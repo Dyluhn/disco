@@ -71,7 +71,7 @@ export const EVENT_DISPOSITION: Record<
     where:
       "Build/Agent ActivityFeed (agent narration) + Deep Research follow-up Q&A thread (DeepResearchSurface). User/assistant only; environment/system-reminder messages are suppressed at the projection.",
   },
-  action: { disposition: "rendered", where: "Build/Agent ActivityFeed (tool calls). DR loop actions (phase/search/section_done) are suppressed on the research surface as plumbing." },
+  action: { disposition: "rendered", where: "Build/Agent ActivityFeed (tool calls). On Deep Research: the brief and search actions render as live-trace rows; phase/section_done are consumed as progress signal, not shown raw." },
   observation: { disposition: "rendered", where: "Build/Agent ActivityFeed (tool results, screenshots)." },
   agent_error: { disposition: "rendered", where: "Build/Agent ActivityFeed error rows + status." },
   status: { disposition: "rendered", where: "AgentStatusBar / lifecycle state machine across all surfaces." },
@@ -96,7 +96,7 @@ export const EVENT_DISPOSITION: Record<
     where: "Build/Agent ActivityFeed explicit AppKit-to-Freeform revision and lost-guarantee marker.",
   },
   error: { disposition: "rendered", where: "Conversation-level error surface (states.tsx error card)." },
-  plan: { disposition: "rendered", where: "PlanPanel (Build + Deep Research plan gate)." },
+  plan: { disposition: "rendered", where: "PlanPanel (Build/Agent plan gate). Deep Research is gateless and emits no PlanEvent." },
   report: { disposition: "rendered", where: "DeepReportView (Deep Research)." },
   alternatives: { disposition: "rendered", where: "AlternativesGate (Build/Agent, after repeated tool failure)." },
   deliverable: { disposition: "rendered", where: "DeliverablePanel (Build finished-artifact handoff)." },

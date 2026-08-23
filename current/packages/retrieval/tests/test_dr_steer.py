@@ -1,31 +1,35 @@
 """D3 — DR mid-run steer / inject-source: unit tests.
 
+In v2 steering is not a probe scheduler: `pop_steers` is drained at every turn
+boundary of the agentic research loop and its strings enter the NEXT turn's
+message as priority `USER STEER` guidance, which the lead model acts on with
+its own searches. `pop_injected_sources` passages are admitted straight into
+the evidence pool (user-provided → exempt from the quality filter and from the
+web-source budget).
+
 Covers:
   1. No-hook parity: omitted hooks and explicit None are identical.
-  2. Steer: pop_steers returning a steer at the first boundary grows the
-     evidence investigation and emits a steer observation. Report headings are
-     still compiled from evidence, never copied from probes.
-  3. Inject-source: pop_injected_sources returning a Passage → it is folded
-     into the evidence pool and retained on the assembled report's evidence
-     ledger (cited_passages or reviewed_passages).
-  4. Both hooks: steer + inject work together without disrupting the baseline.
+  2. Steer: a steer returned at a turn boundary reaches the model as a USER
+     STEER line, the search it drives runs (search + observation events, the
+     query recorded in completed_probes), and report headings still come from
+     the writer, never from the steer text.
+  3. Inject-source: an injected Passage is folded into the evidence pool and
+     retained on the assembled report's evidence ledger.
+  4. Both hooks together, without disturbing the baseline.
+  5. The WS client frame types that carry them.
 
-All tests use the same _ScriptedRouter / _Fake* pattern from test_deep_research.py
-to stay hermetic (no network, no real LLM, no real embedder/NLI). Planner,
-section, and summary calls are dispatched by prompt shape with grounded
-auto-responses, so the one report funnel runs without hand-scripting every
-call.
+All tests use the scripted-router / fake-retrieval pattern from
+`test_research_agent.py` + `test_deep_research.py` to stay hermetic (no
+network, no real LLM, no real NLI).
 """
 
 from __future__ import annotations
 
-import json
 import re
 from collections.abc import AsyncIterator
 from dataclasses import replace
 from typing import Any
 
-import pytest
 from disco.core.llm import (
     CompletionRequest,
     CompletionResponse,
@@ -33,206 +37,106 @@ from disco.core.llm import (
     StreamChunk,
     TokenUsage,
 )
-from disco.retrieval.deep_research import (
-    DeepResearchRun,
-    DepthTier,
-)
-from disco.retrieval.engine import DefaultRetrievalEngine
-from disco.retrieval.models import (
-    ExtractedDoc,
-    Passage,
-    SearchHit,
-)
+from disco.retrieval.deep_research import DeepResearchRun, DepthTier
+from disco.retrieval.models import Passage, RetrievalRequest, RetrievalResult, SearchHit
 from disco.retrieval.vectorstore import InMemoryVectorStore
 
 # ---- fakes (mirrors test_deep_research.py) -----------------------------------
 
+_TURN0 = (
+    '{"brief": "The question asks about X; I will map it before going deep.", '
+    '"action": "search", "queries": ["what is X"]}'
+)
+_TURN_STEERED = '{"action": "search", "queries": ["risks of X"]}'
+_DONE = '{"action": "done", "reason": "the evidence covers every angle"}'
+_CLEAN_REVIEW = '{"passes": true, "failures": []}'
+_EVIDENCE_ID = re.compile(r"(?m)^\[([\w-]+)\] ")
 
-class _FakeSearch:
-    name = "fake_search"
+
+def _auto_report(prompt: str) -> str:
+    """A grounded whole-report draft citing the ids in the writer's own
+    evidence block (see `test_deep_research.py` for the same helper)."""
+    ids = list(dict.fromkeys(_EVIDENCE_ID.findall(prompt)))[:2]
+    if not ids:
+        return ""
+    body = " ".join(
+        "The measured evidence documents the research question with collected "
+        f"data and reported figures [[{passage_id}]]."
+        for passage_id in ids
+    )
+    return f"{body} {body}\n\n## Convergent findings\n{body} {body}"
+
+
+class _FakeRetrieval:
+    """RetrievalEngine double: mints two passages per query so evidence is
+    attributable to the query that found it."""
 
     def __init__(self) -> None:
-        self.calls: list[str] = []
+        self.queries: list[str] = []
 
-    async def search(
-        self,
-        query: str,
-        *,
-        limit: int = 10,
-        domains_allow: Any = None,
-        domains_deny: Any = None,
-        time_filter: str | None = None,
-    ) -> list[SearchHit]:
-        self.calls.append(query)
-        return [
-            SearchHit(
-                url=f"https://example.com/{query}/{i}",
-                title=f"{query} — source {i}",
-                snippet=f"snippet for {query} #{i}",
-                source_engine="fake",
-                rank=i,
+    async def retrieve(self, request: RetrievalRequest) -> RetrievalResult:
+        self.queries.append(request.query)
+        index = len(self.queries)
+        passages = [
+            Passage(
+                id=f"p{index}_{item}",
+                source_url=f"https://example.com/{index}/{item}",
+                source_title=f"Source {index}-{item}",
+                text=(
+                    "Substantive measured evidence documents the research "
+                    f"question with collected data and reported figures {index}-{item}."
+                ),
             )
-            for i in range(min(limit, 3))
+            for item in range(2)
         ]
-
-
-class _FakeExtraction:
-    name = "fake_extract"
-
-    def __init__(self) -> None:
-        self.calls: list[str] = []
-        self._counter = 0
-        self._by_url: dict[str, int] = {}
-
-    async def extract(self, url: str, *, hint: str = "") -> ExtractedDoc | None:
-        self.calls.append(url)
-        if url not in self._by_url:
-            self._by_url[url] = self._counter
-            self._counter += 1
-        idx = self._by_url[url]
-        passage_id = f"p{idx}"
-        return ExtractedDoc(
-            url=url,
-            title=f"doc {idx}",
-            content=f"content for {url}",
-            passages=[
-                Passage(
-                    id=passage_id,
-                    text=(
-                        f"Source {idx} provides substantive evidence about X, "
-                        "including its operation, constraints, risks, and practical implications."
-                    ),
-                    source_url=url,
-                    source_title=f"doc {idx}",
-                )
-            ],
+        hits = [
+            SearchHit(url=p.source_url, title=p.source_title, snippet="s", rank=i)
+            for i, p in enumerate(passages)
+        ]
+        return RetrievalResult(
+            passages=passages, all_hits=hits, extracted=[], issued_queries=[request.query]
         )
-
-    async def extract_many(self, urls: list[str]) -> list[ExtractedDoc]:
-        docs = [await self.extract(url) for url in urls]
-        return [doc for doc in docs if doc is not None]
-
-
-class _FakeReranker:
-    name = "fake_reranker"
-
-    async def rerank(
-        self,
-        query: str,
-        passages: list[Passage],
-        *,
-        top_k: int,
-    ) -> list[Passage]:
-        return passages[:top_k]
-
-
-class _FakeEmbedder:
-    async def embed(self, texts: list[str]) -> list[list[float]]:
-        out = []
-        for t in texts:
-            vec = [(sum(ord(c) for c in t[i::8]) % 97) / 97.0 for i in range(8)]
-            out.append(vec)
-        return out
 
 
 class _FakeNLI:
     def entail(self, premise: str, hypothesis: str) -> str:
         if not premise or not hypothesis:
             return "neutral"
-        prem_words = set(premise.lower().split())
-        hyp_words = set(hypothesis.lower().split())
-        return "entail" if prem_words & hyp_words else "neutral"
+        return (
+            "entail"
+            if set(premise.lower().split()) & set(hypothesis.lower().split())
+            else "neutral"
+        )
 
     def score(self, premise: str, hypothesis: str) -> float:
         return 1.0 if self.entail(premise, hypothesis) == "entail" else 0.0
 
 
 class _ScriptedRouter(LLMRouter):
-    """Prompt-shape dispatch mirror of test_deep_research.py's router: the
-    planner call gets an evidence-grouped JSON outline, section/summary calls
-    get grounded auto-responses (or the "section"/"summary" script queues),
-    and gap-reason calls default to SUFFICIENT so most tests exercise the
-    funnel without hand-scripting every call."""
+    """Prompt-shape dispatch: research turns replay `turns` (defaulting to
+    done), the writer gets an auto-grounded report, the review passes it.
+    Every research-turn user message is recorded so a test can assert what the
+    model was actually told."""
 
-    def __init__(self, scripts: dict[str, list[str]] | None = None) -> None:
-        self._scripts: dict[str, list[str]] = {
-            "query_rewriter": [],
-            "rag_answerer": [],
-            "section": [],
-            "summary": [],
-        }
-        if scripts:
-            for k, v in scripts.items():
-                self._scripts[k] = list(v)
-        self.calls: list[tuple[str, str]] = []
-
-    @staticmethod
-    def _auto_section(last_msg: str) -> str:
-        ids = re.findall(r"^\[([\w-]+)\]", last_msg, re.MULTILINE)[:2]
-        if not ids:
-            return "(no scripted response)"
-        cited = " ".join(f"[[{pid}]]" for pid in ids)
-        # Long enough to clear the per-section minimum-content gate (the gate
-        # caps at 120 words), every sentence cited and entailed by overlap.
-        sentence = (
-            "The sources document the research question with collected data "
-            f"and measured evidence relevant to the finding {cited}."
-        )
-        return " ".join([sentence] * 12)
-
-    @staticmethod
-    def _auto_summary(last_msg: str) -> str:
-        ids = list(dict.fromkeys(re.findall(r"\[\[([\w-]+)\]\]", last_msg)))[:2]
-        if not ids:
-            return "(no scripted response)"
-        cited = " ".join(f"[[{pid}]]" for pid in ids)
-        return f"The evidence establishes the answer to the question {cited}."
+    def __init__(self, turns: list[str] | None = None) -> None:
+        self._turns = list(turns or [])
+        self.turn_prompts: list[str] = []
+        self.calls: list[str] = []
 
     async def complete(
         self, request: CompletionRequest, *, context: Any = None
     ) -> CompletionResponse:
-        role = (
-            request.profile.role.value
-            if hasattr(request.profile.role, "value")
-            else str(request.profile.role)
-        )
-        last_msg = request.messages[-1].content if request.messages else ""
-        prompt_texts = [message.content for message in request.messages]
-        planner_msg = next(
-            (text for text in prompt_texts if "Design the finished report structure" in text),
-            "",
-        )
-        is_section = any(
-            "You are writing one section" in text or "Rewrite the previous section" in text
-            for text in prompt_texts
-        )
-        is_summary = any("executive editor of a research report" in text for text in prompt_texts)
-        self.calls.append((role, last_msg))
-        if role == "rag_answerer" and planner_msg:
-            evidence_ids = re.findall(r"^\[([^\]]+)\]", planner_msg, re.MULTILINE)
-            groups = [evidence_ids[index : index + 3] for index in range(0, len(evidence_ids), 3)]
-            text = json.dumps(
-                [
-                    {"title": f"Evidence-led finding {index + 1}", "evidence_ids": ids}
-                    for index, ids in enumerate(groups)
-                ]
-            )
-        elif role == "rag_answerer" and "strict claim-grounding judge" in last_msg:
-            text = "SUPPORTED"
-        elif is_section and self._scripts["section"]:
-            text = self._scripts["section"].pop(0)
-        elif is_summary and self._scripts["summary"]:
-            text = self._scripts["summary"].pop(0)
-        elif (queue := self._scripts.get(role, [])):
-            text = queue.pop(0)
-        elif role == "query_rewriter":
-            text = "SUFFICIENT\nnone"  # default: stop the loop
-        elif is_section:
-            text = self._auto_section(last_msg)
-        elif is_summary:
-            text = self._auto_summary(last_msg)
+        del context
+        joined = "\n".join(message.content for message in request.messages)
+        if "FIXED rubric" in joined:
+            kind, text = "review", _CLEAN_REVIEW
+        elif "WRITE THE REPORT" in joined:
+            kind, text = "report", _auto_report(joined)
         else:
-            text = "(no scripted response)"
+            kind = "turn"
+            self.turn_prompts.append(request.messages[-1].content)
+            text = self._turns.pop(0) if self._turns else _DONE
+        self.calls.append(kind)
         return CompletionResponse(
             text=text,
             tool_calls=[],
@@ -252,10 +156,10 @@ class _ScriptedRouter(LLMRouter):
         return gen()
 
 
-def _collect_events() -> tuple[list[tuple[str, dict]], Any]:
-    captured: list[tuple[str, dict]] = []
+def _collect_events() -> tuple[list[tuple[str, dict[str, Any]]], Any]:
+    captured: list[tuple[str, dict[str, Any]]] = []
 
-    async def emit(kind: str, payload: dict) -> None:
+    async def emit(kind: str, payload: dict[str, Any]) -> None:
         captured.append((kind, payload))
 
     return captured, emit
@@ -265,202 +169,144 @@ def _make_run(
     router: _ScriptedRouter,
     *,
     conversation_id: str = "conv_steer",
+    retrieval: _FakeRetrieval | None = None,
 ) -> DeepResearchRun:
-    """Build a DeepResearchRun with fake providers (no embedder → fallback path)."""
-    engine = DefaultRetrievalEngine(
-        search=_FakeSearch(),
-        extraction=_FakeExtraction(),
-        reranker=_FakeReranker(),
-        embedder=_FakeEmbedder(),
-    )
+    """Build a DeepResearchRun with fake providers, at the fakes' word scale."""
     run = DeepResearchRun(
         query="the state of X",
         router=router,
-        retrieval_engine=engine,
-        embedder=None,  # no embedder → section retrieval uses fallback_passages
+        retrieval_engine=retrieval or _FakeRetrieval(),
+        embedder=None,
         vector_store=InMemoryVectorStore(),
         nli=_FakeNLI(),
         depth=DepthTier.STANDARD_DEEP,
         conversation_id=conversation_id,
     )
-    run._bound = replace(
-        run._bound,
-        min_evidence_passages=6,
-        min_evidence_themes=1,
-        min_evidence_sources=6,
-    )
+    run._bound = replace(run._bound, report_min_words=40, report_max_words=4_000)
     return run
 
 
 # ---- test 1: OFF-path parity -------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_no_hooks_run_is_byte_identical_to_baseline() -> None:
-    """Both hooks defaulting to None → result is byte-identical to a plain run.
+    """Both hooks defaulting to None → result is identical to a plain run.
 
     Runs the engine twice with identical inputs: once without the hook params
-    (explicit omission), once with both set to None (explicit None). The section
-    titles, bounded_by, and event sequence must be identical — the hook plumbing
-    must never change the baseline path.
+    (explicit omission), once with both set to None (explicit None). The
+    section titles, bounded_by, and event sequence must be identical — the hook
+    plumbing must never change the baseline path.
     """
-    plan_steps = ["What is X?", "How does X work?"]
-
     # Run A: no hook params (old-style call, pre-D3)
-    router_a = _ScriptedRouter()
+    router_a = _ScriptedRouter([_TURN0, _DONE])
     run_a = _make_run(router_a, conversation_id="conv_a")
     captured_a, emit_a = _collect_events()
-    result_a = await run_a.run(plan_steps, emit=emit_a)
+    result_a = await run_a.run(emit=emit_a)
 
     # Run B: explicit None (new-style, hooks param present but OFF)
-    router_b = _ScriptedRouter()
+    router_b = _ScriptedRouter([_TURN0, _DONE])
     run_b = _make_run(router_b, conversation_id="conv_b")
     captured_b, emit_b = _collect_events()
-    result_b = await run_b.run(
-        plan_steps,
-        emit=emit_b,
-        pop_steers=None,
-        pop_injected_sources=None,
-    )
+    result_b = await run_b.run(emit=emit_b, pop_steers=None, pop_injected_sources=None)
 
     # Section structure identical
     assert [s.title for s in result_a.sections] == [s.title for s in result_b.sections]
+    assert result_a.sections
     assert result_a.bounded_by == result_b.bounded_by
     assert result_a.bounded_by is None
 
-    # Event sequence identical (kinds + subquestion/phase values)
-    kinds_a = [k for k, _ in captured_a]
-    kinds_b = [k for k, _ in captured_b]
-    assert kinds_a == kinds_b, "event sequence differs between plain and None-hooks run"
+    # Event sequence identical (kinds, in order)
+    assert [k for k, _ in captured_a] == [k for k, _ in captured_b], (
+        "event sequence differs between plain and None-hooks run"
+    )
 
-    # No steer observation events emitted (guards against spurious emit)
-    steer_obs = [
-        p
-        for k, p in captured_b
-        if k == "observation" and "mid-run steer" in str(p.get("detail", ""))
-    ]
-    assert steer_obs == [], "steer observation emitted on the OFF-path"
+    # No USER STEER guidance reached the model on the OFF-path
+    assert all("USER STEER" not in prompt for prompt in router_b.turn_prompts)
 
 
-# ---- test 2: steer adds a research probe -------------------------------------
+# ---- test 2: a steer reaches the model and drives the next search ------------
 
 
-@pytest.mark.asyncio
 async def test_steer_at_boundary_adds_probe_and_emits_observation() -> None:
-    """A steer returned by pop_steers at the first boundary:
-    - becomes a research probe → gathered and recorded in completed_probes
-    - emits an `observation` event with 'mid-run steer' in `detail`
-    - baseline probes still complete (steer is ADDITIVE)
-    - report headings stay compiler-owned: the steer text is never a title
+    """A steer returned by pop_steers at a turn boundary:
+    - enters that turn's message as priority USER STEER guidance
+    - the search the model then runs is a real probe → search + observation
+      events, and the query lands in completed_probes
+    - baseline research still completes (the steer is ADDITIVE)
+    - report headings stay writer-owned: the steer text is never a title
     """
-    plan_steps = ["What is X?", "How does X work?"]
     STEER = "What are the risks of X?"
-
-    router = _ScriptedRouter()
-    run = _make_run(router, conversation_id="conv_steer")
+    router = _ScriptedRouter([_TURN0, _TURN_STEERED, _DONE])
+    retrieval = _FakeRetrieval()
+    run = _make_run(router, conversation_id="conv_steer", retrieval=retrieval)
     captured, emit = _collect_events()
 
     steer_call_count = {"n": 0}
 
     def pop_steers() -> list[str]:
-        """Return the steer at the FIRST call only (first probe boundary)."""
+        """Return the steer at the SECOND drain (the first turn boundary after
+        research started)."""
         steer_call_count["n"] += 1
-        if steer_call_count["n"] == 1:
-            return [STEER]
-        return []
+        return [STEER] if steer_call_count["n"] == 2 else []
 
-    result = await run.run(plan_steps, emit=emit, pop_steers=pop_steers)
+    result = await run.run(emit=emit, pop_steers=pop_steers)
 
+    # The steer reached the model as priority guidance on that turn only.
+    assert "USER STEER" not in router.turn_prompts[0]
+    assert "USER STEER" in router.turn_prompts[1]
+    assert STEER in router.turn_prompts[1]
+
+    # Baseline probe AND the steered probe both ran and are recorded.
+    assert retrieval.queries == ["what is X", "risks of X"]
+    assert result.completed_probes == ["what is X", "risks of X"]
+
+    # The steered probe produced its own search + observation events.
+    steered_searches = [p for k, p in captured if k == "search" and p["query"] == "risks of X"]
+    assert len(steered_searches) == 1
+    observations = [p for k, p in captured if k == "observation"]
+    assert len(observations) == 2 and all(p["ok"] for p in observations)
+
+    # Headings come from the writer, not from the steer text.
     assert result.sections
-    assert set(plan_steps) <= set(result.completed_probes)
-    assert STEER in result.completed_probes
     assert STEER not in {section.title for section in result.sections}
-
-    # steer observation emitted with the right detail
-    steer_obs = [
-        p for k, p in captured if k == "observation" and "mid-run steer" in str(p.get("detail", ""))
-    ]
-    assert len(steer_obs) == 1, f"expected 1 steer observation, got {steer_obs}"
-    assert steer_obs[0].get("subquestion") == STEER
-
     # bounded_by is NOT set by the steer (it's a normal completion)
     assert result.bounded_by is None
 
 
-@pytest.mark.asyncio
 async def test_steer_empty_returns_do_not_change_run() -> None:
-    """pop_steers returning [] every time → run is structurally identical to a
-    no-hook run (same probes completed, no steer observation events)."""
-    plan_steps = ["What is X?", "How does X work?"]
-    router = _ScriptedRouter()
+    """pop_steers returning [] every time → the run is structurally identical to
+    a no-hook run (same probes, no USER STEER guidance anywhere)."""
+    router = _ScriptedRouter([_TURN0, _DONE])
     run = _make_run(router, conversation_id="conv_steer_empty")
-    captured, emit = _collect_events()
+    _, emit = _collect_events()
 
-    result = await run.run(plan_steps, emit=emit, pop_steers=lambda: [])
-
-    assert result.sections
-    assert set(result.completed_probes) == set(plan_steps)
-    steer_obs = [
-        p for k, p in captured if k == "observation" and "mid-run steer" in str(p.get("detail", ""))
-    ]
-    assert steer_obs == []
-
-
-@pytest.mark.asyncio
-async def test_steer_respects_tier_subquestion_cap() -> None:
-    plan_steps = [f"Question {index}" for index in range(6)]
-    steer = "A seventh question"
-    router = _ScriptedRouter()
-    run = _make_run(router, conversation_id="conv_steer_cap")
-    run._bound = replace(run._bound, max_subquestions=6)
-    captured, emit = _collect_events()
-    calls = 0
-
-    def pop_steers() -> list[str]:
-        nonlocal calls
-        calls += 1
-        return [steer] if calls == 1 else []
-
-    result = await run.run(plan_steps, emit=emit, pop_steers=pop_steers)
+    result = await run.run(emit=emit, pop_steers=lambda: [])
 
     assert result.sections
-    assert len(result.completed_probes) == 6
-    assert steer in result.completed_probes
-    assert result.pending_probes == []
-    assert steer not in {section.title for section in result.sections}
-    accepted = [
-        payload
-        for kind, payload in captured
-        if kind == "observation" and "mid-run steer" in str(payload.get("detail", ""))
-    ]
-    assert len(accepted) == 1
-    assert accepted[0]["ok"] is True
+    assert result.completed_probes == ["what is X"]
     assert result.bounded_by is None
+    assert all("USER STEER" not in prompt for prompt in router.turn_prompts)
 
 
-# ---- test 3: inject-source folds passage into the evidence pool --------------
+# ---- test 3: inject-source folds a passage into the evidence pool ------------
 
 
-@pytest.mark.asyncio
 async def test_inject_source_passage_is_retained_on_the_report() -> None:
-    """An injected Passage returned by pop_injected_sources is folded into the
-    run's carried passages, making it part of the global evidence pool the
-    report is compiled from. Whether or not a section ends up citing it, the
-    assembled report retains it on the evidence ledger (cited_passages or
-    reviewed_passages) — the injection is never silently dropped.
+    """An injected Passage returned by pop_injected_sources is admitted into the
+    run's evidence pool, so the assembled report retains it on the evidence
+    ledger (cited_passages or reviewed_passages) — the injection is never
+    silently dropped, and being user-provided it is exempt from the quality
+    filter that would otherwise reject such a short note.
     """
-    plan_steps = ["What is X?"]
     INJECTED_ID = "injected-test-001"
-    INJECTED_TEXT = "X has a critical vulnerability according to security researchers."
-
     injected_passage = Passage(
         id=INJECTED_ID,
-        text=INJECTED_TEXT,
+        text="X has a critical vulnerability according to security researchers.",
         source_url="user-injected",
         source_title="User-injected source",
     )
 
-    router = _ScriptedRouter()
+    router = _ScriptedRouter([_TURN0, _DONE])
     run = _make_run(router, conversation_id="conv_inject")
     _, emit = _collect_events()
 
@@ -468,11 +314,9 @@ async def test_inject_source_passage_is_retained_on_the_report() -> None:
 
     def pop_injected() -> list[Passage]:
         inject_call_count["n"] += 1
-        if inject_call_count["n"] == 1:
-            return [injected_passage]
-        return []
+        return [injected_passage] if inject_call_count["n"] == 1 else []
 
-    result = await run.run(plan_steps, emit=emit, pop_injected_sources=pop_injected)
+    result = await run.run(emit=emit, pop_injected_sources=pop_injected)
 
     assert result.sections
     retained_ids = {
@@ -482,41 +326,31 @@ async def test_inject_source_passage_is_retained_on_the_report() -> None:
         f"injected passage {INJECTED_ID!r} was lost from the evidence ledger; "
         f"got {retained_ids}"
     )
+    # It was also visible to the researcher in the very next evidence digest.
+    assert INJECTED_ID in router.turn_prompts[0]
 
 
-@pytest.mark.asyncio
 async def test_inject_empty_returns_do_not_change_run() -> None:
-    """pop_injected_sources returning [] every time → byte-identical to no-hook run."""
-    plan_steps = ["What is X?", "How does X work?"]
-    router = _ScriptedRouter()
+    """pop_injected_sources returning [] every time → identical to a no-hook run."""
+    router = _ScriptedRouter([_TURN0, _DONE])
     run = _make_run(router, conversation_id="conv_inject_empty")
-    captured, emit = _collect_events()
+    _, emit = _collect_events()
 
-    result = await run.run(
-        plan_steps,
-        emit=emit,
-        pop_injected_sources=lambda: [],
-    )
+    result = await run.run(emit=emit, pop_injected_sources=lambda: [])
 
     assert result.sections
-    assert set(result.completed_probes) == set(plan_steps)
+    assert result.completed_probes == ["what is X"]
     assert result.bounded_by is None
-    # No steer observation (no steer hook was installed)
-    steer_obs = [
-        p for k, p in captured if k == "observation" and "mid-run steer" in str(p.get("detail", ""))
-    ]
-    assert steer_obs == []
+    assert all("USER STEER" not in prompt for prompt in router.turn_prompts)
 
 
 # ---- test 4: both hooks together ---------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_steer_and_inject_compose_correctly() -> None:
-    """Steer + inject both active → the steer becomes a completed probe and the
-    injected passage is retained in the evidence ledger; neither hook disturbs
-    the baseline probe."""
-    plan_steps = ["What is X?"]
+    """Steer + inject both active → the steered search runs as its own probe and
+    the injected passage is retained in the evidence ledger; neither hook
+    disturbs the baseline probe."""
     STEER = "What are the risks of X?"
     INJECTED_ID = "injected-combo-001"
     injected_passage = Passage(
@@ -529,7 +363,7 @@ async def test_steer_and_inject_compose_correctly() -> None:
         source_title="User-injected source",
     )
 
-    router = _ScriptedRouter()
+    router = _ScriptedRouter([_TURN0, _TURN_STEERED, _DONE])
     run = _make_run(router, conversation_id="conv_both")
     _, emit = _collect_events()
 
@@ -538,22 +372,19 @@ async def test_steer_and_inject_compose_correctly() -> None:
 
     def pop_steers() -> list[str]:
         steer_calls["n"] += 1
-        return [STEER] if steer_calls["n"] == 1 else []
+        return [STEER] if steer_calls["n"] == 2 else []
 
     def pop_injected() -> list[Passage]:
         inject_calls["n"] += 1
         return [injected_passage] if inject_calls["n"] == 1 else []
 
     result = await run.run(
-        plan_steps,
-        emit=emit,
-        pop_steers=pop_steers,
-        pop_injected_sources=pop_injected,
+        emit=emit, pop_steers=pop_steers, pop_injected_sources=pop_injected
     )
 
     assert result.sections
-    assert "What is X?" in result.completed_probes
-    assert STEER in result.completed_probes
+    assert result.completed_probes == ["what is X", "risks of X"]
+    assert STEER in router.turn_prompts[1]
 
     retained_ids = {
         passage.id for passage in [*result.cited_passages, *result.reviewed_passages]

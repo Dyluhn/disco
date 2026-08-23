@@ -330,20 +330,13 @@ class LiveWebSocketTransport:
                 observer,
                 {"type": "harness_control", "command": "send_message"},
             )
-            approved_plan = False
+            # v2 (PKG-35): deep research is gateless — the question launches the
+            # run and the model's brief streams as its first output; there is no
+            # AWAITING_PLAN_APPROVAL state to acknowledge.
             async with asyncio.timeout(request.timeout_s):
                 async for raw in ws:
                     frame = json.loads(raw)
                     self._record(frames, observer, frame)
-                    status = _conversation_status(frame)
-                    if status == "AWAITING_PLAN_APPROVAL" and not approved_plan:
-                        await ws.send(json.dumps({"type": "approve_plan"}))
-                        self._record(
-                            frames,
-                            observer,
-                            {"type": "harness_control", "command": "approve_plan"},
-                        )
-                        approved_plan = True
                     event = frame.get("event") if isinstance(frame.get("event"), Mapping) else frame
                     if event.get("kind") == "report":
                         # The report is terminal for a deep-research run; keep

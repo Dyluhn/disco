@@ -291,7 +291,11 @@ export function DeepReportView({ query, summary, assembling, report, cid }: Prop
         </header>
 
         {summary && (
-          <section className="pmx-rise">
+          // id="summary" is the ToC's "Executive summary" link target. Without
+          // it that link was dead — it pointed at #summary while no element
+          // carried the id. scroll-mt matches the section anchors so the
+          // heading isn't hidden under the sticky header on jump.
+          <section id="summary" className="pmx-rise scroll-mt-24">
             <header className="mb-section flex items-baseline gap-inline border-b border-hairline pb-inline">
               <h2 className="font-display text-[1.2rem] font-medium leading-tight tracking-tight text-text-muted">
                 Executive summary
@@ -330,7 +334,7 @@ export function DeepReportView({ query, summary, assembling, report, cid }: Prop
             {summary && (
               <li>
                 <a
-                  href={`#summary`}
+                  href="#summary"
                   className="-ml-px block border-l border-transparent py-hair pl-body font-ui text-[0.82rem] text-text-muted transition-colors hover:border-accent hover:text-text"
                 >
                   Executive summary

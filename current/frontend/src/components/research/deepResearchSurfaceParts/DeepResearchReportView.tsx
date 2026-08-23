@@ -22,13 +22,15 @@ interface Props {
 export function DeepResearchReportView({ r }: Props) {
   return (
     <>
-      {/* The report — assembles section-by-section while RUNNING, settled
-          after FINISHED. Always rendered once we have a plan so the
-          reader sees the document forming. */}
-      {!r.awaitingPlan && r.plan && (
+      {/* The report document. v2 (gateless): there is no plan to wait for, so
+          the mount condition is the report itself — sections are written in
+          one pass and arrive with the ReportEvent. Rendering the shell before
+          then would be an empty document promising content that doesn't
+          exist yet; the progress strip owns the in-flight story. */}
+      {r.report && (
         <DeepReportView
           query={r.query ?? ""}
-          summary={r.report?.summary ?? null}
+          summary={r.report.summary ?? null}
           assembling={r.assembling}
           report={r.report}
           cid={r.cid}

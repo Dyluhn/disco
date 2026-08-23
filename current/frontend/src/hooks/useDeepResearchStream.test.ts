@@ -4,6 +4,7 @@
  * WALK-08 (A4): dispatch reset when session is null (prevent stale events).
  * WALK-11 (B2): follow_up / follow_up_complete StatusEvents must NOT overwrite
  *               the main `status` field.
+ * v2 (gateless): the reducer holds NO plan-gate state — see the last block.
  */
 
 import { describe, expect, it } from "vitest";
@@ -130,10 +131,17 @@ describe("reducer — WALK-11 followUpStatus decoupling", () => {
   });
 });
 
-// ---- AWAITING_PLAN_APPROVAL pendingPlanId (regression guard) ----------------
+// ---- no plan gate (v2 regression guard) -------------------------------------
+//
+// Deep Research is gateless: submitting starts the research and the model's
+// brief is its first visible output. The reducer used to special-case
+// AWAITING_PLAN_APPROVAL and stash a `pendingPlanId` for the approve/revise
+// gate. That state is GONE, and this block is the guard against it creeping
+// back — a status the deep-research engine never emits must be carried as a
+// plain status, with no gate bookkeeping attached.
 
-describe("reducer — pendingPlanId (regression)", () => {
-  it("AWAITING_PLAN_APPROVAL still sets pendingPlanId from detail", () => {
+describe("reducer — no plan gate (v2 regression)", () => {
+  it("AWAITING_PLAN_APPROVAL is carried as a plain status with no gate state", () => {
     const state = reducer(initial, {
       type: "frame",
       frame: {
@@ -142,7 +150,27 @@ describe("reducer — pendingPlanId (regression)", () => {
       },
     });
     expect(state.status).toBe("AWAITING_PLAN_APPROVAL");
-    expect(state.pendingPlanId).toBe("plan_evt_abc");
+    expect(state).not.toHaveProperty("pendingPlanId");
     expect(state.followUpStatus).toBeNull();
+  });
+
+  it("a `state` frame carries only the execution status, not a pending plan id", () => {
+    const state = reducer(initial, {
+      type: "frame",
+      frame: {
+        type: "state",
+        state: {
+          conversation_id: "c1",
+          execution_status: "RUNNING",
+          iteration: 1,
+          max_iterations: 30,
+          last_seq: 2,
+          pending_action_id: null,
+          pending_plan_id: "plan_evt_abc",
+        },
+      },
+    });
+    expect(state.status).toBe("RUNNING");
+    expect(state).not.toHaveProperty("pendingPlanId");
   });
 });

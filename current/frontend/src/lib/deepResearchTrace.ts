@@ -1,23 +1,24 @@
 /**
  * Deep Research derivers — pure functions that turn the conversation's event
  * stream into the views the surface renders. Mirrors `buildTrace.ts` in
- * shape (deriveActivity / derivePlan / derivePlanProgress) but specialized
- * for the engine's tool names and the ReportEvent shape.
+ * shape but specialized for the engine's tool names and the ReportEvent shape.
  *
- * The engine emits ActionEvents with tool names:
+ * v2 (gateless deep research): there is no plan and no approval gate —
+ * research starts on submit and the model's brief is the first streamed
+ * output. The engine emits ActionEvents with tool names:
+ *   "brief"               — the model's opening read of the question ({text})
  *   "phase"               — phase transitions (gather / synthesize / coherence)
- *   "search"              — one round of retrieval for a sub-question
- *   "synthesize_section"  — synthesis of one section's body
+ *   "search"              — one search round ({subquestion: label, query, round, rounds_max})
  * And ObservationEvents with tool_name:
  *   "observation"         — result of a search round (added, total_for_subq, …)
- *   "gap_reason"          — the gap-reasoner's verdict + follow-up
- * The final ReportEvent is the assembled report.
+ * Plus "section_done" checkpoints as the written report finalizes. The final
+ * ReportEvent is the assembled report. Pre-v2 replays additionally carry
+ * "synthesize_section" actions and "gap_reason" observations — their handlers
+ * stay so historical conversations keep rendering.
  *
  * Module-size and complexity decomposition (PKG-12-C/TS-0051..TS-0053): the
- * three highest-mccabe derivers' implementations moved to
- * `./deepResearchTraceParts/*` so each callable stays under the architecture
- * caps — `deriveStats` alone went from 37 branches to a dispatcher plus one
- * small handler per tool_name.
+ * highest-mccabe derivers' implementations live in `./deepResearchTraceParts/*`
+ * so each callable stays under the architecture caps.
  *
  * The PUBLIC DECLARATIONS deliberately stay HERE rather than becoming a
  * barrel of `export … from` re-exports — see `buildTrace.ts`'s header for why
@@ -32,76 +33,59 @@
 import type { ActivityItem } from "@/lib/buildTrace";
 import { sourceUrlKey } from "@/lib/sources";
 import { computeLiveTrace } from "./deepResearchTraceParts/liveTrace";
-import { computePlanProgress } from "./deepResearchTraceParts/planProgress";
 import { computeStats } from "./deepResearchTraceParts/stats";
 import type {
   AgentEvent,
   ConversationStatus,
-  PlanStep,
   ReportEvent,
   ReportSection,
 } from "@/types/agent";
 
-export type StepState = "pending" | "active" | "done";
-
-export interface DeepPlanView {
-  id: string;
-  summary: string;
-  steps: PlanStep[];
-  revision: number;
-  context: string;
-}
-
-/** The latest proposed plan (highest revision wins — same convention as
- * buildTrace.derivePlan). Returns null before any plan exists. */
-export function derivePlan(events: AgentEvent[]): DeepPlanView | null {
-  let latest: DeepPlanView | null = null;
+/** The model's opening brief — how it read the question and the angles it
+ *  will chase. First streamed output of a gateless run: arrives as an
+ *  ActionEvent (tool_name "brief", payload {text}) and is mirrored as an
+ *  assistant chat message. Prefer the typed action; fall back to the first
+ *  pre-report assistant message so a stream missing the action still
+ *  surfaces it. Null until the brief lands. */
+export function deriveBrief(events: AgentEvent[]): string | null {
   for (const e of events) {
-    if (e.kind !== "plan") continue;
-    if (latest === null || e.revision >= latest.revision) {
-      latest = {
-        id: e.id,
-        summary: e.summary,
-        steps: e.steps,
-        revision: e.revision,
-        context: e.context ?? "",
-      };
+    if (e.kind === "action" && e.tool_call?.tool_name === "brief") {
+      const text = String(e.tool_call.arguments.text ?? "").trim();
+      if (text) return text;
     }
   }
-  return latest;
-}
-
-/** Per-sub-question progress derived from the engine's emitted ActionEvents.
- *  A sub-question is "done" once `synthesize_section` has fired for it,
- *  "active" once any `search` action targeted it, "pending" otherwise.
- *  Returns a 1-based Map matching PlanPanel's contract. */
-export function derivePlanProgress(
-  events: AgentEvent[],
-  plan: DeepPlanView | null,
-): Map<number, StepState> {
-  return computePlanProgress(events, plan);
+  const reportSeq = deriveReport(events)?.seq ?? Number.POSITIVE_INFINITY;
+  for (const e of events) {
+    if (e.kind !== "message" || e.message.role !== "assistant") continue;
+    if ((e.seq ?? 0) >= reportSeq) break;
+    const text = (e.message.content ?? "").trim();
+    if (text && !text.includes("<system-reminder>")) return text;
+  }
+  return null;
 }
 
 export interface DeepStats {
-  /** Sub-questions on the plan. */
-  subquestionsTotal: number;
-  /** Sub-questions marked done (synthesize_section fired). */
-  subquestionsDone: number;
-  /** Sub-question currently being worked on (title, 1-based index), or null. */
-  activeSubquestion: { title: string; index: number } | null;
-  /** Current round within the active sub-question, and the round cap. */
+  /** Search rounds fired so far (one per engine `search` action). */
+  searches: number;
+  /** Report sections finalized (`section_done` checkpoints seen). */
+  sectionsDone: number;
+  /** What the engine is searching for right now — the latest search's label.
+   *  Cleared once the run leaves the gather phase. */
+  activeSubquestion: { title: string } | null;
+  /** Current round within the gather loop, and the round cap. */
   activeRound: { current: number; max: number } | null;
   /** Sources discovered so far — sum of observations' `added` counts (the
    *  engine's per-round addition count from the gather loop). */
   sourcesDiscovered: number;
-  /** Wall-clock seconds since the first event (for the live stats display). */
+  /** Wall-clock seconds between the first and the latest event timestamps
+   *  (BaseEvent.timestamp). Null until a timestamped event exists. */
   elapsedSeconds: number | null;
   /** The engine phase from the latest `phase` action (gather/synthesize/coherence). */
   phase: string | null;
-  /** Section currently being WRITTEN (synthesize_section fired, section_done not
-   *  yet) — the heartbeat for the long quiet synthesis stretch on local models. */
-  activeSection: { title: string; index: number } | null;
-  /** The engine's latest "thought" — a gap_reason rationale ("found X, still
+  /** Section currently being WRITTEN (pre-v2 replays' synthesize_section
+   *  heartbeat; v2 writes the report in one pass). */
+  activeSection: { title: string } | null;
+  /** The engine's latest "thought" — a gap rationale ("found X, still
    *  missing Y") or a section completion — surfaced so a working run never
    *  reads as a hang. */
   lastThought: string | null;
@@ -109,11 +93,8 @@ export interface DeepStats {
 
 /** Live stats for the mono header strip. Computed from the event stream;
  *  cheap to re-run on every reducer update. */
-export function deriveStats(
-  events: AgentEvent[],
-  plan: DeepPlanView | null,
-): DeepStats {
-  return computeStats(events, plan);
+export function deriveStats(events: AgentEvent[]): DeepStats {
+  return computeStats(events);
 }
 
 /** The final, assembled ReportEvent — null until the engine emits it. */
@@ -125,10 +106,9 @@ export function deriveReport(events: AgentEvent[]): ReportEvent | null {
   return null;
 }
 
-/** Final report sections. The approved plan contains starting research
- * directions, not a promised document outline, so plan steps must never become
- * fake section placeholders. The report compiler owns section structure after
- * the evidence loop finishes. */
+/** Final report sections. Section structure is owned by the report writer
+ * after the evidence loop finishes — mid-run activity must never become fake
+ * section placeholders. */
 export interface AssemblingSection {
   id: string;
   title: string;
@@ -137,11 +117,7 @@ export interface AssemblingSection {
   section: ReportSection | null;
 }
 
-export function deriveAssemblingSections(
-  events: AgentEvent[],
-  plan: DeepPlanView | null,
-): AssemblingSection[] {
-  void plan;
+export function deriveAssemblingSections(events: AgentEvent[]): AssemblingSection[] {
   const report = deriveReport(events);
   if (!report) return [];
   return report.sections.map((section) => ({

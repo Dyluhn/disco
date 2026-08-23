@@ -14,10 +14,7 @@ test.describe("Contradiction surfacing — support meter + claim verdicts", () =
     );
     await input.press("Enter");
 
-    // Plan-approval gate, then approve the decomposition.
-    const approve = page.locator('[data-disco-control="approve-plan"]');
-    await expect(approve).toBeVisible();
-    await approve.click();
+    // v2 is gateless — research starts on submit, nothing to approve.
 
     // Wait for the report sections to assemble — look for a section title.
     const sectionTitle = page.getByRole("heading", {

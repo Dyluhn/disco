@@ -25,9 +25,9 @@ import {
   traceBeforeGate,
 } from "@/fixtures/agentTrace";
 import {
+  fixtureFinishedEvent,
   fixtureFinishedState,
   fixtureInitialState,
-  fixturePlan,
   fixtureReport,
   fixtureRunningEvents,
 } from "@/fixtures/deepResearchTrace";
@@ -182,77 +182,39 @@ export function subscribeFixture(cid: string, onFrame: (f: WSServerFrame) => voi
 
 export function subscribeDeepFixture(onFrame: (f: WSServerFrame) => void): AgentHandle {
   let cancelled = false;
-  let atPlan = false;
 
-  async function streamUntilGate() {
+  /** v2 (gateless deep research): sending the question STARTS the research.
+   *  There is no plan proposal, no approval pause and nothing to revise — the
+   *  stream runs straight through brief → gather → write → report. Steering
+   *  and cancel stay live for the whole run. */
+  async function streamRunAndReport() {
     onFrame({ type: "state", state: fixtureInitialState });
-    // Send events up to the AWAITING_PLAN_APPROVAL gate (the first 4 events:
-    // user msg, RUNNING, plan, gate-status).
-    for (let i = 0; i < 4; i++) {
+    for (const event of fixtureRunningEvents) {
       if (cancelled) return;
       await fixtureDelay(80);
-      onFrame({ type: "event", event: fixtureRunningEvents[i] });
-    }
-    atPlan = true;
-  }
-
-  async function streamRunAndReport() {
-    // Stream the post-approval events (plan_approved → phases → actions → obs)
-    // with small delays so the live progress feel is preserved.
-    for (let i = 4; i < fixtureRunningEvents.length; i++) {
-      if (cancelled) return;
-      await fixtureDelay(90);
-      onFrame({ type: "event", event: fixtureRunningEvents[i] });
+      onFrame({ type: "event", event });
     }
     if (cancelled) return;
     await fixtureDelay(150);
     onFrame({ type: "event", event: fixtureReport });
     if (cancelled) return;
-    onFrame({
-      type: "event",
-      event: {
-        id: "evt_finished",
-        kind: "status",
-        source: "system",
-        seq: 80,
-        timestamp: "2026-06-06T12:00:00Z",
-        status: "FINISHED",
-      },
-    });
+    onFrame({ type: "event", event: fixtureFinishedEvent });
     onFrame({ type: "state", state: fixtureFinishedState });
   }
 
   return {
     send: (f) => {
-      if (f.type === "send_message") void streamUntilGate();
-      else if (f.type === "approve_plan" && atPlan) {
-        atPlan = false;
-        void streamRunAndReport();
-      } else if (f.type === "request_plan") {
-        // re-plan: re-emit a (slightly modified) plan and the gate. For
-        // fixture simplicity we just bump revision and re-gate; tests can
-        // observe the new revision on the next event.
-        atPlan = true;
-        void (async () => {
-          await fixtureDelay(80);
-          onFrame({
-            type: "event",
-            event: {
-              ...fixturePlan,
-              id: "evt_replan",
-              seq: 5,
-              revision: 2,
-              summary: `Revised plan: ${f.content ?? ""}`,
-            },
-          });
-        })();
-      } else if (f.type === "cancel") {
+      if (f.type === "send_message") void streamRunAndReport();
+      else if (f.type === "cancel") {
         cancelled = true;
         onFrame({
           type: "state",
           state: { ...fixtureFinishedState, execution_status: "IDLE" },
         });
       }
+      // `steer` / `inject_source` are accepted mid-run and change what the
+      // LIVE engine gathers next; the canned fixture stream has nothing to
+      // re-plan, so they are no-ops here rather than a fake acknowledgement.
     },
     cancel: () => {
       cancelled = true;

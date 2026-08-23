@@ -24,6 +24,10 @@ const VERB: Record<string, (a: Record<string, unknown>) => string> = {
     if (p === "coherence") return `Drafting the executive summary`;
     return `Phase: ${p}`;
   },
+  // v2 (gateless): the model's opening read of the question — the FIRST row of
+  // every run's trace. Without this arm it fell through to the unknown-kind
+  // fallback and rendered as the raw internal name "brief".
+  brief: () => `Framed the question`,
   search: (a) =>
     a.label != null
       ? `Iterating on section "${a.label}"`
@@ -33,6 +37,14 @@ const VERB: Record<string, (a: Record<string, unknown>) => string> = {
       ? `Rewriting section: ${a.label}`
       : `Writing section: ${a.section ?? ""}`,
 };
+
+/** The brief's own text is its trace detail — the reader sees HOW the model
+ *  read the question, not just that it did. Truncated to one trace line; the
+ *  full text renders as an assistant chat message in the report view. */
+function briefDetail(args: Record<string, unknown>): string | undefined {
+  const text = String(args.text ?? "").trim();
+  return text ? truncateWithEllipsis(splitThink(text).answer || text, 160) : undefined;
+}
 
 function plainLabel(toolName: string, args: Record<string, unknown>): string {
   return (VERB[toolName] ?? (() => `${toolName}`))(args);
@@ -82,9 +94,13 @@ function buildActivityItem(
       obs.tool_result.tool_name,
       obs.tool_result.structured,
     );
+  } else if (tc.tool_name === "brief") {
+    detail = briefDetail(tc.arguments);
   }
   let st: ActivityItem["status"];
-  if (obs) st = "done";
+  // The brief is a completed statement the moment it lands — no observation
+  // pairs with it, so without this arm it would spin forever during the run.
+  if (obs || tc.tool_name === "brief") st = "done";
   else if (status === "RUNNING") st = "running";
   else st = "done";
   const item: ActivityItem = {

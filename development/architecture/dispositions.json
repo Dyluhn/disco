@@ -68,7 +68,7 @@
     "state": "active",
     "original_type": "DISTRIBUTED_CONCERN",
     "owner_package": "PKG-11-RETRIEVAL",
-    "location": "current/packages/retrieval/src/disco/retrieval/streaming.py + current/packages/retrieval/src/disco/retrieval/deep_research/synthesis.py",
+    "location": "current/packages/retrieval/src/disco/retrieval/streaming.py + current/packages/retrieval/src/disco/retrieval/deep_research/writer.py",
     "role_category": "duplicated citation grammar/private sibling coupling"
   },
   {

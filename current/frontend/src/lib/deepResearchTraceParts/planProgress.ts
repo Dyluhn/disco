@@ -1,61 +1,22 @@
 /**
- * Per-sub-question plan progress, split out of `deepResearchTrace.ts`
- * (PKG-12-C/TS-0051). `deriveStats` also needs this computation (to tally
- * `subquestionsDone`) and imports it from here directly rather than routing
- * back through the parent.
+ * Deep Research no longer has a plan, so there are no plan steps to match
+ * progress against.
+ *
+ * v2 (gateless deep research) removed the decompose → plan → approve gate:
+ * research starts on submit, the model's brief is the first visible output,
+ * and the engine's search / observation / phase / section_done events are the
+ * only honest progress signal (see `./stats.ts`). Matching engine actions back
+ * to plan-step titles produced a checklist of things the run never promised.
+ *
+ * This module is kept as a compatibility stub rather than deleted (the same
+ * treatment as `components/research/IterativeToggle.tsx`): no runtime module
+ * imports it, and a stale caller gets an empty map rather than a broken build.
  */
-import type { AgentEvent } from "@/types/agent";
-import type { DeepPlanView, StepState } from "@/lib/deepResearchTrace";
 
-/** A step already `"done"` must never regress to `"active"` — search/synthesize
- *  actions that target an already-finished sub-question are no-ops here. */
-function markActive(
-  map: Map<number, StepState>,
-  titleIndex: Map<string, number>,
-  title: string,
-): void {
-  const idx = titleIndex.get(title);
-  if (idx !== undefined && map.get(idx) !== "done") {
-    map.set(idx, "active");
-  }
-}
+/** Retained so a stale import still type-checks. Plan steps no longer exist. */
+export type StepState = "pending" | "active" | "done";
 
-function markDone(
-  map: Map<number, StepState>,
-  titleIndex: Map<string, number>,
-  title: string,
-): void {
-  const idx = titleIndex.get(title);
-  if (idx !== undefined) map.set(idx, "done");
-}
-
-/** Per-sub-question progress derived from the engine's emitted ActionEvents.
- *  A sub-question is "done" once `synthesize_section` has fired for it,
- *  "active" once any `search` action targeted it, "pending" otherwise.
- *  Returns a 1-based Map matching PlanPanel's contract. */
-export function computePlanProgress(
-  events: AgentEvent[],
-  plan: DeepPlanView | null,
-): Map<number, StepState> {
-  const map = new Map<number, StepState>();
-  if (!plan) return map;
-  const titleIndex = new Map<string, number>();
-  plan.steps.forEach((s, i) => titleIndex.set(s.title, i + 1)); // 1-based
-
-  for (const e of events) {
-    if (e.kind !== "action" || !e.tool_call) continue;
-    const name = e.tool_call.tool_name;
-    const args = e.tool_call.arguments;
-    if (name === "search") {
-      markActive(map, titleIndex, String(args.subquestion ?? ""));
-    } else if (name === "synthesize_section") {
-      // Writing STARTED — the step is being worked, not finished. Marking it
-      // done here (the old behavior) checked steps off ~30-60s early on local
-      // models and left the strip lying about progress.
-      markActive(map, titleIndex, String(args.section ?? ""));
-    } else if (name === "section_done") {
-      markDone(map, titleIndex, String(args.title ?? ""));
-    }
-  }
-  return map;
+/** Always empty — there is no plan to track progress against. */
+export function computePlanProgress(): Map<number, StepState> {
+  return new Map();
 }

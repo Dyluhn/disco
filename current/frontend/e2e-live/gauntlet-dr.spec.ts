@@ -80,45 +80,17 @@ test(`gauntlet DR ${LABEL}: report finishes with sections+citations, deck builds
     /NetworkError|Failed to fetch|csrf required|auth mint|forbidden|unauthorized/i,
   );
 
-  // Plan approval gates DR — approve when offered (autonomous may skip).
-  // Live label is "Approve research plan" (fix-c #1); tolerate older variants
-  // and the stable control hook.
-  const approve = page
-    .locator('[data-disco-control="approve-plan"]')
-    .or(page.getByRole("button", { name: /approve (research plan|& build)/i }))
-    .first();
-  try {
-    await approve.waitFor({ state: "visible", timeout: 240_000 });
-    await shot("05-plan");
-
-    // DR_REVISE: live revision exercise (the 2026-07-07 STUCK regression path —
-    // revision → Phase 1R re-propose → a REVISED plan gate, never STUCK).
-    // Set DR_REVISE to a revision instruction to enable for this run.
-    const revise = process.env.DR_REVISE;
-    if (revise) {
-      await page
-        .locator('[data-disco-control="revise-plan-open"]')
-        .or(page.getByRole("button", { name: /revise/i }))
-        .first()
-        .click();
-      await page.getByRole("textbox").last().fill(revise);
-      await page
-        .locator('[data-disco-control="revise-plan"]')
-        .or(page.getByRole("button", { name: /send revision/i }))
-        .first()
-        .click();
-      await shot("05b-revision-sent");
-      // The revised plan gate must come back (NOT a STUCK banner).
-      await approve.waitFor({ state: "visible", timeout: 240_000 });
-      const bodyNow = await page.locator("body").innerText();
-      expect(bodyNow, "revision must re-propose, not STUCK").not.toMatch(/\bSTUCK\b/i);
-      await shot("05c-revised-plan");
-    }
-
-    await approve.click();
-  } catch {
-    /* no approval gate offered — autonomous path */
-  }
+  // v2 is gateless: submitting STARTS the research — there is no plan to
+  // approve and no revision gate (the DR_REVISE exercise went with them). The
+  // model's brief is the first visible output, so it is the honest "the run
+  // really started" checkpoint: reaching it proves work began rather than the
+  // page sitting idle until the report budget expires.
+  await page
+    .locator("[data-dr-brief]")
+    .waitFor({ state: "visible", timeout: 240_000 });
+  await shot("05-brief");
+  const afterBrief = await page.locator("body").innerText();
+  expect(afterBrief, "run went STUCK before gathering").not.toMatch(/\bSTUCK\b/i);
   await shot("06-running");
 
   // Report completion oracle: the Cited tab mounts only with a finished, cited

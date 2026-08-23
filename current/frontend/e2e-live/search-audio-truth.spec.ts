@@ -117,9 +117,11 @@ test("a new grounded report renders real synthesis progress and exports playable
       const input = page.getByPlaceholder(/ask a research question/i);
       await input.fill(QUESTION);
       await input.press("Enter");
-      const approve = page.locator('[data-disco-control="approve-plan"]').first();
-      await approve.waitFor({ state: "visible", timeout: 300_000 });
-      await approve.click();
+      // v2 is gateless: submitting starts the research. Wait on the model's
+      // brief (the first visible output) instead of an approval gate.
+      await page
+        .locator("[data-dr-brief]")
+        .waitFor({ state: "visible", timeout: 300_000 });
       await expect(page.locator('[data-dr-phase="done"]')).toBeVisible({
         timeout: 1_500_000,
       });

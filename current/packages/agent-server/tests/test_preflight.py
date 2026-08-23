@@ -21,7 +21,6 @@ from disco.core import (
     LLMMessage,
     MessageEvent,
     PlanEvent,
-    PlanStep,
     SqliteEventStore,
     StatusEvent,
 )
@@ -566,13 +565,31 @@ async def test_preflight_soft_degrade_is_per_driver_not_per_conversation():
     ) not in rt._driver_preflight._proven
 
 
-async def test_deep_research_kick_blocks_on_dead_driver():
-    """P1-2: the DR INITIAL KICK pre-flights the driver. A dead/unauthed model
-    emits StatusEvent(ERROR) and does NOT leave the conversation stuck RUNNING
-    (the old bug: decompose set RUNNING then failed with only a MessageEvent)."""
-    store = SqliteEventStore(":memory:")
-    rt = ConversationRuntime(store)  # no injected router → preflight active
+def _dr_runtime(store: SqliteEventStore) -> ConversationRuntime:
+    """A deep_research conversation with hermetic (present, healthy) encoders,
+    so only the driver pre-flight decides whether the run starts."""
+    rt = ConversationRuntime(
+        store,
+        research_providers={
+            "search": object(),
+            "extraction": object(),
+            "reranker": _FakeNLI(),
+            "embedder": None,
+            "nli": _FakeNLI(),
+        },
+    )
     rt.settings._set_surface("c1", "deep_research")
+    return rt
+
+
+async def test_deep_research_kick_blocks_on_dead_driver():
+    """P1-2: the gateless DR KICKOFF pre-flights the driver BEFORE any research
+    starts. A dead/unauthed model emits ErrorEvent + StatusEvent(ERROR) and does
+    NOT leave the conversation stuck RUNNING (v2: there is no plan step, so the
+    kickoff pre-flight is the only thing standing between a dead driver and a
+    long doomed run)."""
+    store = SqliteEventStore(":memory:")
+    rt = _dr_runtime(store)
 
     async def _dead(cid, **kw):
         return "Driver 'm' rejected the API key: invalid api key"
@@ -586,39 +603,39 @@ async def test_deep_research_kick_blocks_on_dead_driver():
             message=LLMMessage(role="user", content="research X"),
         ),
     )
-    await rt.deep_research._propose_deep_research_plan("c1", await store.get_events("c1"))
+    await rt.deep_research._maybe_run_deep_research("c1")
 
     events = await store.get_events("c1")
     statuses = [e for e in events if isinstance(e, StatusEvent)]
     assert statuses and statuses[-1].status == ConversationStatus.ERROR
     assert "rejected the API key" in (statuses[-1].detail or "")
-    # NEVER set RUNNING, and never emitted a plan → not stuck.
+    assert any(isinstance(e, ErrorEvent) and e.code == "deep_research_preflight" for e in events)
+    # NEVER set RUNNING → not stuck. And no plan machinery is involved at all.
     assert not any(s.status == ConversationStatus.RUNNING for s in statuses)
     assert not any(isinstance(e, PlanEvent) for e in events)
 
 
-async def test_deep_research_kick_decompose_failure_goes_error_not_stuck():
-    """P1-2: even when the pre-flight passes, a decompose_query failure (e.g. a
-    dead QUERY_REWRITER the RAG_ANSWERER probe didn't cover) must take the
-    conversation to ERROR — NOT spin forever at RUNNING."""
+async def test_deep_research_run_failure_goes_error_not_stuck(monkeypatch):
+    """PKG-34 semantics, retained in v2: when the pre-flight passes and the run
+    itself then fails (a provider blowing up mid-research), the single failure
+    handler takes the conversation to ERROR with the named reason — it never
+    spins forever at RUNNING. (The old decompose-failure path this replaced is
+    gone: v2 never decomposes.)"""
+    from disco.agent_server._deep_research_service_parts import execute as execute_parts
+
     store = SqliteEventStore(":memory:")
-    rt = ConversationRuntime(store)
-    rt.settings._set_surface("c1", "deep_research")
+    rt = _dr_runtime(store)
 
     async def _ok(cid, **kw):
         return None  # pre-flight passes
 
     rt._driver_preflight.check = _ok  # type: ignore[method-assign]
+    rt.drivers.router = lambda **kw: object()
 
-    # Make decompose_query blow up: the router its decompose uses raises.
-    class _DeadRewriterRouter:
-        async def complete(self, req, *, context=None):
-            raise LLMAuthError("rewriter key rejected", provider="x")
+    async def _boom(*args, **kwargs):
+        raise LLMAuthError("research key rejected", provider="x")
 
-        def stream_complete(self, req, *, context=None):  # pragma: no cover
-            raise LLMAuthError("rewriter key rejected", provider="x")
-
-    rt.drivers.router = lambda **kw: _DeadRewriterRouter()
+    monkeypatch.setattr(execute_parts, "run_engine", _boom)
 
     await store.append(
         "c1",
@@ -627,34 +644,29 @@ async def test_deep_research_kick_decompose_failure_goes_error_not_stuck():
             message=LLMMessage(role="user", content="research X"),
         ),
     )
-    await rt.deep_research._propose_deep_research_plan("c1", await store.get_events("c1"))
+    await rt.deep_research._maybe_run_deep_research("c1")
 
     events = await store.get_events("c1")
     statuses = [e for e in events if isinstance(e, StatusEvent)]
     assert statuses and statuses[-1].status == ConversationStatus.ERROR
-    assert "decomposition failed" in (statuses[-1].detail or "").lower()
+    assert "research key rejected" in (statuses[-1].detail or "")
+    assert any(isinstance(e, ErrorEvent) and e.code == "deep_research_failed" for e in events)
 
 
-async def test_deep_research_kick_bounds_query_rewriter_role():
-    """W-35-fu: decompose_query runs via QUERY_REWRITER, NOT RAG_ANSWERER. A
-    black-holed QUERY_REWRITER (endpoint accepts the socket, never answers) that
-    the RAG_ANSWERER probe didn't cover must be caught by the QUERY_REWRITER
-    pre-flight → bounded → StatusEvent(ERROR), NOT a kick stuck RUNNING forever.
-    Both roles are probed before RUNNING; the rewriter probe is what fails here.
-    """
+async def test_deep_research_kickoff_probes_rag_answerer_role():
+    """P1-3 in v2: the gateless kickoff probes the role the run GENERATES with —
+    RAG_ANSWERER (the research agent and the writer both use it) — not
+    AGENT_DRIVER, and no longer QUERY_REWRITER (nothing decomposes any more)."""
     store = SqliteEventStore(":memory:")
-    rt = ConversationRuntime(store)  # no injected router → preflight path active
-    rt.settings._set_surface("c1", "deep_research")
+    rt = _dr_runtime(store)
 
     probed: list[ModelRole] = []
 
     async def _by_role(cid, *, override=None, role=ModelRole.AGENT_DRIVER):
         probed.append(role)
-        if role is ModelRole.QUERY_REWRITER:
-            # Exactly the bounded-timeout reason _preflight_driver returns for a
-            # black hole (see test_preflight_driver_is_wall_bounded_on_black_hole).
-            return "Driver 'rw' unreachable: no response within 8s (pre-flight timed out)"
-        return None  # RAG_ANSWERER healthy
+        # Exactly the bounded-timeout reason _preflight_driver returns for a
+        # black hole (see test_preflight_driver_is_wall_bounded_on_black_hole).
+        return "Driver 'm' unreachable: no response within 8s (pre-flight timed out)"
 
     rt._driver_preflight.check = _by_role  # type: ignore[method-assign]
 
@@ -665,17 +677,15 @@ async def test_deep_research_kick_bounds_query_rewriter_role():
             message=LLMMessage(role="user", content="research X"),
         ),
     )
-    await rt.deep_research._propose_deep_research_plan("c1", await store.get_events("c1"))
+    await rt.deep_research._maybe_run_deep_research("c1")
 
     events = await store.get_events("c1")
     statuses = [e for e in events if isinstance(e, StatusEvent)]
-    # The rewriter role WAS probed, and the kick errored on it.
-    assert ModelRole.QUERY_REWRITER in probed
+    assert probed == [ModelRole.RAG_ANSWERER]
     assert statuses and statuses[-1].status == ConversationStatus.ERROR
     assert "timed out" in (statuses[-1].detail or "")
-    # NEVER set RUNNING and never decomposed/planned → not stuck (genuinely bounded).
+    # NEVER set RUNNING → genuinely bounded, not stuck.
     assert not any(s.status == ConversationStatus.RUNNING for s in statuses)
-    assert not any(isinstance(e, PlanEvent) for e in events)
 
 
 async def test_deep_research_preflights_rag_answerer_role():
@@ -795,7 +805,9 @@ async def test_research_stream_emits_named_error_on_dead_encoder():
 
 async def test_execute_deep_research_blocks_on_dead_encoder():
     """The DR report engine does NOT start on a dead required encoder: an
-    ErrorEvent + StatusEvent(ERROR) name the reason instead of a wrong report."""
+    ErrorEvent + StatusEvent(ERROR) name the reason instead of a wrong report.
+    A degraded remote reranker returns input order silently, so this check is
+    the only thing between it and a quietly-wrong report."""
     store = SqliteEventStore(":memory:")
     rt = ConversationRuntime(
         store,
@@ -815,8 +827,7 @@ async def test_execute_deep_research_blocks_on_dead_encoder():
             message=LLMMessage(role="user", content="research X"),
         ),
     )
-    plan = PlanEvent(summary="plan", steps=[PlanStep(title="q1")])
-    await rt.deep_research._execute_deep_research("c1", plan)
+    await rt.deep_research._execute_deep_research("c1")
 
     events = await store.get_events("c1")
     assert any(isinstance(e, ErrorEvent) and e.code == "deep_research_preflight" for e in events)

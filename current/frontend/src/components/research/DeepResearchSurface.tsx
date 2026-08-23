@@ -7,9 +7,7 @@
  *   ┌─ Started (running or finished) ──────────────────────────┐
  *   │ H1 — the question (font-display)                         │
  *   │                                                          │
- *   │ Plan-edit gate (PlanPanel in gate mode)                  │  ← only at AWAITING_PLAN_APPROVAL
- *   │   ── or ──                                               │
- *   │ DeepProgressStrip (checklist + trace + stats)            │  ← collapsing
+ *   │ DeepProgressStrip (brief + trace + stats)                │  ← collapsing
  *   │                                                          │
  *   │ DeepBoundedNotice                                        │  ← when bounded_by
  *   │                                                          │
@@ -20,9 +18,17 @@
  *   │ Export, Refine                                           │  ← FINISHED actions
  *   └──────────────────────────────────────────────────────────┘
  *
- * Reuses: PlanPanel (gate), ActivityFeed (via DeepProgressStrip), Citation
- * cards (via DeepReportView → CitedText), QueryInput, the conversation WS
- * subscription, the Build status state machine.
+ * v2 (gateless): submitting STARTS the research. There is no plan proposal and
+ * no approve/revise gate on this surface — the model's brief is its first
+ * visible output, and Stop / Kill / Resume stay live for the whole run. The
+ * build and agent surfaces keep their own plan machinery; none of it is shared
+ * here. (The mid-run steer + inject-source transport is wired in
+ * `useDeepResearchStream` but still has no rendered control — see the note
+ * there; it is a missing affordance, not something this surface removed.)
+ *
+ * Reuses: ActivityFeed (via DeepProgressStrip), Citation cards (via
+ * DeepReportView → CitedText), QueryInput, the conversation WS subscription,
+ * the Build status state machine.
  *
  * ---- Surface map (Epic 12-C decomposition) --------------------------------
  *
@@ -36,7 +42,7 @@
  *   - useDeepResearchSurfaceState  — draft state, new-research, top-bar export
  *   - DeepResearchComposer         — the pre-run composer (empty state)
  *   - DeepResearchTopBar           — H1 + Notify/Stop/Kill/Retry/Export/New
- *   - DeepResearchRunView          — error/planning-loader/plan-gate/progress/bounded
+ *   - DeepResearchRunView          — error/starting-loader/progress/bounded
  *   - DeepResearchReportView       — report/sources/follow-ups/need-more/footer
  */
 
@@ -94,14 +100,13 @@ export function DeepResearchSurface({
 
   // Gap #39 — a stable, assertable DR lifecycle phase. The run itself is
   // model+live-search+streaming (non-deterministic), but the PHASE TRANSITIONS
-  // (idle → planning → running → paused/error → done) are deterministic and can
-  // be asserted by the harness off this single attribute.
-  const drPhase: string = r.awaitingPlan
-    ? "planning"
-    : r.status === "RUNNING"
-      ? r.plan
-        ? "running"
-        : "planning"
+  // (idle → running → paused/error → done) are deterministic and can be
+  // asserted by the harness off this single attribute. v2 dropped the
+  // "planning" phase along with the plan gate: submit goes straight to
+  // running.
+  const drPhase: string =
+    r.status === "RUNNING"
+      ? "running"
       : r.status === "PAUSED"
         ? "paused"
         : r.status === "ERROR"

@@ -1,44 +1,20 @@
-"""Extracted helpers for `deep_research.synthesis` (Epic 11-B, PKG-11-RETRIEVAL).
+"""Markdown table repair + continuation-join mechanics for the report writer.
 
-Split out of the old monolithic `synthesis.py` to clear its module-size cap
-(>700 logical) and two callables' complexity caps (`_repair_tables`,
-`synthesize_section` — both were over the mccabe-15 / logical-100 limits).
-Each piece here owns exactly one decision; none of it changes behaviour.
-
-This module imports its parent **lazily**: `from . import synthesis as
-_synthesis` below binds the module object only (always safe — the submodule
-is registered in `sys.modules` the instant its import begins, before any of
-its top-level code runs). The few synthesis-private names this file needs
-(`_RouterWithCtx`, `_EVIDENCE_SYSTEM_PROMPT`, `_SYNTHESIS_TEMPERATURE`) are
-resolved as `_synthesis.<name>` attribute lookups **inside function bodies**,
-i.e. at call time, not at import time. `synthesis.py` imports THIS module at
-its own top level (the normal parent-imports-child direction), so by the time
-anything here is actually called, `synthesis.py` has long since finished
-executing and every one of those attributes exists.
+Originally extracted from the v1 per-section `synthesis.py` (removed by the
+v2 agentic rework, PKG-35); the writer (`writer.py` / `_writer_parts.py`)
+still uses these rendering-safety repairs. Each piece owns exactly one
+decision; none of it edits prose content — pipe normalization and delimiter
+injection only.
 """
 
 from __future__ import annotations
 
 import re
-from typing import cast
-
-from disco.core.events import LLMMessage
-from disco.core.llm import (
-    CapabilityProfile,
-    CompletionRequest,
-    CompletionResponse,
-    LLMRouter,
-    ModelRole,
-)
-from disco.core.think import strip_think_spans
-
-from . import synthesis as _synthesis
-from .gather import GatherLegContext
 
 # ---------------------------------------------------------------------------
-# BW-07 table repair (PY-0710: `_repair_tables` mccabe was 17, cap 15) — split
-# so each piece owns one decision: gathering a candidate run, judging whether
-# it's really a table, and rebuilding a confirmed one.
+# BW-07 table repair — split so each piece owns one decision: gathering a
+# candidate run, judging whether it's really a table, and rebuilding a
+# confirmed one.
 # ---------------------------------------------------------------------------
 
 _DELIM_CELL_RE = re.compile(r"^\s*:?-{1,}:?\s*$")
@@ -110,9 +86,8 @@ def _rebuild_table(run: list[str], ncols: int) -> list[str]:
 
 
 def repair_tables(markdown: str) -> str:
-    """BW-07 — repair malformed GFM tables so remark-gfm parses them instead of
-    falling back to a literal-pipe paragraph. The preserved public entry point
-    is `synthesis._repair_tables`, a thin wrapper around this function."""
+    """BW-07 — repair malformed GFM tables so remark-gfm parses them instead
+    of falling back to a literal-pipe paragraph."""
     lines = markdown.split("\n")
     out: list[str] = []
     in_fence = False
@@ -144,44 +119,8 @@ def repair_tables(markdown: str) -> str:
     return "\n".join(out)
 
 
-def repair_grounded_tables(markdown: str) -> str:
-    """Repair tables after unsupported claims have been removed.
-
-    Claim filtering can erase individual table cells while preserving their
-    pipe delimiters.  Normalize the table again, then drop sparse fragment rows
-    that no longer carry enough cells to remain meaningful.  A table with no
-    substantive rows disappears instead of rendering as a broken skeleton.
-    """
-
-    lines = repair_tables(markdown).split("\n")
-    out: list[str] = []
-    index = 0
-    while index < len(lines):
-        if index + 1 >= len(lines) or not _is_delimiter_row(lines[index + 1]):
-            if lines[index].strip() != "|":
-                out.append(lines[index])
-            index += 1
-            continue
-        header = lines[index]
-        divider = lines[index + 1]
-        ncols = max(2, _header_cell_count(header))
-        index += 2
-        rows: list[str] = []
-        while index < len(lines) and "|" in lines[index] and lines[index].strip():
-            row = _normalize_table_row(lines[index], ncols)
-            cells = [cell.strip() for cell in row.strip().strip("|").split("|")]
-            if sum(bool(cell) for cell in cells) >= max(2, ncols - 1):
-                rows.append(row)
-            index += 1
-        if rows:
-            out.extend([header, divider, *rows])
-    return "\n".join(out)
-
-
 # ---------------------------------------------------------------------------
-# `synthesize_section` decomposition (PY-0711/0712: logical 185 / cap 100,
-# mccabe 26 / cap 15) — the truncation-continuation loop and the shared
-# extractive-fallback-or-bail path, each in its own callable.
+# Continuation join for the truncation guard (used by `_writer_parts`).
 # ---------------------------------------------------------------------------
 
 
@@ -196,57 +135,3 @@ def _join_continuation_text(markdown: str, stripped_extra: str) -> str:
     if markdown[-1:] == "|" and stripped_extra[:1] == "|":
         return markdown + "\n" + stripped_extra
     return markdown + stripped_extra
-
-
-async def continue_truncated_section(
-    router: LLMRouter,
-    instruction: str,
-    markdown: str,
-    resp: CompletionResponse,
-    *,
-    leg_context: GatherLegContext,
-) -> str:
-    """BW-07 (2) truncation guard: continue a ``finish_reason == 'length'``
-    section from its exact cut point, bounded to 2 continuations."""
-    cont = 0
-    while resp.finish_reason == "length" and cont < 2:
-        cont += 1
-        try:
-            resp = await cast(_synthesis._RouterWithCtx, router).complete(
-                CompletionRequest(
-                    profile=CapabilityProfile(role=ModelRole.RAG_ANSWERER),
-                    messages=[
-                        LLMMessage(
-                            role="system",
-                            content=_synthesis._EVIDENCE_SYSTEM_PROMPT,
-                        ),
-                        LLMMessage(role="user", content=instruction),
-                        LLMMessage(role="assistant", content=markdown.rstrip()),
-                        LLMMessage(
-                            role="user",
-                            content=(
-                                "Your previous reply was cut off. Continue "
-                                "EXACTLY where you stopped — do not repeat any "
-                                "earlier text and do not add a preamble. If you "
-                                "were mid-table, finish the table."
-                            ),
-                        ),
-                    ],
-                    temperature=_synthesis._SYNTHESIS_TEMPERATURE,
-                    max_tokens=1400,
-                ),
-                context=leg_context.call_context,
-            )
-        except Exception:  # noqa: BLE001 — keep the partial section
-            break
-        extra = strip_think_spans(resp.text, keep_edge_whitespace=True)
-        if not extra.strip():
-            break
-        markdown = _join_continuation_text(markdown, extra.lstrip())
-    return markdown
-
-
-# The extractive-fallback constructors that used to live here
-# (`frame_extractive_fallback`, `fallback_section_or_markdown`) were removed:
-# a section that cannot be synthesized and grounded raises to the run instead
-# of shipping quote-stub prose.

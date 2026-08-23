@@ -3,24 +3,27 @@
  * the surface's renderable views. Same architecture as `useBuildStream` —
  * upsert-dedup-by-id, status state machine, history-then-live via the
  * shared subscribeConversation. The Deep Research specifics live in the
- * derived state: plan / progress / stats / assembling sections / report.
+ * derived state: brief / stats / assembling sections / report.
+ *
+ * v2 (gateless deep research): there is NO plan-approval gate on this surface.
+ * Submitting sends the question and research starts immediately; the model's
+ * brief is its first visible output. The approve/revise frames the build lane
+ * still uses are deliberately absent here — the build surface keeps its own
+ * plan machinery in `useBuildStream`.
  */
 
 import { useEffect, useMemo, useReducer, useRef } from "react";
 import { subscribeConversation, type AgentHandle } from "@/api/agent";
 import {
   deriveAssemblingSections,
+  deriveBrief,
   deriveLiveTrace,
-  derivePlan,
-  derivePlanProgress,
   deriveReport,
   deriveSourceTiers,
   deriveStats,
   type AssemblingSection,
-  type DeepPlanView,
   type DeepStats,
   type SourceTiers,
-  type StepState,
 } from "@/lib/deepResearchTrace";
 import type { ActivityItem } from "@/lib/buildTrace";
 import type {
@@ -46,10 +49,9 @@ interface RawState {
   /** Tracks the current follow-up phase without overwriting the main status.
    *  "follow_up" = a follow-up answer is being generated (loop re-entered);
    *  "follow_up_complete" = the last follow-up finished;
-   *  null = no follow-up in flight (plan-run or idle). */
+   *  null = no follow-up in flight (main run or idle). */
   followUpStatus: "follow_up" | "follow_up_complete" | null;
   events: AgentEvent[];
-  pendingPlanId: string | null;
   error: string | null;
 }
 
@@ -57,7 +59,6 @@ export const initial: RawState = {
   status: "IDLE",
   followUpStatus: null,
   events: [],
-  pendingPlanId: null,
   error: null,
 };
 
@@ -76,34 +77,21 @@ export function reducer(state: RawState, action: Action): RawState {
   if (action.type === "reset") return initial;
   const f = action.frame;
   if (f.type === "state") {
-    return {
-      ...state,
-      status: f.state.execution_status,
-      pendingPlanId: f.state.pending_plan_id,
-    };
+    return { ...state, status: f.state.execution_status };
   }
   if (f.type === "event") {
     const events = upsert(state.events, f.event);
     if (f.event.kind === "status") {
       const detail = f.event.detail ?? null;
       // Follow-up status events MUST NOT overwrite the main conversation status.
-      // If they did, re-entering RUNNING for a follow-up re-spins DeepProgressStrip
-      // (the original-plan loader flashes again). Track them in a separate field
-      // so the plan-progress UI can stay calm while the follow-up answer generates.
+      // If they did, re-entering RUNNING for a follow-up re-spins
+      // DeepProgressStrip (the run loader flashes again). Track them in a
+      // separate field so the progress UI stays calm while the follow-up
+      // answer generates.
       if (detail === "follow_up" || detail === "follow_up_complete") {
         return { ...state, events, followUpStatus: detail };
       }
-      const status = f.event.status;
-      return {
-        ...state,
-        events,
-        status,
-        followUpStatus: null,
-        pendingPlanId:
-          status === "AWAITING_PLAN_APPROVAL"
-            ? (detail ?? state.pendingPlanId)
-            : null,
-      };
+      return { ...state, events, status: f.event.status, followUpStatus: null };
     }
     if (f.event.kind === "error") {
       return {
@@ -129,12 +117,10 @@ export interface DeepResearchStream {
   followUpStatus: "follow_up" | "follow_up_complete" | null;
   events: AgentEvent[];
   error: string | null;
-  /** The proposed plan (sub-questions). Null until decompose completes. */
-  plan: DeepPlanView | null;
-  /** Per-sub-question progress (1-based index → state). */
-  progress: Map<number, StepState>;
-  /** True at AWAITING_PLAN_APPROVAL (drives the plan-edit gate). */
-  awaitingPlan: boolean;
+  /** The model's opening brief — how it read the question and the angles it
+   *  will chase. The FIRST visible output of a gateless run (v2); null until
+   *  it lands. */
+  brief: string | null;
   /** Live counts for the mono stats strip. */
   stats: DeepStats;
   /** The activity feed items (reuses ActivityFeed verbatim). */
@@ -146,8 +132,6 @@ export interface DeepResearchStream {
   /** Three-tier source split (cited / reviewed / discovered). */
   sources: SourceTiers;
   /** Send WS frames to the conversation. */
-  approvePlan: () => void;
-  requestPlan: (text: string) => void;
   cancel: () => void;
   /** Continue a stopped/incomplete run (explicit — never on open). */
   resume: () => void;
@@ -155,12 +139,13 @@ export interface DeepResearchStream {
    *  that re-kicks the loop with the report's corpus as grounding. */
   followUp: (question: string) => void;
   /**
-   * D3 mid-run steer: send a steer string to the running DR engine. The
-   * server routes the `steer` WS frame into the DR queue (not the agent
-   * loop) when a DR run is active; the engine drains it at the next section
-   * boundary and starts a fresh gather leg for the steer topic.
+   * Mid-run steer: send a steer string to the running DR engine. The server
+   * routes the `steer` WS frame into the DR queue (not the agent loop) when
+   * a DR run is active; the research agent drains it at its next turn
+   * boundary, where it appears as a priority USER STEER line the model acts
+   * on before returning to its own plan.
    *
-   * Only call while `status === "RUNNING"` and the WS is open — the button
+   * Only call while `status === "RUNNING"` and the WS is open — the control
    * is gated in the surface to enforce this.
    */
   steer: (text: string) => void;
@@ -200,8 +185,9 @@ export function useDeepResearchStream(
     handle.current = h;
     // Command–Query Separation: only a FRESH submit kicks the loop. Opening an
     // existing run (resume / History) is a safe read — subscribe + replay only.
-    // The engine's _propose_deep_research_plan path decomposes the query into a
-    // PlanEvent + AWAITING_PLAN_APPROVAL; we then wait at the plan gate.
+    // v2: sending the question IS starting the research. There is no plan
+    // proposal and nothing to approve — the engine's first visible output is
+    // the model's brief.
     if (current.kick) {
       h.send({ type: "send_message", content: current.query });
     }
@@ -211,10 +197,6 @@ export function useDeepResearchStream(
     };
   }, [sessionCid]);
 
-  const approvePlan = () => handle.current?.send({ type: "approve_plan" });
-  const requestPlan = (text: string) =>
-    text.trim() &&
-    handle.current?.send({ type: "request_plan", content: text.trim() });
   const cancel = () => handle.current?.send({ type: "cancel" });
   // Resume a stopped/incomplete run (explicit; never automatic on open).
   const resume = () => handle.current?.send({ type: "resume" });
@@ -226,7 +208,9 @@ export function useDeepResearchStream(
   // D3: mid-run steer — sends a `steer` frame while a DR run is active.
   // The server routes it into the DR queue (not the agent loop) and the engine
   // starts a new gather leg for the steer topic at the next section boundary.
-  // Only functional while status === "RUNNING"; gated in the surface.
+  // Only meaningful while status === "RUNNING".
+  // The user-facing control is `DeepSteerInput`, rendered by
+  // DeepResearchRunView while the run is live.
   const steer = (text: string) => {
     const trimmed = text.trim();
     if (trimmed) handle.current?.send({ type: "steer", steer_text: trimmed });
@@ -239,39 +223,30 @@ export function useDeepResearchStream(
       handle.current?.send({ type: "inject_source", inject_source_text: trimmed });
   };
 
-  const plan = useMemo(() => derivePlan(state.events), [state.events]);
-  const progress = useMemo(
-    () => derivePlanProgress(state.events, plan),
-    [state.events, plan],
-  );
-  const stats = useMemo(() => deriveStats(state.events, plan), [state.events, plan]);
+  const brief = useMemo(() => deriveBrief(state.events), [state.events]);
+  const stats = useMemo(() => deriveStats(state.events), [state.events]);
   const trace = useMemo(
     () => deriveLiveTrace(state.events, state.status),
     [state.events, state.status],
   );
   const assembling = useMemo(
-    () => deriveAssemblingSections(state.events, plan),
-    [state.events, plan],
+    () => deriveAssemblingSections(state.events),
+    [state.events],
   );
   const report = useMemo(() => deriveReport(state.events), [state.events]);
   const sources = useMemo(() => deriveSourceTiers(report), [report]);
-  const awaitingPlan = state.status === "AWAITING_PLAN_APPROVAL";
 
   return {
     status: state.status,
     followUpStatus: state.followUpStatus,
     events: state.events,
     error: state.error,
-    plan,
-    progress,
-    awaitingPlan,
+    brief,
     stats,
     trace,
     assembling,
     report,
     sources,
-    approvePlan,
-    requestPlan,
     cancel,
     resume,
     followUp,

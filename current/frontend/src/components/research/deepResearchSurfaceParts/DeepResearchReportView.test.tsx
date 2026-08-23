@@ -36,8 +36,6 @@ const report: ReportEvent = {
 
 function renderReport(followUpStatus: "follow_up" | "follow_up_complete" | null) {
   const state = {
-    awaitingPlan: false,
-    plan: { id: "plan" },
     query: report.query,
     report,
     assembling: [],

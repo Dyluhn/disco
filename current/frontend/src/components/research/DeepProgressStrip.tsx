@@ -3,62 +3,74 @@
  * run. Three components inside the strip:
  *
  *   ┌─────────────────────────────────────────────────────────────┐
- *   │ Directions  3 of 6  ·  30 sources  ·  Round 2/4       [ ▾ ]  │  ← collapsible header
+ *   │ 12 searches  ·  30 sources  ·  round 2/4  ·  4m       [ ▾ ]  │  ← collapsible header
  *   ├─────────────────────────────────────────────────────────────┤
- *   │ ☑ 1. What products are shipping today?            done      │
- *   │ ⟳ 2. What are the manufacturing bottlenecks?      active    │  ← PlanPanel
- *   │ ◌ 3. How do costs compare to lithium-ion?         pending   │     (read-only)
+ *   │ Searching: "SK On pilot production timeline"                │  ← heartbeat
+ *   ├─────────────────────────────────────────────────────────────┤
+ *   │ The brief: how the model read the question and the angles   │  ← the brief
+ *   │ it intends to chase.                                        │
  *   ├─────────────────────────────────────────────────────────────┤
  *   │ Searching: "SK On pilot production timeline"                │
  *   │   Round 2: +6 sources (12 total for this sub-question)      │  ← ActivityFeed
- *   │ Coverage sufficient                                          │     (the live trace)
+ *   │ Framed the question                                          │     (the live trace)
  *   └─────────────────────────────────────────────────────────────┘
  *
+ * v2 (gateless deep research): there is no plan, so the strip no longer
+ * renders a sub-question checklist — a checklist of steps the run never
+ * promised was the dishonest part of the old treatment. What replaces it is
+ * the model's own brief plus the real event counts.
+ *
  * When the run finishes the strip collapses to a single line: "How it
- * researched · 3 of 6 sub-questions covered · 30 sources · [ ▸ Expand ]".
- * Click to re-open the full trace (transparency preserved, not discarded).
+ * researched · 12 searches · 30 sources · [ ▸ Expand ]". Click to re-open the
+ * full trace (transparency preserved, not discarded).
  */
 
 import { ChevronDown, ChevronRight, Loader2 } from "lucide-react";
 import { useState } from "react";
 import { ActivityFeed } from "@/components/build/ActivityFeed";
-import { PlanPanel } from "@/components/build/PlanPanel";
-import type { PlanView, StepState } from "@/lib/buildTrace";
 import { cn } from "@/lib/cn";
 import type { ActivityItem } from "@/lib/buildTrace";
-import type { DeepPlanView, DeepStats } from "@/lib/deepResearchTrace";
+import type { DeepStats } from "@/lib/deepResearchTrace";
 import type { ConversationStatus } from "@/types/agent";
 
 interface Props {
-  plan: DeepPlanView | null;
-  progress: Map<number, StepState>;
+  /** The model's opening brief — the first visible output of a gateless run. */
+  brief: string | null;
   trace: ActivityItem[];
   stats: DeepStats;
   status: ConversationStatus;
   /** Separate follow-up phase signal. When "follow_up", a follow-up answer is
-   *  generating and the PLAN-RUN loaders must stay calm. */
+   *  generating and the RUN loaders must stay calm. */
   followUpStatus: "follow_up" | "follow_up_complete" | null;
+}
+
+/** Whole minutes once past a minute, seconds below that. Only ever rendered
+ *  from a REAL measured span (stats.elapsedSeconds is null when no event
+ *  carried a timestamp) — never an estimate. */
+function formatElapsed(seconds: number): string {
+  if (seconds < 60) return `${seconds}s`;
+  return `${Math.round(seconds / 60)}m`;
 }
 
 function StatsRow({
   stats,
   status,
-  planActive,
+  runActive,
 }: {
   stats: DeepStats;
   status: ConversationStatus;
-  /** True only when the PLAN run is actively working — false during a follow-up
-   *  so the "Working" spinner doesn't re-flash on the plan strip. */
-  planActive: boolean;
+  /** True only when the RUN itself is working — false during a follow-up so
+   *  the "Working" spinner doesn't re-flash on the strip. */
+  runActive: boolean;
 }) {
   const isFinished = status === "FINISHED";
   return (
     <div className="flex flex-wrap items-center gap-body font-mono text-[0.78rem] text-text-muted">
       <span>
-        <span className="text-text">{stats.subquestionsDone}</span>
-        <span className="text-text-faint"> of </span>
-        <span className="text-text">{stats.subquestionsTotal}</span>
-        <span className="text-text-faint"> starting directions</span>
+        <span className="text-text">{stats.searches}</span>
+        <span className="text-text-faint">
+          {stats.searches === 1 ? " search" : " searches"}
+        </span>
       </span>
       <span className="text-text-faint">·</span>
       <span>
@@ -75,7 +87,16 @@ function StatsRow({
           </span>
         </>
       )}
-      {planActive && (
+      {stats.elapsedSeconds !== null && stats.elapsedSeconds > 0 && (
+        <>
+          <span className="text-text-faint">·</span>
+          <span>
+            <span className="text-text">{formatElapsed(stats.elapsedSeconds)}</span>
+            <span className="text-text-faint"> elapsed</span>
+          </span>
+        </>
+      )}
+      {runActive && (
         <>
           <span className="text-text-faint">·</span>
           <span className="flex items-center gap-hair text-accent">
@@ -89,26 +110,25 @@ function StatsRow({
 }
 
 /** The "now" line — what the engine is doing RIGHT NOW, so a long quiet stretch
- * (a 30-60s section write on a local model) reads as work, not a hang. */
+ * (a 30-60s write on a local model) reads as work, not a hang. */
 function Heartbeat({
   stats,
-  planActive,
+  runActive,
 }: {
   stats: DeepStats;
-  /** True only during the original plan run — suppressed during follow-up. */
-  planActive: boolean;
+  /** True only during the main run — suppressed during follow-up. */
+  runActive: boolean;
 }) {
-  if (!planActive) return null;
+  if (!runActive) return null;
   let now: string | null = null;
   if (stats.activeSection) {
-    const n = stats.activeSection.index || stats.subquestionsDone + 1;
-    now = `Compiling report section ${n}: “${stats.activeSection.title}”`;
+    now = `Writing “${stats.activeSection.title}”`;
   } else if (stats.phase === "coherence") {
     now = "Cross-checking the report for coherence…";
+  } else if (stats.phase === "synthesize") {
+    now = "Writing the report…";
   } else if (stats.activeSubquestion) {
     now = `Searching: “${stats.activeSubquestion.title}”`;
-  } else if (stats.phase === "synthesize") {
-    now = "Preparing the next section…";
   }
   if (!now && !stats.lastThought) return null;
   return (
@@ -128,30 +148,17 @@ function Heartbeat({
   );
 }
 
-export function DeepProgressStrip({ plan, progress, trace, stats, status, followUpStatus }: Props) {
+export function DeepProgressStrip({ brief, trace, stats, status, followUpStatus }: Props) {
   const isFinished = status === "FINISHED" || status === "IDLE";
-  // planActive: the plan run itself is working (not a follow-up answer).
+  // runActive: the research run itself is working (not a follow-up answer).
   // When followUpStatus === "follow_up", the loop re-entered for a follow-up
-  // but the plan-progress strip must stay calm — only the follow-up indicator
-  // (WALK-12, separate lane) shows activity.
-  const planActive = status === "RUNNING" && followUpStatus !== "follow_up";
+  // but this strip must stay calm — only the follow-up indicator (WALK-12,
+  // separate lane) shows activity.
+  const runActive = status === "RUNNING" && followUpStatus !== "follow_up";
   const [expandedWhenFinished, setExpandedWhenFinished] = useState(false);
   // Finished reports begin compact. A user can expand the trace explicitly;
   // active runs stay expanded regardless of the finished-view preference.
   const collapsed = isFinished && !expandedWhenFinished;
-
-  // Cast our DeepPlanView shape to Build's PlanView (structurally compatible:
-  // both have id/summary/steps/revision/context fields). The PlanPanel just
-  // reads steps + progress; no Build-specific assumptions.
-  const planForPanel: PlanView | null = plan
-    ? {
-        id: plan.id,
-        summary: plan.summary,
-        steps: plan.steps,
-        revision: plan.revision,
-        context: plan.context,
-      }
-    : null;
 
   if (collapsed) {
     return (
@@ -166,7 +173,7 @@ export function DeepProgressStrip({ plan, progress, trace, stats, status, follow
             How it researched
           </span>
           <span className="ml-auto">
-            <StatsRow stats={stats} status={status} planActive={planActive} />
+            <StatsRow stats={stats} status={status} runActive={runActive} />
           </span>
         </button>
       </section>
@@ -186,16 +193,22 @@ export function DeepProgressStrip({ plan, progress, trace, stats, status, follow
             <ChevronDown className="size-3.5" aria-hidden />
           </button>
         )}
-        <StatsRow stats={stats} status={status} planActive={planActive} />
+        <StatsRow stats={stats} status={status} runActive={runActive} />
       </header>
 
       {/* The heartbeat — what's happening RIGHT NOW + the engine's latest thought. */}
-      <Heartbeat stats={stats} planActive={planActive} />
+      <Heartbeat stats={stats} runActive={runActive} />
 
-      {/* Plan checklist — reuses Build's PlanPanel in read-only mode. */}
-      {planForPanel && (
-        <div className="border-b border-hairline px-body py-body">
-          <PlanPanel plan={planForPanel} progress={progress} />
+      {/* The brief — the model's own read of the question. First visible
+          output of a gateless run, so it leads the strip's body. */}
+      {brief && (
+        <div className="border-b border-hairline px-body py-body" data-dr-brief="">
+          <div className="mb-inline font-ui text-[0.7rem] font-semibold uppercase tracking-wide text-text-faint">
+            Research brief
+          </div>
+          <p className="font-reading text-[0.86rem] leading-snug text-text-muted">
+            {brief}
+          </p>
         </div>
       )}
 

@@ -1,13 +1,15 @@
 """Deep Research execution-phase collaborators.
 
 Extracted from ``DeepResearchService._execute_deep_research``
-(PKG-11-RETRIEVAL wave 1, PY-0192/PY-0197/PY-0198): the post-approval
-driver's distinct concerns — dependency/space resolution, preflight, engine
-assembly, event-encoding (the emit callback), checkpoint-resume rebuilding,
-and the run/cleanup lifecycle — each get their own narrow collaborator here.
-``run_execute`` is the sequencing of these steps, not a relocated copy of the
-original body. Every step takes ``service`` and resolves collaborators off
-it at call time, so instance-level test monkeypatches
+(PKG-11-RETRIEVAL wave 1, PY-0192/PY-0197/PY-0198), reworked for v2 (PKG-35):
+the run driver's distinct concerns — query assembly, dependency/space
+resolution, preflight, engine assembly, event-encoding (the emit callback),
+checkpoint-resume rebuilding, and the run/cleanup lifecycle — each get their
+own narrow collaborator here. ``run_execute`` is the sequencing of these
+steps. With the plan gate gone (decision #7) the run takes the QUERY straight
+from the conversation's user messages — no approved PlanEvent exists or is
+needed. Every step takes ``service`` and resolves collaborators off it at
+call time, so instance-level test monkeypatches
 (``monkeypatch.setattr(rt.deep_research, "_execute_deep_research", ...)``) keep
 resolving correctly regardless of this module boundary.
 """
@@ -15,7 +17,6 @@ resolving correctly regardless of this module boundary.
 from __future__ import annotations
 
 import logging
-import os
 from typing import TYPE_CHECKING, Any, Literal
 
 from disco.core import (
@@ -23,8 +24,10 @@ from disco.core import (
     ConversationStatus,
     ErrorEvent,
     Event,
+    EventSource,
+    LLMMessage,
+    MessageEvent,
     ObservationEvent,
-    PlanEvent,
     ReportEvent,
     ToolCall,
     ToolResult,
@@ -32,7 +35,6 @@ from disco.core import (
 from disco.core.llm import DefaultLLMRouter, ModelRole
 from disco.retrieval import DefaultRetrievalEngine, InMemoryVectorStore, RouterQueryRewriter
 from disco.retrieval.deep_research import DeepResearchRun, DepthTier, ReportFromRun
-from disco.retrieval.deep_research.concurrency import gather_concurrency_for
 from disco.retrieval.models import Passage, SearchHit
 
 if TYPE_CHECKING:
@@ -41,11 +43,30 @@ if TYPE_CHECKING:
 _LOG = logging.getLogger(__name__)
 
 
-def resolve_query(events: list[Event], plan: PlanEvent) -> str:
-    """Use the same canonical query+revisions that produced the approved plan."""
-    from .plan import build_query_with_constraints
-
-    return build_query_with_constraints(events) or plan.summary
+def build_query_with_constraints(events: list[Event]) -> str | None:
+    """The research QUESTION is the FIRST user message; every LATER pre-run
+    user message (typed before the run launched, or while it was paused) is
+    folded in as an explicit instruction so the run honors it. Returns None
+    when there is no user text yet (nothing to research; wait). Mid-run
+    guidance never lands here — it routes into the live steer queue."""
+    user_texts = [
+        (e.message.content or "").strip()
+        for e in events
+        if isinstance(e, MessageEvent)
+        and e.source == EventSource.USER
+        and (e.message.content or "").strip()
+    ]
+    if not user_texts:
+        return None
+    query = user_texts[0]
+    if len(user_texts) <= 1:
+        return query
+    constraints = "\n".join(f"- {t}" for t in user_texts[1:])
+    return (
+        f"{query}\n\n"
+        f"The user added these instructions after the initial question — "
+        f"the research MUST honor them:\n{constraints}"
+    )
 
 
 async def build_retrieval_deps(
@@ -105,18 +126,6 @@ def build_router_and_engine(
     return router, retrieval_engine
 
 
-def compute_gather_cap(service: DeepResearchService, plan_steps: list[str]) -> int | None:
-    """RAM-aware peak-memory guard (OOM fix): bound how many gather legs run
-    their fetch/extract/embed/rerank body at once. Applies on EVERY tier —
-    not OOMing is correctness, not a free-tier perk."""
-    in_process_encoders = service._provider.in_process_encoders()
-    return gather_concurrency_for(
-        in_process_encoders=in_process_encoders,
-        n_subquestions=len(plan_steps),
-        env=os.environ,
-    )
-
-
 def build_run(
     service: DeepResearchService,
     conversation_id: str,
@@ -127,12 +136,14 @@ def build_run(
     deps: dict[str, Any],
     tier: DepthTier,
     recency_window: Literal["month", "week"] | None,
-    gather_cap: int | None,
     space_ids: frozenset[str],
 ) -> DeepResearchRun:
     # G1/DR-4 F2: load any pre-attached upload passages (text files the user
     # attached in the initial box before submitting). Empty when no text
     # files were uploaded (the OFF path — byte-identical to pre-DR-4 code).
+    # The v2 engine ignores the old gather-concurrency knob (the agent loop's
+    # per-turn retrieval replaced the plan-wide gather fan-out), so the
+    # RAM-aware cap computation is gone with it.
     upload_passages = service.get_upload_passages(conversation_id)
     return DeepResearchRun(
         query=query,
@@ -143,9 +154,8 @@ def build_run(
         nli=deps["nli"],
         depth=tier,
         conversation_id=conversation_id,
-        gather_concurrency=gather_cap,
         recency_window=recency_window,
-        # G1/DR-4 F2: seed every gather leg with upload passages.
+        # G1/DR-4 F2: seed the evidence pool with upload passages.
         upload_passages=upload_passages or None,
         corpus_ids=space_ids,
     )
@@ -216,6 +226,21 @@ def build_emit_callback(service: DeepResearchService, conversation_id: str):
         if key is not None:
             action_by_key[key] = event.id
             action_by_key[f"{payload.get('subquestion')}|latest"] = event.id
+        if kind == "brief":
+            # Decision #7: the brief is the model's first VISIBLE output —
+            # besides the trace action above it lands as an assistant chat
+            # message, so the conversation opens with the model's reading of
+            # the question and its planned angles.
+            await service._store.append(
+                conversation_id,
+                MessageEvent(
+                    source=EventSource.AGENT,
+                    message=LLMMessage(
+                        role="assistant",
+                        content=str(payload.get("text", "")),
+                    ),
+                ),
+            )
 
     return emit
 
@@ -230,8 +255,11 @@ def rebuild_resume_state(
     list[str] | None,
 ]:
     """Checkpointed resume: rebuild the retrieval-typed passages/hits from
-    the prior partial ReportEvent's plain dicts so the engine can carry its
-    completed sections forward (and skip those sub-questions)."""
+    the prior stopped run's checkpoint ReportEvent. The v2 engine seeds its
+    evidence pool from the passages and its audit trail from
+    ``completed_probes`` (the queries the agent already issued), then writes
+    the report fresh from the combined pool; sections/pending_probes are
+    accepted for signature compatibility only."""
     if resume_from is None:
         return None, None, None, None, None
     resume_sections = list(resume_from.sections)
@@ -251,9 +279,9 @@ def rebuild_resume_state(
 
 def build_steer_hooks(service: DeepResearchService, conversation_id: str):
     """D3: pop_* closures drain the per-cid steer/inject queues at each
-    section boundary. The WS handler enqueues into these queues; the queues
-    are removed in ``run_engine``'s ``finally`` so the presence of a key = "a
-    DR run is currently in flight for this cid"."""
+    turn boundary of the agent loop. The WS handler enqueues into these
+    queues; the queues are removed in ``run_engine``'s ``finally`` so the
+    presence of a key = "a DR run is currently in flight for this cid"."""
 
     def pop_steers() -> list[str]:
         return service._live_state.pop_steers(conversation_id)
@@ -269,7 +297,6 @@ async def run_engine(
     conversation_id: str,
     run: DeepResearchRun,
     *,
-    plan_steps: list[str],
     resume_sections: list[Any] | None,
     resume_passages: list[Passage] | None,
     resume_all_hits: list[SearchHit] | None,
@@ -284,8 +311,8 @@ async def run_engine(
     to resume with the same settings."""
     from ..runtime import _release_process_memory
 
-    # Fresh cancel flag for this execution; the engine polls it at each
-    # sub-question/section boundary so Stop actually halts the run.
+    # Fresh cancel flag for this execution; the engine polls it at every
+    # turn boundary so Stop actually halts the run (→ a resumable checkpoint).
     flag = service._cancellations.begin(conversation_id)
 
     # D3: initialise per-cid steer/inject queues on the research owner.
@@ -294,7 +321,6 @@ async def run_engine(
 
     try:
         return await run.run(
-            plan_steps,
             emit=emit,
             should_cancel=flag.is_set,
             resume_sections=resume_sections,
@@ -308,7 +334,8 @@ async def run_engine(
     finally:
         service._cancellations.clear(conversation_id)
         # D3: remove per-cid queues so the WS handler knows no DR run is
-        # active for this cid (it tests `cid in _dr_steer` for routing).
+        # active for this cid (enqueue_steer returns False → the WS handler falls
+        # back to the normal user-turn path).
         service._live_state.forget(conversation_id)
         # Return the run's transient working set (fetch buffers + ONNX batch
         # temporaries, already freed by the time run.run() returned) back to
@@ -339,17 +366,18 @@ def _tier_for_run(
 async def run_execute(
     service: DeepResearchService,
     conversation_id: str,
-    plan: PlanEvent,
     *,
     resume_from: ReportEvent | None = None,
 ) -> None:
-    """The post-approval driver with exactly three outcomes: a ReportEvent +
-    FINISHED, a Stop checkpoint ReportEvent + PAUSED, or an ErrorEvent +
-    ERROR. Every failure — provider config, preflight, the engine, or
-    persisting the final event — lands in the single failure handler here, so
-    a run can never end without a terminal status."""
+    """The run driver with exactly three outcomes: a ReportEvent + FINISHED,
+    a Stop checkpoint ReportEvent + PAUSED, or an ErrorEvent + ERROR. A
+    dead-end run is NOT an error (decision #6) — the engine returns its
+    honest-account report and it finishes like any other. Every failure —
+    provider config, preflight, the engine, or persisting the final event —
+    lands in the single failure handler here, so a run can never end without
+    a terminal status."""
     try:
-        await _run_to_report(service, conversation_id, plan, resume_from=resume_from)
+        await _run_to_report(service, conversation_id, resume_from=resume_from)
     except Exception as exc:  # noqa: BLE001 — every failure becomes a named run error
         _LOG.exception("deep research run failed for %s", conversation_id)
         service.forget(conversation_id)
@@ -371,20 +399,23 @@ async def run_execute(
 async def _run_to_report(
     service: DeepResearchService,
     conversation_id: str,
-    plan: PlanEvent,
     *,
     resume_from: ReportEvent | None = None,
 ) -> None:
     """Build deps, preflight, run the engine, persist the terminal events.
 
     ``resume_from`` is a prior stopped run's checkpoint ReportEvent: its
-    gathered evidence + probe state (and depth tier) are carried into the
+    gathered evidence + issued queries (and depth tier) are carried into the
     engine so resume continues from the checkpoint instead of redoing the
-    probes that already finished."""
-    # Find the query from the user's last (pre-plan) message.
+    searches that already ran."""
+    # The query is the conversation's first user message plus any pre-run
+    # additions (decision #7: no PlanEvent exists — the question IS the launch).
     events = await service._store.get_events(conversation_id)
-    query = resolve_query(events, plan)
-    plan_steps = [s.title for s in plan.steps]
+    query = build_query_with_constraints(events) or (
+        resume_from.query if resume_from is not None else None
+    )
+    if not query:
+        raise ValueError("deep research needs a user question before it can run")
     tier = _tier_for_run(service, conversation_id, resume_from)
     recency_window = service._recency_for(conversation_id)
 
@@ -416,8 +447,13 @@ async def _run_to_report(
         )
         return
 
+    # Gateless kickoff: RUNNING lands only after the preflight passes, so a
+    # dead driver/encoder can never leave the conversation pinned RUNNING.
+    await service._lifecycle_commands.append_status(
+        conversation_id, ConversationStatus.RUNNING, detail="research"
+    )
+
     router, retrieval_engine = build_router_and_engine(service, conversation_id, deps)
-    gather_cap = compute_gather_cap(service, plan_steps)
     run = build_run(
         service,
         conversation_id,
@@ -427,7 +463,6 @@ async def _run_to_report(
         deps=deps,
         tier=tier,
         recency_window=recency_window,
-        gather_cap=gather_cap,
         space_ids=space_ids,
     )
 
@@ -444,7 +479,6 @@ async def _run_to_report(
         service,
         conversation_id,
         run,
-        plan_steps=plan_steps,
         resume_sections=resume_sections,
         resume_passages=resume_passages,
         resume_all_hits=resume_all_hits,

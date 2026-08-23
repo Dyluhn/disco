@@ -1,4 +1,4 @@
-"""Deep Research planning, retrieval, execution, and reporting."""
+"""Deep Research kickoff, retrieval, execution, and reporting."""
 
 from __future__ import annotations
 
@@ -8,12 +8,10 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from disco.core import (
     DEFAULT_OWNER_ID,
-    ConversationStatus,
     Event,
     EventSource,
     MessageEvent,
     NoOpCondenser,
-    PlanEvent,
     ReportEvent,
 )
 from disco.core.llm import (
@@ -25,10 +23,7 @@ from disco.core.llm import (
 from disco.core.loop import AgentLoop, NeverConfirm, RouterAgent
 from disco.core.security import RuleBasedAnalyzer
 from disco.core.think import strip_think_spans
-from disco.retrieval.deep_research import (
-    DepthTier,
-    decompose_query,
-)
+from disco.retrieval.deep_research import DepthTier
 from disco.retrieval.models import Passage
 from disco.retrieval.ranking import Embedder
 
@@ -230,11 +225,12 @@ class DeepResearchService:
     ) -> AgentLoop:
         """Compose the loop frame for Deep Research. The loop itself doesn't drive
         the research — `_run_with_persistence` short-circuits `loop.run()` for
-        this surface and runs `DeepResearchRun` directly. The AgentLoop exists
-        here as the host for the plan-approval gate (we reuse Build's plan
-        machinery: same PlanEvent, same AWAITING_PLAN_APPROVAL status, same
-        approve_plan WS frame). No tools, no risk gate, no condenser — Deep
-        Research's iteration lives in the engine, not the loop."""
+        this surface and runs the phase dispatcher (which launches the v2
+        engine) directly. The AgentLoop exists only because every surface's
+        kick resolves one; it never runs for Deep Research (v2, decision #7:
+        no plan gate — the old approval flow this loop used to host is gone).
+        No tools, no risk gate, no condenser — Deep Research's iteration
+        lives in the engine, not the loop."""
         # Deep Research intentionally uses the standard tier: it is a read-only
         # pipeline (no tool execution), so the weak-model assist compensations
         # (F-features) are not applicable. Explicit model_policy= satisfies the
@@ -250,10 +246,6 @@ class DeepResearchService:
             NoOpCondenser(),  # the engine manages its own corpus; no View condense
             RouterSummarizer(router),
             mode=OperatingMode.PLANNING,
-            # Configure planning_tools so the loop's mode-tracking is consistent
-            # with Build (PLANNING → LONG_HORIZON on approve_plan). The actual
-            # plan-event is emitted synthetically by _run_with_persistence; the
-            # loop never sees a submit_plan tool call.
             planning_tools=frozenset({"submit_plan"}),
             model_policy=ModelExecutionPolicy.standard(),
             driver_context_window=driver_context_window,
@@ -380,81 +372,35 @@ class DeepResearchService:
 
     async def _maybe_run_deep_research(self, conversation_id: str) -> None:
         """The Deep Research phase dispatcher. See ``dispatch_parts.run_phase``
-        for the full phase table (propose → maybe-run → execute → follow-up)
-        this drives every turn. All actions persist via the event store; the
-        WS surface streams them. Failures surface as ErrorEvent on the log —
-        never raise out of the background task."""
+        for the full phase table (resume → follow-up → kickoff) this drives
+        every turn — v2 (decision #7) is gateless: the first user message
+        launches execution directly, with no plan proposal or approval step.
+        All actions persist via the event store; the WS surface streams them.
+        Failures surface as ErrorEvent on the log — never raise out of the
+        background task."""
         from ._deep_research_service_parts import dispatch as dispatch_parts
 
         await dispatch_parts.run_phase(self, conversation_id)
 
-    async def _propose_deep_research_plan(self, conversation_id: str, events: list) -> None:
-        """Decompose the user's query into sub-questions and emit a synthetic
-        PlanEvent + AWAITING_PLAN_APPROVAL. See ``plan_parts`` for the
-        query/constraint extraction, preflight, and PlanEvent construction —
-        the ``decompose_query`` call stays here because tests monkeypatch it
-        on this module (``monkeypatch.setattr(drs, "decompose_query", ...)``);
-        relocating the call site would silently defeat that patch point."""
-        from ._deep_research_service_parts import plan as plan_parts
-
-        query = plan_parts.build_query_with_constraints(events)
-        if query is None:
-            return  # nothing to plan; wait
-        prior_plans = sum(1 for e in events if isinstance(e, PlanEvent))
-
-        override = self._settings._get_model_override(conversation_id)
-        preflight_reason = await plan_parts.preflight_plan_roles(self, conversation_id, override)
-        if preflight_reason is not None:
-            await self._lifecycle_commands.append_status(
-                conversation_id, ConversationStatus.ERROR, detail=preflight_reason[:200]
-            )
-            return
-
-        await self._lifecycle_commands.append_status(conversation_id, ConversationStatus.RUNNING)
-        ctx = plan_parts.prepare_decompose_context(self, conversation_id)
-        # Decompose via QUERY_REWRITER. The decompose call IS the planning
-        # step; we emit the result as a PlanEvent directly (no LLM "planning
-        # mode" loop needed — the engine owns the work).
-        try:
-            subqs = await decompose_query(
-                ctx.router,
-                query,
-                max_subq=ctx.bound.initial_probe_count,
-                recency_window=ctx.recency_window,
-            )
-        except Exception as exc:  # noqa: BLE001 — surface as a system reminder
-            await plan_parts.handle_decompose_failure(self, conversation_id, exc)
-            return
-
-        await plan_parts.finalize_plan(
-            self,
-            conversation_id,
-            query=query,
-            tier=ctx.tier,
-            bound=ctx.bound,
-            subqs=subqs,
-            prior_plans=prior_plans,
-        )
-
     async def _execute_deep_research(
         self,
         conversation_id: str,
-        plan: PlanEvent,
         *,
         resume_from: ReportEvent | None = None,
     ) -> None:
-        """The post-approval driver: run DeepResearchRun on the approved plan,
-        emitting Action/Observation events for every retrieval round + section
-        synthesis, ending with a ReportEvent + StatusEvent(FINISHED). See
-        ``execute_parts.run_execute`` for the full sequencing.
+        """Run the v2 engine on the conversation's research question (the
+        first user message + any pre-run additions), emitting the brief and
+        Action/Observation events as the agent works, ending with a
+        ReportEvent + StatusEvent(FINISHED). See ``execute_parts.run_execute``
+        for the full sequencing.
 
-        `resume_from` is a prior stopped run's partial ReportEvent: its completed
-        sections (+ their cited passages / discovered hits) are carried into the
-        engine so resume continues from the checkpoint instead of redoing the
-        sub-questions that already finished."""
+        `resume_from` is a prior stopped run's checkpoint ReportEvent: its
+        gathered evidence + issued queries are carried into the engine so
+        resume continues from the checkpoint instead of redoing the searches
+        that already ran."""
         from ._deep_research_service_parts import execute as execute_parts
 
-        await execute_parts.run_execute(self, conversation_id, plan, resume_from=resume_from)
+        await execute_parts.run_execute(self, conversation_id, resume_from=resume_from)
 
     @staticmethod
     def _has_fresh_user_message(events: list[Event], reports: list[ReportEvent]) -> bool:

@@ -269,13 +269,20 @@ class FastEmbedReranker:
 
 
 class FastEmbedNLIVerifier:
-    """[NLIVerifier] Real entailment signal from the SAME cross-encoder, framed as
+    """[NLIVerifier] Support signal from the SAME cross-encoder, framed as
     claim↔passage relevance (a strong proxy for 'does this passage support the
     claim'), replacing the lexical-overlap stub. SYNC per the interface; results
-    cached per (premise, claim). A true 3-class NLI model is a further refinement
-    — this is a real signal, not a heuristic."""
+    cached per (premise, claim).
 
-    def __init__(self, *, entail_at: float = 0.5, contradict_below: float = 0.1) -> None:
+    A relevance proxy can support "entail" and "neutral" but CANNOT detect
+    contradiction: two compatible sentences about different aspects of one
+    topic score near zero, so any low-score→"contradict" mapping fabricates
+    contradictions (measured live: a fully compatible sentence pair scored
+    0.066/0.001). The default therefore never returns "contradict"; pass an
+    explicit ``contradict_below`` only when the backing model is a real
+    entailment model rather than this relevance proxy."""
+
+    def __init__(self, *, entail_at: float = 0.5, contradict_below: float | None = None) -> None:
         self._entail_at = entail_at
         self._contradict_below = contradict_below
         self._cache: dict[tuple[str, str], float] = {}
@@ -304,6 +311,6 @@ class FastEmbedNLIVerifier:
             return "neutral"
         if s >= self._entail_at:
             return "entail"
-        if s <= self._contradict_below:
+        if self._contradict_below is not None and s <= self._contradict_below:
             return "contradict"
         return "neutral"

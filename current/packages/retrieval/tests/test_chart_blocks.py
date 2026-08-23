@@ -1,6 +1,11 @@
+"""Chart rendering safety: the streaming block parser (`_to_blocks`) and the
+report writer's chart validation (`_writer_parts.validate_charts`), which
+degrades a broken ```chart block to a table rather than shipping broken JSON
+to the UI."""
+
 import json
 
-from disco.retrieval.deep_research.synthesis import _validate_charts
+from disco.retrieval.deep_research._writer_parts import validate_charts
 from disco.retrieval.streaming import _to_blocks
 
 
@@ -39,7 +44,7 @@ def test_invalid_chart_json_degrade_to_code():
 def test_validate_charts_valid():
     payload = {"chart_type": "bar", "data": [{"label": "A", "value": 10}]}
     md = f"Intro\n\n```chart\n{json.dumps(payload)}\n```\nOutro"
-    valid_md = _validate_charts(md)
+    valid_md = validate_charts(md)
     assert "```chart" in valid_md
     assert "Intro" in valid_md
     assert "Outro" in valid_md
@@ -49,7 +54,7 @@ def test_validate_charts_invalid_degrade_to_table():
     # 'wrong' instead of 'value'
     payload = {"chart_type": "bar", "data": [{"label": "A", "wrong": 10}]}
     md = f"```chart\n{json.dumps(payload)}\n```"
-    valid_md = _validate_charts(md)
+    valid_md = validate_charts(md)
     assert "```chart" not in valid_md
     assert "|" in valid_md
     assert "Label" in valid_md
@@ -68,6 +73,6 @@ def test_scatter_chart_roundtrip():
 
 def test_validate_charts_malformed_json_drop():
     md = "```chart\n{bad}\n```"
-    valid_md = _validate_charts(md)
+    valid_md = validate_charts(md)
     assert "```chart" not in valid_md
     assert valid_md.strip() == ""

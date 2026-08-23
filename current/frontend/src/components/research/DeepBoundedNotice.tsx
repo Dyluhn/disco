@@ -2,8 +2,8 @@
  * DeepBoundedNotice — the honest "what was cut" surface. When the engine's
  * ReportEvent sets `bounded_by`, a quiet aside renders outside the document
  * naming the research budget that closed the evidence loop. The report itself
- * remains a finished artifact; starting directions are not treated as promised
- * sections or an incomplete checklist.
+ * remains a finished artifact — a bound is a budget that was reached, never an
+ * incomplete checklist.
  *
  * Most tools hide this — a run "completes" and you're left guessing what's
  * been left out. Surfacing it elegantly is the trust move that fits this
@@ -11,12 +11,10 @@
  */
 
 import { Info, Layers, Zap } from "lucide-react";
-import type { DeepPlanView } from "@/lib/deepResearchTrace";
 import type { ReportEvent } from "@/types/agent";
 
 interface Props {
   report: ReportEvent;
-  plan: DeepPlanView | null;
   onTryExhaustive?: () => void;
 }
 
@@ -28,20 +26,14 @@ const BOUND_TEXT: Record<string, { what: string; lever: string }> = {
   },
   wall_clock: {
     what: "the wall-clock budget",
-    lever: "The run hit its time budget before completing the plan.",
-  },
-  subquestions: {
-    what: "the sub-question width cap",
-    lever:
-      "The plan proposed more sub-questions than this tier covers; the rest were trimmed before the gather phase.",
+    lever: "The run hit its time budget before the model called the research done.",
   },
 };
 
-export function DeepBoundedNotice({ report, plan, onTryExhaustive }: Props) {
-  void plan;
-  // "rounds" is the per-sub-question DEPTH cap, not a coverage truncation — every
-  // sub-question still produces a section — so it is not surfaced (mirrors the backend
-  // report_truncation() shared by the PDF/markdown/LLM-context exporters).
+export function DeepBoundedNotice({ report, onTryExhaustive }: Props) {
+  // "rounds" is the per-round DEPTH cap, not a coverage truncation, so it is
+  // not surfaced (mirrors the backend report_truncation() shared by the
+  // PDF/markdown/LLM-context exporters).
   if (!report.bounded_by || report.bounded_by === "rounds") return null;
   const text =
     BOUND_TEXT[report.bounded_by] ??

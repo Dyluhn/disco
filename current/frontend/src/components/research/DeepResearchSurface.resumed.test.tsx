@@ -5,6 +5,10 @@
  * from the replayed ReportEvent or user MessageEvent), not the "(resumed)"
  * placeholder the hook uses as an internal sentinel, and must NOT show a bare
  * "(resumed)" as a title replacement.
+ *
+ * The page carries more than one level-1 heading — the top bar titles the run
+ * and the report document titles itself — so these tests read the FIRST one
+ * (the top bar's), which is the title under test.
  */
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -113,7 +117,7 @@ describe("DeepResearchSurface — resume path", () => {
 
     const heading = await waitFor(
       () => {
-        const h = screen.getByRole("heading", { level: 1 });
+        const h = screen.getAllByRole("heading", { level: 1 })[0];
         // The heading must contain the real query text before we pass
         expect(h).toHaveTextContent(REAL_QUERY);
         return h;
@@ -130,7 +134,7 @@ describe("DeepResearchSurface — resume path", () => {
 
     const heading = await waitFor(
       () => {
-        const h = screen.getByRole("heading", { level: 1 });
+        const h = screen.getAllByRole("heading", { level: 1 })[0];
         expect(h).toHaveTextContent(REAL_QUERY);
         return h;
       },
@@ -143,5 +147,20 @@ describe("DeepResearchSurface — resume path", () => {
     // proves the resume path is wired.
     expect(heading.textContent?.trim()).toBe(REAL_QUERY);
     expect(heading.textContent?.trim()).not.toMatch(/resumed/i);
+  });
+
+  it("renders the replayed report body — a resumed run is not gated on a plan", async () => {
+    // The report view used to mount only once a PlanEvent had been derived, so
+    // a v2 run (which emits no plan) replayed its finished report into a blank
+    // page. The mount condition is the report itself.
+    renderResumeSurface();
+
+    await waitFor(
+      () =>
+        expect(
+          screen.getByText(/A brief summary of quantum computing prospects\./),
+        ).toBeInTheDocument(),
+      { timeout: 3000 },
+    );
   });
 });

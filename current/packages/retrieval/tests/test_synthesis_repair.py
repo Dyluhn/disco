@@ -1,57 +1,59 @@
-"""BW-05 (single-bracket citation normalization) + BW-07 (table repair +
-truncation-continuation join)."""
+"""Report-writer text mechanics: the repairs and formatters the whole-report
+writer runs on model output.
+
+BW-05 (single-bracket citation normalization), BW-07 (malformed-table repair +
+the truncation-continuation join), the evidence-pool formatter, and the
+readable-summary paragraph contract. All of it is pure text mechanics or a
+bounded provider retry — none of it deletes prose (decision #5, no scissors).
+"""
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from typing import Any
 
-import pytest
+from disco.core import LLMMessage
 from disco.core.llm import (
-    CallContext,
     CompletionRequest,
     CompletionResponse,
     LLMRouter,
-    LLMTransientError,
+    StreamChunk,
     TokenUsage,
 )
-from disco.retrieval.deep_research import synthesis as synthesis_mod
-from disco.retrieval.deep_research.decompose import SubQuestion
-from disco.retrieval.deep_research.gather import GatherLegContext, SubQuestionResult
-from disco.retrieval.deep_research.report_compiler import RetrievalGap
-from disco.retrieval.deep_research.synthesis import (
-    _normalize_citations,
-    _repair_grounded_tables,
-    _repair_tables,
-    synthesize_section,
+from disco.retrieval.deep_research._synthesis_parts import repair_tables
+from disco.retrieval.deep_research._writer_parts import (
+    continue_truncated_report,
+    format_evidence_pool,
+    normalize_citations,
+    readable_summary,
 )
 from disco.retrieval.models import Passage
-from disco.retrieval.vectorstore import InMemoryVectorStore
 
 # ---- BW-05: bare [id] -> [[id]] ----------------------------------------
 
 
 def test_normalize_promotes_known_single_bracket():
     md = "The market grew sharply [f1161a_p2] last year."
-    out = _normalize_citations(md, {"f1161a_p2"})
+    out = normalize_citations(md, {"f1161a_p2"})
     assert "[[f1161a_p2]]" in out
     assert "[f1161a_p2]" not in out.replace("[[f1161a_p2]]", "")
 
 
 def test_normalize_leaves_already_doubled_alone():
     md = "Already cited [[abc_p1]] here."
-    out = _normalize_citations(md, {"abc_p1"})
+    out = normalize_citations(md, {"abc_p1"})
     assert out == md  # no triple-bracket mangling
 
 
 def test_normalize_leaves_unknown_prose_brackets():
     md = "See footnote [1] and the link [text](http://x) and [note]."
-    out = _normalize_citations(md, {"abc_p1"})
+    out = normalize_citations(md, {"abc_p1"})
     assert out == md  # none of these ids are known passages
 
 
 def test_normalize_mixed():
     md = "A [src1] and B [[src2]] and prose [aside]."
-    out = _normalize_citations(md, {"src1", "src2"})
+    out = normalize_citations(md, {"src1", "src2"})
     assert "[[src1]]" in out
     assert "[[src2]]" in out
     assert "[aside]" in out  # unknown id untouched
@@ -59,7 +61,7 @@ def test_normalize_mixed():
 
 def test_normalize_empty_ids_noop():
     md = "Nothing [x] to do."
-    assert _normalize_citations(md, set()) == md
+    assert normalize_citations(md, set()) == md
 
 
 # ---- BW-07: malformed table repair -------------------------------------
@@ -68,7 +70,7 @@ def test_normalize_empty_ids_noop():
 def test_repair_injects_missing_delimiter_and_pipes():
     # No leading/trailing pipes, NO |---| delimiter row -> remark would fail.
     md = "Option | Pros | Cons\nA | fast | costly\nB | cheap | slow"
-    out = _repair_tables(md)
+    out = repair_tables(md)
     lines = [ln for ln in out.split("\n") if ln.strip()]
     assert lines[0] == "| Option | Pros | Cons |"
     # second line must now be a delimiter row
@@ -79,166 +81,99 @@ def test_repair_injects_missing_delimiter_and_pipes():
 
 def test_repair_preserves_valid_table():
     md = "| A | B |\n| --- | --- |\n| 1 | 2 |"
-    out = _repair_tables(md)
+    out = repair_tables(md)
     assert "| A | B |" in out
     assert "| 1 | 2 |" in out
     # exactly one delimiter row
     assert out.count("---") >= 1
 
-    filtered = (
-        "| Approach | Operation | Advantage | Limitation |\n"
-        "| --- | --- | --- | --- |\n"
-        "| lost opening cell | fragment only |  |  |\n"
-        "| VLA | text and images | adapts | needs controls |\n"
-        "|  |  |  |  |"
-    )
-    grounded = _repair_grounded_tables(filtered)
-    assert "lost opening cell" not in grounded
-    assert "| VLA | text and images | adapts | needs controls |" in grounded
-    assert "|  |  |  |  |" not in grounded
-
 
 def test_repair_leaves_prose_with_single_pipe():
     md = "Throughput is measured in tokens | second in this benchmark."
-    out = _repair_tables(md)
+    out = repair_tables(md)
     assert out == md  # lone pipe line is not a table
 
 
 def test_repair_does_not_touch_code_fences():
     md = "```\na | b | c\n```\nafter"
-    out = _repair_tables(md)
+    out = repair_tables(md)
     assert out == md
 
 
 def test_repair_pads_ragged_rows():
     md = "H1 | H2 | H3\nx | y"
-    out = _repair_tables(md)
+    out = repair_tables(md)
     assert "| x | y |  |" in out  # padded to 3 columns
 
 
 # ---- BW-07: truncation -> continuation join (finish_reason == "length") ---
 
 
-class _FakeNLI:
-    """Deterministic NLI stub — every non-empty claim is 'entail'."""
-
-    def entail(self, premise: str, hypothesis: str) -> str:
-        return "entail" if premise and hypothesis else "neutral"
-
-    def score(self, premise: str, hypothesis: str) -> float:
-        return 1.0 if self.entail(premise, hypothesis) == "entail" else 0.0
-
-
-ScriptItem = tuple[str, str] | Exception
-
-
 class _ScriptedRouter(LLMRouter):
-    """Replays a queue of (text, finish_reason) for the rag_answerer role so a
-    test can drive synthesize_section's truncation/continuation path."""
+    """Replays a queue of (text, finish_reason) continuation responses and
+    counts the continuation calls the guard actually made."""
 
-    def __init__(self, script: list[ScriptItem]) -> None:
+    def __init__(self, script: list[tuple[str, str]]) -> None:
         self._script = list(script)
         self.calls = 0
 
     async def complete(
         self, request: CompletionRequest, *, context: Any = None
     ) -> CompletionResponse:
+        del context
         self.calls += 1
-        item = self._script.pop(0) if self._script else ("(exhausted)", "stop")
-        if isinstance(item, Exception):
-            raise item
-        text, finish = item
+        text, finish = self._script.pop(0) if self._script else ("(exhausted)", "stop")
         return CompletionResponse(
             text=text,
             tool_calls=[],
             usage=TokenUsage(input_tokens=1, output_tokens=1),
             finish_reason=finish,  # type: ignore[arg-type]
             model_used="fake",
+            request_id=request.request_id,
             routing=None,
         )
 
+    async def stream_complete(
+        self, request: CompletionRequest, *, context: Any = None
+    ) -> AsyncIterator[StreamChunk]:
+        async def gen() -> AsyncIterator[StreamChunk]:
+            yield StreamChunk(done=True, final=await self.complete(request, context=context))
 
-def _passage() -> Passage:
-    return Passage(
-        id="p1",
-        source_url="http://example.test/x",
-        source_title="Source X",
-        text="Alpha scored 90 and Beta scored 85 on the benchmark.",
+        return gen()
+
+
+def _first(text: str, finish: str) -> CompletionResponse:
+    return CompletionResponse(
+        text=text,
+        tool_calls=[],
+        usage=TokenUsage(input_tokens=1, output_tokens=1),
+        finish_reason=finish,  # type: ignore[arg-type]
+        model_used="fake",
+        routing=None,
     )
 
 
-async def _run_synth(
-    router: LLMRouter, *, target_words: tuple[int, int] | None = None
-) -> str:
-    sub = SubQuestionResult(
-        subq=SubQuestion(title="How do the models compare?"),
-        passages=[_passage()],
+async def _continue(script: list[tuple[str, str]]) -> tuple[str, int]:
+    """Run the truncation guard over `script[0]` as the writer's first response
+    and the rest as its continuations. Returns (markdown, continuation calls)."""
+    head_text, head_finish = script[0]
+    router = _ScriptedRouter(script[1:])
+    markdown = await continue_truncated_report(
+        router,
+        [LLMMessage(role="user", content="WRITE THE REPORT")],
+        head_text,
+        _first(head_text, head_finish),
+        max_tokens=1_000,
     )
-
-    async def _emit(_kind: str, _payload: dict[str, Any]) -> None:
-        return None
-
-    section = await synthesize_section(
-        sub,
-        router=router,
-        embedder=None,
-        vector_store=InMemoryVectorStore(),
-        namespace="ns",
-        nli=_FakeNLI(),
-        section_id="s1",
-        top_k_for_section=4,
-        emit=_emit,
-        leg_context=GatherLegContext(
-            subq_id="sq1",
-            namespace="ns",
-            call_context=CallContext(conversation_id="conv_trunc"),
-        ),
-        target_words=target_words,
-    )
-    return section.markdown
-
-
-async def _no_sleep(_seconds: float) -> None:
-    return None
-
-
-async def test_initial_synthesis_retries_one_transient_failure(monkeypatch: Any) -> None:
-    monkeypatch.setattr(synthesis_mod.asyncio, "sleep", _no_sleep)
-    router = _ScriptedRouter(
-        [
-            LLMTransientError("rate limited", provider="fake"),
-            ("Recovered synthesis [[p1]].", "stop"),
-        ]
-    )
-
-    md = await _run_synth(router)
-
-    assert router.calls == 2
-    assert "Recovered synthesis" in md
-
-
-async def test_empty_retry_retries_one_transient_failure(monkeypatch: Any) -> None:
-    monkeypatch.setattr(synthesis_mod.asyncio, "sleep", _no_sleep)
-    router = _ScriptedRouter(
-        [
-            ("", "stop"),
-            LLMTransientError("connection reset", provider="fake"),
-            ("Recovered after empty retry [[p1]].", "stop"),
-        ]
-    )
-
-    md = await _run_synth(router)
-
-    assert router.calls == 3
-    assert "Recovered after empty retry" in md
+    return markdown, router.calls
 
 
 async def test_truncation_continues_mid_table_row_without_loss() -> None:
-    """A section cut mid-table-row (`finish_reason=="length"`) is continued from
+    """A report cut mid-table-row (`finish_reason=="length"`) is continued from
     the exact cut point and glued WITHOUT a spurious separator: the half-written
     cell completes (``| Alpha | 9`` + ``0 |`` -> ``| Alpha | 90 |``) — no merged
     rows, no lost or duplicated content."""
-    router = _ScriptedRouter(
+    md, calls = await _continue(
         [
             (
                 "## Findings\n\nResults [[p1]]:\n\n| Model | Score |\n| --- | --- |\n| Alpha | 9",
@@ -247,9 +182,8 @@ async def test_truncation_continues_mid_table_row_without_loss() -> None:
             ("0 |\n| Beta | 85 |", "stop"),
         ]
     )
-    md = await _run_synth(router)
 
-    assert router.calls == 2  # exactly one continuation call
+    assert calls == 1  # exactly one continuation call
     # the split number was rejoined into a single cell (no loss, no spurious gap)
     assert "| Alpha | 90 |" in md
     assert "| Beta | 85 |" in md
@@ -258,7 +192,7 @@ async def test_truncation_continues_mid_table_row_without_loss() -> None:
     # no duplication of the continued content
     assert md.count("Beta") == 1
     assert md.count("Alpha") == 1
-    # section no longer terminates mid-table: it ends on a closed pipe row
+    # the report no longer terminates mid-table: it ends on a closed pipe row
     assert md.rstrip().endswith("|")
 
 
@@ -267,7 +201,7 @@ async def test_truncation_at_row_boundary_starts_a_fresh_line() -> None:
     newline), the continuation begins on a FRESH line — a new row never merges
     into the previous one. This is the case the pre-fix strip()-then-glue logic
     broke (it produced ``| Alpha | 90 || Beta | 85 |``)."""
-    router = _ScriptedRouter(
+    md, calls = await _continue(
         [
             (
                 "Intro [[p1]].\n\n| Model | Score |\n| --- | --- |\n| Alpha | 90 |\n",
@@ -276,9 +210,8 @@ async def test_truncation_at_row_boundary_starts_a_fresh_line() -> None:
             ("| Beta | 85 |", "stop"),
         ]
     )
-    md = await _run_synth(router)
 
-    assert router.calls == 2
+    assert calls == 1
     assert "| Alpha | 90 |" in md
     assert "| Beta | 85 |" in md
     # the boundary bug: two rows fused on one line
@@ -294,182 +227,39 @@ async def test_truncation_after_complete_row_without_newline_joins_fresh_line() 
     leading pipe (``| Beta | 85 |``). A direct glue would fuse them into one row
     (``| Alpha | 90 || Beta | 85 |``); the adjacent ``||`` is the tell. The join
     must insert a newline so each row stays distinct."""
-    router = _ScriptedRouter(
+    md, calls = await _continue(
         [
             (
-                "Intro [[p1]].\n\n"
-                "| Model | Score |\n| --- | --- |\n| Alpha | 90 |",  # NO trailing \n
+                "Intro [[p1]].\n\n| Model | Score |\n| --- | --- |\n| Alpha | 90 |",
                 "length",
             ),
             ("| Beta | 85 |", "stop"),
         ]
     )
-    md = await _run_synth(router)
 
-    assert router.calls == 2
+    assert calls == 1
     assert "| Alpha | 90 |" in md
     assert "| Beta | 85 |" in md
     # the row-boundary bug: two complete rows fused into one via "||"
     assert "||" not in md
-    assert "| Alpha | 90 || Beta" not in md
-    # the two rows were joined on a fresh line, in order, with no loss
     assert "90 |\n| Beta | 85 |" in md
     assert md.count("Beta") == 1
     assert md.count("Alpha") == 1
 
 
 async def test_no_continuation_when_first_response_completes() -> None:
-    """A normal (`finish_reason=="stop"`) section makes exactly one call — the
-    truncation guard never fires."""
-    router = _ScriptedRouter(
-        [
-            ("A complete section about Alpha [[p1]].", "stop"),
-        ]
-    )
-    md = await _run_synth(router)
+    """A normal (`finish_reason=="stop"`) report makes NO continuation call —
+    the truncation guard never fires."""
+    md, calls = await _continue([("A complete report about Alpha [[p1]].", "stop")])
 
-    assert router.calls == 1
-    assert "Alpha" in md
-
-
-async def test_empty_response_retries_then_uses_retry_content() -> None:
-    """The blank-last-section bug: a successful completion (finish_reason=="stop")
-    comes back with EMPTY text. synthesize_section must retry once and use the
-    retry's content — never store the empty body that the UI renders as a titled
-    card with no content."""
-    router = _ScriptedRouter(
-        [
-            ("", "stop"),  # first call: empty, successful — the bug trigger
-            ("A real section about Alpha [[p1]].", "stop"),  # retry produces content
-        ]
-    )
-    md = await _run_synth(router)
-
-    assert router.calls == 2  # exactly one empty-response retry
-    assert "Alpha" in md
-    assert md.strip()  # NEVER an empty body
-
-
-async def test_empty_length_response_retries_with_wider_budget() -> None:
-    """The production root cause: a reasoning model returns empty content with
-    finish_reason=="length" (the whole budget went to hidden reasoning). The
-    retry must WIDEN max_tokens so reasoning can finish AND emit prose."""
-    seen_tokens: list[int | None] = []
-
-    class _RecordingRouter(LLMRouter):
-        def __init__(self) -> None:
-            self.calls = 0
-
-        async def complete(
-            self, request: CompletionRequest, *, context: Any = None
-        ) -> CompletionResponse:
-            self.calls += 1
-            seen_tokens.append(request.max_tokens)
-            if self.calls == 1:
-                text, finish = "", "length"  # reasoning ate the whole budget
-            else:
-                text, finish = "Recovered prose about Alpha [[p1]].", "stop"
-            return CompletionResponse(
-                text=text,
-                tool_calls=[],
-                usage=TokenUsage(input_tokens=1, output_tokens=1),
-                finish_reason=finish,  # type: ignore[arg-type]
-                model_used="fake",
-                routing=None,
-            )
-
-    router = _RecordingRouter()
-    md = await _run_synth(router)
-    assert router.calls == 2
-    assert seen_tokens[0] == 1400  # initial cap
-    assert seen_tokens[1] == 2800  # widened on length-exhaustion retry
-    assert "Alpha" in md
-    assert md.strip()
-
-
-async def test_think_only_response_counts_as_empty_and_retries() -> None:
-    """Live-caught (DR3): a reasoning model spends the whole budget INSIDE
-    <think> — raw text is non-empty, so the empty-retry was skipped, then the
-    think-strip emptied it and 5/6 sections degraded to the honest placeholder.
-    Emptiness must be judged post-strip so the widened retry fires."""
-    router = _ScriptedRouter(
-        [
-            ("<think>reasoning that ate the whole budget", "length"),
-            ("Recovered prose about Alpha [[p1]].", "stop"),
-        ]
-    )
-    md = await _run_synth(router)
-
-    assert router.calls == 2  # think-only first response triggered the retry
-    assert "Alpha" in md
-    assert "<think" not in md
-
-
-async def test_section_still_empty_after_bounded_retry_raises_retrieval_gap() -> None:
-    """A section whose generation stays empty after the one empty-response
-    retry is a run failure — RetrievalGap, never preserved excerpts or
-    placeholder prose."""
-    router = _ScriptedRouter(
-        [
-            ("   ", "stop"),  # whitespace-only
-            ("\n\n", "stop"),  # retry: also empty
-        ]
-    )
-
-    with pytest.raises(RetrievalGap, match="produced no prose after the bounded retry"):
-        await _run_synth(router)
-
-    assert router.calls == 2  # initial call + exactly one empty-response retry
-
-
-async def test_synthesis_provider_exception_propagates() -> None:
-    """A non-transient provider failure propagates out of synthesize_section —
-    it is never converted into extractive prose."""
-    router = _ScriptedRouter([RuntimeError("provider exploded")])
-
-    with pytest.raises(RuntimeError, match="provider exploded"):
-        await _run_synth(router)
-
-    assert router.calls == 1  # no retry for a non-transient failure
-
-
-async def test_thin_candidate_still_thin_after_one_rewrite_raises() -> None:
-    """A grounded candidate below the minimum-content gate gets exactly ONE
-    rewrite; a rewrite that is still thin raises RetrievalGap naming the
-    section instead of shipping an under-filled slot."""
-    thin = "Alpha scored 90 on the benchmark [[p1]]."
-    router = _ScriptedRouter([(thin, "stop"), (thin, "stop")])
-
-    with pytest.raises(RetrievalGap, match="remained too thin after its one rewrite") as gap:
-        await _run_synth(router, target_words=(300, 500))
-
-    assert "How do the models compare?" in str(gap.value)
-    assert router.calls == 2  # one generation + exactly one rewrite
-
-
-async def test_thin_candidate_is_replaced_by_its_one_substantive_rewrite() -> None:
-    """The successful repair path: a thin first draft triggers exactly one
-    rewrite, and the section ships the rewrite's content (the draft is
-    replaced, not appended)."""
-    thin = "Alpha leads [[p1]]."
-    substantive = " ".join(
-        "Alpha scored ninety points and Beta scored eighty five points on "
-        f"benchmark run number {index} [[p1]]."
-        for index in range(12)
-    )
-    router = _ScriptedRouter([(thin, "stop"), (substantive, "stop")])
-
-    md = await _run_synth(router, target_words=(300, 500))
-
-    assert router.calls == 2  # one generation + exactly one rewrite
-    assert "benchmark run number" in md
-    assert "Alpha leads" not in md  # the thin draft was replaced, not appended
+    assert calls == 0
+    assert md == "A complete report about Alpha [[p1]]."
 
 
 async def test_truncation_guard_is_bounded() -> None:
     """A model that keeps returning `length` is bounded: the guard continues at
-    most twice (3 router calls total), then stops with the accumulated text."""
-    router = _ScriptedRouter(
+    most twice, then stops with the accumulated text."""
+    md, calls = await _continue(
         [
             ("part-1 [[p1]]", "length"),
             (" part-2", "length"),
@@ -477,9 +267,50 @@ async def test_truncation_guard_is_bounded() -> None:
             (" part-4", "length"),
         ]
     )
-    md = await _run_synth(router)
 
-    assert router.calls == 3  # initial + 2 bounded continuations
+    assert calls == 2  # exactly two bounded continuations
     assert "part-1" in md
     assert "part-3" in md
-    assert "part-4" not in md  # the 4th would-be call never happens
+    assert "part-4" not in md  # the 3rd would-be call never happens
+
+
+# ---- the evidence pool the writer reads -------------------------------------
+
+
+def test_section_evidence_keeps_tail_qualifications_and_url():
+    passage = Passage(
+        id="p1",
+        source_url="https://example.com/release",
+        source_title="Release report",
+        text="A" * 2_000 + " The release was limited to a private preview.",
+    )
+    formatted = format_evidence_pool([passage], char_budget=800)
+    assert "https://example.com/release" in formatted
+    assert "private preview" in formatted
+    assert "middle omitted" in formatted
+
+
+# ---- the executive summary's paragraph contract ------------------------------
+
+
+def test_successful_summary_is_split_when_provider_ignores_paragraph_contract():
+    summary = readable_summary(
+        "First supported finding [[one]]. Second supported finding [[two]]. "
+        "Third supported finding [[three]]. Fourth supported finding [[four]]."
+    )
+
+    assert summary.count("\n\n") == 3
+    assert "[[one]]" in summary
+    assert "[[four]]" in summary
+
+
+def test_successful_summary_preserves_existing_markdown_paragraphs():
+    summary = readable_summary(
+        "**Bottom line.** The first finding is supported [[one]].\n\n"
+        "The qualification is also supported [[two]]."
+    )
+
+    assert summary == (
+        "**Bottom line.** The first finding is supported [[one]].\n\n"
+        "The qualification is also supported [[two]]."
+    )

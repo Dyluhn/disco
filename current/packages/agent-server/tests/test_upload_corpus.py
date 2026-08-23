@@ -5,7 +5,7 @@ Covers:
   • Non-text (.pdf) upload → corpus NOT populated, file still saved
   • research_stream receives seed_passages from pre-attached uploads
   • WS /ws/research accepts conversation_id in the frame body
-  • DR run (DeepResearchRun) receives upload passages via extra_passages in each leg
+  • DR run receives upload passages as the engine's pool seed (upload_passages)
 """
 
 from __future__ import annotations
@@ -484,12 +484,22 @@ async def test_seed_passages_in_stream_research_answer() -> None:
 
 
 @pytest.mark.asyncio
-async def test_dr_run_extra_passages_seeded_into_legs() -> None:
-    """DeepResearchRun passes upload_passages as extra_passages to each leg
-    so they are in the working set from the start."""
-    from unittest.mock import AsyncMock, MagicMock
-
-    from disco.retrieval.deep_research.engine import DeepResearchRun
+async def test_dr_run_upload_passages_reach_the_engine() -> None:
+    """The agent-server seam (v2): passages from a pre-attached upload are read
+    off the conversation's Deep Research state and handed to the engine as
+    ``upload_passages``, which seeds them into the evidence pool before the
+    first search. The v1 per-leg ``extra_passages`` gather seam this used to
+    patch no longer exists — the agentic loop has no gather legs."""
+    from disco.agent_server import ConversationRuntime
+    from disco.agent_server._deep_research_service_parts import execute as execute_parts
+    from disco.core import (
+        ConversationStatus,
+        EventSource,
+        LLMMessage,
+        MessageEvent,
+        ReportEvent,
+        StatusEvent,
+    )
     from disco.retrieval.models import Passage
 
     upload_p = Passage(
@@ -499,76 +509,65 @@ async def test_dr_run_extra_passages_seeded_into_legs() -> None:
         text="Row 1: name=alpha value=1",
     )
 
-    # Track what extra_passages each leg sees.
-    seen_extra: list[Passage] = []
+    class _FakeEncoder:
+        def entail(self, premise: str, hypothesis: str) -> str:
+            return "entail"
 
-    async def _patched_gather(
-        subq: Any,
-        *,
-        extra_passages: list[Any] | None = None,
-        **kw: Any,
-    ) -> Any:
-        extra_passages = extra_passages or []
-        seen_extra.extend(extra_passages)
-        from disco.retrieval.deep_research.gather import SubQuestionResult
+        def score(self, premise: str, hypothesis: str) -> float:
+            return 0.9
 
-        return SubQuestionResult(subq=subq, passages=list(extra_passages))
+    store = SqliteEventStore(":memory:")
+    rt = ConversationRuntime(
+        store,
+        research_providers={
+            "search": object(),
+            "extraction": object(),
+            "reranker": _FakeEncoder(),
+            "embedder": None,
+            "nli": _FakeEncoder(),
+        },
+    )
+    cid = "conv_y"
+    rt.settings._set_surface(cid, "deep_research")
 
-    # Patch the name as imported into engine.py (not the original in gather.py)
-    # because _gather_leg in engine.py closes over the local import.
-    with mock.patch(
-        "disco.retrieval.deep_research.engine.gather_for_subquestion",
-        _patched_gather,
-    ):
-        fake_engine = AsyncMock()
-        fake_router = AsyncMock()
-        fake_embedder = None
-        fake_vs = AsyncMock()
-        fake_vs.upsert = AsyncMock()
-        fake_vs.query = AsyncMock(return_value=[])
-        fake_nli = MagicMock()
-        fake_nli.predict = MagicMock(return_value=[])
+    async def _preflight_ok(conversation_id: str, **kw: Any) -> None:
+        return None
 
-        # Build a minimal synthesis mock so run() completes.
-        with mock.patch(
-            "disco.retrieval.deep_research.engine.synthesize_section",
-            new_callable=lambda: lambda *a, **kw: _fake_synth(*a, **kw),
-        ):
-            run = DeepResearchRun(
-                query="What is alpha?",
-                router=fake_router,
-                retrieval_engine=fake_engine,
-                embedder=fake_embedder,
-                vector_store=fake_vs,
-                nli=fake_nli,
-                depth="quick",
-                conversation_id="conv_y",
-                upload_passages=[upload_p],
+    rt._driver_preflight.check = _preflight_ok  # type: ignore[method-assign]
+    rt.drivers.router = lambda **kw: object()  # type: ignore[assignment]
+
+    await store.append(
+        cid,
+        MessageEvent(
+            source=EventSource.USER,
+            message=LLMMessage(role="user", content="What is alpha?"),
+        ),
+    )
+    rt.deep_research.add_upload_passages(cid, [upload_p])
+
+    seen: dict[str, Any] = {}
+
+    class _RecordingRun:
+        def __init__(self, **kwargs: Any) -> None:
+            seen.update(kwargs)
+
+        async def run(self, **kwargs: Any) -> Any:
+            return SimpleNamespace(
+                bounded_by=None,
+                to_event=lambda: ReportEvent(
+                    query=str(seen.get("query", "")),
+                    summary="Done.",
+                    sections=[],
+                    passages=[],
+                    all_hits=[],
+                ),
             )
 
-            try:
-                await run.run(
-                    ["Sub-question 1"],
-                    emit=_noop_emit,
-                    should_cancel=lambda: False,
-                )
-            except Exception:
-                pass  # synthesis might fail with fake deps; that's OK
+    with mock.patch.object(execute_parts, "DeepResearchRun", _RecordingRun):
+        await rt.deep_research._maybe_run_deep_research(cid)
 
-    # The upload passage should have been passed to each leg.
-    assert any(p.id == "up_seed_0" for p in seen_extra)
-
-
-async def _noop_emit(kind: str, payload: dict[str, Any]) -> None:
-    pass
-
-
-async def _fake_synth(*args: Any, **kwargs: Any) -> Any:
-    from disco.retrieval.deep_research.synthesis import SectionResult
-
-    return SectionResult(
-        title="Sub-question 1",
-        markdown="Synthesized.",
-        cited_passage_ids=[],
-        disputed_notes=[],
-    )
+    # The upload passage reached the engine's pool seed, and the run finished.
+    assert [p.id for p in seen["upload_passages"]] == ["up_seed_0"]
+    assert seen["query"] == "What is alpha?"
+    statuses = [e for e in await store.get_events(cid) if isinstance(e, StatusEvent)]
+    assert statuses[-1].status == ConversationStatus.FINISHED

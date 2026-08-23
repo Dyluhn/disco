@@ -61,8 +61,9 @@ frames.json`. Common controls are `--depth`, `--recency`, `--model`,
 requested depth's wall-clock budget — `quick` 600 s, `standard_deep` 1,500 s,
 `exhaustive` 3,000 s — sized above the product tier budgets plus report-writing
 time; `--timeout` overrides it explicitly. Live runs establish the same paired
-cookie/CSRF session as the browser and automatically approve the normal Deep
-Research plan gate. For a non-loopback server, pass its operator pairing token
+cookie/CSRF session as the browser; Deep Research is gateless (v2) — sending
+the question launches the run and the model's brief streams as its first
+output. For a non-loopback server, pass its operator pairing token
 with `--auth-token` or `DISCO_PAIRING_TOKEN`; it is never written to an artifact.
 
 Each run writes:
@@ -76,9 +77,12 @@ Each run writes:
 The command exits nonzero when the provider fails or the artifact violates a
 report invariant.  A Deep Research run has exactly three legitimate outcomes:
 
-1. **A valid report** — the summary is always non-empty and cited, and every
-   section is present and substantive.
-2. **A run ERROR** — an `ErrorEvent` plus a terminal `ERROR` status.
+1. **A complete report** — the summary is non-empty and cited, and every
+   section is present and substantive. (A budget-exhausted run with an empty
+   evidence pool finishes with the system-gated honest dead-end account —
+   still a FINISHED report, never an error.)
+2. **A run ERROR** — an `ErrorEvent` plus a terminal `ERROR` status; reserved
+   for genuine provider failure.
 3. **A user-Stop PAUSED checkpoint** — `bounded_by == "stopped"` with
    `sections == []` and `summary == ""`.  The harness judges this shape as a
    checkpoint: the empty summary and sections are allowed **only** when
@@ -108,7 +112,7 @@ diagnosis, but the process exits nonzero. Secrets in requests and event payloads
 are redacted before artifacts are written.
 
 The event stream includes the public state and event frames as well as the
-harness's outbound `send_message` and `approve_plan` controls. This makes plan,
-search, extraction, gap, verification, synthesis, terminal state, bounds, and
-provider errors inspectable without importing or patching product internals.
+harness's outbound `send_message` control. This makes the brief, search,
+extraction, verification, writing, terminal state, bounds, and provider
+errors inspectable without importing or patching product internals.
 `--watch` prints a concise redacted version of that stream while the run is live.

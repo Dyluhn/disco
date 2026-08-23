@@ -1,7 +1,10 @@
 /**
  * Deep Research surface — integration test over the offline fixture (the
  * same conversation the screenshots are captured against). Verifies the
- * full lifecycle the user sees: empty → plan gate → live progress → report.
+ * full lifecycle the user sees: empty → brief → live progress → report.
+ *
+ * v2 (gateless): submitting STARTS the research. There is no plan-approval
+ * gate on this surface, so nothing pauses between the question and the work.
  */
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -12,15 +15,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ModeProvider } from "@/shell/ModeProvider";
 import {
   deriveAssemblingSections,
-  derivePlan,
-  derivePlanProgress,
+  deriveBrief,
   deriveReport,
   deriveSourceTiers,
   deriveStats,
 } from "@/lib/deepResearchTrace";
 import {
+  FIXTURE_DEEP_BRIEF,
   fixtureFullTrace,
-  fixturePlan,
   fixtureReport,
 } from "@/fixtures/deepResearchTrace";
 import { DeepResearchSurface } from "./DeepResearchSurface";
@@ -121,7 +123,7 @@ describe("Deep Research surface — full lifecycle", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("after submit, shows the plan gate with editable sub-questions", async () => {
+  it("after submit, research starts immediately and shows the model's brief", async () => {
     const user = userEvent.setup();
     const onScopeChange = vi.fn();
     renderSurface(onScopeChange);
@@ -131,26 +133,34 @@ describe("Deep Research surface — full lifecycle", () => {
     );
     await user.keyboard("{Enter}");
 
-    // wait for the plan gate to render
-    const gate = await waitFor(
-      () => screen.getByRole("alertdialog", { name: /plan needs your approval/i }),
+    // The brief — the model's first visible output — arrives with no gate in
+    // between. It renders inside the progress strip.
+    const brief = await waitFor(
+      () => {
+        const el = document.querySelector("[data-dr-brief]");
+        expect(el).not.toBeNull();
+        return el as HTMLElement;
+      },
       { timeout: 5000 },
     );
+    expect(brief).toHaveTextContent(/path from lab to production line/i);
     await user.click(screen.getByRole("button", { name: /Standard Search/i }));
     expect(onScopeChange).toHaveBeenCalledWith("standard");
-    // sub-questions present from the fixture plan
+
+    // Nothing to approve or revise: the gate is gone, not merely hidden.
     expect(
-      within(gate).getByText(/Which solid-state battery products/i),
-    ).toBeInTheDocument();
-    // fix-c #1: the research surface now passes approveLabel="Approve research
-    // plan" to PlanPanel — the build surface still uses the default
-    // "Approve & build". This test renders the RESEARCH surface so we assert
-    // the research-surface label.
-    expect(within(gate).getByRole("button", { name: /approve research plan/i })).toBeEnabled();
-    expect(within(gate).getByRole("button", { name: /revise/i })).toBeEnabled();
+      screen.queryByRole("alertdialog", { name: /plan needs your approval/i }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /approve research plan/i }),
+    ).not.toBeInTheDocument();
+    // Run controls stay live once the gate is gone — Stop is the rendered one
+    // (the steer transport exists but has no control on this surface).
+    expect(screen.getByRole("button", { name: /^Stop$/ })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /^Kill$/ })).toBeEnabled();
   });
 
-  it("after approve, streams the progress + assembles the report without a false rounds notice", async () => {
+  it("after submit, streams the progress + assembles the report without a false rounds notice", async () => {
     const user = userEvent.setup();
     renderSurface();
     await user.type(
@@ -158,8 +168,6 @@ describe("Deep Research surface — full lifecycle", () => {
       "what is the current state of solid-state battery commercialization?",
     );
     await user.keyboard("{Enter}");
-    await waitFor(() => screen.getByRole("button", { name: /approve research plan/i }), { timeout: 5000 });
-    await user.click(screen.getByRole("button", { name: /approve research plan/i }));
 
     // Wait for the report to appear. `bounded_by: "rounds"` is a depth cap, not a
     // coverage truncation, so the current product contract suppresses the bounded
@@ -217,39 +225,42 @@ describe("DeepResearchSurface — WALK-08 stale follow-up guard", () => {
 describe("DeepResearchSurface — WALK-02 planning loader", () => {
   it("WALK-02: the empty-state surface does not show a planning loader (no session)", () => {
     renderSurface();
-    // Only shows the empty state / compose input
+    // Only shows the empty state / compose input. v2 replaced the planning
+    // loader with a start-up loader; neither may appear before a session.
     expect(screen.queryByText(/planning the research/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/starting the research/i)).not.toBeInTheDocument();
     expect(screen.getByPlaceholderText(/ask a research question/i)).toBeInTheDocument();
   });
 });
 
 describe("Deep Research derivers", () => {
-  it("derivePlan returns the latest revision", () => {
-    const plan = derivePlan(fixtureFullTrace);
-    expect(plan).not.toBeNull();
-    expect(plan!.id).toBe("evt_plan");
-    expect(plan!.steps).toHaveLength(6);
-    expect(plan!.steps[0].title).toMatch(/products are in mass or pilot/i);
+  it("deriveBrief returns the model's opening brief", () => {
+    const brief = deriveBrief(fixtureFullTrace);
+    expect(brief).toBe(FIXTURE_DEEP_BRIEF);
+    expect(brief).toMatch(/path from lab to production line/i);
   });
 
-  it("derivePlanProgress marks first 3 sub-questions done", () => {
-    const plan = derivePlan(fixtureFullTrace)!;
-    const progress = derivePlanProgress(fixtureFullTrace, plan);
-    expect(progress.get(1)).toBe("done"); // synth_1 fired
-    expect(progress.get(2)).toBe("done"); // synth_2 fired
-    expect(progress.get(3)).toBe("done"); // synth_3 fired
-    expect(progress.get(4)).toBeUndefined(); // not started
-    expect(progress.get(5)).toBeUndefined();
-    expect(progress.get(6)).toBeUndefined();
+  it("the fixture trace carries no plan and no approval gate", () => {
+    expect(fixtureFullTrace.some((e) => e.kind === "plan")).toBe(false);
+    expect(
+      fixtureFullTrace.some(
+        (e) => e.kind === "status" && e.status === "AWAITING_PLAN_APPROVAL",
+      ),
+    ).toBe(false);
   });
 
   it("deriveStats counts sources from observation events", () => {
-    const plan = derivePlan(fixtureFullTrace)!;
-    const stats = deriveStats(fixtureFullTrace, plan);
-    expect(stats.subquestionsTotal).toBe(6);
-    expect(stats.subquestionsDone).toBe(3);
+    const stats = deriveStats(fixtureFullTrace);
     // fixture observations: 8 + 6 + 5 + 5 = 24
     expect(stats.sourcesDiscovered).toBe(24);
+    // Real event counts, not plan-step bookkeeping.
+    expect(stats.searches).toBe(4);
+    expect(stats.sectionsDone).toBe(3);
+  });
+
+  it("deriveStats reports a real elapsed span from the event timestamps", () => {
+    // The fixture's timestamps advance with seq (1s per unit): seq 1 → seq 80.
+    expect(deriveStats(fixtureFullTrace).elapsedSeconds).toBe(79);
   });
 
   it("deriveReport returns the final ReportEvent", () => {
@@ -261,8 +272,7 @@ describe("Deep Research derivers", () => {
   });
 
   it("deriveAssemblingSections shows pending for uncovered + done for covered", () => {
-    const plan = derivePlan(fixtureFullTrace)!;
-    const sections = deriveAssemblingSections(fixtureFullTrace, plan);
+    const sections = deriveAssemblingSections(fixtureFullTrace);
     expect(sections).toHaveLength(3);
     expect(sections.every((section) => section.state === "done")).toBe(true);
     expect(sections.map((section) => section.title)).toEqual(
@@ -285,6 +295,5 @@ describe("Deep Research derivers", () => {
     expect(fixtureReport.bounded_by).toBe("rounds");
     expect(fixtureReport.sections[0].confidence).toBe("mixed");
     expect(fixtureReport.sections[0].disputed_notes.length).toBeGreaterThan(0);
-    expect(fixturePlan.steps).toHaveLength(6);
   });
 });

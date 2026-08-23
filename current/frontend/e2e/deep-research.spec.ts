@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 
-test.describe("Deep Research → plan → report", () => {
-  test("plan gate, then a bounded multi-section report assembles", async ({
+test.describe("Deep Research → brief → report", () => {
+  test("research starts on submit, then a bounded multi-section report assembles", async ({
     page,
   }) => {
     await page.goto("/");
@@ -16,14 +16,16 @@ test.describe("Deep Research → plan → report", () => {
     );
     await input.press("Enter");
 
-    // Plan-approval gate, then approve the decomposition.
-    const approve = page.locator('[data-disco-control="approve-plan"]');
-    await expect(approve).toBeVisible();
-    await approve.click();
+    // v2 is gateless: submitting starts the research, and the model's brief is
+    // its first visible output — nothing to approve in between.
+    await expect(page.locator("[data-dr-brief]")).toBeVisible();
+    await expect(
+      page.locator('[data-disco-control="approve-plan"]'),
+    ).toHaveCount(0);
 
-    // The fixture run is bounded (hit the per-subquestion round limit) and
-    // surfaces that honestly rather than pretending all 6 sub-questions ran.
-    await expect(page.getByText(/3 of 6/i)).toBeVisible();
+    // The strip reports the run's REAL counts (searches / sources), not a
+    // checklist of sub-questions the run never promised.
+    await expect(page.getByText(/4 searches/i)).toBeVisible();
 
     // The tiered source panel separates Cited / Reviewed / Discovered.
     await expect(page.getByRole("tab", { name: /cited/i })).toBeVisible();
@@ -37,7 +39,6 @@ test.describe("Deep Research → plan → report", () => {
       "What is the current state of solid-state battery commercialization?",
     );
     await input.press("Enter");
-    await page.locator('[data-disco-control="approve-plan"]').click();
 
     // While the run streams (status=RUNNING) a graceful Stop control is offered.
     // The full Stop→PAUSED→Resume transition races the fixture's fast auto-

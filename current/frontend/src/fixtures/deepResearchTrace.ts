@@ -1,15 +1,15 @@
 /**
  * Deep Research fixture trace — drives the offline UI (no live backend
- * needed). Mirrors the live event stream the agent-server produces:
+ * needed). Mirrors the live event stream the agent-server produces for a
+ * v2 (gateless) run:
  *
- *   USER message → status RUNNING → PlanEvent → AWAITING_PLAN_APPROVAL
- *     [user approves]
- *   → status RUNNING (plan_approved) → ActionEvents (phase, search,
- *     synthesize_section, …) + ObservationEvents → ReportEvent →
- *     status FINISHED
+ *   USER message → status RUNNING → brief ActionEvent (+ the same text as an
+ *   assistant MessageEvent) → ActionEvents (phase, search, section_done, …)
+ *   + ObservationEvents → ReportEvent → status FINISHED
  *
- * Includes a bounded_by run (3 of 6 sub-questions covered) to demonstrate
- * the honest-failure surface end-to-end in the screenshots.
+ * There is no PlanEvent and no AWAITING_PLAN_APPROVAL pause: research starts
+ * on submit. Includes a bounded_by run to demonstrate the honest-failure
+ * surface end-to-end in the screenshots.
  */
 
 import type {
@@ -18,7 +18,6 @@ import type {
   ConversationState,
   MessageEvent,
   ObservationEvent,
-  PlanEvent,
   ReportEvent,
   StatusEvent,
 } from "@/types/agent";
@@ -28,13 +27,21 @@ export const FIXTURE_DEEP_QUERY =
   "What is the current state of solid-state battery commercialization?";
 
 const NOW = "2026-06-06T12:00:00Z";
+const START_MS = Date.parse(NOW);
+
+/** Timestamps advance with `seq` so the derived stats can compute a REAL
+ *  elapsed span (the strip renders "Nm elapsed" only from measured time).
+ *  One second per seq unit keeps the whole fixture run at a plausible ~80s. */
+function at(seq: number): string {
+  return new Date(START_MS + seq * 1000).toISOString();
+}
 
 const userMsg: MessageEvent = {
   id: "evt_user",
   kind: "message",
   source: "user",
   seq: 1,
-  timestamp: NOW,
+  timestamp: at(1),
   message: { role: "user", content: FIXTURE_DEEP_QUERY },
 };
 
@@ -43,51 +50,19 @@ const statusRunning: StatusEvent = {
   kind: "status",
   source: "system",
   seq: 2,
-  timestamp: NOW,
+  timestamp: at(2),
   status: "RUNNING",
 };
 
-export const fixturePlan: PlanEvent = {
-  id: "evt_plan",
-  kind: "plan",
-  source: "agent",
-  seq: 3,
-  timestamp: NOW,
-  summary:
-    "Multi-section research report on the current state of solid-state battery commercialization. Will gather sources across 6 sub-questions (tier: standard_deep; cap: 40 sources, 4 rounds/subq).",
-  steps: [
-    { title: "Which solid-state battery products are in mass or pilot production today?" },
-    { title: "What are the primary technical and manufacturing bottlenecks?" },
-    { title: "How do projected costs per kWh compare to lithium-ion?" },
-    { title: "Which OEMs have confirmed near-term integration timelines?" },
-    { title: "What is the competitive landscape (Toyota, QuantumScape, Solid Power, CATL)?" },
-    { title: "What policy, supply chain, and regulatory headwinds exist?" },
-  ],
-  revision: 1,
-  context:
-    "## Approach\n\nDecomposed query into 6 sub-questions prioritized by relevance — products, bottlenecks, and economics first; competitive landscape and policy last (background context).",
-};
-
-const planGate: StatusEvent = {
-  id: "evt_gate",
-  kind: "status",
-  source: "system",
-  seq: 4,
-  timestamp: NOW,
-  status: "AWAITING_PLAN_APPROVAL",
-  detail: "evt_plan",
-};
-
-/** Events emitted between plan-approval and the final report. */
-const approved: StatusEvent = {
-  id: "evt_approved",
-  kind: "status",
-  source: "system",
-  seq: 5,
-  timestamp: NOW,
-  status: "RUNNING",
-  detail: "plan_approved",
-};
+/** The model's opening brief — the first visible output of a gateless run.
+ *  The engine emits it BOTH as an ActionEvent (tool_name "brief") and as an
+ *  assistant chat message; the fixture carries both, exactly as the live
+ *  stream does. */
+export const FIXTURE_DEEP_BRIEF =
+  "I read this as a question about where solid-state batteries actually are on the " +
+  "path from lab to production line, not where vendors say they will be. I'll chase " +
+  "shipping and pilot-line evidence first, then the technical bottlenecks holding " +
+  "scale-up back, then the cost gap against lithium-ion.";
 
 function action(
   id: string,
@@ -100,7 +75,7 @@ function action(
     kind: "action",
     source: "agent",
     seq,
-    timestamp: NOW,
+    timestamp: at(seq),
     thought: `Deep Research: ${tool}`,
     tool_call: { tool_name: tool, arguments: args },
   };
@@ -119,7 +94,7 @@ function observation(
     kind: "observation",
     source: "environment",
     seq,
-    timestamp: NOW,
+    timestamp: at(seq),
     action_id: actionId,
     tool_result: {
       call_id: `call_${id}`,
@@ -131,18 +106,32 @@ function observation(
   };
 }
 
-const subq1 = fixturePlan.steps[0].title;
-const subq2 = fixturePlan.steps[1].title;
-const subq3 = fixturePlan.steps[2].title;
+const briefAction: ActionEvent = action("evt_brief", 3, "brief", {
+  text: FIXTURE_DEEP_BRIEF,
+});
+
+const briefMsg: MessageEvent = {
+  id: "evt_brief_msg",
+  kind: "message",
+  source: "agent",
+  seq: 4,
+  timestamp: at(4),
+  message: { role: "assistant", content: FIXTURE_DEEP_BRIEF },
+};
+
+// The engine labels each search leg with a short topic string; these three are
+// also the titles the writer gives the finished report's sections.
+const subq1 = "Which solid-state battery products are in mass or pilot production today?";
+const subq2 = "What are the primary technical and manufacturing bottlenecks?";
+const subq3 = "How do projected costs per kWh compare to lithium-ion?";
 
 /** The events streamed during the live-progress phase. */
 export const fixtureRunningEvents: AgentEvent[] = [
   userMsg,
   statusRunning,
-  fixturePlan,
-  planGate,
-  approved,
-  action("evt_phase_gather", 10, "phase", { phase: "gather", subquestions: 6 }),
+  briefAction,
+  briefMsg,
+  action("evt_phase_gather", 10, "phase", { phase: "gather", mode: "agent", max_turns: 4 }),
   action("evt_search_1_1", 11, "search", {
     subquestion: subq1,
     query: "solid-state battery mass production 2026",
@@ -156,12 +145,6 @@ export const fixtureRunningEvents: AgentEvent[] = [
     added: 8,
     total_for_subq: 8,
     remaining_budget: 32,
-  }),
-  action("evt_gap_1", 13, "phase", {
-    subquestion: subq1,
-    sufficient: false,
-    rationale: "missing OEM timeline specifics",
-    follow_ups: ["SK On Lexus Mercedes solid-state timeline"],
   }),
   action("evt_search_1_2", 14, "search", {
     subquestion: subq1,
@@ -177,14 +160,6 @@ export const fixtureRunningEvents: AgentEvent[] = [
     total_for_subq: 14,
     remaining_budget: 26,
   }),
-  action("evt_synth_1", 20, "synthesize_section", {
-    section: subq1,
-    passages_used: 6,
-  }),
-  action("evt_secdone_1", 21, "section_done", {
-    section_id: "sec_1",
-    title: subq1,
-  }),
   action("evt_search_2_1", 30, "search", {
     subquestion: subq2,
     query: "solid-state battery interface stability dendrite suppression",
@@ -198,14 +173,6 @@ export const fixtureRunningEvents: AgentEvent[] = [
     added: 5,
     total_for_subq: 5,
     remaining_budget: 21,
-  }),
-  action("evt_synth_2", 35, "synthesize_section", {
-    section: subq2,
-    passages_used: 5,
-  }),
-  action("evt_secdone_2", 36, "section_done", {
-    section_id: "sec_2",
-    title: subq2,
   }),
   action("evt_search_3_1", 40, "search", {
     subquestion: subq3,
@@ -221,15 +188,27 @@ export const fixtureRunningEvents: AgentEvent[] = [
     total_for_subq: 5,
     remaining_budget: 16,
   }),
-  action("evt_synth_3", 50, "synthesize_section", {
-    section: subq3,
-    passages_used: 5,
+  // Writing is ONE whole-report pass (v2), so the writer emits a synthesize
+  // phase + a section_done checkpoint per finalized section — never a
+  // per-section "now writing X" action.
+  action("evt_phase_synth_1", 50, "phase", { phase: "synthesize", section: 1 }),
+  action("evt_secdone_1", 51, "section_done", {
+    section_id: "s0",
+    title: subq1,
+    done: 1,
   }),
-  action("evt_secdone_3", 51, "section_done", {
-    section_id: "sec_3",
+  action("evt_phase_synth_2", 52, "phase", { phase: "synthesize", section: 2 }),
+  action("evt_secdone_2", 53, "section_done", {
+    section_id: "s1",
+    title: subq2,
+    done: 2,
+  }),
+  action("evt_phase_synth_3", 54, "phase", { phase: "synthesize", section: 3 }),
+  action("evt_secdone_3", 55, "section_done", {
+    section_id: "s2",
     title: subq3,
+    done: 3,
   }),
-  action("evt_phase_synth", 55, "phase", { phase: "synthesize", sections: 3, passages_total: 30 }),
   action("evt_phase_coher", 60, "phase", { phase: "coherence" }),
 ];
 
@@ -239,7 +218,7 @@ export const fixtureReport: ReportEvent & { claims: import("@/types/grounded").V
   kind: "report",
   source: "agent",
   seq: 70,
-  timestamp: NOW,
+  timestamp: at(70),
   query: FIXTURE_DEEP_QUERY,
   summary:
     "As of early 2026, solid-state battery (SSB) commercialization remains in the pilot production phase, with no major manufacturer having achieved full-scale mass production for mainstream automotive applications. Despite industry narratives emphasizing a rapid transition from R&D, the sector has not yet moved beyond limited-scale manufacturing.\n\nThis delay is driven by a triad of interdependent technical barriers: interfacial instability, dendritic growth, and the absence of scalable manufacturing processes. Economically, SSBs are currently uncompetitive with conventional lithium-ion standards, with manufacturing costs estimated at three to five times higher.",
@@ -451,12 +430,15 @@ export const fixtureReport: ReportEvent & { claims: import("@/types/grounded").V
   depth_tier: "standard_deep",
 };
 
-const statusFinished: StatusEvent = {
+/** The terminal FINISHED StatusEvent. Exported so the offline replay driver
+ *  emits the SAME event the canned trace ends with (it used to hand-roll a
+ *  duplicate literal that could drift). */
+export const fixtureFinishedEvent: StatusEvent = {
   id: "evt_finished",
   kind: "status",
   source: "system",
   seq: 80,
-  timestamp: NOW,
+  timestamp: at(80),
   status: "FINISHED",
 };
 
@@ -465,7 +447,7 @@ const statusFinished: StatusEvent = {
 export const fixtureFullTrace: AgentEvent[] = [
   ...fixtureRunningEvents,
   fixtureReport,
-  statusFinished,
+  fixtureFinishedEvent,
 ];
 
 /** Initial state snapshot the WS sends on connect. */
