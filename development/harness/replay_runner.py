@@ -218,7 +218,9 @@ async def _main() -> None:
     def _builder(store):
         from harness.runtime import build_replay_runtime
 
-        return build_replay_runtime(cassette, store)
+        runtime = build_replay_runtime(cassette, store)
+        runtime.deep_research.set_depth("replay", "quick")
+        return runtime
 
     surface = "deep_research"
     outputs = await replay_conversation(

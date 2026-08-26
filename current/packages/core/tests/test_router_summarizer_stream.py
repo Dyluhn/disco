@@ -34,6 +34,14 @@ class _NoFinalProvider(FakeModelProvider):
         yield StreamChunk(delta_text="partial")
 
 
+class _FinalThenErrorProvider(FakeModelProvider):
+    async def stream_complete(self, req, *, model):
+        self.calls += 1
+        self.seen_requests.append(req)
+        yield StreamChunk(done=True, final=self._make_response(req, model))
+        raise RuntimeError("provider failed after its terminal chunk")
+
+
 async def test_summarizer_routes_summarizer_role_and_returns_text():
     """Async `summarize()` (v1.2 §5.2) routes a SUMMARIZER call."""
     summ_provider = FakeModelProvider("ollama", text="THE SUMMARY")
@@ -209,3 +217,30 @@ async def test_stream_cancellation_is_observable_and_propagates(monkeypatch):
     rows = registry().snapshot("stream-cancelled")["model_attempts"]
     assert [row["outcome"] for row in rows] == ["started", "cancelled"]
     assert rows[-1]["error_class"] == "CancelledError"
+
+
+async def test_stream_records_one_terminal_outcome_if_provider_raises_after_final(monkeypatch):
+    monkeypatch.setenv("DISCO_INSPECT", "1")
+    registry().clear()
+    router = DefaultLLMRouter(
+        simple_config(),
+        {
+            "ollama": _FinalThenErrorProvider("ollama"),
+            "openrouter": FakeModelProvider("openrouter"),
+        },
+    )
+    request = CompletionRequest(
+        profile=CapabilityProfile(role=ModelRole.AGENT_DRIVER),
+        messages=[LLMMessage(role="user", content="go")],
+        stream=True,
+    )
+
+    with pytest.raises(RuntimeError, match="after its terminal chunk"):
+        async for _chunk in router.stream_complete(
+            request, context=CallContext(conversation_id="stream-final-then-error")
+        ):
+            pass
+
+    rows = registry().snapshot("stream-final-then-error")["model_attempts"]
+    terminal_rows = [row for row in rows if row["outcome"] != "started"]
+    assert [row["outcome"] for row in terminal_rows] == ["success"]

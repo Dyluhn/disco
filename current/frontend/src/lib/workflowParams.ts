@@ -8,6 +8,54 @@ export interface ParsedWorkflowParams {
   errors: Record<string, string>;
 }
 
+type ParsedValue =
+  | { ok: true; value: unknown }
+  | { ok: false; error: string };
+
+function parseJsonContainer(raw: string, kind: "array" | "object"): ParsedValue {
+  try {
+    const value: unknown = JSON.parse(raw);
+    const valid =
+      kind === "array"
+        ? Array.isArray(value)
+        : value !== null && typeof value === "object" && !Array.isArray(value);
+    if (!valid) throw new Error(`not an ${kind}`);
+    return { ok: true, value };
+  } catch {
+    return kind === "array"
+      ? { ok: false, error: 'Enter a JSON array, for example ["value"]' }
+      : { ok: false, error: 'Enter a JSON object, for example {"key":"value"}' };
+  }
+}
+
+function parseWorkflowValue(type: string | undefined, raw: string): ParsedValue {
+  if (type?.endsWith("array")) return parseJsonContainer(raw, "array");
+  if (type === "object") return parseJsonContainer(raw, "object");
+  if (type === "integer") {
+    const value = Number(raw);
+    return Number.isInteger(value)
+      ? { ok: true, value }
+      : { ok: false, error: "Enter a whole number" };
+  }
+  if (type === "number") {
+    const value = Number(raw);
+    return Number.isFinite(value)
+      ? { ok: true, value }
+      : { ok: false, error: "Enter a number" };
+  }
+  if (type === "boolean") {
+    return raw === "true" || raw === "false"
+      ? { ok: true, value: raw === "true" }
+      : { ok: false, error: "Enter true or false" };
+  }
+  if (type === "null") {
+    return raw === "null"
+      ? { ok: true, value: null }
+      : { ok: false, error: "Enter null" };
+  }
+  return { ok: true, value: raw };
+}
+
 /** Parse the small workflow input schema used by both Run and Scheduling. */
 export function parseWorkflowParams(
   schema: WorkflowParamSchema,
@@ -22,41 +70,9 @@ export function parseWorkflowParams(
       continue;
     }
     if (!raw) continue;
-    if (definition.type?.endsWith("array")) {
-      try {
-        const value: unknown = JSON.parse(raw);
-        if (!Array.isArray(value)) throw new Error("not an array");
-        params[name] = value;
-      } catch {
-        errors[name] = 'Enter a JSON array, for example ["value"]';
-      }
-    } else if (definition.type === "integer") {
-      const value = Number(raw);
-      if (!Number.isInteger(value)) errors[name] = "Enter a whole number";
-      else params[name] = value;
-    } else if (definition.type === "number") {
-      const value = Number(raw);
-      if (!Number.isFinite(value)) errors[name] = "Enter a number";
-      else params[name] = value;
-    } else if (definition.type === "boolean") {
-      if (raw !== "true" && raw !== "false") errors[name] = "Enter true or false";
-      else params[name] = raw === "true";
-    } else if (definition.type === "object") {
-      try {
-        const value: unknown = JSON.parse(raw);
-        if (value === null || typeof value !== "object" || Array.isArray(value)) {
-          throw new Error("not an object");
-        }
-        params[name] = value;
-      } catch {
-        errors[name] = 'Enter a JSON object, for example {"key":"value"}';
-      }
-    } else if (definition.type === "null") {
-      if (raw !== "null") errors[name] = "Enter null";
-      else params[name] = null;
-    } else {
-      params[name] = raw;
-    }
+    const parsed = parseWorkflowValue(definition.type, raw);
+    if (parsed.ok) params[name] = parsed.value;
+    else errors[name] = parsed.error;
   }
   return { params, errors };
 }

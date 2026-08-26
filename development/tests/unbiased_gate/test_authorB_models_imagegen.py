@@ -247,7 +247,7 @@ async def test_w50_slides_degrade_to_image_less_when_image_backend_unconfigured(
     ) as mock_llm:
         mock_llm.side_effect = [outline_json, full_json]
         outcome = await SlidesTool().run(
-            SlidesGenerateArgs(goal="A four-slide market brief", filename="brief", format="html"),
+            SlidesGenerateArgs(goal="A four-slide market brief", filename="brief", format="pptx"),
             ctx,
         )
 
@@ -255,13 +255,15 @@ async def test_w50_slides_degrade_to_image_less_when_image_backend_unconfigured(
     assert outcome.success is True, outcome.content
     assert outcome.error is None
     # A real rendered artifact landed in the workspace.
-    assert "brief.html" in outcome.artifacts
-    artifact = workspace / "brief.html"
+    assert "brief.pptx" in outcome.artifacts
+    artifact = workspace / "brief.pptx"
     assert artifact.exists() and artifact.stat().st_size > 0
-    # All four slides lowered + rendered via the real C3 brand renderer.
+    # All four slides lowered + rendered via the real native deck renderer.
     structured = outcome.structured or {}
     assert structured.get("slide_count") == 4
-    assert structured.get("renderer") == "c3-brand"
+    assert structured.get("renderer") == "pptx-native"
+    preview = workspace / "brief.html"
+    assert preview.exists() and "<svg" in preview.read_text()
     # DEGRADED to image-less: no image asset was generated/written for the image_prompt
     # slide (the whole point of W-50 — omit images, don't crash).
     assert not list(workspace.glob("*_img_*.png"))

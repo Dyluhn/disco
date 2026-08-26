@@ -63,13 +63,36 @@ class PinnedReferenceInspector(Protocol):
     ) -> Mapping[str, Any] | Awaitable[Mapping[str, Any]]: ...
 
 
+class ReferencePackVersion(Protocol):
+    files: Sequence[object]
+
+
+class ReferencePackRecord(Protocol):
+    id: str
+    name: str
+    current: ReferencePackVersion
+    current_version_id: str
+
+
+class ReferencePackStore(Protocol):
+    def acreate(
+        self,
+        owner_id: str,
+        name: str,
+        description: str,
+        files: list[ReferencePackFileArg | dict[str, Any] | str],
+        *,
+        reader: Any,
+    ) -> Awaitable[ReferencePackRecord]: ...
+
+
 async def create_reference_pack(
     name: str,
     description: str,
     files: Sequence[ReferencePackFileArg | dict[str, Any] | str],
     *,
     owner_id: str,
-    store: Any,
+    store: ReferencePackStore,
     reader: Any,
 ) -> Any:
     """Create one pack through the host-injected async ingress seam."""
@@ -78,7 +101,9 @@ async def create_reference_pack(
 
 
 class CreateReferencePackTool:
-    def __init__(self, *, store: Any | None = None, reader_factory: Any | None = None) -> None:
+    def __init__(
+        self, *, store: ReferencePackStore | None = None, reader_factory: Any | None = None
+    ) -> None:
         """Bind host authorities once at composition time.
 
         ``ToolContext`` is frozen and intentionally has no ad-hoc collaborator

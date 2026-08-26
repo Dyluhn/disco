@@ -11,6 +11,15 @@ mocked httpx transport and reused by both the provider-key and data-source probe
 from __future__ import annotations
 
 import httpx
+from disco.core._provider_contracts import (
+    brave_search_request,
+    firecrawl_extract_request,
+    parse_brave_search_response,
+    parse_firecrawl_response,
+    parse_tavily_search_response,
+    tavily_search_request,
+)
+from disco.core._provider_http import BoundedHttpExecutor, HttpAttemptPolicy, with_outcome
 
 
 def _provider_probe_result(
@@ -37,6 +46,7 @@ def _provider_probe_result(
         return False, "unreachable", f"{root} timed out while testing {action}."
     return False, "error", f"{root} returned no usable {action} ({outcome}{code})."
 
+
 # A short, fixed budget — a "test" button must feel instant and never hang the
 # settings UI on a black-holed host. Connect + read both bounded.
 _TIMEOUT = httpx.Timeout(6.0, connect=4.0)
@@ -47,8 +57,6 @@ def _provider_probe_executor(
     transport: httpx.AsyncBaseTransport | None,
 ):
     """Use production request mapping under the Settings button's short SLA."""
-    from disco.retrieval.provider_http import BoundedHttpExecutor, HttpAttemptPolicy
-
     return BoundedHttpExecutor(
         provider,
         transport=transport,
@@ -212,17 +220,27 @@ async def probe_brave_search(
     ``httpx.MockTransport``) — production callers never pass it, so the default
     ``None`` makes a real connection.
     """
-    from disco.retrieval.bundled_providers import BraveSearchProvider
-
     root = base_url.rstrip("/")
-    hits, diagnostic = await BraveSearchProvider(
-        api_key or "",
-        base_url=root,
-        executor=_provider_probe_executor("brave", transport),
-    ).search_detailed("disco connectivity test", limit=1)
-    return _provider_probe_result(
-        root, "search result", diagnostic, usable_count=len(hits)
+    if not api_key:
+        return _provider_probe_result(
+            root, "search result", {"outcome": "auth", "status_code": None}, usable_count=0
+        )
+    request = brave_search_request(root, api_key, "disco connectivity test", limit=1)
+    result = await _provider_probe_executor("brave", transport).request(
+        request.method,
+        request.url,
+        headers=request.headers,
+        params=request.params,
+        json=request.json,
     )
+    diagnostic = dict(result.diagnostic)
+    hits: list[dict] = []
+    if result.response is not None and diagnostic["outcome"] == "ok":
+        try:
+            hits = parse_brave_search_response(result.response)
+        except (TypeError, ValueError):
+            diagnostic = with_outcome(diagnostic, "invalid_response")
+    return _provider_probe_result(root, "search result", diagnostic, usable_count=len(hits))
 
 
 async def probe_tavily_search(
@@ -237,24 +255,34 @@ async def probe_tavily_search(
 
     ``transport`` is test-only, see ``probe_brave_search``.
     """
-    from disco.retrieval.bundled_providers import TavilySearchProvider
-
     root = base_url.rstrip("/")
+    if not api_key:
+        return _provider_probe_result(
+            root, "search result", {"outcome": "auth", "status_code": None}, usable_count=0
+        )
     try:
-        hits, diagnostic = await TavilySearchProvider(
-            api_key or "",
-            base_url=root,
-            executor=_provider_probe_executor("tavily", transport),
-        ).search_detailed("disco connectivity test", limit=1)
+        request = tavily_search_request(root, api_key, "disco connectivity test", limit=1)
     except ValueError:
         return (
             False,
             "misconfigured",
             "Tavily requires the official API origin https://api.tavily.com.",
         )
-    return _provider_probe_result(
-        root, "search result", diagnostic, usable_count=len(hits)
+    result = await _provider_probe_executor("tavily", transport).request(
+        request.method,
+        request.url,
+        headers=request.headers,
+        params=request.params,
+        json=request.json,
     )
+    diagnostic = dict(result.diagnostic)
+    hits: list[dict] = []
+    if result.response is not None and diagnostic["outcome"] == "ok":
+        try:
+            hits = parse_tavily_search_response(result.response)
+        except (TypeError, ValueError):
+            diagnostic = with_outcome(diagnostic, "invalid_response")
+    return _provider_probe_result(root, "search result", diagnostic, usable_count=len(hits))
 
 
 async def probe_firecrawl_extract(
@@ -268,14 +296,28 @@ async def probe_firecrawl_extract(
 
     ``transport`` is test-only, see ``probe_brave_search``.
     """
-    from disco.retrieval.bundled_providers import FirecrawlExtractionProvider
-
     root = base_url.rstrip("/")
-    doc, diagnostic = await FirecrawlExtractionProvider(
-        api_key or "",
-        base_url=root,
-        executor=_provider_probe_executor("firecrawl", transport),
-    ).extract_detailed("https://example.com")
-    return _provider_probe_result(
-        root, "readable passage", diagnostic, usable_count=len(doc.passages)
+    if not api_key:
+        return _provider_probe_result(
+            root,
+            "readable passage",
+            {"outcome": "auth", "status_code": None},
+            usable_count=0,
+        )
+    request = firecrawl_extract_request(root, api_key, "https://example.com")
+    result = await _provider_probe_executor("firecrawl", transport).request(
+        request.method,
+        request.url,
+        headers=request.headers,
+        params=request.params,
+        json=request.json,
     )
+    diagnostic = dict(result.diagnostic)
+    usable_count = 0
+    if result.response is not None and diagnostic["outcome"] == "ok":
+        try:
+            _meta, content = parse_firecrawl_response(result.response)
+            usable_count = int(any(len(part.strip()) >= 40 for part in content.split("\n\n")))
+        except (TypeError, ValueError):
+            diagnostic = with_outcome(diagnostic, "invalid_response")
+    return _provider_probe_result(root, "readable passage", diagnostic, usable_count=usable_count)

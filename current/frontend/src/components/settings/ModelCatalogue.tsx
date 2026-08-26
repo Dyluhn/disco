@@ -13,14 +13,14 @@ import {
   useUpdateModel,
 } from "@/hooks/useModels";
 import {
-  type Capability,
-  CAPABILITY_LABEL,
   isMetered,
   type ModelInfo,
   type ModelUpsert,
   staticVisionStatus,
 } from "@/types/models";
+import { ModelAdvancedFields } from "./ModelAdvancedFields";
 import { StoredCredentialField } from "./StoredCredentialField";
+import { VisionConfirmation } from "./VisionConfirmation";
 
 /**
  * The model CATALOGUE — add, edit, and remove the assignable models. Real CRUD:
@@ -28,11 +28,6 @@ import { StoredCredentialField } from "./StoredCredentialField";
  * model added here is immediately assignable in the matrix above and callable at
  * runtime. The form edits the raw config (endpoint, model id, context, key env).
  */
-const CAPS: Capability[] = [
-  "tool_calling",
-  "json_mode",
-  "long_context",
-];
 const BLANK: ModelUpsert = {
   id: "",
   model_id: "",
@@ -82,57 +77,6 @@ function visionSelectValue(value: boolean | null | undefined): string {
 function visionFromSelect(value: string): boolean | null {
   if (value === "auto") return null;
   return value === "true";
-}
-
-export function VisionConfirmation({
-  open,
-  onOpenChange,
-  onChoose,
-}: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  onChoose: (vision: boolean) => void;
-}) {
-  return (
-    <Dialog.Root open={open} onOpenChange={onOpenChange}>
-      <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-[60] bg-black/45" />
-        <Dialog.Content className="fixed left-1/2 top-1/2 z-[70] w-[min(26rem,92vw)] -translate-x-1/2 -translate-y-1/2 rounded-card border border-hairline bg-bg p-body pmx-rise">
-          <Dialog.Title className="font-ui text-[0.95rem] font-semibold text-text">
-            Does this model support images?
-          </Dialog.Title>
-          <Dialog.Description className="mt-hair font-ui text-[0.8rem] leading-snug text-text-muted">
-            The provider did not report a capability and the model name is not
-            conclusive. Choose the endpoint's actual input modality before saving.
-          </Dialog.Description>
-          <div className="mt-body grid grid-cols-2 gap-inline">
-            <button
-              type="button"
-              className="min-h-11 rounded-control bg-accent px-inline py-hair font-ui text-[0.8rem] font-medium text-bg"
-              onClick={() => onChoose(true)}
-            >
-              Supports images
-            </button>
-            <button
-              type="button"
-              className="min-h-11 rounded-control border border-hairline px-inline py-hair font-ui text-[0.8rem] text-text-muted hover:text-text"
-              onClick={() => onChoose(false)}
-            >
-              Text only
-            </button>
-          </div>
-          <Dialog.Close asChild>
-            <button
-              type="button"
-              className="mt-inline w-full font-ui text-[0.78rem] text-text-faint hover:text-text"
-            >
-              Cancel — do not add
-            </button>
-          </Dialog.Close>
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
-  );
 }
 
 function ModelForm({
@@ -242,142 +186,7 @@ function ModelForm({
         </span>
       </label>
 
-      <details className="rounded-control border border-hairline bg-surface-1/30 px-body py-inline">
-        <summary className="cursor-pointer py-3 font-ui text-[0.84rem] font-medium text-text lg:py-0">
-          Advanced model metadata
-        </summary>
-        <div className="mt-body flex flex-col gap-body">
-          <div className="grid grid-cols-2 gap-body">
-            <label className="flex flex-col gap-hair">
-              <span className={labelCls}>Context window</span>
-              <input
-                type="number"
-                className={field}
-                value={form.context_window}
-                min={1}
-                onChange={(e) => set("context_window", Number(e.target.value))}
-                required
-              />
-            </label>
-            <label className="flex flex-col gap-hair">
-              <span className={labelCls}>Maximum output tokens (optional)</span>
-              <input
-                type="number"
-                className={field}
-                value={form.max_output_tokens ?? ""}
-                min={1}
-                placeholder="Provider default"
-                onChange={(e) =>
-                  set(
-                    "max_output_tokens",
-                    e.target.value ? Number(e.target.value) : null,
-                  )
-                }
-              />
-            </label>
-            <label className="col-span-2 flex flex-col gap-hair">
-              <span className={labelCls}>Quantization (optional)</span>
-              <input
-                className={field}
-                value={form.quantization ?? ""}
-                placeholder="Q5_K_XL"
-                onChange={(e) => set("quantization", e.target.value)}
-              />
-            </label>
-          </div>
-
-          <fieldset className="flex flex-col gap-hair">
-            <span className={labelCls}>Capabilities (advisory)</span>
-            <div className="flex flex-wrap gap-inline">
-              {CAPS.map((capability) => (
-                <label
-                  key={capability}
-                  className="flex items-center gap-hair font-ui text-[0.8rem] text-text-muted"
-                >
-                  <input
-                    type="checkbox"
-                    checked={form.capabilities.includes(capability)}
-                    onChange={(event) =>
-                      set(
-                        "capabilities",
-                        event.target.checked
-                          ? [...form.capabilities, capability]
-                          : form.capabilities.filter(
-                              (current) => current !== capability,
-                            ),
-                      )
-                    }
-                  />
-                  {CAPABILITY_LABEL[capability]}
-                </label>
-              ))}
-            </div>
-          </fieldset>
-
-          <div className="grid grid-cols-2 gap-body">
-            {form.pricing_mode === "subscription" ? (
-              <p
-                data-disco-flag="model-subscription-no-price"
-                className="col-span-2 rounded-control border border-hairline bg-surface-1 px-inline py-hair font-ui text-[0.8rem] text-text-muted"
-              >
-                Subscription — a flat-rate plan. No per-token price; this model
-                shows as “Subscription” everywhere (never “Free”, never a $/Mtok
-                rate).
-              </p>
-            ) : (
-              <>
-                <label className="flex flex-col gap-hair">
-                  <span className={labelCls}>Price in / Mtok (0 = free)</span>
-                  <input
-                    type="number"
-                    step="0.01"
-                    min={0}
-                    className={field}
-                    value={form.price_in_per_m}
-                    onChange={(e) =>
-                      set("price_in_per_m", Number(e.target.value))
-                    }
-                  />
-                </label>
-                <label className="flex flex-col gap-hair">
-                  <span className={labelCls}>Price out / Mtok</span>
-                  <input
-                    type="number"
-                    step="0.01"
-                    min={0}
-                    className={field}
-                    value={form.price_out_per_m}
-                    onChange={(e) =>
-                      set("price_out_per_m", Number(e.target.value))
-                    }
-                  />
-                </label>
-              </>
-            )}
-            <label className="col-span-2 flex flex-col gap-hair">
-              <span className={labelCls}>Pricing</span>
-              <select
-                className={field}
-                value={form.pricing_mode ?? "metered"}
-                onChange={(e) =>
-                  set(
-                    "pricing_mode",
-                    e.target.value as ModelUpsert["pricing_mode"],
-                  )
-                }
-              >
-                <option value="metered">
-                  Metered — pay per token (uses the prices above)
-                </option>
-                <option value="subscription">
-                  Subscription — flat plan, shown as “Subscription”
-                </option>
-                <option value="free">Free — no charge</option>
-              </select>
-            </label>
-          </div>
-        </div>
-      </details>
+      <ModelAdvancedFields form={form} onChange={set} />
 
       {err && (
         <p role="alert" className="font-ui text-[0.8rem] text-unsupported">

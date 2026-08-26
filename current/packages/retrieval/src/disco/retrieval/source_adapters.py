@@ -3,19 +3,40 @@
 from __future__ import annotations
 
 import asyncio
-import datetime
 import json
 import logging
-import re
 import xml.etree.ElementTree as ET
-from collections.abc import Mapping
-from html.parser import HTMLParser
 from typing import Any, cast
-from urllib.parse import urlencode, urlparse
 
 import httpx
-from disco.core.host_egress import EgressDenied, GuardedResponse, guarded_get
+from disco.core.host_egress import EgressDenied
 
+from ._multi_search_parts import summarize_provider_rows as _summarize_provider_rows
+from ._search_diagnostics import search_diagnostic as _search_diagnostic
+from ._source_parts import (
+    atom_date as _atom_date,
+)
+from ._source_parts import (
+    collapse_ws as _collapse_ws,
+)
+from ._source_parts import (
+    fetch_get as _fetch_get,
+)
+from ._source_parts import (
+    parse_sites as _parse_sites,
+)
+from ._source_parts import (
+    recency_start as _recency_start,
+)
+from ._source_parts import (
+    response_status as _response_status,
+)
+from ._source_parts import (
+    strip_html as _strip_html,
+)
+from ._source_parts import (
+    with_params as _with_params,
+)
 from .models import SearchHit
 from .providers import SearchProvider
 from .url_policy import parse_source_date, source_url_key, url_allowed
@@ -23,108 +44,6 @@ from .url_policy import parse_source_date, source_url_key, url_allowed
 _LOG = logging.getLogger(__name__)
 
 _ATOM_NS = {"a": "http://www.w3.org/2005/Atom"}
-
-
-def _search_diagnostic(
-    provider: str,
-    outcome: str,
-    *,
-    started: float,
-    status_code: int | None = None,
-    result_count: int = 0,
-    error: BaseException | None = None,
-) -> dict[str, object]:
-    """Build a small, provider-neutral search fact.
-
-    Diagnostics are control-plane facts, not copied upstream responses.  Keep
-    only bounded machine-readable fields so a malformed response or exception
-    cannot leak response bodies, URLs, or credentials into the event log.
-    """
-
-    diagnostic: dict[str, object] = {
-        "provider": provider[:80],
-        "outcome": outcome,
-        "status_code": status_code if isinstance(status_code, int) else None,
-        "result_count": max(0, int(result_count)),
-        "latency_ms": max(0, int((asyncio.get_running_loop().time() - started) * 1_000)),
-    }
-    if error is not None:
-        diagnostic["provider_error"] = type(error).__name__[:48]
-    return diagnostic
-
-
-def _response_status(response: httpx.Response | GuardedResponse) -> int | None:
-    status = getattr(response, "status_code", None)
-    return status if isinstance(status, int) else None
-
-
-def _with_params(base: str, params: Mapping[str, object]) -> str:
-    sep = "&" if "?" in base else "?"
-    return f"{base}{sep}{urlencode(params)}"
-
-
-async def _fetch_get(
-    url: str,
-    *,
-    timeout_s: float,
-    headers: Mapping[str, str] | None = None,
-    transport: httpx.AsyncBaseTransport | None = None,
-) -> httpx.Response | GuardedResponse:
-    if transport is not None:
-        async with httpx.AsyncClient(
-            transport=transport,
-            timeout=timeout_s,
-            follow_redirects=True,
-            trust_env=False,
-        ) as client:
-            return await client.get(url, headers=headers)
-    return await guarded_get(url, timeout_s=timeout_s, headers=headers)
-
-
-def _collapse_ws(value: str | None) -> str:
-    return " ".join((value or "").split())
-
-
-def _recency_start(time_filter: str | None) -> datetime.date | None:
-    days = {"week": 7, "month": 31}.get(time_filter or "")
-    return datetime.date.today() - datetime.timedelta(days=days) if days else None
-
-
-def _atom_date(value: str | None) -> datetime.date | None:
-    return parse_source_date(value)
-
-
-class _HTMLTextExtractor(HTMLParser):
-    def __init__(self) -> None:
-        super().__init__(convert_charrefs=True)
-        self.parts: list[str] = []
-
-    def handle_data(self, data: str) -> None:
-        self.parts.append(data)
-
-
-def _strip_html(value: str | None) -> str:
-    parser = _HTMLTextExtractor()
-    parser.feed(value or "")
-    parser.close()
-    text = _collapse_ws(" ".join(parser.parts))
-    return re.sub(r"\s+([.,;:!?])", r"\1", text)
-
-
-def _parse_sites(sites: str) -> tuple[str, ...]:
-    domains: list[str] = []
-    seen: set[str] = set()
-    for raw in re.split(r"[\s,]+", sites):
-        token = raw.strip().lower().removeprefix("site:")
-        if "://" in token:
-            token = urlparse(token).hostname or ""
-        else:
-            token = token.split("/", 1)[0]
-        token = token.strip(".")
-        if token and token not in seen:
-            seen.add(token)
-            domains.append(token)
-    return tuple(domains)
 
 
 class ArxivSearchProvider:
@@ -700,55 +619,7 @@ class MultiSearchProvider:
             ],
             return_exceptions=True,
         )
-        rows_by_provider: list[list[SearchHit]] = []
-        diagnostics: dict[str, object] = {}
-        explicit_outcomes: list[str] = []
-        failed_providers = 0
-        for provider, result in zip(self._providers, gathered, strict=True):
-            provider_name = str(getattr(provider, "name", type(provider).__name__))[:80]
-            if isinstance(result, BaseException):
-                failed_providers += 1
-                diagnostics[provider_name] = {
-                    "provider": provider_name,
-                    "outcome": "upstream",
-                    "provider_error": type(result).__name__[:48],
-                    "result_count": 0,
-                }
-                _LOG.warning(
-                    "search provider %s failed: %s: %s",
-                    getattr(provider, "name", type(provider).__name__),
-                    type(result).__name__,
-                    result,
-                )
-                continue
-            rows, provider_diagnostic = result
-            if provider_diagnostic:
-                diagnostics[provider_name] = provider_diagnostic
-            # Legacy providers have no explicit paid-provider outcome; a
-            # completed empty response remains healthy/unknown.
-            if isinstance(provider_diagnostic, dict) and "outcome" in provider_diagnostic:
-                outcome = str(provider_diagnostic["outcome"])
-                explicit_outcomes.append(outcome)
-                if outcome not in {"ok", "empty"}:
-                    failed_providers += 1
-            if not rows:
-                continue
-            rows_by_provider.append(list(rows))
-        if explicit_outcomes or failed_providers:
-            failed = failed_providers > 0
-            if failed and failed_providers == len(self._providers):
-                aggregate = "all_failed"
-            elif failed:
-                aggregate = "partial_outage"
-            elif rows_by_provider:
-                aggregate = "success"
-            else:
-                aggregate = "empty"
-            return rows_by_provider, {
-                "provider_aggregate": aggregate,
-                "providers": diagnostics,
-            }
-        return rows_by_provider, ({"providers": diagnostics} if diagnostics else {})
+        return _summarize_provider_rows(self._providers, gathered)
 
     @staticmethod
     async def _search_provider(

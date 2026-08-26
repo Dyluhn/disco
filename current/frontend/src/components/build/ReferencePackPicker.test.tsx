@@ -1,42 +1,42 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { ReferencePackPicker } from "@/components/build/ReferencePackPicker";
-import type { ReferencePack } from "@/api/referencePacks";
+import { ReferencePackPicker } from "@/components/buildSurface/ReferencePackPicker";
 
-const packs: ReferencePack[] = [
+const packs = [
   {
     id: "pack-1",
-    name: "AppKit",
-    description: "Trusted components",
-    current_version_id: "version-1",
-    current: { id: "version-1", description: "", content_sha256: "sha-1", files: [], total_bytes: 4, created_at: "" },
-    files: [{ name: "components.md", path: "components.md", media_type: "text/markdown", size: 4, sha256: "x" }],
-    created_at: "",
-    updated_at: "",
+    name: "Brand",
+    description: "Brand references",
+    revision: "rev-1",
+    files: [{ id: "file-1", name: "brand.md", media_type: "text/markdown", size_bytes: 4 }],
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
   },
 ];
 
-vi.mock("@/api/client", () => ({ agentLive: () => true }));
 vi.mock("@/hooks/useReferencePacks", () => ({
   useReferencePacks: () => ({ data: packs, isLoading: false }),
 }));
 
+vi.mock("@/api/referencePacks", async () => {
+  const actual = await vi.importActual<typeof import("@/api/referencePacks")>("@/api/referencePacks");
+  return { ...actual, referencePacksAvailable: () => true };
+});
+
 describe("ReferencePackPicker", () => {
-  it("lets a Build select a pack and exposes the immutable snapshot affordance", () => {
+  it("adds an unselected pack", () => {
     const onChange = vi.fn();
     const view = render(<ReferencePackPicker selected={[]} onChange={onChange} />);
-    const pack = screen.getByRole("checkbox", { name: /use appkit/i });
-    fireEvent.click(pack);
+    fireEvent.click(screen.getByRole("checkbox", { name: "Use Brand" }));
     expect(onChange).toHaveBeenCalledWith(packs);
     view.rerender(<ReferencePackPicker selected={packs} onChange={onChange} />);
-    expect(screen.getByText(/snapshotted when this build starts/i)).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "Use Brand" })).toHaveAttribute("aria-checked", "true");
   });
 
-  it("removes an already-selected pack without mutating the source list", () => {
+  it("removes a selected pack", () => {
     const onChange = vi.fn();
     render(<ReferencePackPicker selected={packs} onChange={onChange} />);
-    fireEvent.click(screen.getByRole("checkbox", { name: /use appkit/i }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Use Brand" }));
     expect(onChange).toHaveBeenCalledWith([]);
-    expect(packs).toHaveLength(1);
   });
 });

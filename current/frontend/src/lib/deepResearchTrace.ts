@@ -36,6 +36,7 @@ import { computeStats } from "./deepResearchTraceParts/stats";
 import type {
   AgentEvent,
   ConversationStatus,
+  PlanStep,
   ReportEvent,
   ResearchCheckpointEvent,
   ReportSection,
@@ -116,6 +117,37 @@ export function deriveResearchCheckpoint(
     if (e.kind === "research_checkpoint") return e;
   }
   return null;
+}
+
+// ---- legacy plan compatibility -------------------------------------------
+
+/** @deprecated Deep Research is gateless; retained so older extensions keep
+ * compiling while the current surface derives progress from live activity. */
+export interface DeepPlanView {
+  id: string;
+  summary: string;
+  steps: PlanStep[];
+  revision: number;
+  context: string;
+}
+
+/** @deprecated Deep Research no longer exposes plan-step progress. */
+export type StepState = "pending" | "active" | "done";
+
+/** @deprecated Deep Research starts immediately and therefore has no plan. */
+export function derivePlan(events: AgentEvent[]): DeepPlanView | null {
+  void events;
+  return null;
+}
+
+/** @deprecated Gateless research progress is represented by deriveLiveTrace. */
+export function derivePlanProgress(
+  events: AgentEvent[],
+  plan: DeepPlanView | null,
+): Map<number, StepState> {
+  void events;
+  void plan;
+  return new Map();
 }
 
 /** Final report sections. Section structure is owned by the report writer

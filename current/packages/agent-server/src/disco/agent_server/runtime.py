@@ -19,13 +19,12 @@ from disco.core import (
     AgentErrorEvent,
     ConversationStatus,
     EventSource,
-    MessageEvent,
     ObservationEvent,
     PlanEvent,
     SkillStore,
     StatusEvent,
 )
-from disco.core.appkit import BuildBrief, appkit_applicable, classify_build_brief
+from disco.core.appkit import BuildBrief, appkit_applicable
 from disco.core.env import disco_env
 from disco.core.flags import appkit_enabled
 from disco.core.llm import (
@@ -39,7 +38,6 @@ from disco.core.llm.config import RouterConfig
 from disco.core.llm.secret_refs import resolve_provider_secret
 from disco.core.loop import AgentLoop, RouterAgent
 from disco.core.store.sqlite import SqliteEventStore
-from disco.core.verification import VerificationRequirementsDirective
 from disco.core.workflow import WorkflowReadiness, WorkflowRun
 from disco.tools import SandboxService, SandboxSpec
 from disco.tools.builtin.verify_appkit_app import (
@@ -47,6 +45,7 @@ from disco.tools.builtin.verify_appkit_app import (
 )
 from disco.tools.projects import ProjectStore
 
+from ._runtime_actions import _RuntimeActionsMixin
 from .build_contract_service import (
     _AUDIT_KIND_TERMS,
 )
@@ -210,7 +209,7 @@ _WORKFLOW_CLICK_TARGET_STATUSES = frozenset(
 )
 
 
-class ConversationRuntime:
+class ConversationRuntime(_RuntimeActionsMixin):
     """Wiring-only root plus the transport-stable conversation ingress facade."""
 
     if TYPE_CHECKING:
@@ -262,6 +261,23 @@ class ConversationRuntime:
         # fmt: on
 
     _AUDIT_KIND_TERMS = _AUDIT_KIND_TERMS
+
+    # Keep the transport ingress explicit on the public class while the
+    # implementations live in the small action mixin below the architecture
+    # budget.  These assignments preserve the existing class-level API and
+    # introspection contract without duplicating orchestration here.
+    start = _RuntimeActionsMixin.start
+    send_user_turn = _RuntimeActionsMixin.send_user_turn
+    confirm = _RuntimeActionsMixin.confirm
+    reject = _RuntimeActionsMixin.reject
+    approve_plan = _RuntimeActionsMixin.approve_plan
+    request_plan = _RuntimeActionsMixin.request_plan
+    pick_alternative = _RuntimeActionsMixin.pick_alternative
+    pause = _RuntimeActionsMixin.pause
+    cancel = _RuntimeActionsMixin.cancel
+    resume = _RuntimeActionsMixin.resume
+    kill = _RuntimeActionsMixin.kill
+    aclose = _RuntimeActionsMixin.aclose
 
     def __init__(
         self,
@@ -578,89 +594,6 @@ class ConversationRuntime:
 
     async def _teardown_sandbox(self, conversation_id: str) -> None:
         await self.lifecycle._teardown_sandbox(conversation_id)
-
-    def start(self, conversation_id: str) -> None:
-        self.conversation_control.start(conversation_id)
-
-    async def send_user_turn(
-        self,
-        conversation_id: str,
-        text: str,
-        *,
-        context: str | None = None,
-        build_brief: BuildBrief | None = None,
-        verification_requirements: VerificationRequirementsDirective | None = None,
-        steer: bool = False,
-    ) -> MessageEvent:
-        # The normal Build client sends only the advisory brief marker. Resolve
-        # governed AppKit mode here, at the host boundary, before contract
-        # activation or loop composition. This keeps direct sends and lazy
-        # pre-created attachment/reference-pack conversations on one path.
-        if (
-            build_brief is None
-            and self._surface_of(conversation_id) == "build"
-            and await self.settings._conversation_is_pristine(conversation_id)
-        ):
-            build_brief = classify_build_brief(text)
-        if build_brief is not None and self._surface_of(conversation_id) == "build":
-            await self._promote_appkit_for_build(conversation_id, build_brief)
-
-        # Build briefs are an explicit Build-contract activation signal, not a
-        # generic task hint. Older clients sent the marker for Agent because the
-        # two surfaces share a stream hook; fail neutral at the server boundary
-        # so an ordinary Agent task can never acquire web-app completion gates.
-        # Strict AppKit conversations retain their own classified contract.
-        if (
-            build_brief is not None
-            and self._surface_of(conversation_id) == "agent"
-            and not self.settings._effective_appkit_mode(conversation_id)
-        ):
-            build_brief = None
-        return await self.conversation_control.send_user_turn(
-            conversation_id,
-            text,
-            context=context,
-            build_brief=build_brief,
-            verification_requirements=verification_requirements,
-            steer=steer,
-        )
-
-    async def confirm(self, conversation_id: str) -> None:
-        await self.conversation_control.confirm(conversation_id)
-
-    async def reject(
-        self,
-        conversation_id: str,
-        reason: str = "rejected by user",
-    ) -> None:
-        await self.conversation_control.reject(conversation_id, reason)
-
-    async def approve_plan(self, conversation_id: str) -> None:
-        await self.conversation_control.approve_plan(conversation_id)
-
-    async def request_plan(self, conversation_id: str, text: str = "") -> None:
-        await self.conversation_control.request_plan(conversation_id, text)
-
-    async def pick_alternative(self, conversation_id: str, option_id: str) -> None:
-        await self.conversation_control.pick_alternative(conversation_id, option_id)
-
-    async def pause(self, conversation_id: str) -> None:
-        await self._run_lifecycle.pause(conversation_id)
-
-    async def cancel(self, conversation_id: str) -> None:
-        await self._run_lifecycle.cancel(conversation_id)
-
-    async def resume(self, conversation_id: str) -> None:
-        await self._run_lifecycle.resume(conversation_id)
-
-    async def kill(self, conversation_id: str) -> None:
-        await self._run_lifecycle.kill(conversation_id)
-
-    async def aclose(self) -> None:
-        await self._run_supervisor.cancel_runs()
-        await self._driver_preflight.aclose()
-        await self._run_supervisor.close_resources()
-
 
 async def execute_disco_tool(
     self: Any, conversation_id: str, tool_call: ToolCall

@@ -122,6 +122,21 @@ class WorkflowInvocationService:
             require_current_instance=True,
         )
 
+    @staticmethod
+    def _rejected(
+        instance_id: str,
+        readiness: WorkflowReadiness,
+        reason: str,
+        issues: tuple[WorkflowParameterIssue, ...] = (),
+    ) -> WorkflowInvocationPreparation:
+        return WorkflowInvocationPreparation(
+            accepted=False,
+            instance_id=instance_id,
+            readiness=readiness,
+            parameter_issues=issues,
+            reason=reason,
+        )
+
     def prepare(
         self,
         instance_id: str,
@@ -131,28 +146,18 @@ class WorkflowInvocationService:
     ) -> WorkflowInvocationPreparation:
         instance = self._store.get_instance(instance_id)
         if instance is None:
-            return WorkflowInvocationPreparation(
-                accepted=False,
-                instance_id=instance_id,
-                readiness=WorkflowReadiness(ready=False, reasons=("not_found",)),
-                reason="workflow_not_found",
+            return self._rejected(
+                instance_id,
+                WorkflowReadiness(ready=False, reasons=("not_found",)),
+                "workflow_not_found",
             )
         readiness = self._readiness(instance, owner_id=owner_id)
         if not readiness.ready:
-            return WorkflowInvocationPreparation(
-                accepted=False,
-                instance_id=instance_id,
-                readiness=readiness,
-                reason="workflow_not_ready",
-            )
+            return self._rejected(instance_id, readiness, "workflow_not_ready")
         validation = validate_workflow_params(instance.definition.params_model_schema, params)
         if not validation.valid:
-            return WorkflowInvocationPreparation(
-                accepted=False,
-                instance_id=instance_id,
-                readiness=readiness,
-                parameter_issues=validation.issues,
-                reason="invalid_parameters",
+            return self._rejected(
+                instance_id, readiness, "invalid_parameters", validation.issues
             )
         # The store is read again after validation.  This is the TOCTOU gate: a
         # changed definition, approval, or surface cannot be silently pinned.

@@ -8,11 +8,30 @@ import {
   useProviderModels,
 } from "@/hooks/useModels";
 import { staticVisionStatus, type ModelInfo, type ProviderCatalogueModel, type ProviderInfo } from "@/types/models";
-import { VisionConfirmation } from "../ModelCatalogue";
+import { VisionConfirmation } from "../VisionConfirmation";
 import { CatalogueErrorBanner } from "./CatalogueErrorBanner";
 import { errorText } from "./helpers";
-import { ModelRow } from "./ModelRow";
+import { ProviderModelList } from "./ProviderModelList";
 import { FIELD } from "./styles";
+
+function matchingProviderRows(
+  models: ProviderCatalogueModel[] | undefined,
+  enabledByModel: Map<string, ModelInfo>,
+  query: string,
+): ProviderCatalogueModel[] {
+  const needle = query.trim().toLowerCase();
+  return (models ?? [])
+    .filter(
+      (model) =>
+        !needle ||
+        model.model_id.toLowerCase().includes(needle) ||
+        model.label.toLowerCase().includes(needle),
+    )
+    .sort((left, right) => {
+      const enabledOrder = Number(enabledByModel.has(right.model_id)) - Number(enabledByModel.has(left.model_id));
+      return enabledOrder || left.label.localeCompare(right.label);
+    });
+}
 
 export function BrowseProvider({
   provider,
@@ -36,21 +55,10 @@ export function BrowseProvider({
     () => new Map(enabledModels.map((m) => [m.model_id, m])),
     [enabledModels],
   );
-  const rows = useMemo(() => {
-    const needle = q.trim().toLowerCase();
-    const matched = (data ?? []).filter(
-      (m) =>
-        !needle ||
-        m.model_id.toLowerCase().includes(needle) ||
-        m.label.toLowerCase().includes(needle),
-    );
-    return matched.sort((a, b) => {
-      const ae = enabledByModel.has(a.model_id) ? 0 : 1;
-      const be = enabledByModel.has(b.model_id) ? 0 : 1;
-      if (ae !== be) return ae - be;
-      return a.label.localeCompare(b.label);
-    });
-  }, [data, enabledByModel, q]);
+  const rows = useMemo(
+    () => matchingProviderRows(data, enabledByModel, q),
+    [data, enabledByModel, q],
+  );
 
   const pending = enable.isPending || disable.isPending;
   // Context-required enable: the engine budgets context from context_window, so
@@ -184,34 +192,24 @@ export function BrowseProvider({
           No matching models.
         </p>
       )}
-      {rows.length > 0 && (
-        <ul className="overflow-hidden rounded-control border border-hairline bg-surface-1">
-          {rows.slice(0, 100).map((m) => {
-            const catalogueEntry = enabledByModel.get(m.model_id);
-            const enabled = optimistic[m.model_id] ?? !!catalogueEntry;
-            const asking = ctxAsk?.modelId === m.model_id;
-            return (
-              <ModelRow
-                key={m.model_id}
-                model={m}
-                providerLabel={provider.label}
-                enabled={enabled}
-                pending={pending}
-                contextWindow={catalogueEntry?.context_window ?? m.context_window}
-                ctxAskValue={asking ? ctxAsk.value : undefined}
-                onToggle={() => toggle(m)}
-                onCtxAskChange={(value) => setCtxAsk({ modelId: m.model_id, value })}
-                onCtxAskSubmit={(e) => {
-                  e.preventDefault();
-                  if (!asking) return;
-                  const ctx = Number(ctxAsk.value);
-                  if (Number.isFinite(ctx) && ctx >= 1024) confirmCtxEnable(m, ctx, ctxVision ?? undefined);
-                }}
-              />
-            );
-          })}
-        </ul>
-      )}
+      <ProviderModelList
+        rows={rows}
+        providerLabel={provider.label}
+        enabledByModel={enabledByModel}
+        optimistic={optimistic}
+        pending={pending}
+        contextAsk={ctxAsk}
+        onToggle={toggle}
+        onContextChange={(modelId, value) => setCtxAsk({ modelId, value })}
+        onContextSubmit={(model, event) => {
+          event.preventDefault();
+          if (ctxAsk?.modelId !== model.model_id) return;
+          const contextWindow = Number(ctxAsk.value);
+          if (Number.isFinite(contextWindow) && contextWindow >= 1024) {
+            confirmCtxEnable(model, contextWindow, ctxVision ?? undefined);
+          }
+        }}
+      />
       {rows.length > 100 && (
         <p className="font-ui text-[0.76rem] text-text-faint">
           Showing the first 100 of {rows.length}; refine the search.

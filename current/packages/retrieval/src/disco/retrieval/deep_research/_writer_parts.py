@@ -79,8 +79,7 @@ def _degrade_chart_to_table(block: str) -> str | None:
         if payload.get("chart_type") == "scatter":
             cols = ["Group", payload.get("x_label", "X"), payload.get("y_label", "Y")]
             rows = [
-                [str(d.get("group", "")), str(d.get("x", "")), str(d.get("y", ""))]
-                for d in data
+                [str(d.get("group", "")), str(d.get("x", "")), str(d.get("y", ""))] for d in data
             ]
         else:
             cols = [payload.get("x_label", "Label"), payload.get("y_label", "Value")]
@@ -174,9 +173,7 @@ def readable_summary(summary: str) -> str:
     blocks = [block.strip() for block in re.split(r"\n\s*\n", cleaned) if block.strip()]
     if len(blocks) != 1 or "\n" in blocks[0]:
         return "\n\n".join(blocks)
-    sentences = [
-        part.strip() for part in _SUMMARY_SENTENCE_BREAK.split(blocks[0]) if part.strip()
-    ]
+    sentences = [part.strip() for part in _SUMMARY_SENTENCE_BREAK.split(blocks[0]) if part.strip()]
     if len(sentences) < 2:
         return blocks[0]
     return "\n\n".join(_paragraphize(sentences))
@@ -221,9 +218,7 @@ def format_evidence_pool(
     stays inside the writer's context budget."""
     if not passages:
         return "(no evidence)"
-    overhead = sum(
-        len(p.id) + len(p.source_title or "") + len(p.source_url) + 12 for p in passages
-    )
+    overhead = sum(len(p.id) + len(p.source_title or "") + len(p.source_url) + 12 for p in passages)
     share = max(_MIN_PASSAGE_CHARS, (char_budget - overhead) // len(passages))
     parts: list[str] = []
     for passage in passages:
@@ -246,9 +241,7 @@ async def continue_truncated_report(
     max_tokens: int,
     conversation_id: str | None = None,
     inspect_stage: str = "report_continuation",
-    on_completion: Callable[
-        [CompletionRequest, CompletionResponse, str, int, int], None
-    ]
+    on_completion: Callable[[CompletionRequest, CompletionResponse, str, int, int], None]
     | None = None,
 ) -> str:
     """Continue a `finish_reason == "length"` report from its exact cut point,

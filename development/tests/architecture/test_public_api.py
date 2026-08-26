@@ -873,8 +873,9 @@ class TestFrontendPublicApi:
         # 404 after the mobile-first-class pass added three shared primitives
         # (tapTarget, useScrollFade, ScrollFade). 407 after the composer redesign
         # (SearchTypeSlider, DriverModelNotice, focusModelControl). 409 after the
-        # production-readiness wave (McpImportBox, passageNormalize). All additive.
-        assert len(live["frontend_modules"]) == 409
+        # production-readiness wave (McpImportBox, passageNormalize). 422 after
+        # the MCP-connectivity additions. All additive.
+        assert len(live["frontend_modules"]) == 422
         assert len(authority["contract_files"]) == 2
         assert all(set(row) == {"path", "sha256", "bytes"} for row in authority["contract_files"])
         assert module == {
@@ -978,19 +979,43 @@ class TestFrontendPublicApi:
         # correction adds the explicit capability fields on ProviderSettings
         # and ModelEntry; records policy adds Entity; MCP diagnostics add McpPool;
         # the launch closeout widens WSClientFrame's `type` Literal with the
-        # explicit accept_finished stop-intent frame.
+        # explicit accept_finished stop-intent frame; later transitions cover
+        # the workflow, event, schedule, tool, and SQLite surfaces.
         assert {row["public_name"] for row in baseline["member_transitions"]} == {
-            "WSClientFrame", "McpPool", "HttpVerifyClient",
-            "DefaultToolExecutor",
+            "AGENT_TOOLS",
+            "AgentErrorEvent",
+            "AgentLoop",
+            "BuildPlatformAdmissionEvent",
+            "BuildPlatformRegistry",
             "ConfigState",
             "ConfigStore",
-            "SecretBox", "SecretStore", "BuildPlatformAdmissionEvent",
-            "BuildPlatformRegistry", "ConversationRuntime", "AgentLoop",
+            "ConversationRuntime",
+            "DeepResearchRun",
+            "DefaultLLMRouter",
+            "DefaultToolExecutor",
+            "DepthBound",
+            "Entity",
+            "Event",
             "FinishGate",
-            "AgentErrorEvent",
-            "RetrievalRequest", "SearchHit", "DepthBound", "SectionContent", "Passage",
-            "DefaultLLMRouter", "LLMSummarizingCondenser", "ReportEvent", "ReportFromRun",
-            "ProviderSettings", "ModelEntry", "Entity", "DeepResearchRun",
+            "HttpVerifyClient",
+            "LLMSummarizingCondenser",
+            "McpPool",
+            "ModelEntry",
+            "Passage",
+            "ProviderSettings",
+            "ReportEvent",
+            "ReportFromRun",
+            "RetrievalRequest",
+            "ScheduleSpec",
+            "SearchHit",
+            "SecretBox",
+            "SecretStore",
+            "SectionContent",
+            "SqliteEventStore",
+            "ToolContext",
+            "WSClientFrame",
+            "WorkflowInstance",
+            "workflow_effective_scope",
         }
         for row in baseline["member_transitions"]:
             # A member transition never changes origin — that is a bridge's job.

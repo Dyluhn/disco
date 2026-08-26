@@ -853,7 +853,7 @@ async def test_registered_run_waiting_on_fence_cannot_race_host_reseal(
     monkeypatch.setattr(rt._run_execution, "run", _blocked_run(run_started, release_run))
     lock = rt.workspace.lock(cid)
     async with lock:
-        task, _generation = rt._run_supervisor.create_task(cid, _make_loop())
+        task, _generation = rt._run_supervisor.create_task(cid, loop_factory=_make_loop)
         await asyncio.sleep(0)
         assert rt.run_registry._tasks[cid] is task
         assert not rt.workspace.has_admitted_run(cid)
@@ -906,7 +906,7 @@ async def test_ingress_first_pending_run_blocks_already_queued_deploy(
 
     deploy = asyncio.create_task(_queued_committed_view(lock, rt, cid))
     await asyncio.sleep(0)  # place deploy first in the lock's waiter queue
-    run, _generation = rt._run_supervisor.create_task(cid, _make_loop())
+    run, _generation = rt._run_supervisor.create_task(cid, loop_factory=_make_loop)
     rt.workspace.claim_registered_run_locked(cid)
     assert rt.workspace.has_run_claim(cid)
     lock.release()
@@ -929,7 +929,7 @@ async def test_forget_clears_claim_when_queued_run_is_cancelled_before_entry(
     lock = rt.workspace.lock(cid)
     await lock.acquire()
     same_lock = rt.workspace.lock(cid)
-    task, _generation = rt._run_supervisor.create_task(cid, _make_loop())
+    task, _generation = rt._run_supervisor.create_task(cid, loop_factory=_make_loop)
     rt.workspace.claim_registered_run_locked(cid)
     assert rt.workspace.has_run_claim(cid)
 

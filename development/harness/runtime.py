@@ -4,8 +4,8 @@ runtime executes a full research/deep-research run deterministically off a
 cassette — no network, no LLM. A recording runtime runs the real services and
 captures everything it touches.
 
-The bundled encoders (rerank/embed/nli via fastembed) are deterministic CPU, so
-they run live in both modes and need no cassette.
+Replay uses small deterministic encoders in-process.  This keeps the fixture
+hermetic and avoids downloading or loading model checkpoints during tests.
 """
 
 from __future__ import annotations
@@ -25,16 +25,37 @@ from .sandbox import RecordingSandboxService, ReplaySandboxService
 
 
 def _live_encoders() -> dict:
-    """The real, deterministic fastembed encoders (reranker/embedder/nli)."""
-    from disco.retrieval.live import build_live_retrieval
+    """Return deterministic, model-free encoders for cassette replay.
 
-    deps = build_live_retrieval()  # defaults: bundled encoders + ddgs/local (we override those)
-    return {"reranker": deps["reranker"], "embedder": deps["embedder"], "nli": deps["nli"]}
+    The capture fixture uses the same simple behavior.  Loading the normal
+    fastembed stack here would make replay depend on local model downloads and
+    would produce scores that differ from the checked-in fixture.
+    """
+    from disco.retrieval.ranking import HashingEmbedder
+
+    class ReplayReranker:
+        async def rerank(self, query, passages, *, top_k):
+            del query
+            return passages[:top_k]
+
+    class ReplayNLI:
+        def entail(self, premise, hypothesis):
+            del premise, hypothesis
+            return "entail"
+
+        def score(self, premise, hypothesis):
+            del premise, hypothesis
+            return 1.0
+
+    return {
+        "reranker": ReplayReranker(),
+        "embedder": HashingEmbedder(),
+        "nli": ReplayNLI(),
+    }
 
 
 def build_replay_runtime(cassette: Cassette, store, *, config_store=None, secret_store=None):
-    """A runtime whose LLM + search + extraction are served from the cassette
-    (encoders run live). Fully deterministic; safe to run anywhere."""
+    """A runtime whose providers and encoders are fully deterministic and local."""
     providers = {
         "search": ReplaySearchProvider(cassette),
         "extraction": ReplayExtractionProvider(cassette),

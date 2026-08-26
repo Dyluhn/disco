@@ -188,9 +188,7 @@ async def _main_async(args: argparse.Namespace) -> int:
     if args.transport == "replay" and not cassette:
         # The demo cassette lives beside the harness modules, one level above
         # this parts package.
-        cassette = str(
-            Path(__file__).resolve().parent.parent / "cassettes" / "research_demo.jsonl"
-        )
+        cassette = str(Path(__file__).resolve().parent.parent / "cassettes" / "research_demo.jsonl")
     raw_frames: list[Mapping[str, Any]] | None = None
     if args.transport == "fake":
         raw_frames = _load_fake_frames(args.frames)

@@ -21,10 +21,12 @@ a record exists for the identity, and it is fail-closed on every prong:
    **live** signature bytes, so a record authorizes exactly one transition;
 3. ``old_origin == new_origin == record["origin"]`` — sameness is asserted,
    not merely permitted; an origin *change* remains a bridge's job;
-4. the method/field delta computed from the two signatures equals
+4. the exact member-token delta computed from the two signatures equals
    ``removed_members``/``added_members`` exactly — no over-authorization.
    Full member strings are stored rather than bare names, so a record cannot
-   silently absorb a signature change to a *surviving* member;
+   silently absorb a signature change to a *surviving* member.  The supported
+   projections are class members/fields, discriminated-union alternatives,
+   literal frozenset values, and function parameters;
 5. :func:`check_member_delta` mirrors ``_check_bridge_delta``, so a stale or
    extra record fails regeneration;
 6. ``accepting_commit`` must be a full SHA that resolves in this repository.
@@ -34,6 +36,7 @@ No wildcards, no defaults, no partial records.
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import subprocess
@@ -52,23 +55,189 @@ def signature_sha256(signature: Any) -> str:
 
 
 def _members_of(signature: Any) -> list[str] | None:
-    """Return every exact class member governed by a transition.
+    """Return the exact governed member tokens for one public signature.
 
     The public-surface scanner records methods and typed fields separately,
-    but both are semantic members of a public class. Omitting fields here made
-    an exact, same-origin field change impossible to authorize.
+    but both are semantic members of a public class.  Value aliases and
+    functions use deliberately narrow AST projections below; unsupported or
+    opaque expressions return ``None`` rather than becoming wildcard rows.
     """
     if not isinstance(signature, dict):
         return None
     members = signature.get("members")
     fields = signature.get("fields")
-    if (
-        not isinstance(members, list)
-        or not isinstance(fields, list)
-        or not all(isinstance(item, str) for item in [*members, *fields])
+    if isinstance(members, list) and isinstance(fields, list):
+        if not all(isinstance(item, str) for item in [*members, *fields]):
+            return None
+        return [*members, *fields]
+    kind = signature.get("kind")
+    text = signature.get("signature")
+    if not isinstance(kind, str) or not isinstance(text, str):
+        return None
+    if kind == "value":
+        parsed = _value_signature_parts(text)
+        return None if parsed is None else parsed[1]
+    if kind == "function":
+        parsed = _function_signature_parts(text)
+        return None if parsed is None else parsed[1]
+    return None
+
+
+def _value_signature_parts(signature: str) -> tuple[str, list[str], str] | None:
+    """Parse one deliberately narrow, literal value transition.
+
+    The public scanner stores assignments as text.  Only the two value shapes
+    whose member additions are unambiguous are admitted here: a discriminated
+    ``Annotated[A | B, Field(discriminator='kind')]`` union, and a literal
+    ``frozenset({'a', 'b'})``.  Names, calls, comprehensions, and arbitrary
+    metadata stay opaque and therefore cannot be authorized by a member row.
+    """
+    value = _assignment_value(signature)
+    if value is None:
+        return None
+    return _frozenset_signature_parts(value) or _union_signature_parts(value)
+
+
+def _assignment_value(signature: str) -> ast.expr | None:
+    try:
+        tree = ast.parse(signature, mode="exec")
+    except SyntaxError:
+        return None
+    if len(tree.body) != 1 or not isinstance(tree.body[0], ast.Assign):
+        return None
+    assignment = tree.body[0]
+    if len(assignment.targets) != 1 or not isinstance(assignment.targets[0], ast.Name):
+        return None
+    return assignment.value
+
+
+def _frozenset_signature_parts(value: ast.expr) -> tuple[str, list[str], str] | None:
+    if not (
+        isinstance(value, ast.Call)
+        and isinstance(value.func, ast.Name)
+        and value.func.id == "frozenset"
+        and len(value.args) == 1
+        and not value.keywords
     ):
         return None
-    return [*members, *fields]
+    values = _string_set_elements(value.args[0])
+    return None if values is None else ("frozenset", sorted(values), "frozenset")
+
+
+def _string_set_elements(value: ast.expr) -> list[str] | None:
+    if not isinstance(value, ast.Set) or not value.elts:
+        return None
+    values: list[str] = []
+    for element in value.elts:
+        if not isinstance(element, ast.Constant) or not isinstance(element.value, str):
+            return None
+        if not element.value or element.value in values:
+            return None
+        values.append(element.value)
+    return values
+
+
+def _union_signature_parts(value: ast.expr) -> tuple[str, list[str], str] | None:
+    if not (
+        isinstance(value, ast.Subscript)
+        and isinstance(value.value, ast.Name)
+        and value.value.id == "Annotated"
+    ):
+        return None
+    arguments = _subscript_arguments(value.slice)
+    if arguments is None or len(arguments) != 2:
+        return None
+    union = _union_names(arguments[0])
+    metadata = arguments[1]
+    if union is None or len(union) < 2 or len(union) != len(set(union)):
+        return None
+    if not _is_discriminator(metadata):
+        return None
+    return "discriminated_union", union, ast.dump(metadata, include_attributes=False)
+
+
+def _is_discriminator(value: ast.expr) -> bool:
+    if not (
+        isinstance(value, ast.Call)
+        and isinstance(value.func, ast.Name)
+        and value.func.id == "Field"
+        and not value.args
+        and len(value.keywords) == 1
+    ):
+        return False
+    keyword = value.keywords[0]
+    return (
+        keyword.arg == "discriminator"
+        and isinstance(keyword.value, ast.Constant)
+        and isinstance(keyword.value.value, str)
+        and bool(keyword.value.value)
+    )
+
+
+def _subscript_arguments(slice_node: ast.expr) -> list[ast.expr] | None:
+    if isinstance(slice_node, ast.Tuple):
+        return list(slice_node.elts)
+    return [slice_node]
+
+
+def _union_names(node: ast.expr) -> list[str] | None:
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
+        left = _union_names(node.left)
+        right = _union_names(node.right)
+        if left is None or right is None:
+            return None
+        return [*left, *right]
+    if isinstance(node, (ast.Name, ast.Attribute)):
+        return [ast.unparse(node)]
+    return None
+
+
+def _function_signature_parts(
+    signature: str,
+) -> tuple[tuple[str, str, str | None], list[str]] | None:
+    """Return function identity/return shape and exact parameter tokens."""
+    try:
+        tree = ast.parse(f"{signature}:\n    pass", mode="exec")
+    except SyntaxError:
+        return None
+    if len(tree.body) != 1 or not isinstance(
+        tree.body[0], (ast.FunctionDef, ast.AsyncFunctionDef)
+    ):
+        return None
+    function = tree.body[0]
+    args = function.args
+    parameters: list[str] = []
+    positional = [*args.posonlyargs, *args.args]
+    positional_defaults = [None] * (len(positional) - len(args.defaults)) + list(
+        args.defaults
+    )
+    for index, argument in enumerate(positional):
+        parameters.append(_parameter_text(argument, positional_defaults[index]))
+        if args.posonlyargs and index + 1 == len(args.posonlyargs):
+            parameters.append("/")
+    if args.vararg is not None:
+        parameters.append("*" + _parameter_text(args.vararg, None))
+    elif args.kwonlyargs:
+        parameters.append("*")
+    for argument, default in zip(args.kwonlyargs, args.kw_defaults, strict=True):
+        parameters.append(_parameter_text(argument, default))
+    if args.kwarg is not None:
+        parameters.append("**" + _parameter_text(args.kwarg, None))
+    return (
+        (
+            "async" if isinstance(function, ast.AsyncFunctionDef) else "def",
+            function.name,
+            ast.unparse(function.returns) if function.returns is not None else None,
+        ),
+        parameters,
+    )
+
+
+def _parameter_text(argument: ast.arg, default: ast.expr | None) -> str:
+    text = ast.unparse(argument)
+    if default is not None:
+        text += "=" + ast.unparse(default)
+    return text
 
 
 def commit_resolves(root: Path, value: str) -> bool:
@@ -201,12 +370,20 @@ def _check_member_delta(
     old_target: dict[str, Any], new_target: dict[str, Any], problems: list[str],
 ) -> None:
     """Prong 4: the computed delta equals the recorded delta exactly."""
-    old_members = _members_of(old_target.get("public_signature"))
-    new_members = _members_of(new_target.get("public_signature"))
+    old_signature = old_target.get("public_signature")
+    new_signature = new_target.get("public_signature")
+    old_members = _members_of(old_signature)
+    new_members = _members_of(new_signature)
     if old_members is None or new_members is None:
         problems.append(
             f"member transition target has no member list: {identity}"
         )
+        return
+    if _check_signature_shape(old_signature, new_signature, identity, problems):
+        return
+    if _check_parameter_order(
+        old_signature, new_signature, old_members, new_members, identity, problems
+    ):
         return
     removed = sorted(set(old_members) - set(new_members))
     added = sorted(set(new_members) - set(old_members))
@@ -215,6 +392,88 @@ def _check_member_delta(
             "member transition delta does not match the surfaces: "
             f"{identity}; removed={removed}; added={added}"
         )
+
+
+def _check_signature_shape(
+    old_signature: Any,
+    new_signature: Any,
+    identity: TargetIdentity,
+    problems: list[str],
+) -> bool:
+    if not isinstance(old_signature, dict) or not isinstance(new_signature, dict):
+        return False
+    kind = old_signature.get("kind")
+    if kind != new_signature.get("kind"):
+        return False
+    if kind == "function":
+        return _check_function_shape(old_signature, new_signature, identity, problems)
+    if kind == "value":
+        return _check_value_shape(old_signature, new_signature, identity, problems)
+    return False
+
+
+def _check_function_shape(
+    old_signature: dict[str, Any],
+    new_signature: dict[str, Any],
+    identity: TargetIdentity,
+    problems: list[str],
+) -> bool:
+    old_parts = _function_signature_parts(old_signature.get("signature", ""))
+    new_parts = _function_signature_parts(new_signature.get("signature", ""))
+    if old_parts is not None and new_parts is not None and old_parts[0] == new_parts[0]:
+        return False
+    problems.append(
+        "function member transition may change parameters only: "
+        f"{identity}"
+    )
+    return True
+
+
+def _check_value_shape(
+    old_signature: dict[str, Any],
+    new_signature: dict[str, Any],
+    identity: TargetIdentity,
+    problems: list[str],
+) -> bool:
+    old_parts = _value_signature_parts(old_signature.get("signature", ""))
+    new_parts = _value_signature_parts(new_signature.get("signature", ""))
+    if (
+        old_parts is not None
+        and new_parts is not None
+        and old_parts[0] == new_parts[0]
+        and old_parts[2] == new_parts[2]
+    ):
+        return False
+    problems.append(
+        "value member transition may change literal members only: "
+        f"{identity}"
+    )
+    return True
+
+
+def _check_parameter_order(
+    old_signature: Any,
+    new_signature: Any,
+    old_members: list[str],
+    new_members: list[str],
+    identity: TargetIdentity,
+    problems: list[str],
+) -> bool:
+    if not (
+        isinstance(old_signature, dict)
+        and isinstance(new_signature, dict)
+        and old_signature.get("kind") == new_signature.get("kind") == "function"
+    ):
+        return False
+    old_survivors = [member for member in old_members if member in new_members]
+    new_survivors = [member for member in new_members if member in old_members]
+    if old_survivors == new_survivors:
+        return False
+    problems.append(
+        "function member transition cannot reorder surviving parameters: "
+        f"{identity}"
+    )
+    return True
 
 
 def check_member_change(

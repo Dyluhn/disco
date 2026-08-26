@@ -26,7 +26,6 @@ graph TD
     disco.agent_server --> disco.retrieval
     disco.agent_server --> disco.tools
     disco.app_server --> disco.core
-    disco.app_server --> disco.retrieval
     disco.app_server --> disco.tools
     disco.retrieval --> disco.core
     disco.tools ==>|UPWARD: debt| disco.agent_server

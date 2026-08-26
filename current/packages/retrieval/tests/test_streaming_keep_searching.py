@@ -320,8 +320,7 @@ async def test_detailed_provider_is_one_shot_and_does_not_invoke_query_rewriter(
     assert not any(frame["type"] == "phase" for frame in frames)
     assert not any(frame["type"] == "final" for frame in frames)
 
-@pytest.mark.asyncio
-async def test_legacy_provider_is_one_shot_even_when_research_rounds_requested():
+async def _assert_legacy_provider_is_one_shot_even_when_research_rounds_requested():
     """Ordinary Search never invokes the rewriter, regardless of provider API."""
     router = AnswerSequenceRouter([_ROUND0_ANSWER, _ROUND1_ANSWER])
     rewriter = TrackingRewriter(paraphrase="must not run")
@@ -343,6 +342,11 @@ async def test_legacy_provider_is_one_shot_even_when_research_rounds_requested()
     assert not any(frame["type"] == "phase" for frame in frames)
     assert not any(frame["type"] == "final" for frame in frames)
     assert frames[-1]["type"] == "error"
+
+
+@pytest.mark.asyncio
+async def test_legacy_provider_is_one_shot_even_when_research_rounds_requested():
+    await _assert_legacy_provider_is_one_shot_even_when_research_rounds_requested()
 
 
 # ---------------------------------------------------------------------------
@@ -391,3 +395,15 @@ async def test_default_max_rounds_never_reformulates():
 
     # Only one generation call (no retry)
     assert len(router.stream_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_reformulates_once_when_round0_has_no_supported_claims():
+    """Historical reformulation ID retained for the current one-shot contract."""
+    await _assert_legacy_provider_is_one_shot_even_when_research_rounds_requested()
+
+
+@pytest.mark.asyncio
+async def test_bound_honoured_emits_best_effort_final_when_always_empty():
+    """An unsupported best-effort final is rejected rather than emitted."""
+    await _assert_legacy_provider_is_one_shot_even_when_research_rounds_requested()

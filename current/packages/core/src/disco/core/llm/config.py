@@ -771,64 +771,66 @@ def apply_runtime_capabilities(
 
     Returns the SAME config object when nothing changed (identity test stable).
     """
-    global _DRIVER_VISION_DEPRECATION_LOGGED
-
     new_models = dict(config.models)
     changed = False
-
     for key, entry in config.models.items():
-        if entry.base_url is None:
-            # NLI cross-encoder and other non-chat backends — leave untouched.
-            continue
-
-        # A legacy config's resolved VISION bit is the only provider evidence it
-        # has. New entries carry ``vision_declared`` explicitly. Do not treat an
-        # absent bit as text-only: unknown stays unknown and image requests fail
-        # closed until the user confirms the model.
-        provider_declared = entry.vision_declared
-        if provider_declared is None and Requirement.VISION in entry.capabilities:
-            provider_declared = True
-        live_probe = (
-            probe_results.get(key)
-            if probe_results is not None and key in probe_results
-            else entry.vision_probe
-        )
-        if entry.vision is None and key == "driver-local":
-            dv = disco_env("DRIVER_VISION")
-            if dv in ("0", "1"):
-                if not _DRIVER_VISION_DEPRECATION_LOGGED:
-                    _LOG.warning(
-                        "DISCO_DRIVER_VISION / PMX_DRIVER_VISION is deprecated "
-                        "for vision detection; use a vision= pin on ModelEntry "
-                        "or the runtime probe in wiring.py instead."
-                    )
-                    _DRIVER_VISION_DEPRECATION_LOGGED = True
-                live_probe = dv == "1"
-        resolved = resolve_vision_status(
-            model_id=entry.model_id,
-            family=entry.family,
-            explicit=entry.vision,
-            live_probe=live_probe,
-            provider_declared=provider_declared,
-        )
-        target = resolved == "vision"
-        probe_value = live_probe if resolved != "unknown" and live_probe is not None else None
-
-        # ---- apply if different ------------------------------------------
-        has_vision = Requirement.VISION in entry.capabilities
-        if target == has_vision and entry.vision_probe == probe_value:
-            continue  # already correct; leave the entry untouched
-
-        caps = set(entry.capabilities)
-        if target:
-            caps.add(Requirement.VISION)
-        else:
-            caps.discard(Requirement.VISION)
-        new_models[key] = entry.model_copy(
-            update={"capabilities": frozenset(caps), "vision_probe": probe_value}
-        )
-        changed = True
+        updated = _runtime_entry(key, entry, probe_results)
+        if updated is not None:
+            new_models[key] = updated
+            changed = True
 
     if not changed:
         return config
     return config.model_copy(update={"models": new_models})
+
+
+def _runtime_entry(
+    key: str, entry: ModelEntry, probe_results: dict[str, bool | None] | None
+) -> ModelEntry | None:
+    if entry.base_url is None:
+        return None
+    provider_declared = entry.vision_declared
+    if provider_declared is None and Requirement.VISION in entry.capabilities:
+        provider_declared = True
+    live_probe = _runtime_probe(key, entry, probe_results)
+    resolved = resolve_vision_status(
+        model_id=entry.model_id,
+        family=entry.family,
+        explicit=entry.vision,
+        live_probe=live_probe,
+        provider_declared=provider_declared,
+    )
+    target = resolved == "vision"
+    probe_value = live_probe if resolved != "unknown" and live_probe is not None else None
+    if target == (Requirement.VISION in entry.capabilities) and entry.vision_probe == probe_value:
+        return None
+    capabilities = set(entry.capabilities)
+    if target:
+        capabilities.add(Requirement.VISION)
+    else:
+        capabilities.discard(Requirement.VISION)
+    return entry.model_copy(
+        update={"capabilities": frozenset(capabilities), "vision_probe": probe_value}
+    )
+
+
+def _runtime_probe(
+    key: str, entry: ModelEntry, probe_results: dict[str, bool | None] | None
+) -> bool | None:
+    global _DRIVER_VISION_DEPRECATION_LOGGED
+    live_probe = (
+        probe_results.get(key)
+        if probe_results is not None and key in probe_results
+        else entry.vision_probe
+    )
+    if entry.vision is None and key == "driver-local":
+        legacy = disco_env("DRIVER_VISION")
+        if legacy in ("0", "1"):
+            if not _DRIVER_VISION_DEPRECATION_LOGGED:
+                _LOG.warning(
+                    "DISCO_DRIVER_VISION / PMX_DRIVER_VISION is deprecated for vision detection; "
+                    "use a vision= pin on ModelEntry or the runtime probe in wiring.py instead."
+                )
+                _DRIVER_VISION_DEPRECATION_LOGGED = True
+            live_probe = legacy == "1"
+    return live_probe

@@ -9,7 +9,6 @@ import sys
 from pathlib import Path
 
 import pytest
-
 from harness.product_build.minimax_relay import (
     MAX_TOKENS_CAP,
     conversation_id_from_headers,
@@ -88,9 +87,10 @@ def test_create_app_fails_fast_without_key(monkeypatch) -> None:
 
 
 def test_relay_importable_without_disco_or_fastapi() -> None:
-    # the relay must import dependency-light: only the repo root on PYTHONPATH (NOT current/packages/*/src),
+    # The relay must import dependency-light: only the development package root
+    # on PYTHONPATH (not current/packages/*/src),
     # so a successful import proves it pulls neither disco nor fastapi.
-    root = str(Path(__file__).resolve().parents[4])
+    root = str(Path(__file__).resolve().parents[3])
     code = (
         "import sys, harness.product_build.minimax_relay as m;"
         "assert 'disco' not in sys.modules, 'disco leaked';"
