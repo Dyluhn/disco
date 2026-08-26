@@ -9,6 +9,7 @@ SearchHit snippet (principle 4 "never trust the snippet").
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from typing import Any, Protocol, cast, runtime_checkable
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -125,8 +126,26 @@ def _extraction_error_class(doc: ExtractedDoc) -> str | None:
     error = _trace_text(doc.error, 240).casefold()
     if doc.fetched_ok and status == "ok":
         return None
+    return (
+        _status_error_class(status)
+        or _text_error_class(error)
+        or _http_error_class(error)
+        or "other"
+    )
 
-    if status == "blocked" or any(
+
+def _status_error_class(status: str) -> str | None:
+    if status == "blocked":
+        return "anti_bot"
+    if status == "paywalled":
+        return "paywalled"
+    if status == "not_found":
+        return "not_found"
+    return None
+
+
+def _text_error_class(error: str) -> str | None:
+    if any(
         marker in error
         for marker in (
             "captcha",
@@ -139,30 +158,23 @@ def _extraction_error_class(doc: ExtractedDoc) -> str | None:
         )
     ):
         return "anti_bot"
-    if status == "paywalled":
-        return "paywalled"
-    if status == "not_found":
-        return "not_found"
     if any(marker in error for marker in ("timeout", "timed out", "readtimeout", "connecttimeout")):
         return "timeout"
     if any(
-        marker in error
-        for marker in ("empty content", "no readable content", "no result returned")
+        marker in error for marker in ("empty content", "no readable content", "no result returned")
     ):
         return "empty_content"
+    return None
 
-    # Only accept a numeric status when it appears in an HTTP/status/error
-    # context; this avoids mistaking an IP octet (for example 127.0.0.1) for a
-    # response code.  The resulting class is still bounded to a three-digit
-    # status code and contains no arbitrary provider text.
+
+def _http_error_class(error: str) -> str | None:
+    """Classify numeric response codes only in an HTTP-like context."""
     for match in re.finditer(r"\b([3-5][0-9]{2})\b", error):
         context = error[max(0, match.start() - 20) : min(len(error), match.end() + 20)]
         if any(marker in context for marker in ("http", "status", "response", "error", "redirect")):
             code = match.group(1)
-            if code.startswith("3"):
-                return f"redirect/http_{code}"
-            return f"upstream_http_{code}"
-    return "other"
+            return f"redirect/http_{code}" if code.startswith("3") else f"upstream_http_{code}"
+    return None
 
 
 def _trace_hit(hit: SearchHit, *, status: str | None = None, provider: str = "") -> dict[str, Any]:
@@ -245,9 +257,7 @@ def annotate_passage_dates(
     """Carry exact discovery dates onto citable extracted passages by source id."""
 
     dates = {
-        source_url_key(hit.url): hit.published_at
-        for hit in hits
-        if hit.published_at is not None
+        source_url_key(hit.url): hit.published_at for hit in hits if hit.published_at is not None
     }
     if not dates:
         return extracted
@@ -265,6 +275,135 @@ def annotate_passage_dates(
         ]
         annotated.append(document.model_copy(update={"passages": passages}))
     return annotated
+
+
+async def _extract_for_retrieval(
+    extraction: ExtractionProvider, candidate_hits: list[SearchHit]
+) -> tuple[list[ExtractedDoc], object]:
+    if not candidate_hits:
+        return [], {}
+    extracted, diagnostic = await extract_discovered_hits_detailed(extraction, candidate_hits)
+    if (
+        not extracted or all(not doc.fetched_ok for doc in extracted)
+    ) and _is_explicit_provider_failure(diagnostic):
+        raise ProviderOperationError({"extraction": diagnostic})
+    return annotate_passage_dates(extracted, candidate_hits), diagnostic
+
+
+def _extraction_statuses(extracted: list[ExtractedDoc]) -> list[dict[str, Any]]:
+    statuses = [
+        {
+            "url": _trace_url(doc.url),
+            "title": _trace_text(doc.title, _TRACE_TITLE_CHARS),
+            "status": doc.status,
+            "fetched_ok": bool(doc.fetched_ok),
+        }
+        for doc in extracted[:_TRACE_MAX_HITS_PER_QUERY]
+    ]
+    for doc, status in zip(extracted[:_TRACE_MAX_HITS_PER_QUERY], statuses, strict=True):
+        error_class = _extraction_error_class(doc)
+        if error_class is not None:
+            status["error_class"] = error_class
+    return statuses
+
+
+def _query_traces(
+    req: RetrievalRequest,
+    queries: list[str],
+    raw_hit_lists: list[list[SearchHit]],
+    provider_diagnostics: list[object],
+    status_by_url: Mapping[str, str | None],
+    provider_name: str,
+) -> list[dict[str, Any]]:
+    traces: list[dict[str, Any]] = []
+    for query, raw_hits, provider_diagnostic in zip(
+        queries, raw_hit_lists, provider_diagnostics, strict=True
+    ):
+        traces.append(
+            {
+                "planned_query": _trace_text(req.query, _TRACE_QUERY_CHARS),
+                "issued_query": _trace_text(query, _TRACE_QUERY_CHARS),
+                "raw_discovered_hit_count": len(raw_hits),
+                "hits": [
+                    _trace_hit(
+                        hit,
+                        status=status_by_url.get(source_url_key(hit.url)),
+                        provider=provider_name,
+                    )
+                    for hit in raw_hits[:_TRACE_MAX_HITS_PER_QUERY]
+                ],
+                "extraction": {
+                    "attempted": sum(
+                        status_by_url.get(source_url_key(hit.url)) is not None for hit in raw_hits
+                    ),
+                    "success": sum(
+                        status_by_url.get(source_url_key(hit.url)) == "ok" for hit in raw_hits
+                    ),
+                    "failure": sum(
+                        status_by_url.get(source_url_key(hit.url)) is not None
+                        and status_by_url.get(source_url_key(hit.url)) != "ok"
+                        for hit in raw_hits
+                    ),
+                },
+                **(
+                    {"provider_diagnostic": _trace_diagnostic(provider_diagnostic)}
+                    if provider_diagnostic
+                    else {}
+                ),
+            }
+        )
+    return traces
+
+
+def _retrieval_notes(
+    req: RetrievalRequest,
+    queries: list[str],
+    all_hits: list[SearchHit],
+    raw_hit_lists: list[list[SearchHit]],
+    provider_diagnostics: list[object],
+    extracted: list[ExtractedDoc],
+    candidate_hits: list[SearchHit],
+    candidates: list[Passage],
+    ranked: list[Passage],
+    provider_name: str,
+    extraction_diagnostic: object,
+) -> dict[str, Any]:
+    status_by_url = {source_url_key(doc.url): doc.status for doc in extracted}
+    return {
+        "candidates": len(candidates),
+        "depth": req.depth,
+        "discovered": len(all_hits),
+        "extracted": len(extracted),
+        "retrieval_trace": {
+            "planned_query": _trace_text(req.query, _TRACE_QUERY_CHARS),
+            "issued_queries": [_trace_text(query, _TRACE_QUERY_CHARS) for query in queries],
+            "provider": provider_name,
+            "provider_diagnostics": [
+                _trace_diagnostic(item) for item in provider_diagnostics if item
+            ],
+            "raw_discovered_hit_count": sum(len(hits) for hits in raw_hit_lists),
+            "queries": _query_traces(
+                req,
+                queries,
+                raw_hit_lists,
+                provider_diagnostics,
+                status_by_url,
+                provider_name,
+            ),
+            "extraction": {
+                "attempted": len(candidate_hits),
+                "success": sum(1 for doc in extracted if doc.fetched_ok),
+                "failure": sum(1 for doc in extracted if not doc.fetched_ok),
+                "statuses": _extraction_statuses(extracted),
+                **(
+                    {"provider_diagnostic": _trace_diagnostic(extraction_diagnostic)}
+                    if extraction_diagnostic
+                    else {}
+                ),
+            },
+            "reranked_passage_count": len(ranked),
+        },
+    }
 
 
 class DefaultRetrievalEngine:
@@ -373,19 +512,9 @@ class DefaultRetrievalEngine:
         all_hits, raw_hit_lists, provider_diagnostics = await self._discover(req, queries)
         candidate_cap = min(self._candidate_cap, req.extract_cap or self._candidate_cap)
         candidate_hits = all_hits[:candidate_cap]
-        extraction_diagnostic: object = {}
-        if candidate_hits:
-            extracted, extraction_diagnostic = await extract_discovered_hits_detailed(
-                self._extraction, candidate_hits
-            )
-            if (
-                (not extracted or all(not doc.fetched_ok for doc in extracted))
-                and _is_explicit_provider_failure(extraction_diagnostic)
-            ):
-                raise ProviderOperationError({"extraction": extraction_diagnostic})
-            extracted = annotate_passage_dates(extracted, candidate_hits)
-        else:
-            extracted = []
+        extracted, extraction_diagnostic = await _extract_for_retrieval(
+            self._extraction, candidate_hits
+        )
 
         # Discovery and extraction are different facts.  Carry extraction
         # truth back onto every attempted hit; leave unattempted hits as None.
@@ -401,89 +530,23 @@ class DefaultRetrievalEngine:
 
         ranked = await self._reranker.rerank(req.query, candidates, top_k=req.top_k)
         provider_name = _trace_text(getattr(self._search, "name", ""), _TRACE_ENGINE_CHARS)
-        extraction_statuses = [
-            {
-                "url": _trace_url(doc.url),
-                "title": _trace_text(doc.title, _TRACE_TITLE_CHARS),
-                "status": doc.status,
-                "fetched_ok": bool(doc.fetched_ok),
-            }
-            for doc in extracted[:_TRACE_MAX_HITS_PER_QUERY]
-        ]
-        for doc, status in zip(
-            extracted[:_TRACE_MAX_HITS_PER_QUERY], extraction_statuses, strict=True
-        ):
-            error_class = _extraction_error_class(doc)
-            if error_class is not None:
-                status["error_class"] = error_class
-        query_traces = [
-            {
-                "planned_query": _trace_text(req.query, _TRACE_QUERY_CHARS),
-                "issued_query": _trace_text(query, _TRACE_QUERY_CHARS),
-                "raw_discovered_hit_count": len(raw_hits),
-                "hits": [
-                    _trace_hit(
-                        hit,
-                        status=status_by_url.get(source_url_key(hit.url)),
-                        provider=provider_name,
-                    )
-                    for hit in raw_hits[:_TRACE_MAX_HITS_PER_QUERY]
-                ],
-                "extraction": {
-                    "attempted": sum(
-                        status_by_url.get(source_url_key(hit.url)) is not None
-                        for hit in raw_hits
-                    ),
-                    "success": sum(
-                        status_by_url.get(source_url_key(hit.url)) == "ok" for hit in raw_hits
-                    ),
-                    "failure": sum(
-                        status_by_url.get(source_url_key(hit.url)) is not None
-                        and status_by_url.get(source_url_key(hit.url)) != "ok"
-                        for hit in raw_hits
-                    ),
-                },
-                **(
-                    {"provider_diagnostic": _trace_diagnostic(provider_diagnostic)}
-                    if provider_diagnostic
-                    else {}
-                ),
-            }
-            for query, raw_hits, provider_diagnostic in zip(
-                queries, raw_hit_lists, provider_diagnostics, strict=True
-            )
-        ]
+        notes = _retrieval_notes(
+            req,
+            queries,
+            all_hits,
+            raw_hit_lists,
+            provider_diagnostics,
+            extracted,
+            candidate_hits,
+            candidates,
+            ranked,
+            provider_name,
+            extraction_diagnostic,
+        )
         return RetrievalResult(
             passages=ranked,
             all_hits=all_hits,  # full discovery set incl. failed/blocked (§2.2)
             extracted=extracted,
             issued_queries=queries,
-            notes={
-                "candidates": len(candidates),
-                "depth": req.depth,
-                "discovered": len(all_hits),
-                "extracted": len(extracted),
-                "retrieval_trace": {
-                    "planned_query": _trace_text(req.query, _TRACE_QUERY_CHARS),
-                    "issued_queries": [_trace_text(query, _TRACE_QUERY_CHARS) for query in queries],
-                    "provider": provider_name,
-                    "provider_diagnostics": [
-                        _trace_diagnostic(item) for item in provider_diagnostics if item
-                    ],
-                    "raw_discovered_hit_count": sum(len(hits) for hits in raw_hit_lists),
-                    "queries": query_traces,
-                    "extraction": {
-                        "attempted": len(candidate_hits),
-                        "success": sum(1 for doc in extracted if doc.fetched_ok),
-                        "failure": sum(1 for doc in extracted if not doc.fetched_ok),
-                        "statuses": extraction_statuses,
-                        **(
-                            {"provider_diagnostic": _trace_diagnostic(extraction_diagnostic)}
-                            if extraction_diagnostic
-                            else {}
-                        ),
-                    },
-                    "reranked_passage_count": len(ranked),
-                },
-            },
+            notes=notes,
         )

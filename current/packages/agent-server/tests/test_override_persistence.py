@@ -240,7 +240,7 @@ async def test_on_disconnect_grace_fires_suspend_but_reconnect_cancels_it(tmp_pa
     assert not rt._run_resources.has_executor("conv_a")
 
 
-async def test_deep_research_resume_carries_checkpoint_forward(tmp_path, monkeypatch):
+async def test_deep_research_resume_carries_the_partial_report_forward(tmp_path, monkeypatch):
     """Checkpointed Deep Research resume (runtime wiring): a PAUSED run with a
     ResearchCheckpointEvent on the log resumes by passing that checkpoint as
     `resume_from` to the engine — so its gathered evidence and the queries

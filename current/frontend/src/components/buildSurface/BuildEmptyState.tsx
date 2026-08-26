@@ -25,7 +25,7 @@ import { BuildModelPicker } from "@/components/build/BuildModelPicker";
 // file this directory decomposes. It is not ours to edit; only its
 // `UploadComposer` export is consumed here, unchanged from the original.
 import { UploadComposer } from "@/components/build/BuildSurface";
-import { ReferencePackPicker } from "@/components/build/ReferencePackPicker";
+import { ReferencePackPicker } from "./ReferencePackPicker";
 import { ImportProjectDialog } from "@/components/build/ImportProjectDialog";
 import { ConnectionsStrip } from "@/components/build/ConnectionsStrip";
 import { SuggestionChips } from "@/components/SuggestionChips";

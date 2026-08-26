@@ -1,6 +1,6 @@
 name: evidence-harness
 
-# The evidence-harness gates (campaign: current/docs/disco-evidence-harness-campaign.md). Two tiers,
+# The evidence-harness gates (campaign: archive/docs/disco-evidence-harness-campaign.md). Two tiers,
 # matching the synthesized plan:
 #
 #  - pr-evidence (GitHub-hosted, REQUIRED, deterministic, NO browser): the fast input/output
@@ -23,6 +23,9 @@ on:
 jobs:
   pr-evidence:
     name: pr-evidence (boundary + replay + validators, no browser)
+    # The scheduled event exists for the self-hosted nightly tier below. Do not
+    # spend a second hosted run every night for the PR gate.
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -40,7 +43,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y poppler-utils ffmpeg
 
       - name: Boundary contracts (W1/W2/W3/W10)
-        run: uv run pytest packages -m boundary_contract -p no:cacheprovider
+        run: uv run pytest current/packages -m boundary_contract -p no:cacheprovider
 
       - name: Artifact validators + disco-verify runner (W14a/W15)
         run: |
@@ -55,8 +58,8 @@ jobs:
             -p no:cacheprovider
 
       - name: Frontend event-store replay (W9 — no browser)
+        working-directory: current/frontend
         run: |
-          cd frontend
           npm ci
           npx vitest run src/lib/buildTrace.replay.test.ts
 
@@ -90,8 +93,8 @@ jobs:
       # localhost (the reverse SSH tunnel). The full Playwright config + live
       # disco-verify scenarios produce dossiers under test-record/.
       - name: Evidence-harness Playwright specs (W11/W12)
+        working-directory: current/frontend
         run: |
-          cd frontend
           npm ci
           npx playwright install firefox chromium
           npx playwright test --config e2e-full/full.config.ts
@@ -109,3 +112,4 @@ jobs:
           path: |
             current/frontend/test-record/e2e-full/**
             test-record/**
+          if-no-files-found: error

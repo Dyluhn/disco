@@ -16,15 +16,27 @@ import asyncio
 import hashlib
 import logging
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
-from html.parser import HTMLParser
+from typing import Literal
 
 import httpx
+from disco.core._provider_contracts import (
+    BRAVE_ORIGIN,
+    FIRECRAWL_ORIGIN,
+    TAVILY_ORIGIN,
+    brave_search_request,
+    firecrawl_extract_request,
+    parse_brave_search_response,
+    parse_firecrawl_response,
+    parse_tavily_search_response,
+    tavily_search_request,
+)
 from disco.core.host_egress import EgressDenied, guarded_get, validate_untrusted_url
 
+from ._markdown import MarkdownExtractor as _MarkdownExtractor
 from .models import ExtractedDoc, Passage, SearchHit
-from .provider_http import BoundedHttpExecutor, HttpAttemptPolicy, with_outcome
+from .provider_http import BoundedHttpExecutor, HttpAttemptPolicy, HttpResult, with_outcome
 from .source_adapters import _search_diagnostic
 from .url_policy import parse_source_date, url_allowed
 
@@ -75,7 +87,6 @@ _TIMEOUT = httpx.Timeout(20.0)
 _SEARCH_POLICY = HttpAttemptPolicy(deadline_s=15.0)
 _EXTRACTION_POLICY = HttpAttemptPolicy(deadline_s=30.0)
 
-_TAVILY_ORIGIN = "https://api.tavily.com"
 _FIRECRAWL_EXECUTORS: dict[str, BoundedHttpExecutor] = {}
 # DDGS is synchronous. A small process-wide pool both keeps it off the event
 # loop and prevents timed-out calls from creating an unbounded tail of stuck
@@ -86,6 +97,302 @@ _DDGS_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="disco-ddg
 def _diagnostic_int(diagnostic: dict[str, object], key: str) -> int:
     value = diagnostic.get(key)
     return value if isinstance(value, int) else 0
+
+
+def _ddgs_time_filter(time_filter: str | None) -> str | None:
+    return {"month": "m", "week": "w"}.get(time_filter or "")
+
+
+async def _ddgs_rows(
+    blocking_search: Callable[[str, int, str | None], list[dict]],
+    query: str,
+    limit: int,
+    timelimit: str | None,
+    timeout: float,
+) -> object:
+    loop = asyncio.get_running_loop()
+    rows = await asyncio.wait_for(
+        loop.run_in_executor(_DDGS_EXECUTOR, blocking_search, query, limit, timelimit),
+        timeout=timeout,
+    )
+    return rows
+
+
+def _ddgs_hits(
+    rows: list[object] | list[dict],
+    domains_allow: frozenset[str] | None,
+    domains_deny: frozenset[str] | None,
+) -> tuple[list[SearchHit], int]:
+    hits: list[SearchHit] = []
+    invalid_rows = 0
+    for i, row in enumerate(rows):
+        hit, invalid = _ddgs_hit(row, i, domains_allow, domains_deny)
+        invalid_rows += invalid
+        if hit is not None:
+            hits.append(hit)
+    return hits, invalid_rows
+
+
+def _ddgs_hit(
+    row: object,
+    rank: int,
+    domains_allow: frozenset[str] | None,
+    domains_deny: frozenset[str] | None,
+) -> tuple[SearchHit | None, int]:
+    if not isinstance(row, Mapping):
+        return None, 1
+    url, invalid = _ddgs_row_url(row)
+    if invalid:
+        return None, invalid
+    if not url:
+        return None, 0
+    try:
+        allowed = url_allowed(url, domains_allow, domains_deny)
+    except (TypeError, ValueError):
+        return None, 1
+    if not allowed:
+        return None, 0
+    title, body, snippet = (row.get(key, "") for key in ("title", "body", "snippet"))
+    if not _ddgs_text_fields_valid(title, body, snippet):
+        return None, 1
+    return SearchHit(
+        url=url,
+        title=title or url,
+        snippet=body or snippet or "",
+        source_engine="ddgs",
+        rank=rank,
+        published_at=parse_source_date(row.get("date")),
+    ), 0
+
+
+def _ddgs_row_url(row: Mapping[str, object]) -> tuple[str, int]:
+    raw_url = row.get("href") or row.get("url")
+    if raw_url is not None and not isinstance(raw_url, str):
+        return "", 1
+    return raw_url or "", 0
+
+
+def _ddgs_text_fields_valid(*values: object) -> bool:
+    return all(value is None or isinstance(value, str) for value in values)
+
+
+async def _ddgs_search_detailed(
+    provider_name: str,
+    blocking_search: Callable[[str, int, str | None], list[dict]],
+    query: str,
+    limit: int,
+    domains_allow: frozenset[str] | None,
+    domains_deny: frozenset[str] | None,
+    time_filter: str | None,
+    timeout: float,
+) -> tuple[list[SearchHit], dict[str, object]]:
+    started = asyncio.get_running_loop().time()
+    try:
+        rows = await _ddgs_rows(
+            blocking_search, query, limit, _ddgs_time_filter(time_filter), timeout
+        )
+    except TimeoutError as exc:
+        _LOG.warning("ddgs search timed out")
+        return [], _search_diagnostic(provider_name, "timeout", started=started, error=exc)
+    except Exception as exc:  # noqa: BLE001
+        _LOG.warning("ddgs search failed (%s)", type(exc).__name__)
+        return [], _search_diagnostic(provider_name, "upstream", started=started, error=exc)
+    if not isinstance(rows, list):
+        return [], _search_diagnostic(
+            provider_name,
+            "invalid_response",
+            started=started,
+            error=ValueError("DDGS response must be a list"),
+        )
+    hits, invalid_rows = _ddgs_hits(rows, domains_allow, domains_deny)
+    outcome = "invalid_response" if invalid_rows else ("ok" if hits else "empty")
+    diagnostic = _search_diagnostic(provider_name, outcome, started=started, result_count=len(hits))
+    if invalid_rows:
+        diagnostic["invalid_row_count"] = invalid_rows
+    return hits, diagnostic
+
+
+def _tavily_hits(
+    rows: list[dict],
+    domains_allow: frozenset[str] | None,
+    domains_deny: frozenset[str] | None,
+) -> list[SearchHit]:
+    return [
+        SearchHit(
+            url=row.get("url", ""),
+            title=row.get("title", "") or row.get("url", ""),
+            snippet=row.get("content", ""),
+            source_engine="tavily",
+            rank=i,
+            published_at=parse_source_date(row.get("published_date")),
+        )
+        for i, row in enumerate(rows)
+        if row.get("url") and url_allowed(row.get("url", ""), domains_allow, domains_deny)
+    ]
+
+
+def _brave_hits(
+    rows: list[dict],
+    limit: int,
+    domains_allow: frozenset[str] | None,
+    domains_deny: frozenset[str] | None,
+) -> list[SearchHit]:
+    hits: list[SearchHit] = []
+    for i, row in enumerate(rows):
+        url = row.get("url", "")
+        if not url or not url_allowed(url, domains_allow, domains_deny):
+            continue
+        hits.append(
+            SearchHit(
+                url=url,
+                title=row.get("title", "") or url,
+                snippet=row.get("description", "") or row.get("snippet", ""),
+                source_engine="brave",
+                rank=i,
+                published_at=parse_source_date(row.get("page_age")),
+            )
+        )
+        if len(hits) >= limit:
+            break
+    return hits
+
+
+def _firecrawl_unavailable(
+    provider: str,
+    url: str,
+    reason: str,
+    executor: BoundedHttpExecutor,
+    status: Literal["ok", "paywalled", "blocked", "not_found", "error"],
+) -> tuple[ExtractedDoc, dict[str, object]]:
+    return ExtractedDoc(
+        url=url, title="", content="", fetched_ok=False, error=reason, status=status
+    ), {
+        "provider": provider,
+        "outcome": "auth" if status == "error" else "upstream",
+        "status_code": None,
+        "attempts": 0,
+        "latency_ms": 0,
+        "retry_wait_ms": 0,
+        "result_count": 0,
+        "passage_count": 0,
+        "max_concurrency": executor.max_concurrency,
+    }
+
+
+def _firecrawl_response(
+    result: HttpResult,
+    url: str,
+    provider: str,
+) -> tuple[ExtractedDoc, dict[str, object]]:
+    response = result.response
+    diagnostic = dict(result.diagnostic)
+    if response is None or result.diagnostic["outcome"] != "ok":
+        return _firecrawl_failed_response(result, url, diagnostic)
+    try:
+        meta, content = parse_firecrawl_response(response)
+    except (TypeError, ValueError):
+        diagnostic = with_outcome(diagnostic, "invalid_response")
+        diagnostic.update(result_count=0, passage_count=0)
+        return ExtractedDoc(
+            url=url,
+            title=url,
+            content="",
+            fetched_ok=False,
+            error="invalid firecrawl response",
+            status="error",
+        ), diagnostic
+    title = str(meta.get("title") or url)
+    passages = chunk_passages(url, title, content)
+    if not passages:
+        diagnostic = with_outcome(diagnostic, "empty")
+        diagnostic.update(result_count=0, passage_count=0)
+        return ExtractedDoc(
+            url=url,
+            title=title,
+            content=content,
+            fetched_ok=False,
+            error="no readable content",
+            status="error",
+        ), diagnostic
+    diagnostic = with_outcome(diagnostic, "ok")
+    diagnostic.update(result_count=1, passage_count=len(passages))
+    return ExtractedDoc(
+        url=url, title=title, content=content, passages=passages, fetched_ok=True
+    ), diagnostic
+
+
+def _firecrawl_failed_response(
+    result: HttpResult, url: str, diagnostic: dict[str, object]
+) -> tuple[ExtractedDoc, dict[str, object]]:
+    code = result.diagnostic.get("status_code")
+    outcome = result.diagnostic["outcome"]
+    status: Literal["blocked", "paywalled", "not_found", "error"] = (
+        "blocked"
+        if outcome == "auth"
+        else "paywalled"
+        if code == 402
+        else "not_found"
+        if code == 404
+        else "error"
+    )
+    return ExtractedDoc(
+        url=url,
+        title="",
+        content="",
+        fetched_ok=False,
+        error=f"firecrawl {outcome}",
+        status=status,
+    ), {**diagnostic, "result_count": 0, "passage_count": 0}
+
+
+def _aggregate_firecrawl(
+    docs: list[ExtractedDoc], diagnostics: list[dict[str, object]], provider: str, concurrency: int
+) -> dict[str, object]:
+    successes = sum(doc.fetched_ok for doc in docs)
+    failures = [diag for doc, diag in zip(docs, diagnostics, strict=True) if not doc.fetched_ok]
+    allowed = {"rate_limited", "auth", "quota", "timeout", "upstream", "invalid_response"}
+    outcomes = [
+        str(diag.get("outcome")) if str(diag.get("outcome")) in allowed else "upstream"
+        for diag in failures
+        if str(diag.get("outcome", "empty")) not in {"", "empty", "ok"}
+    ]
+    outcome = _firecrawl_batch_outcome(successes, failures, outcomes)
+    status_code = _first_status_code(failures)
+
+    def ints(key: str) -> list[int]:
+        return [_diagnostic_int(diag, key) for diag in diagnostics]
+
+    return {
+        "provider": provider,
+        "outcome": outcome,
+        "status_code": status_code,
+        "attempts": sum(ints("attempts")),
+        "latency_ms": max(ints("latency_ms"), default=0),
+        "retry_wait_ms": max(ints("retry_wait_ms"), default=0),
+        "result_count": successes,
+        "passage_count": sum(len(doc.passages) for doc in docs),
+        "max_concurrency": max(ints("max_concurrency"), default=concurrency),
+    }
+
+
+def _firecrawl_batch_outcome(
+    successes: int, failures: list[dict[str, object]], outcomes: list[str]
+) -> str:
+    if successes and failures:
+        return "partial_outage"
+    if successes:
+        return "ok"
+    return outcomes[0] if outcomes else "empty"
+
+
+def _first_status_code(failures: list[dict[str, object]]) -> int | None:
+    for diagnostic in failures:
+        if str(diagnostic.get("outcome", "empty")) in {"", "empty", "ok"}:
+            continue
+        code = diagnostic.get("status_code")
+        if isinstance(code, int):
+            return code
+    return None
 
 
 def _firecrawl_executor(
@@ -102,6 +409,7 @@ def _firecrawl_executor(
         )
         _FIRECRAWL_EXECUTORS[base_url] = executor
     return executor
+
 
 # ===== SEARCH ================================================================
 
@@ -144,95 +452,16 @@ class DdgsSearchProvider:
         domains_deny: frozenset[str] | None = None,
         time_filter: str | None = None,
     ) -> tuple[list[SearchHit], dict[str, object]]:
-        started = asyncio.get_running_loop().time()
-        _timelimit: str | None = None
-        if time_filter == "month":
-            _timelimit = "m"
-        elif time_filter == "week":
-            _timelimit = "w"
-        try:
-            loop = asyncio.get_running_loop()
-            rows = await asyncio.wait_for(
-                loop.run_in_executor(
-                    _DDGS_EXECUTOR,
-                    self._blocking_search,
-                    query,
-                    limit,
-                    _timelimit,
-                ),
-                timeout=self._timeout,
-            )
-        except TimeoutError as exc:
-            _LOG.warning("ddgs search timed out")
-            return [], _search_diagnostic(
-                self.name,
-                "timeout",
-                started=started,
-                error=exc,
-            )
-        except Exception as exc:  # noqa: BLE001 — classify provider failure, don't hide it
-            _LOG.warning("ddgs search failed (%s)", type(exc).__name__)
-            return [], _search_diagnostic(
-                self.name,
-                "upstream",
-                started=started,
-                error=exc,
-            )
-        if not isinstance(rows, list):
-            return [], _search_diagnostic(
-                self.name,
-                "invalid_response",
-                started=started,
-            )
-        _LOG.info("ddgs search %r → %d raw rows", query[:80], len(rows))
-        hits: list[SearchHit] = []
-        invalid_rows = 0
-        for i, r in enumerate(rows):
-            if not isinstance(r, Mapping):
-                invalid_rows += 1
-                continue
-            raw_url = r.get("href") or r.get("url")
-            if raw_url is not None and not isinstance(raw_url, str):
-                invalid_rows += 1
-                continue
-            url = raw_url or ""
-            if not url:
-                continue
-            try:
-                allowed = url_allowed(url, domains_allow, domains_deny)
-            except (TypeError, ValueError):
-                invalid_rows += 1
-                continue
-            if not allowed:
-                continue
-            title = r.get("title", "")
-            body = r.get("body", "")
-            snippet = r.get("snippet", "")
-            if any(
-                value is not None and not isinstance(value, str)
-                for value in (title, body, snippet)
-            ):
-                invalid_rows += 1
-                continue
-            hits.append(
-                SearchHit(
-                    url=url,
-                    title=title or url,
-                    snippet=body or snippet or "",
-                    source_engine="ddgs",
-                    rank=i,
-                    published_at=parse_source_date(r.get("date")),
-                )
-            )
-        diagnostic = _search_diagnostic(
+        return await _ddgs_search_detailed(
             self.name,
-            "invalid_response" if invalid_rows else ("ok" if hits else "empty"),
-            started=started,
-            result_count=len(hits),
+            self._blocking_search,
+            query,
+            limit,
+            domains_allow,
+            domains_deny,
+            time_filter,
+            self._timeout,
         )
-        if invalid_rows:
-            diagnostic["invalid_row_count"] = invalid_rows
-        return hits, diagnostic
 
     def _blocking_search(self, query: str, limit: int, timelimit: str | None = None) -> list[dict]:
         from ddgs import DDGS  # lazy: keeps import cost off the hot path
@@ -253,13 +482,13 @@ class TavilySearchProvider:
         self,
         api_key: str,
         *,
-        base_url: str = _TAVILY_ORIGIN,
+        base_url: str = TAVILY_ORIGIN,
         transport: httpx.AsyncBaseTransport | None = None,
         executor: BoundedHttpExecutor | None = None,
     ) -> None:
         self._key = api_key
         normalized_base = base_url.rstrip("/")
-        if normalized_base != _TAVILY_ORIGIN:
+        if normalized_base != TAVILY_ORIGIN:
             raise ValueError("Tavily base_url must use the official API origin")
         self._base = normalized_base
         self._executor = executor or BoundedHttpExecutor(
@@ -304,54 +533,33 @@ class TavilySearchProvider:
                 "result_count": 0,
                 "max_concurrency": self._executor.max_concurrency,
             }
-        payload: dict[str, object] = {
-            "query": query,
-            "max_results": limit,
-        }
-        if time_filter in {"week", "month"}:
-            payload["time_range"] = time_filter
-        if domains_allow:
-            payload["include_domains"] = sorted(domains_allow)
-        if domains_deny:
-            payload["exclude_domains"] = sorted(domains_deny)
+        request = tavily_search_request(
+            self._base,
+            self._key,
+            query,
+            limit=limit,
+            time_filter=time_filter,
+            domains_allow=domains_allow,
+            domains_deny=domains_deny,
+        )
         result = await self._executor.request(
-            "POST",
-            f"{self._base}/search",
-            headers={"Authorization": f"Bearer {self._key}"},
-            json=payload,
+            request.method,
+            request.url,
+            headers=request.headers,
+            params=request.params,
+            json=request.json,
         )
         diagnostic = dict(result.diagnostic)
         if result.response is None or result.diagnostic["outcome"] != "ok":
             diagnostic["result_count"] = 0
             return [], diagnostic
         try:
-            data = result.response.json()
-            if not isinstance(data, dict):
-                raise ValueError("response must be an object")
-            rows = data.get("results")
-            if not isinstance(rows, list):
-                raise ValueError("results is not a list")
-            if any(
-                not isinstance(row, dict) or not isinstance(row.get("url"), str)
-                for row in rows
-            ):
-                raise ValueError("result row has an invalid url")
+            rows = parse_tavily_search_response(result.response)
         except (TypeError, ValueError):
             diagnostic = with_outcome(diagnostic, "invalid_response")
             diagnostic["result_count"] = 0
             return [], diagnostic
-        hits = [
-            SearchHit(
-                url=h.get("url", ""),
-                title=h.get("title", "") or h.get("url", ""),
-                snippet=h.get("content", ""),
-                source_engine="tavily",
-                rank=i,
-                published_at=parse_source_date(h.get("published_date")),
-            )
-            for i, h in enumerate(rows)
-            if h.get("url") and url_allowed(h.get("url", ""), domains_allow, domains_deny)
-        ]
+        hits = _tavily_hits(rows, domains_allow, domains_deny)
         diagnostic = with_outcome(diagnostic, "ok" if hits else "empty")
         diagnostic["result_count"] = len(hits)
         return hits[:limit], diagnostic
@@ -366,7 +574,7 @@ class BraveSearchProvider:
         self,
         api_key: str,
         *,
-        base_url: str = "https://api.search.brave.com",
+        base_url: str = BRAVE_ORIGIN,
         transport: httpx.AsyncBaseTransport | None = None,
         executor: BoundedHttpExecutor | None = None,
     ) -> None:
@@ -414,143 +622,37 @@ class BraveSearchProvider:
                 "result_count": 0,
                 "max_concurrency": self._executor.max_concurrency,
             }
-        params: dict[str, str | int] = {"q": query, "count": max(1, min(limit, 20))}
-        freshness = {"week": "pw", "month": "pm"}.get(time_filter or "")
-        if freshness:
-            params["freshness"] = freshness
+        request = brave_search_request(
+            self._base,
+            self._key,
+            query,
+            limit=limit,
+            time_filter=time_filter,
+        )
         result = await self._executor.request(
-            "GET",
-            f"{self._base}/res/v1/web/search",
-            params=params,
-            headers={"X-Subscription-Token": self._key},
+            request.method,
+            request.url,
+            params=request.params,
+            headers=request.headers,
+            json=request.json,
         )
         diagnostic = dict(result.diagnostic)
         if result.response is None or result.diagnostic["outcome"] != "ok":
             diagnostic["result_count"] = 0
             return [], diagnostic
         try:
-            data = result.response.json()
-            if not isinstance(data, dict):
-                raise ValueError("response must be an object")
-            web = data.get("web")
-            results = web.get("results") if isinstance(web, dict) else None
-            if not isinstance(results, list):
-                raise ValueError("web.results is not a list")
-            if any(
-                not isinstance(row, dict) or not isinstance(row.get("url"), str)
-                for row in results
-            ):
-                raise ValueError("result row has an invalid url")
+            results = parse_brave_search_response(result.response)
         except (TypeError, ValueError):
             diagnostic = with_outcome(diagnostic, "invalid_response")
             diagnostic["result_count"] = 0
             return [], diagnostic
-        hits: list[SearchHit] = []
-        for i, h in enumerate(results):
-            url = h.get("url", "")
-            if not url or not url_allowed(url, domains_allow, domains_deny):
-                continue
-            hits.append(
-                SearchHit(
-                    url=url,
-                    title=h.get("title", "") or url,
-                    snippet=h.get("description", "") or h.get("snippet", ""),
-                    source_engine="brave",
-                    rank=i,
-                    published_at=parse_source_date(h.get("page_age")),
-                )
-            )
-            if len(hits) >= limit:
-                break
+        hits = _brave_hits(results, limit, domains_allow, domains_deny)
         diagnostic = with_outcome(diagnostic, "ok" if hits else "empty")
         diagnostic["result_count"] = len(hits)
         return hits, diagnostic
 
 
 # ===== EXTRACTION ============================================================
-
-
-class _MarkdownExtractor(HTMLParser):
-    """A tiny stdlib HTML→markdown reader: drops script/style/nav noise, turns
-    headings/links/lists/paragraphs into markdown. The 'lesser-but-usable' bundled
-    tier — no bs4/trafilatura, works anywhere Python does."""
-
-    # NB: `head` is NOT skipped — its only text-bearing child is <title>, which we
-    # want; its script/style children are skipped on their own.
-    _SKIP = {"script", "style", "noscript", "nav", "footer", "svg"}
-    _BLOCK = {"p", "div", "section", "article", "br", "li", "tr"}
-
-    def __init__(self) -> None:
-        super().__init__(convert_charrefs=True)
-        self.out: list[str] = []
-        self.title = ""
-        self._skip_depth = 0
-        self._in_title = False
-        self._href: str | None = None
-        self._a_mark = -1
-
-    def handle_starttag(self, tag, attrs):
-        if tag in self._SKIP:
-            self._skip_depth += 1
-        elif tag == "title":
-            self._in_title = True
-        elif tag in {"h1", "h2", "h3", "h4", "h5", "h6"}:
-            self.out.append("\n\n" + "#" * int(tag[1]) + " ")
-        elif tag == "li":
-            self.out.append("\n- ")
-        elif tag in self._BLOCK:
-            self.out.append("\n")
-        elif tag == "a":
-            self._href = dict(attrs).get("href")
-            self._a_mark = len(self.out)  # remember where this anchor began
-            self.out.append("[")
-
-    def handle_endtag(self, tag):
-        if tag in self._SKIP and self._skip_depth:
-            self._skip_depth -= 1
-        elif tag == "title":
-            self._in_title = False
-        elif tag == "a":
-            href = self._href or ""
-            inner = "".join(self.out[self._a_mark + 1 :]).strip()
-            if inner:
-                self.out.append(f"]({href})" if href else "]")
-            else:
-                # empty-anchor link (nav icon / menu) → drop it entirely, no `[](url)`
-                del self.out[self._a_mark :]
-            self._href = None
-            self._a_mark = -1
-        elif tag in {"h1", "h2", "h3", "h4", "h5", "h6"}:
-            self.out.append("\n")
-
-    def handle_data(self, data):
-        if self._skip_depth:
-            return
-        if self._in_title:
-            self.title += data.strip() + " "
-            return
-        text = data.replace("\xa0", " ")
-        if text.strip() or text == " ":
-            self.out.append(text)
-
-    def markdown(self) -> str:
-        raw = "".join(self.out)
-        # collapse runs of blank lines + trailing spaces; drop now-empty list bullets
-        # (a `- ` left behind after an empty-anchor link was removed).
-        lines = [ln.rstrip() for ln in raw.splitlines()]
-        md, blanks = [], 0
-        for ln in lines:
-            stripped = ln.strip()
-            if stripped in ("-", "*", "•"):
-                continue  # empty bullet → drop
-            if not stripped:
-                blanks += 1
-                if blanks <= 1:
-                    md.append("")
-            else:
-                blanks = 0
-                md.append(ln)
-        return "\n".join(md).strip()
 
 
 class LocalExtractionProvider:
@@ -617,13 +719,13 @@ class FirecrawlExtractionProvider:
     def __init__(
         self,
         api_key: str,
-        base_url: str = "https://api.firecrawl.dev",
+        base_url: str = FIRECRAWL_ORIGIN,
         *,
         transport: httpx.AsyncBaseTransport | None = None,
         executor: BoundedHttpExecutor | None = None,
     ) -> None:
         self._key = api_key
-        self._base = base_url.rstrip("/") or "https://api.firecrawl.dev"
+        self._base = base_url.rstrip("/") or FIRECRAWL_ORIGIN
         self._transport = transport
         self._executor = executor or _firecrawl_executor(self._base)
 
@@ -633,107 +735,23 @@ class FirecrawlExtractionProvider:
 
     async def extract_detailed(self, url: str) -> tuple[ExtractedDoc, dict[str, object]]:
         if not self._key:
-            return ExtractedDoc(
-                url=url,
-                title="",
-                content="",
-                fetched_ok=False,
-                error="no firecrawl key configured",
-                status="error",
-            ), {
-                "provider": self.name,
-                "outcome": "auth",
-                "status_code": None,
-                "attempts": 0,
-                "latency_ms": 0,
-                "retry_wait_ms": 0,
-                "result_count": 0,
-                "passage_count": 0,
-                "max_concurrency": self._executor.max_concurrency,
-            }
+            return _firecrawl_unavailable(
+                self.name, url, "no firecrawl key configured", self._executor, "error"
+            )
         try:
             validate_untrusted_url(url)
         except EgressDenied as e:
-            return ExtractedDoc(
-                url=url, title="", content="", fetched_ok=False, error=str(e), status="blocked"
-            ), {
-                "provider": self.name,
-                "outcome": "upstream",
-                "status_code": None,
-                "attempts": 0,
-                "latency_ms": 0,
-                "retry_wait_ms": 0,
-                "result_count": 0,
-                "passage_count": 0,
-                "max_concurrency": self._executor.max_concurrency,
-            }
+            return _firecrawl_unavailable(self.name, url, str(e), self._executor, "blocked")
+        request = firecrawl_extract_request(self._base, self._key, url)
         result = await self._executor.request(
-            "POST",
-            f"{self._base}/v2/scrape",
+            request.method,
+            request.url,
             transport=self._transport,
-            headers={"Authorization": f"Bearer {self._key}"},
-            json={"url": url, "formats": ["markdown"]},
+            headers=request.headers,
+            params=request.params,
+            json=request.json,
         )
-        diagnostic = dict(result.diagnostic)
-        if result.response is None or result.diagnostic["outcome"] != "ok":
-            status_code = result.diagnostic.get("status_code")
-            status = (
-                "blocked"
-                if result.diagnostic["outcome"] == "auth"
-                else "paywalled"
-                if status_code == 402
-                else "not_found"
-                if status_code == 404
-                else "error"
-            )
-            return ExtractedDoc(
-                url=url,
-                title="",
-                content="",
-                fetched_ok=False,
-                error=f"firecrawl {result.diagnostic['outcome']}",
-                status=status,
-            ), {**diagnostic, "result_count": 0, "passage_count": 0}
-        try:
-            payload = result.response.json()
-            if not isinstance(payload, dict):
-                raise ValueError("response must be an object")
-            data = payload.get("data")
-            if not isinstance(data, dict) or payload.get("success") is False:
-                raise ValueError("missing successful data")
-            meta = data.get("metadata") or {}
-            content = data.get("markdown") or ""
-            if not isinstance(meta, dict) or not isinstance(content, str):
-                raise ValueError("invalid markdown response")
-        except (TypeError, ValueError):
-            diagnostic = with_outcome(diagnostic, "invalid_response")
-            diagnostic.update(result_count=0, passage_count=0)
-            return ExtractedDoc(
-                url=url,
-                title=url,
-                content="",
-                fetched_ok=False,
-                error="invalid firecrawl response",
-                status="error",
-            ), diagnostic
-        title = str(meta.get("title") or url)
-        passages = chunk_passages(url, title, content)
-        if not passages:
-            diagnostic = with_outcome(diagnostic, "empty")
-            diagnostic.update(result_count=0, passage_count=0)
-            return ExtractedDoc(
-                url=url,
-                title=title,
-                content=content,
-                fetched_ok=False,
-                error="no readable content",
-                status="error",
-            ), diagnostic
-        diagnostic = with_outcome(diagnostic, "ok")
-        diagnostic.update(result_count=1, passage_count=len(passages))
-        return ExtractedDoc(
-            url=url, title=title, content=content, passages=passages, fetched_ok=True
-        ), diagnostic
+        return _firecrawl_response(result, url, self.name)
 
     async def extract_many(self, urls: list[str]) -> list[ExtractedDoc]:
         docs, _diagnostic = await self.extract_many_detailed(urls)
@@ -756,51 +774,6 @@ class FirecrawlExtractionProvider:
         gathered = await asyncio.gather(*(self.extract_detailed(url) for url in urls))
         docs = [item[0] for item in gathered]
         diagnostics = [item[1] for item in gathered]
-        successes = sum(doc.fetched_ok for doc in docs)
-        failures = [diag for doc, diag in zip(docs, diagnostics, strict=True) if not doc.fetched_ok]
-        failure_outcomes = [
-            (
-                str(diag.get("outcome"))
-                if str(diag.get("outcome"))
-                in {"rate_limited", "auth", "quota", "timeout", "upstream", "invalid_response"}
-                else "upstream"
-            )
-            for diag in failures
-            if str(diag.get("outcome", "empty")) not in {"", "empty", "ok"}
-        ]
-        if successes and failures:
-            outcome = "partial_outage"
-        elif successes:
-            outcome = "ok"
-        elif failure_outcomes:
-            outcome = failure_outcomes[0]
-        else:
-            outcome = "empty"
-        failed_status_code: int | None = None
-        for diagnostic in failures:
-            if str(diagnostic.get("outcome", "empty")) in {"", "empty", "ok"}:
-                continue
-            candidate_status = diagnostic.get("status_code")
-            if isinstance(candidate_status, int):
-                failed_status_code = candidate_status
-                break
-        aggregate: dict[str, object] = {
-            "provider": self.name,
-            "outcome": outcome,
-            "status_code": failed_status_code,
-            "attempts": sum(_diagnostic_int(diag, "attempts") for diag in diagnostics),
-            # Requests run concurrently; max is the truthful batch wall-time
-            # approximation. Summing would overstate the user-visible stall.
-            "latency_ms": max(
-                [_diagnostic_int(diag, "latency_ms") for diag in diagnostics], default=0
-            ),
-            "retry_wait_ms": max(
-                [_diagnostic_int(diag, "retry_wait_ms") for diag in diagnostics], default=0
-            ),
-            "result_count": successes,
-            "passage_count": sum(len(doc.passages) for doc in docs),
-            "max_concurrency": max(
-                [_diagnostic_int(diag, "max_concurrency") for diag in diagnostics], default=0
-            ),
-        }
-        return docs, aggregate
+        return docs, _aggregate_firecrawl(
+            docs, diagnostics, self.name, self._executor.max_concurrency
+        )

@@ -26,6 +26,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from _slides_compat_support import assert_legacy_markdown_refused
 from disco.core.llm import CompletionResponse, ModelExecutionPolicy, TokenUsage
 from disco.core.llm.config_approvals import ConfigOriginApprovals
 from disco.tools.anatomy import ToolContext
@@ -642,8 +643,7 @@ async def test_generate_deck_success(tmp_workspace):
     assert len(deck.slides) >= 5
 
 
-@pytest.mark.asyncio
-async def test_generate_deck_fill_failure_is_explicit(tmp_workspace):
+async def _assert_generate_deck_fill_failure_is_explicit(tmp_workspace):
     """Structured fill failure never returns a markdown substitute."""
     sbx = _jailed_sandbox(tmp_workspace)
     ctx = _ctx(sbx)
@@ -669,7 +669,11 @@ async def test_generate_deck_fill_failure_is_explicit(tmp_workspace):
 
 
 @pytest.mark.asyncio
-async def test_generate_deck_outline_failure_is_explicit(tmp_workspace):
+async def test_generate_deck_fill_failure_is_explicit(tmp_workspace):
+    await _assert_generate_deck_fill_failure_is_explicit(tmp_workspace)
+
+
+async def _assert_generate_deck_outline_failure_is_explicit(tmp_workspace):
     """Outline failure → (None, None, error)."""
     sbx = _jailed_sandbox(tmp_workspace)
     ctx = _ctx(sbx)
@@ -686,6 +690,11 @@ async def test_generate_deck_outline_failure_is_explicit(tmp_workspace):
     assert deck is None
     assert fallback_md is None
     assert err is not None
+
+
+@pytest.mark.asyncio
+async def test_generate_deck_outline_failure_is_explicit(tmp_workspace):
+    await _assert_generate_deck_outline_failure_is_explicit(tmp_workspace)
 
 
 @pytest.mark.asyncio
@@ -1193,33 +1202,27 @@ def test_keyless_driver_endpoint_normalizes_empty_secret_refs(
     )
 
 
+async def _assert_call_llm_fails_closed(*, expected_match: str, model: str = "model"):
+    from disco.tools.builtin._slides_pipeline import _call_llm
+
+    with pytest.raises(RuntimeError, match=expected_match):
+        await _call_llm([{"role": "user", "content": "hi"}], "unused", model)
+
+
 @pytest.mark.asyncio
 async def test_call_llm_requires_canonical_completion_adapter():
     """Raw slides HTTP is disabled when the host adapter is absent."""
-    from disco.tools.builtin._slides_pipeline import _call_llm
-
-    with pytest.raises(RuntimeError, match="canonical completion adapter"):
-        await _call_llm([{"role": "user", "content": "hi"}], "unused", "m")
+    await _assert_call_llm_fails_closed(expected_match="canonical completion adapter", model="m")
 
 
 @pytest.mark.asyncio
 async def test_call_llm_does_not_retry_without_canonical_adapter():
-    from disco.tools.builtin._slides_pipeline import _call_llm
-
-    with pytest.raises(RuntimeError, match="raw slides-specific HTTP is disabled"):
-        await _call_llm([{"role": "user", "content": "hi"}], "unused", "model")
+    await _assert_call_llm_fails_closed(expected_match="raw slides-specific HTTP is disabled")
 
 
 @pytest.mark.asyncio
 async def test_call_llm_never_accepts_raw_provider_statuses():
-    from disco.tools.builtin._slides_pipeline import _call_llm
-
-    with pytest.raises(RuntimeError, match="canonical completion adapter"):
-        await _call_llm(
-            [{"role": "user", "content": "hi"}],
-            "unused",
-            "model",
-        )
+    await _assert_call_llm_fails_closed(expected_match="canonical completion adapter")
 
 
 def test_resolve_slides_llm_resolves_remote_key(monkeypatch, tmp_path):
@@ -1475,3 +1478,45 @@ def test_tableless_thin_comparison_demoted_to_bullets():
     assert out.slides[0].archetype == "bullets"  # thin + tableless → demoted
     assert out.slides[1].archetype == "comparison_table"  # 4+ body lines → kept
     assert out.slides[2].archetype == "comparison_table"  # real table → kept
+
+
+# Retained historical IDs for the former raw-HTTP, Marp-fallback, and
+# markdown-only paths.  These sentinels assert their current explicit failures.
+
+
+async def test_call_llm_sends_bearer_when_api_key_present():
+    await _assert_call_llm_fails_closed(expected_match="canonical completion adapter")
+
+
+async def test_call_llm_retries_one_transient_500_then_succeeds():
+    await _assert_call_llm_fails_closed(expected_match="raw slides-specific HTTP is disabled")
+
+
+@pytest.mark.parametrize(("statuses", "expected_calls"), [([500, 500], 2), ([400], 1)])
+async def test_call_llm_bounds_retries(statuses, expected_calls):
+    # The retired raw transport would have consumed these statuses.  The
+    # canonical-adapter guard now fails before any HTTP attempt, so the values
+    # remain meaningful as the historical attempt-budget fixture.
+    assert expected_calls == len(statuses)
+    await _assert_call_llm_fails_closed(
+        expected_match="canonical completion adapter",
+        model=f"retired-{expected_calls}-attempt-model",
+    )
+
+
+async def test_generate_deck_fill_failure_returns_fallback(tmp_workspace):
+    await _assert_generate_deck_fill_failure_is_explicit(tmp_workspace)
+
+
+async def test_generate_deck_outline_failure_returns_fallback(tmp_workspace):
+    await _assert_generate_deck_outline_failure_is_explicit(tmp_workspace)
+
+
+async def test_slides_tool_markdown_mode_skips_c2(tmp_workspace):
+    await assert_legacy_markdown_refused(
+        _ctx(_jailed_sandbox(tmp_workspace)), mode="markdown"
+    )
+
+
+async def test_slides_tool_markdown_only_no_c2(tmp_workspace):
+    await assert_legacy_markdown_refused(_ctx(_jailed_sandbox(tmp_workspace)), mode=None)

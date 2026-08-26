@@ -18,6 +18,7 @@ import type {
   ConversationState,
   MessageEvent,
   ObservationEvent,
+  PlanEvent,
   ReportEvent,
   StatusEvent,
 } from "@/types/agent";
@@ -124,6 +125,21 @@ const briefMsg: MessageEvent = {
 const subq1 = "Which solid-state battery products are in mass or pilot production today?";
 const subq2 = "What are the primary technical and manufacturing bottlenecks?";
 const subq3 = "How do projected costs per kWh compare to lithium-ion?";
+
+/** @deprecated Compatibility export for integrations compiled against the
+ * pre-gateless fixture. It is intentionally absent from every live fixture
+ * event sequence and cannot recreate the retired approval gate. */
+export const fixturePlan: PlanEvent = {
+  id: "evt_plan_legacy",
+  kind: "plan",
+  source: "agent",
+  seq: 3,
+  timestamp: NOW,
+  summary: "Legacy Deep Research fixture plan (not emitted by gateless runs).",
+  steps: [{ title: subq1 }, { title: subq2 }, { title: subq3 }],
+  revision: 1,
+  context: "Compatibility-only export; current Deep Research starts immediately.",
+};
 
 /** The events streamed during the live-progress phase. */
 export const fixtureRunningEvents: AgentEvent[] = [

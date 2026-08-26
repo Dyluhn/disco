@@ -222,7 +222,7 @@ def test_legacy_markdown_never_reaches_workspace_renderer():
     assert "markdown" in (legacy.model_extra or {})
 
 
-async def test_result_carries_delivery_note_and_real_paths(tmp_workspace):
+async def _assert_result_carries_delivery_note_and_real_paths(tmp_workspace):
     """ROOT-4 (slides spiral): a successful generation must return the REAL on-disk
     path(s) + an explicit done/delivered/call-finish signal so the agent finishes
     instead of hunting /workspace and verify-looping."""
@@ -252,6 +252,10 @@ async def test_result_carries_delivery_note_and_real_paths(tmp_workspace):
     assert expected in outcome.content
     # The note does not disturb the artifacts list.
     assert "deck.pptx" in outcome.artifacts
+
+
+async def test_result_carries_delivery_note_and_real_paths(tmp_workspace):
+    await _assert_result_carries_delivery_note_and_real_paths(tmp_workspace)
 
 
 # ---- AGENT_TOOLS registration + scoping --------------------------------------
@@ -294,3 +298,107 @@ def test_tool_def_runs_in_sandbox():
     assert tool.definition.runs_in == "sandbox"
     assert tool.definition.read_only is False
     assert Capability.FILESYSTEM in tool.definition.needs
+
+
+# Historical Marp/fallback IDs remain as compatibility sentinels.  The product
+# contract is now native authored PPTX only, so each sentinel proves that the
+# retired path fails closed without creating a substitute artifact.
+
+
+async def test_html_fallback_writes_artifact(tmp_workspace):
+    outcome = await SlidesTool().run(
+        SlidesGenerateArgs(markdown=_THREE_SLIDE_MD, filename="legacy", format="pptx"),
+        _ctx(_jailed_sandbox(tmp_workspace)),
+    )
+    assert outcome.success is False
+    assert outcome.error == "legacy_markdown_slide_path_disabled"
+    assert not list(tmp_workspace.iterdir())
+
+
+async def test_html_fallback_with_theme(tmp_workspace):
+    outcome = await SlidesTool().run(
+        SlidesGenerateArgs(
+            markdown="# One", filename="legacy-themed", format="pptx", theme="ignored"
+        ),
+        _ctx(_jailed_sandbox(tmp_workspace)),
+    )
+    assert outcome.success is False
+    assert outcome.error == "legacy_markdown_slide_path_disabled"
+    assert not list(tmp_workspace.iterdir())
+
+
+async def test_html_fallback_slide_count_in_result(tmp_workspace):
+    outcome = await SlidesTool().run(
+        SlidesGenerateArgs(markdown=_THREE_SLIDE_MD, filename="legacy-count", format="pptx"),
+        _ctx(_jailed_sandbox(tmp_workspace)),
+    )
+    assert outcome.success is False
+    assert outcome.error == "legacy_markdown_slide_path_disabled"
+    assert "slide_count" not in (outcome.structured or {})
+
+
+def test_invalid_format_rejected():
+    with pytest.raises(ValidationError):
+        SlidesGenerateArgs(goal="A deck", filename="bad", format="docx")
+
+
+async def test_hostile_filename_chars_stripped(tmp_workspace):
+    seen: dict[str, str] = {}
+
+    async def _capture(args, _ctx, _fmt):
+        seen["filename"] = args.filename
+        return ToolOutcome(success=False, content="failed", error="test")
+
+    with patch.object(SlidesTool, "_run_c2_pipeline", side_effect=_capture):
+        outcome = await SlidesTool().run(
+            SlidesGenerateArgs(goal="A deck", filename=">my|deck?", format="pptx"),
+            _ctx(_jailed_sandbox(tmp_workspace)),
+        )
+    assert outcome.success is False
+    assert seen["filename"] == "mydeck"
+    assert not list(tmp_workspace.iterdir())
+
+
+async def test_all_invalid_filename_rejected(tmp_workspace):
+    outcome = await SlidesTool().run(
+        SlidesGenerateArgs(goal="A deck", filename=">>?", format="pptx"),
+        _ctx(_jailed_sandbox(tmp_workspace)),
+    )
+    assert outcome.success is False
+    assert outcome.error == "invalid filename"
+    assert not list(tmp_workspace.iterdir())
+
+
+async def test_whitespace_markdown_also_refused(tmp_workspace):
+    outcome = await SlidesTool().run(
+        SlidesGenerateArgs(markdown="   \n  ", filename="empty", format="pptx", mode="markdown"),
+        _ctx(_jailed_sandbox(tmp_workspace)),
+    )
+    assert outcome.success is False
+    assert outcome.error == "legacy_markdown_slide_path_disabled"
+    assert not list(tmp_workspace.iterdir())
+
+
+async def test_pdf_degrades_to_html_when_marp_absent(tmp_workspace):
+    with pytest.raises(ValidationError):
+        SlidesGenerateArgs(markdown=_THREE_SLIDE_MD, filename="deck", format="pdf")
+    assert not list(tmp_workspace.iterdir())
+
+
+async def test_pptx_degrades_to_html_when_marp_absent(tmp_workspace):
+    async def _fail(*_args, **_kwargs):
+        return ToolOutcome(success=False, content="authored failure", error="failed")
+
+    with patch.object(SlidesTool, "_run_c2_pipeline", side_effect=_fail):
+        outcome = await SlidesTool().run(
+            SlidesGenerateArgs(goal="A deck", filename="deck", format="pptx"),
+            _ctx(_jailed_sandbox(tmp_workspace)),
+        )
+    assert outcome.success is False
+    assert outcome.artifacts == []
+    assert not (tmp_workspace / "deck.html").exists()
+    assert not (tmp_workspace / "deck.pptx").exists()
+
+
+async def test_file_lands_in_workspace_not_host_cwd(tmp_workspace):
+    await _assert_result_carries_delivery_note_and_real_paths(tmp_workspace)

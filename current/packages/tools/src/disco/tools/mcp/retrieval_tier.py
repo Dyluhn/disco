@@ -11,13 +11,16 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, cast
 
 from disco.retrieval.bundled_providers import chunk_passages
 from disco.retrieval.models import ExtractedDoc, SearchHit
 from disco.retrieval.source_adapters import _search_diagnostic
 from disco.retrieval.url_policy import source_url_key, url_allowed
+
+from ._retrieval_tier_parts import extract_text as _extract_text
+from ._retrieval_tier_parts import tool_input_fields as _tool_input_fields
 
 _LOG = logging.getLogger(__name__)
 
@@ -87,9 +90,7 @@ def _mcp_result_items(raw: dict, provider_name: str) -> list[dict[str, Any]]:
     return items
 
 
-def _mcp_result_items_detailed(
-    raw: object, provider_name: str
-) -> tuple[list[dict[str, Any]], str]:
+def _mcp_result_items_detailed(raw: object, provider_name: str) -> tuple[list[dict[str, Any]], str]:
     if not isinstance(raw, Mapping):
         return [], "invalid_response"
     if raw.get("isError") or raw.get("is_error"):
@@ -105,10 +106,7 @@ def _mcp_result_items_detailed(
     items = parsed.get("results") if isinstance(parsed, dict) else parsed
     if not isinstance(items, list):
         return [], "invalid_response"
-    if any(
-        not isinstance(item, dict) or not isinstance(item.get("url"), str)
-        for item in items
-    ):
+    if any(not isinstance(item, dict) or not isinstance(item.get("url"), str) for item in items):
         return [], "invalid_response"
     return [item for item in items if isinstance(item, dict)], "ok" if items else "empty"
 
@@ -199,6 +197,63 @@ def _bounded_diagnostic(
     return diagnostic
 
 
+async def _call_search_provider(
+    provider: Any,
+    detailed: Any,
+    query: str,
+    limit: int,
+    domains_allow: frozenset[str] | None,
+    domains_deny: frozenset[str] | None,
+    time_filter: str | None,
+) -> Any:
+    if callable(detailed):
+        detailed_fn = cast(Callable[..., Awaitable[Any]], detailed)
+        return await detailed_fn(
+            query,
+            limit=limit,
+            domains_allow=domains_allow,
+            domains_deny=domains_deny,
+            time_filter=time_filter,
+        )
+    search_fn = cast(Callable[..., Awaitable[Any]], provider.search)
+    return await search_fn(
+        query,
+        limit=limit,
+        domains_allow=domains_allow,
+        domains_deny=domains_deny,
+        time_filter=time_filter,
+    )
+
+
+def _search_result_diagnostic(
+    result: Any, provider_name: str, started: float, detailed: Any
+) -> tuple[list[SearchHit], dict[str, object]]:
+    if detailed is not None:
+        if not isinstance(result, tuple) or len(result) != 2:
+            raise ValueError("search_detailed returned an invalid result")
+        raw_hits, raw_diagnostic = result
+        if not isinstance(raw_hits, list) or not isinstance(raw_diagnostic, Mapping):
+            raise ValueError("search_detailed returned an invalid result")
+        hits = [hit for hit in raw_hits if isinstance(hit, SearchHit)]
+        return hits, _bounded_diagnostic(
+            provider_name, raw_diagnostic, started=started, result_count=len(hits)
+        )
+    if not isinstance(result, list):
+        raise ValueError("search returned an invalid result")
+    hits = [hit for hit in result if isinstance(hit, SearchHit)]
+    return hits, _search_diagnostic(
+        provider_name, "ok" if hits else "empty", started=started, result_count=len(hits)
+    )
+
+
+def _provider_failure(
+    provider_name: str, started: float, exc: Exception
+) -> tuple[list[SearchHit], dict[str, object]]:
+    _LOG.warning("Composite search: provider %r failed (%s)", provider_name, type(exc).__name__)
+    outcome = "invalid_response" if isinstance(exc, ValueError) else "upstream"
+    return [], _search_diagnostic(provider_name, outcome, started=started, error=exc)
+
+
 class _MCPRetrievalSearchProvider:
     """Adapts a shape-compatible MCP tool into a SearchProvider.
 
@@ -262,16 +317,12 @@ class _MCPRetrievalSearchProvider:
             time_filter,
         )
         if arguments is None:
-            return [], _search_diagnostic(
-                self.name, "empty", started=started, result_count=0
-            )
+            return [], _search_diagnostic(self.name, "empty", started=started, result_count=0)
         try:
             raw = await self._call(self._server, self._tool_name, arguments)
         except Exception as exc:
             _LOG.warning("MCP search %r failed (%s)", self.name, type(exc).__name__)
-            return [], _search_diagnostic(
-                self.name, "upstream", started=started, error=exc
-            )
+            return [], _search_diagnostic(self.name, "upstream", started=started, error=exc)
         items, outcome = _mcp_result_items_detailed(raw, self.name)
         if outcome not in {"ok", "empty"}:
             return [], _search_diagnostic(self.name, outcome, started=started)
@@ -356,40 +407,6 @@ class _MCPRetrievalExtractionProvider:
     async def extract_many(self, urls: list[str]) -> list[ExtractedDoc]:
         """Call extract for each URL (no batching)."""
         return [await self.extract(u) for u in urls]
-
-
-def _extract_text(raw: dict) -> str:
-    """Extract text content from an MCP tool result dict."""
-    parts = []
-    for item in raw.get("content", []):
-        if hasattr(item, "text"):
-            parts.append(item.text)
-        elif isinstance(item, dict) and "text" in item:
-            parts.append(item["text"])
-    return "\n".join(parts)
-
-
-def _tool_input_fields(tool_def: Any) -> frozenset[str]:
-    """Return the advertised argument names from either a raw MCP Tool or ToolDef.
-
-    Runtime registration converts raw MCP tools into Disco ``ToolDef`` objects,
-    so retrieval discovery must understand both shapes.  Looking only at the
-    tool name can register an incompatible tool and then repeatedly call it with
-    syntax it never advertised.
-    """
-    schema = getattr(tool_def, "inputSchema", None)
-    if not isinstance(schema, Mapping):
-        schema = getattr(tool_def, "input_schema", None)
-    if isinstance(schema, Mapping):
-        properties = schema.get("properties")
-        if isinstance(properties, Mapping):
-            return frozenset(str(name) for name in properties)
-
-    args_model = getattr(tool_def, "args_model", None)
-    model_fields = getattr(args_model, "model_fields", None)
-    if isinstance(model_fields, Mapping):
-        return frozenset(str(name) for name in model_fields)
-    return frozenset()
 
 
 def _tool_matches_search_shape(tool_def: Any, tool_name: str | None = None) -> bool:
@@ -627,100 +644,22 @@ class CompositeSearchProvider:
     ) -> tuple[list[SearchHit], dict[str, object]]:
         started = asyncio.get_running_loop().time()
         provider_name = str(getattr(provider, "name", type(provider).__name__))[:80]
-
-        async def _call_narrow() -> Any:
-            return await provider.search(query, limit=limit)
-
         detailed = getattr(provider, "search_detailed", None)
         try:
-            if callable(detailed):
-                result = await cast(Any, detailed)(
-                    query,
-                    limit=limit,
-                    domains_allow=domains_allow,
-                    domains_deny=domains_deny,
-                    time_filter=time_filter,
-                )
-                if not isinstance(result, tuple) or len(result) != 2:
-                    raise ValueError("search_detailed returned an invalid result")
-                raw_hits, raw_diagnostic = result
-                if not isinstance(raw_hits, list) or not isinstance(raw_diagnostic, Mapping):
-                    raise ValueError("search_detailed returned an invalid result")
-                hits = [hit for hit in raw_hits if isinstance(hit, SearchHit)]
-                diagnostic = _bounded_diagnostic(
-                    provider_name,
-                    raw_diagnostic,
-                    started=started,
-                    result_count=len(hits),
-                )
-                return hits, diagnostic
-            result = await provider.search(
-                query,
-                limit=limit,
-                domains_allow=domains_allow,
-                domains_deny=domains_deny,
-                time_filter=time_filter,
+            result = await _call_search_provider(
+                provider, detailed, query, limit, domains_allow, domains_deny, time_filter
             )
-            if not isinstance(result, list):
-                raise ValueError("search returned an invalid result")
-            hits = [hit for hit in result if isinstance(hit, SearchHit)]
-            return hits, _search_diagnostic(
-                provider_name,
-                "ok" if hits else "empty",
-                started=started,
-                result_count=len(hits),
-            )
+            return _search_result_diagnostic(result, provider_name, started, detailed)
         except TypeError as exc:
             if callable(detailed):
-                # A detailed provider was called once already. Never turn an
-                # implementation TypeError into a second provider request.
-                _LOG.warning(
-                    "Composite search: provider %r failed (%s)",
-                    provider_name,
-                    type(exc).__name__,
-                )
-                return [], _search_diagnostic(
-                    provider_name,
-                    "upstream",
-                    started=started,
-                    error=exc,
-                )
-            # An MCP provider with a narrower signature — call positionally.
+                return _provider_failure(provider_name, started, exc)
             try:
-                result = await _call_narrow()
-                if not isinstance(result, list):
-                    raise ValueError("search returned an invalid result")
-                hits = [hit for hit in result if isinstance(hit, SearchHit)]
-                return hits, _search_diagnostic(
-                    provider_name,
-                    "ok" if hits else "empty",
-                    started=started,
-                    result_count=len(hits),
-                )
-            except Exception as exc:  # noqa: BLE001 — isolate the narrow provider too
-                _LOG.warning(
-                    "Composite search: provider %r failed (%s)",
-                    provider_name,
-                    type(exc).__name__,
-                )
-                return [], _search_diagnostic(
-                    provider_name,
-                    "invalid_response" if isinstance(exc, ValueError) else "upstream",
-                    started=started,
-                    error=exc,
-                )
-        except Exception as exc:  # noqa: BLE001 — one bad provider must not sink discovery
-            _LOG.warning(
-                "Composite search: provider %r failed (%s)",
-                provider_name,
-                type(exc).__name__,
-            )
-            return [], _search_diagnostic(
-                provider_name,
-                "invalid_response" if isinstance(exc, ValueError) else "upstream",
-                started=started,
-                error=exc,
-            )
+                result = await provider.search(query, limit=limit)
+                return _search_result_diagnostic(result, provider_name, started, None)
+            except Exception as narrow_exc:  # noqa: BLE001
+                return _provider_failure(provider_name, started, narrow_exc)
+        except Exception as exc:  # noqa: BLE001
+            return _provider_failure(provider_name, started, exc)
 
     @staticmethod
     def _merge_rank(

@@ -23,7 +23,6 @@ import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any, Literal
-from urllib.parse import urlsplit
 
 from disco.core import LLMMessage, ReportSection
 from disco.core.inspect import record_model_io
@@ -33,37 +32,33 @@ from disco.core.llm import (
     CompletionResponse,
     LLMRouter,
     ModelRole,
-    Requirement,
 )
 from disco.core.think import strip_think_spans
 
 from ..models import Passage
-from ._synthesis_parts import repair_tables
 from ._writer_parts import (
     cited_ids,
-    confidence_from_claims,
     continue_truncated_report,
     count_prose_words,
     format_evidence_pool,
-    normalize_citations,
     parse_report,
-    readable_summary,
-    validate_charts,
 )
+from ._writer_workflow import coverage_instruction as _coverage_instruction_impl
+from ._writer_workflow import finalize as _finalize_impl
+from ._writer_workflow import is_hard_deficiency as _is_hard_deficiency_impl
+from ._writer_workflow import quality_audit_context as _quality_audit_context_impl
+from ._writer_workflow import self_review_deficiencies as _self_review_deficiencies_impl
+from ._writer_workflow import write_report as _write_report_impl
 from .agent import ResearchOutcome
 from .depth import DepthBound
-from .evidence import EVIDENCE_SYSTEM_PROMPT
+from .evidence import EVIDENCE_SYSTEM_PROMPT as _EVIDENCE_SYSTEM_PROMPT
 from .quality_audit import (
     ClaimRecord,
-    find_high_specificity_claims,
-    hedge_boilerplate_metrics,
     near_duplicate_body_paragraphs,
-    source_concentration,
 )
-from .report_compiler import ReportCompilationError, collect_claim_ledger
-from .source_identity import canonical_work_key
 
 EmitFn = Callable[[str, dict[str, Any]], Awaitable[None]]
+EVIDENCE_SYSTEM_PROMPT = _EVIDENCE_SYSTEM_PROMPT
 
 # One draft + two instructed reworks. Only the latest candidate is ever judged
 # or returned; an unresolved hard deficiency fails the report.
@@ -450,56 +445,7 @@ def _quality_audit_context(
     loop, or publication outcome.
     """
 
-    def work_for_source(source_id: str) -> str:
-        passage = by_id.get(source_id)
-        return canonical_work_key(passage) if passage is not None else ""
-
-    def domain_for_source(source_id: str) -> str:
-        passage = by_id.get(source_id)
-        if passage is None:
-            return ""
-        return urlsplit(passage.source_url).netloc.lower().removeprefix("www.")
-
-    lines: list[str] = []
-    specific = find_high_specificity_claims(claims, work_for_source, domain_for_source)
-    uncorroborated = [finding for finding in specific if finding.needs_corroboration]
-    if uncorroborated:
-        lines.append(
-            "High-specificity claims backed by fewer than two distinct works. "
-            "Flag only when the sentence is not already explicitly attributed "
-            "to its original/single source; otherwise single-source attribution is acceptable:"
-        )
-        for finding in uncorroborated[:8]:
-            lines.append(
-                f"- {finding.text[:220]} (works={finding.work_count}, "
-                f"domains={finding.domain_count}; signals={','.join(finding.matched_rules)})"
-            )
-
-    concentration = source_concentration(claims, work_for_source, threshold=0.15)
-    if concentration.flagged and concentration.dominant_work:
-        lines.append(
-            f"- One work supports {concentration.dominant_share:.0%} of all claims "
-            f"({concentration.dominant_work}). Check whether the draft over-relies "
-            "on its framing; diversify or make that dependence explicit."
-        )
-
-    paragraphs = [
-        paragraph.strip()
-        for _, body in sections
-        for paragraph in re.split(r"\n\s*\n", body)
-        if paragraph.strip()
-    ]
-    hedge = hedge_boilerplate_metrics(paragraphs)
-    if hedge.repeated_phrases:
-        repeated = ", ".join(f"{phrase} x{count}" for phrase, count in hedge.repeated_phrases)
-        lines.append(
-            f"- Repeated hedge language: {repeated}. Flag only boilerplate repetition; "
-            "preserve hedging that communicates real uncertainty."
-        )
-
-    if not lines:
-        return "- No specificity, work-concentration, or hedge-repetition signal was raised."
-    return "\n".join(lines)
+    return _quality_audit_context_impl(claims, sections, by_id)
 
 
 # ---------------------------------------------------------------------------
@@ -549,49 +495,7 @@ def _coverage_instruction(coverage: dict[str, Any]) -> str:
     Coverage is guidance, not a second outline: the evidence pool remains the
     source of truth and the writer decides the natural section structure.
     """
-    covered: list[str] = []
-    for item in coverage.get("covered", []):
-        if not isinstance(item, dict):
-            continue
-        angle = item.get("angle")
-        if not isinstance(angle, str) or not angle.strip():
-            continue
-        evidence_ids = [
-            item_id.strip()
-            for item_id in item.get("evidence_ids", [])
-            if isinstance(item_id, str) and item_id.strip()
-        ]
-        suffix = f" (evidence: {', '.join(evidence_ids)})" if evidence_ids else ""
-        covered.append(f"- {angle.strip()}{suffix}")
-
-    def clean_strings(value: Any) -> list[str]:
-        if not isinstance(value, list):
-            return []
-        return [item.strip() for item in value if isinstance(item, str) and item.strip()]
-
-    open_gaps = clean_strings(coverage.get("open"))
-    contradictions = clean_strings(coverage.get("contradictions_checked"))
-    if not covered and not open_gaps and not contradictions:
-        return ""
-
-    lines = [
-        "COVERAGE MAP (research state; use as guidance, not as a required outline):",
-    ]
-    if covered:
-        lines.append("Covered angles:\n" + "\n".join(covered))
-    if open_gaps:
-        lines.append("Open gaps:\n" + "\n".join(f"- {gap}" for gap in open_gaps))
-    if contradictions:
-        lines.append(
-            "Contradictions checked:\n"
-            + "\n".join(f"- {claim}" for claim in contradictions)
-        )
-    lines.append(
-        "Develop every supported covered angle from the evidence, then consolidate "
-        "them into natural sections. Do not answer this as a questionnaire, copy "
-        "these angle names as headings mechanically, or discuss the coverage map."
-    )
-    return "\n".join(lines) + "\n\n"
+    return _coverage_instruction_impl(coverage)
 
 
 def _report_instruction(
@@ -757,103 +661,14 @@ async def _self_review_deficiencies(
     attempt: int,
 ) -> list[str]:
     """Review the latest candidate and fail closed on malformed output."""
-    previously = ""
-    if prior_flagged:
-        previously = (
-            "Previously flagged deficiencies (judge whether they are fixed; do "
-            "not invent new criteria):\n"
-            + "\n".join(f"- {line}" for line in prior_flagged)
-            + "\n\n"
-        )
-    instruction = _SELF_REVIEW_PROMPT.format(
-        rubric=RESEARCH_REPORT_RUBRIC,
-        previously_flagged=previously,
-        audit_context=audit_context,
-        draft=draft,
-    )
-    messages = [
-        LLMMessage(role="system", content=_REVIEW_SYSTEM),
-        LLMMessage(role="user", content=instruction),
-    ]
-    request = CompletionRequest(
-        profile=CapabilityProfile(
-            role=ModelRole.RAG_ANSWERER,
-            requirements=frozenset({Requirement.JSON_MODE}),
-        ),
-        messages=messages,
-        temperature=0.0,
-        max_tokens=_REVIEW_MAX_TOKENS,
-        response_format="json",
-        enable_thinking=False,
-        metadata=_inspect_metadata(conversation_id, "report_review"),
-    )
-    started = time.perf_counter()
-    response = await router.complete(request)
-    latency_ms = max(0, int((time.perf_counter() - started) * 1_000))
-    text = strip_think_spans(response.text)
-    lines, error = _decode_review(text)
-    _record_writer_io(
-        conversation_id,
-        request,
-        response,
-        text,
-        stage="report_review",
+    return await _self_review_deficiencies_impl(
+        router,
+        draft,
+        prior_flagged,
+        audit_context,
+        conversation_id=conversation_id,
         attempt=attempt,
-        latency_ms=latency_ms,
-        declared_decision={"passes": not lines, "failures": lines} if lines is not None else None,
-        parse_error=error,
     )
-    if lines is not None:
-        return lines
-    retry_max_tokens = (
-        min(_MAX_OUTPUT_TOKENS, _REVIEW_MAX_TOKENS * 2)
-        if response.finish_reason == "length" or not text.strip()
-        else _REVIEW_MAX_TOKENS
-    )
-    retry_request = CompletionRequest(
-        profile=CapabilityProfile(
-            role=ModelRole.RAG_ANSWERER,
-            requirements=frozenset({Requirement.JSON_MODE}),
-        ),
-        messages=[
-            *messages,
-            LLMMessage(
-                role="user",
-                content=(
-                    f"Your response could not be used: {error}. Reply again "
-                    'with ONE strict JSON object: {"passes": true|false, '
-                    '"failures": [{"rubric": "...", "where": "...", '
-                    '"fix": "..."}]}'
-                ),
-            ),
-        ],
-        temperature=0.0,
-        max_tokens=retry_max_tokens,
-        response_format="json",
-        enable_thinking=False,
-        metadata=_inspect_metadata(conversation_id, "report_review_retry"),
-    )
-    started = time.perf_counter()
-    retry = await router.complete(retry_request)
-    retry_latency_ms = max(0, int((time.perf_counter() - started) * 1_000))
-    retry_text = strip_think_spans(retry.text)
-    lines, retry_error = _decode_review(retry_text)
-    _record_writer_io(
-        conversation_id,
-        retry_request,
-        retry,
-        retry_text,
-        stage="report_review_retry",
-        attempt=attempt,
-        latency_ms=retry_latency_ms,
-        declared_decision={"passes": not lines, "failures": lines} if lines is not None else None,
-        parse_error=retry_error,
-    )
-    if lines is None:
-        raise ReportCompilationError(
-            f"report reviewer returned malformed JSON after retry: {retry_error}"
-        )
-    return lines
 
 
 async def _review_candidate(
@@ -945,17 +760,7 @@ def _is_hard_deficiency(line: str) -> bool:
     bounded repair passes are spent. Length is still reviewed and repaired when
     possible; it is only non-blocking after the bounded attempts are exhausted.
     """
-    if line.startswith("Report is "):
-        return False
-    # The deterministic checker emits the canonical ``Report is ... words``
-    # message above. Accept the equivalent model-review wording only when it
-    # explicitly identifies R6 as a word/length/range issue; other R6 findings
-    # (missing headings, malformed structure, etc.) remain hard.
-    if line.startswith("R6 —") and re.search(r"\b(?:word|words|length|range)\b", line, re.I):
-        return False
-    if line.startswith(("R4 —", "R5 —", "Near-duplicate body paragraphs")):
-        return False
-    return True
+    return _is_hard_deficiency_impl(line)
 
 
 async def _finalize(
@@ -967,84 +772,13 @@ async def _finalize(
     bound: DepthBound,
     emit: EmitFn,
 ) -> WrittenReport:
-    summary_raw, section_pairs = parse_report(final_text)
-    if not summary_raw.strip():
-        raise ReportCompilationError("final report has no executive summary")
-    if not section_pairs:
-        raise ReportCompilationError("final report has no headed sections")
-    pool_ids = set(by_id)
-    sections: list[ReportSection] = []
-    for index, (title, body) in enumerate(section_pairs):
-        markdown = validate_charts(body)
-        markdown = normalize_citations(markdown, pool_ids)
-        markdown = repair_tables(markdown)
-        section_cited = sorted({item for item in cited_ids(markdown) if item in pool_ids})
-        sections.append(
-            ReportSection(
-                id=f"r{index}",
-                title=title,
-                markdown=markdown,
-                cited_passage_ids=section_cited,
-            )
-        )
-    summary = normalize_citations(readable_summary(summary_raw), pool_ids)
-    # Normalization can change the exact text that reaches the event boundary;
-    # rerun deterministic and sentence-level checks on that final text before
-    # constructing the durable claim ledger.
-    post_deficiencies = _deterministic_deficiencies(
-        summary
-        + "\n\n"
-        + "\n\n".join(f"## {section.title}\n{section.markdown}" for section in sections),
-        summary,
-        [(section.title, section.markdown) for section in sections],
-        pool_ids,
-        bound,
-    )
-    post_deficiencies.extend(
-        await _grounding_deficiencies(
-            summary,
-            [(section.title, section.markdown) for section in sections],
-            by_id,
-            nli,
-        )
-    )
-    post_hard = [line for line in post_deficiencies if _is_hard_deficiency(line)]
-    if post_hard:
-        raise ReportCompilationError(
-            "final report failed after normalization: " + "; ".join(post_hard)
-        )
-    residual = list(dict.fromkeys([*residual, *post_deficiencies]))
-    ledger = await asyncio.to_thread(
-        collect_claim_ledger, sections, list(by_id.values()), nli, summary
-    )
-    claims_by_section: dict[str, list[dict[str, Any]]] = {}
-    for claim in ledger:
-        claims_by_section.setdefault(claim.section_id, []).append(claim.to_event_dict())
-    finalized: list[ReportSection] = []
-    all_claims: list[dict[str, Any]] = []
-    all_claims.extend(claims_by_section.get("summary", []))
-    unsupported_total = 0
-    for section in sections:
-        section_claims = claims_by_section.get(section.id, [])
-        confidence, unsupported = confidence_from_claims(section_claims)
-        finalized.append(
-            section.model_copy(update={"confidence": confidence, "unsupported_count": unsupported})
-        )
-        unsupported_total += unsupported
-        all_claims.extend(section_claims)
-    for index, section in enumerate(finalized):
-        await emit("phase", {"phase": "synthesize", "section": index + 1})
-        await emit(
-            "section_done",
-            {"section_id": section.id, "title": section.title, "done": index + 1},
-        )
-    return WrittenReport(
-        summary=summary,
-        summary_cited_passage_ids=sorted({item for item in cited_ids(summary) if item in pool_ids}),
-        sections=finalized,
-        claims=all_claims,
-        unsupported_count=unsupported_total,
-        review_notes=residual,
+    return await _finalize_impl(
+        final_text,
+        residual,
+        by_id=by_id,
+        nli=nli,
+        bound=bound,
+        emit=emit,
     )
 
 
@@ -1072,69 +806,13 @@ async def write_report(
     report prose; soft R4/R5 findings and residual R6 word-range misses may
     remain in ``review_notes``.
     """
-    if not outcome.passages:
-        raise ReportCompilationError("research produced no usable evidence")
-    passage_ids = [passage.id for passage in outcome.passages]
-    if any(not passage_id.strip() for passage_id in passage_ids):
-        raise ReportCompilationError("research evidence contains a blank passage id")
-    if len(set(passage_ids)) != len(passage_ids):
-        raise ReportCompilationError("research evidence contains duplicate passage ids")
-    by_id = {passage.id: passage for passage in outcome.passages}
-    base_messages = [
-        LLMMessage(role="system", content=EVIDENCE_SYSTEM_PROMPT),
-        LLMMessage(
-            role="user",
-            content=_report_instruction(query, outcome, bound, recency_window),
-        ),
-    ]
-    max_tokens = _writer_max_tokens(bound)
-    await emit("phase", {"phase": "writing"})
-    draft = await _generate_report(
-        router,
-        base_messages,
-        max_tokens=max_tokens,
-        temperature=_DRAFT_TEMPERATURE,
+    return await _write_report_impl(
+        query,
+        outcome,
+        router=router,
+        nli=nli,
+        bound=bound,
+        emit=emit,
+        recency_window=recency_window,
         conversation_id=conversation_id,
-        stage="report_draft",
-        attempt=1,
     )
-    if not draft:
-        raise ReportCompilationError("report writer returned no prose")
-    prior_flagged: list[str] = []
-    residual: list[str] = []
-    for attempt in range(_WRITER_ATTEMPTS):
-        await emit("phase", {"phase": "reviewing", "attempt": attempt + 1})
-        deficiencies = await _review_candidate(
-            router,
-            draft,
-            by_id=by_id,
-            nli=nli,
-            bound=bound,
-            prior_flagged=prior_flagged,
-            conversation_id=conversation_id,
-            attempt=attempt + 1,
-        )
-        hard = [line for line in deficiencies if _is_hard_deficiency(line)]
-        soft = [line for line in deficiencies if not _is_hard_deficiency(line)]
-        if not deficiencies:
-            break
-        if attempt == _WRITER_ATTEMPTS - 1:
-            if not hard:
-                residual = soft
-                break
-            raise ReportCompilationError(
-                "report retained hard deficiencies after rework: " + "; ".join(hard)
-            )
-        prior_flagged = deficiencies
-        await emit("phase", {"phase": "writing", "attempt": attempt + 2})
-        draft = await _rework_report(
-            router,
-            base_messages,
-            draft,
-            deficiencies,
-            bound=bound,
-            max_tokens=max_tokens,
-            conversation_id=conversation_id,
-            attempt=attempt + 2,
-        )
-    return await _finalize(draft, residual, by_id=by_id, nli=nli, bound=bound, emit=emit)

@@ -399,7 +399,7 @@ async def test_soft_synthesis_failure_is_reworked_before_it_can_ship() -> None:
     assert written.review_notes == []
 
 
-async def test_unresolved_unsupported_prose_fails_closed() -> None:
+async def _assert_unresolved_unsupported_prose_fails_closed() -> None:
     # The writer never fixes the flawed draft; hard grounding defects cannot
     # become a successful report or be hidden in review metadata.
     router = _WriterRouter(
@@ -423,6 +423,10 @@ async def test_unresolved_unsupported_prose_fails_closed() -> None:
     kinds = [kind for kind, _ in router.calls]
     assert kinds == ["report", "review", "rework", "review", "rework", "review"]
     assert kinds[-1] == "review"
+
+
+async def test_unresolved_unsupported_prose_fails_closed() -> None:
+    await _assert_unresolved_unsupported_prose_fails_closed()
 
 
 async def test_word_range_deficiency_uses_exact_numbers() -> None:
@@ -890,3 +894,26 @@ def test_verification_helper_still_imported_unchanged():
     """The per-claim NLI verifier remains the grounding gate after generation:
     the claim ledger the report event carries is built from it."""
     assert hasattr(report_compiler, "_verify_claims")
+
+
+@pytest.mark.asyncio
+async def test_no_scissors_unsupported_prose_ships_with_metadata() -> None:
+    """Historical ID retained while unsupported prose now fails closed."""
+    await _assert_unresolved_unsupported_prose_fails_closed()
+
+
+@pytest.mark.asyncio
+async def test_dead_end_path_only_via_outcome_flag() -> None:
+    """An empty/dead-end outcome cannot be rendered as a report artifact."""
+    router = _WriterRouter({})
+    _, emit = _collect_events()
+    with pytest.raises(ReportCompilationError, match="no usable evidence"):
+        await write_report(
+            "the state of the subject",
+            _outcome(passages=[]),
+            router=router,
+            nli=_OverlapNLI(),
+            bound=_bound(),
+            emit=emit,
+        )
+    assert router.calls == []

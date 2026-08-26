@@ -227,9 +227,7 @@ def _citations_resolve(cited: set[str], passages: Mapping[str, Mapping[str, Any]
     return bool(cited) and cited.issubset(passages.keys()) and citation_urls
 
 
-def _sections_complete(
-    sections: list[Any], valid_sections: Sequence[Mapping[str, Any]]
-) -> bool:
+def _sections_complete(sections: list[Any], valid_sections: Sequence[Mapping[str, Any]]) -> bool:
     return (
         bool(sections)
         and len(valid_sections) == len(sections)
@@ -252,16 +250,13 @@ def _section_citations_ok(
     valid_sections: Sequence[Mapping[str, Any]], passage_ids: set[str]
 ) -> bool:
     return bool(valid_sections) and all(
-        bool(_citation_ids(section))
-        and _citation_ids(section).issubset(passage_ids)
+        bool(_citation_ids(section)) and _citation_ids(section).issubset(passage_ids)
         for section in valid_sections
     )
 
 
 def _diagnostic_language(summary: str, body: str) -> bool:
-    return bool(
-        _SUMMARY_DIAGNOSTIC_LANGUAGE.search(summary) or _BODY_PROCESS_LANGUAGE.search(body)
-    )
+    return bool(_SUMMARY_DIAGNOSTIC_LANGUAGE.search(summary) or _BODY_PROCESS_LANGUAGE.search(body))
 
 
 def _summary_sentences(summary: str) -> list[str]:
@@ -272,9 +267,7 @@ def _summary_sentences(summary: str) -> list[str]:
     return [sentence for sentence in sentences if len(sentence.split()) >= 5]
 
 
-def _summary_is_section_copy(
-    summary: str, valid_sections: Sequence[Mapping[str, Any]]
-) -> bool:
+def _summary_is_section_copy(summary: str, valid_sections: Sequence[Mapping[str, Any]]) -> bool:
     # Executive summaries legitimately restate a report's strongest findings.
     # This synthesis gate rejects only a summary copied wholesale from one
     # section; accidental repetition within the body is measured separately by
@@ -350,8 +343,7 @@ def _heading_hierarchy_is_valid(markdown: str) -> bool:
     # A report has one document title and then a normal Markdown hierarchy;
     # skipping from H2 to H4 is a structural defect even if the text is long.
     return all(
-        level <= previous + 1
-        for (previous, _), (level, _) in zip(rows, rows[1:], strict=False)
+        level <= previous + 1 for (previous, _), (level, _) in zip(rows, rows[1:], strict=False)
     )
 
 

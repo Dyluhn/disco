@@ -1,7 +1,7 @@
 import { Check, Library } from "lucide-react";
-import { cn } from "@/lib/cn";
 import { referencePacksAvailable, type ReferencePack } from "@/api/referencePacks";
 import { useReferencePacks } from "@/hooks/useReferencePacks";
+import { cn } from "@/lib/cn";
 
 export function ReferencePackPicker({
   selected,

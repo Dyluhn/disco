@@ -24,13 +24,13 @@ import asyncio
 import hashlib
 import logging
 import os
-import time
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Literal
 
 import httpx
 from disco.core.host_egress import EgressDenied, validate_untrusted_url
 
+from ._live_search import fetch_searxng_results
 from .local_encoders import EncoderUnavailable
 from .models import ExtractedDoc, Passage, SearchHit
 from .nli import Entailment
@@ -128,77 +128,9 @@ class SearxngSearchProvider:
         return params
 
     async def _fetch_results(self, params: dict) -> tuple[list, dict[str, object]]:
-        started = time.perf_counter()
-        try:
-            async with httpx.AsyncClient(
-                timeout=self._timeout,
-                transport=self._transport,
-                trust_env=False,
-                follow_redirects=False,
-            ) as client:
-                resp = await client.get(f"{self._base}/search", params=params)
-                resp.raise_for_status()
-                try:
-                    payload = resp.json()
-                except ValueError as exc:
-                    raise _InvalidSearxngResponse(
-                        "body was not valid JSON", status_code=resp.status_code
-                    ) from exc
-                if not isinstance(payload, dict):
-                    raise _InvalidSearxngResponse(
-                        "payload must be an object", status_code=resp.status_code
-                    )
-                results = payload.get("results")
-                if not isinstance(results, list):
-                    raise _InvalidSearxngResponse(
-                        "results must be a list", status_code=resp.status_code
-                    )
-                if any(
-                    not isinstance(result, dict)
-                    or ("url" in result and not isinstance(result.get("url"), str))
-                    for result in results
-                ):
-                    raise _InvalidSearxngResponse(
-                        "result entries have an invalid shape", status_code=resp.status_code
-                    )
-                unresponsive = payload.get("unresponsive_engines", [])
-                diagnostic: dict[str, object] = {
-                    "provider": self.name,
-                    "outcome": "ok" if results else "empty",
-                    "status_code": resp.status_code,
-                    "result_count": len(results),
-                    "latency_ms": max(0, int((time.perf_counter() - started) * 1_000)),
-                }
-                if isinstance(unresponsive, list) and unresponsive:
-                    diagnostic["unresponsive_engines"] = [
-                        str(item)[:80] for item in unresponsive[:20]
-                    ]
-                return results if isinstance(results, list) else [], diagnostic
-        except _InvalidSearxngResponse as exc:
-            return [], {
-                "provider": self.name,
-                "outcome": "invalid_response",
-                "provider_error": type(exc).__name__,
-                "status_code": exc.status_code,
-                "result_count": 0,
-                "latency_ms": max(0, int((time.perf_counter() - started) * 1_000)),
-            }
-        except (httpx.HTTPError, ValueError) as exc:
-            # Discovery failure degrades to no hits for THIS round (the run's
-            # zero-evidence gate raises later if nothing was ever admitted),
-            # but is never silent.
-            _LOG.warning("SearXNG search failed: %s: %s", type(exc).__name__, exc)
-            status_code = (
-                exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
-            )
-            return [], {
-                "provider": self.name,
-                "outcome": "upstream",
-                "provider_error": type(exc).__name__,
-                "status_code": status_code,
-                "result_count": 0,
-                "latency_ms": max(0, int((time.perf_counter() - started) * 1_000)),
-            }
+        return await fetch_searxng_results(
+            self._base, self._timeout, self._transport, params, self.name
+        )
 
     def _to_hits(
         self,
@@ -235,14 +167,6 @@ class SearxngSearchProvider:
                 )
             )
         return deduplicate_search_hits(hits)[:limit]
-
-
-class _InvalidSearxngResponse(ValueError):
-    """The SearXNG endpoint answered, but not with its JSON result shape."""
-
-    def __init__(self, message: str, *, status_code: int | None) -> None:
-        super().__init__(message)
-        self.status_code = status_code
 
 
 # ---- Crawl4AI: extraction (URL -> clean content + passages) -----------------

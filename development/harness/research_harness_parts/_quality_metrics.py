@@ -23,14 +23,8 @@ from disco.retrieval.deep_research.source_identity import canonical_work_key
 
 
 def report_quality_metrics(report: Mapping[str, Any]) -> dict[str, Any]:
-    passages = [
-        item for item in report.get("passages", []) if isinstance(item, Mapping)
-    ]
-    by_id = {
-        str(item.get("id")): item
-        for item in passages
-        if str(item.get("id") or "").strip()
-    }
+    passages = [item for item in report.get("passages", []) if isinstance(item, Mapping)]
+    by_id = {str(item.get("id")): item for item in passages if str(item.get("id") or "").strip()}
 
     def work_for_source(source_id: str) -> str:
         source = by_id.get(source_id)
@@ -47,9 +41,7 @@ def report_quality_metrics(report: Mapping[str, Any]) -> dict[str, Any]:
     specifics = find_high_specificity_claims(claims, work_for_source, domain_for_source)
     concentration = source_concentration(claims, work_for_source, threshold=0.15)
     paragraphs = _body_paragraphs(report)
-    duplicates = near_duplicate_body_paragraphs(
-        str(report.get("summary") or ""), paragraphs
-    )
+    duplicates = near_duplicate_body_paragraphs(str(report.get("summary") or ""), paragraphs)
     hedge = hedge_boilerplate_metrics(paragraphs)
     works = {canonical_work_key(item) for item in passages}
     works.discard("url:")
@@ -58,9 +50,7 @@ def report_quality_metrics(report: Mapping[str, Any]) -> dict[str, Any]:
         "distinct_work_count": len(works),
         "claim_count": len(claims),
         "high_specificity_claims": len(specifics),
-        "single_work_specific_claims": sum(
-            finding.needs_corroboration for finding in specifics
-        ),
+        "single_work_specific_claims": sum(finding.needs_corroboration for finding in specifics),
         "dominant_work_claim_share": round(concentration.dominant_share, 4),
         "source_concentration_flagged": concentration.flagged,
         "near_duplicate_body_paragraphs": len(duplicates),

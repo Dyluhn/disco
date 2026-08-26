@@ -233,7 +233,7 @@ describe("NeedMoreCard", () => {
 
   // The server resolves the authoritative report and starts a typed deck job
   // behind the Agent surface; the client sends only the source conversation id.
-  it("A5: 'Build a deck' starts the typed server-owned report job", async () => {
+  it("A5/W-13: 'Build a deck' starts an autonomous agent run seeded with the report", async () => {
     const user = userEvent.setup();
     renderCard();
 
@@ -246,7 +246,7 @@ describe("NeedMoreCard", () => {
     expect(opts).toBeUndefined();
   });
 
-  it("'Build a deck' switches the mode to Agent", async () => {
+  it("W-24: 'Build a deck' switches the mode to Agent", async () => {
     const user = userEvent.setup();
     renderCard();
 

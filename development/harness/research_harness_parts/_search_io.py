@@ -303,75 +303,97 @@ def _diagnostic_value(value: Any, *keys: str) -> Any:
     return None
 
 
-def _record_from(
-    body: Mapping[str, Any], *, elapsed_ms: int | None, seq: int | None, source: str | None
-) -> dict[str, Any] | None:
-    args = _action_args(body)
-    if args is not None:
-        body = {**body, **args}
+def _query_fields(body: Mapping[str, Any], args: Mapping[str, Any] | None) -> tuple[Any, Any]:
     planned = (
         args.get("query")
         if args is not None and args.get("query")
         else _first(body, "planned_query", "query", "plan_query", "subquestion")
     )
     issued = _first(body, "issued_query", "actual_query", "post_transform_query", "executed_query")
-    # A public search action records the model's planned query in `query`.
-    # Query compression/rewriting happens downstream and is only reported by a
-    # structured retrieval trace; never label the action query as issued.
     issued_queries = _first(body, "issued_queries")
     if issued is None and isinstance(issued_queries, list) and issued_queries:
         issued = issued_queries[0]
+    return planned, issued
+
+
+def _extraction_fields(
+    body: Mapping[str, Any],
+) -> tuple[Any, Any, dict[str, int], list[dict[str, Any]]]:
+    value = _first(body, "extractions", "extracted", "extraction_results", "documents")
+    count, ok, statuses, rows = _extract(value)
+    if count is not None:
+        return count, ok, statuses, rows
+    summary = body.get("extraction")
+    if isinstance(summary, Mapping):
+        count = _first(summary, "attempted", "count")
+        ok = _first(summary, "success", "ok")
+        statuses = _status_summary(summary.get("statuses"), statuses, rows)
+        if isinstance(summary.get("statuses"), list):
+            _, _, statuses, rows = _extract(summary["statuses"])
+    raw_statuses = _first(body, "extraction_statuses")
+    if isinstance(raw_statuses, Mapping):
+        statuses = dict(raw_statuses)
+    return (
+        _first(body, "extraction_count", "extraction_attempted") if count is None else count,
+        _first(body, "extraction_ok_count", "successful_extractions") if ok is None else ok,
+        statuses,
+        rows,
+    )
+
+
+def _status_summary(
+    value: Any, statuses: dict[str, int], rows: list[dict[str, Any]]
+) -> dict[str, int]:
+    if isinstance(value, Mapping):
+        return dict(value)
+    return statuses
+
+
+def _provider_fields(body: Mapping[str, Any]) -> tuple[Any, Any, dict[str, Any] | None]:
+    diagnostic = _diagnostic(_first(body, "provider_diagnostic", "provider_diagnostics"))
+    error = _first(body, "provider_error", "error", "exception", "failure")
+    if error is None and diagnostic:
+        error = _diagnostic_value(diagnostic, "provider_error", "error", "detail", "message")
+    outcome = _first(body, "provider_outcome", "outcome", "result_status", "status")
+    if isinstance(outcome, Mapping):
+        error = error or _first(outcome, "error", "detail", "message")
+        outcome = _first(outcome, "status", "outcome", "ok")
+    if error:
+        outcome = "error"
+    elif diagnostic and _diagnostic_value(diagnostic, "unresponsive_engines", "failed_engines"):
+        outcome = "degraded"
+    elif outcome is None:
+        outcome = (
+            "ok"
+            if isinstance(body.get("ok"), bool) and body["ok"]
+            else "error"
+            if isinstance(body.get("ok"), bool)
+            else None
+        )
+    return outcome, error, diagnostic
+
+
+def _record_from(
+    body: Mapping[str, Any], *, elapsed_ms: int | None, seq: int | None, source: str | None
+) -> dict[str, Any] | None:
+    args = _action_args(body)
+    if args is not None:
+        body = {**body, **args}
+    planned, issued = _query_fields(body, args)
     if planned is None and issued is None:
         return None
     raw_value = _first(body, "raw_hits", "hits", "results", "all_hits")
     raw_count, raw_hits = _hits(raw_value)
     if raw_count is None:
         raw_count = _first(body, "raw_discovered_hit_count", "hit_count", "rows")
-    extraction_value = _first(body, "extractions", "extracted", "extraction_results", "documents")
-    extraction_count, extraction_ok, extraction_statuses, extraction_rows = _extract(
-        extraction_value
-    )
-    if extraction_count is None:
-        extraction_summary = body.get("extraction")
-        if isinstance(extraction_summary, Mapping):
-            extraction_count = _first(extraction_summary, "attempted", "count")
-            extraction_ok = _first(extraction_summary, "success", "ok")
-            statuses = extraction_summary.get("statuses")
-            if isinstance(statuses, list):
-                _, _, extraction_statuses, extraction_rows = _extract(statuses)
-            elif isinstance(statuses, Mapping):
-                extraction_statuses = dict(statuses)
-        statuses = _first(body, "extraction_statuses")
-        if isinstance(statuses, Mapping):
-            extraction_statuses = dict(statuses)
-        if extraction_count is None:
-            extraction_count = _first(body, "extraction_count", "extraction_attempted")
-        if extraction_ok is None:
-            extraction_ok = _first(body, "extraction_ok_count", "successful_extractions")
+    extraction_count, extraction_ok, extraction_statuses, extraction_rows = _extraction_fields(body)
     extraction_error_classes: dict[str, int] = {}
     for extraction_row in extraction_rows:
         error_class = extraction_row.get("error_class")
         if isinstance(error_class, str):
             extraction_error_classes[error_class] = extraction_error_classes.get(error_class, 0) + 1
-    provider_diagnostic = _diagnostic(_first(body, "provider_diagnostic", "provider_diagnostics"))
-    provider_error = _first(body, "provider_error", "error", "exception", "failure")
-    if provider_error is None and provider_diagnostic:
-        provider_error = _diagnostic_value(
-            provider_diagnostic, "provider_error", "error", "detail", "message"
-        )
-    provider_outcome = _first(body, "provider_outcome", "outcome", "result_status", "status")
-    if isinstance(provider_outcome, Mapping):
-        provider_error = provider_error or _first(provider_outcome, "error", "detail", "message")
-        provider_outcome = _first(provider_outcome, "status", "outcome", "ok")
-    if provider_error:
-        provider_outcome = "error"
-    elif provider_diagnostic and _diagnostic_value(
-        provider_diagnostic, "unresponsive_engines", "failed_engines"
-    ):
-        provider_outcome = "degraded"
-    elif provider_outcome is None and isinstance(body.get("ok"), bool):
-        provider_outcome = "ok" if body["ok"] else "error"
-    elif provider_outcome is None:
+    provider_outcome, provider_error, provider_diagnostic = _provider_fields(body)
+    if provider_outcome is None:
         provider_outcome = "ok" if raw_count is not None else "not_observed"
     row: dict[str, Any] = {
         "seq": seq,
@@ -426,25 +448,32 @@ def _variants(body: Mapping[str, Any]) -> list[Mapping[str, Any]]:
             continue
         merged = dict(base)
         merged.update(query)
-        query_extraction = query.get("extraction")
-        if isinstance(query_extraction, Mapping) and isinstance(root_extraction, Mapping):
-            statuses = root_extraction.get("statuses")
-            hit_urls = {
-                _safe_url(hit.get("url"))
-                for hit in query.get("hits", [])
-                if isinstance(hit, Mapping) and hit.get("url")
-            }
-            if isinstance(statuses, list):
-                statuses = [
-                    status
-                    for status in statuses
-                    if isinstance(status, Mapping) and _safe_url(status.get("url")) in hit_urls
-                ]
-            merged["extraction"] = {**query_extraction, "statuses": statuses or []}
+        _merge_variant_extraction(merged, query, root_extraction)
         # Per-query trace carries extraction/hits; observation carries these
         # control facts and remains the fallback when a producer omits them.
         variants.append(merged)
     return variants or [base]
+
+
+def _merge_variant_extraction(
+    merged: dict[str, Any], query: Mapping[str, Any], root_extraction: object
+) -> None:
+    query_extraction = query.get("extraction")
+    if not isinstance(query_extraction, Mapping) or not isinstance(root_extraction, Mapping):
+        return
+    statuses = root_extraction.get("statuses")
+    if isinstance(statuses, list):
+        hit_urls = {
+            _safe_url(hit.get("url"))
+            for hit in query.get("hits", [])
+            if isinstance(hit, Mapping) and hit.get("url")
+        }
+        statuses = [
+            status
+            for status in statuses
+            if isinstance(status, Mapping) and _safe_url(status.get("url")) in hit_urls
+        ]
+    merged["extraction"] = {**query_extraction, "statuses": statuses or []}
 
 
 def collect_search_io(
@@ -458,90 +487,98 @@ def collect_search_io(
     not double-count existing cassettes.
     """
     rows: list[dict[str, Any]] = []
-    candidates: list[tuple[Mapping[str, Any], int | None, int | None, str | None]] = []
-    for event in events:
-        body, elapsed, seq, source = _event_body(event)
-        candidates.append((body, elapsed, seq, source))
-    if isinstance(inspect_trace, Mapping):
-        nested = inspect_trace.get("inspect_trace")
-        trace = nested if isinstance(nested, Mapping) else inspect_trace
-        trace_events = trace.get("events", []) if isinstance(trace, Mapping) else []
-        if isinstance(trace_events, list):
-            for item in trace_events:
-                if isinstance(item, Mapping):
-                    candidates.append((item, item.get("elapsed_ms"), item.get("seq"), "inspect"))
+    candidates = _search_candidates(events, inspect_trace)
     for body, elapsed, seq, source in candidates:
         nested = body.get("event") if isinstance(body.get("event"), Mapping) else body
         probe = _nested_payload(nested if isinstance(nested, Mapping) else body)
         structured = _is_structured(probe)
-        simple_search = _kind(probe) in {"search", "search_result"} and _first(
-            probe, "query", "planned_query", "subquestion"
-        )
-        if not structured and _action_args(body) is None and not simple_search:
+        if not _is_search_candidate(body, probe, structured):
             continue
         for variant in _variants(body):
-            row = _record_from(variant, elapsed_ms=elapsed, seq=seq, source=source)
-            if row is None:
-                # Legacy ReplayTransport records extraction as a separate
-                # `{type: extract, passage_count: ...}` frame.  Attach that
-                # observed outcome to the immediately preceding search row;
-                # do not invent a response when no extract frame exists.
-                if _kind(probe) in {"extract", "fetch"} and rows:
-                    prior = rows[-1]
-                    count = _first(probe, "passage_count", "passages_count")
-                    prior["extraction_count"] = 1
-                    prior["extraction_ok_count"] = 1 if count else 0
-                    prior["extraction_statuses"] = {"ok": 1} if count else {"error": 1}
-                    prior["passage_count"] = (
-                        count if count is not None else prior.get("passage_count")
-                    )
-                continue
-            action_key = (
-                row.get("round"),
-                row.get("turn"),
-                row.get("planned_query") or row.get("issued_query"),
-            )
-            if structured:
-                response_key = (*action_key, row.get("issued_query"))
-                for index, prior in enumerate(rows):
-                    prior_key = (
-                        prior.get("round"),
-                        prior.get("turn"),
-                        prior.get("planned_query") or prior.get("issued_query"),
-                        prior.get("issued_query"),
-                    )
-                    if (
-                        prior_key == response_key
-                        and prior.get("provider_outcome") != "not_observed"
-                    ):
-                        rows[index] = row
-                        break
-                else:
-                    rows = [
-                        prior
-                        for prior in rows
-                        if not (
-                            (
-                                prior.get("round"),
-                                prior.get("turn"),
-                                prior.get("planned_query") or prior.get("issued_query"),
-                            )
-                            == action_key
-                            and prior.get("provider_outcome") == "not_observed"
-                        )
-                    ]
-                    rows.append(row)
-            elif not any(
-                (
-                    prior.get("round"),
-                    prior.get("turn"),
-                    prior.get("planned_query") or prior.get("issued_query"),
-                )
-                == action_key
-                for prior in rows
-            ):
-                rows.append(row)
+            _append_search_row(rows, variant, elapsed, seq, source, probe, structured)
     return rows
+
+
+def _search_candidates(
+    events: Sequence[ObservationEvent | Mapping[str, Any]], inspect_trace: Mapping[str, Any] | None
+) -> list[tuple[Mapping[str, Any], int | None, int | None, str | None]]:
+    candidates = [(*_event_body(event),) for event in events]
+    if isinstance(inspect_trace, Mapping):
+        trace = inspect_trace.get("inspect_trace")
+        trace = trace if isinstance(trace, Mapping) else inspect_trace
+        for item in trace.get("events", []) if isinstance(trace, Mapping) else []:
+            if isinstance(item, Mapping):
+                candidates.append((item, item.get("elapsed_ms"), item.get("seq"), "inspect"))
+    return candidates
+
+
+def _is_search_candidate(
+    body: Mapping[str, Any], probe: Mapping[str, Any], structured: bool
+) -> bool:
+    simple = _kind(probe) in {"search", "search_result"} and _first(
+        probe, "query", "planned_query", "subquestion"
+    )
+    return structured or _action_args(body) is not None or bool(simple)
+
+
+def _append_search_row(
+    rows: list[dict[str, Any]],
+    variant: Mapping[str, Any],
+    elapsed: int | None,
+    seq: int | None,
+    source: str | None,
+    probe: Mapping[str, Any],
+    structured: bool,
+) -> None:
+    row = _record_from(variant, elapsed_ms=elapsed, seq=seq, source=source)
+    if row is None:
+        _attach_legacy_extraction(rows, probe)
+        return
+    action_key = (
+        row.get("round"),
+        row.get("turn"),
+        row.get("planned_query") or row.get("issued_query"),
+    )
+    if structured:
+        _replace_structured_row(rows, row, action_key)
+    elif not any(_action_key(prior) == action_key for prior in rows):
+        rows.append(row)
+
+
+def _action_key(row: Mapping[str, Any]) -> tuple[Any, Any, Any]:
+    return row.get("round"), row.get("turn"), row.get("planned_query") or row.get("issued_query")
+
+
+def _attach_legacy_extraction(rows: list[dict[str, Any]], probe: Mapping[str, Any]) -> None:
+    if _kind(probe) not in {"extract", "fetch"} or not rows:
+        return
+    prior = rows[-1]
+    count = _first(probe, "passage_count", "passages_count")
+    prior.update(
+        extraction_count=1,
+        extraction_ok_count=1 if count else 0,
+        extraction_statuses={"ok": 1} if count else {"error": 1},
+        passage_count=count if count is not None else prior.get("passage_count"),
+    )
+
+
+def _replace_structured_row(
+    rows: list[dict[str, Any]], row: dict[str, Any], action_key: tuple[Any, Any, Any]
+) -> None:
+    response_key = (*action_key, row.get("issued_query"))
+    for index, prior in enumerate(rows):
+        prior_key = (*_action_key(prior), prior.get("issued_query"))
+        if prior_key == response_key and prior.get("provider_outcome") != "not_observed":
+            rows[index] = row
+            return
+    rows[:] = [
+        prior
+        for prior in rows
+        if not (
+            _action_key(prior) == action_key and prior.get("provider_outcome") == "not_observed"
+        )
+    ]
+    rows.append(row)
 
 
 def render_search_timeline(rows: Sequence[Mapping[str, Any]]) -> str:
@@ -572,8 +609,9 @@ def render_search_timeline(rows: Sequence[Mapping[str, Any]]) -> str:
         lines.extend(
             [
                 "",
-            "No structured search I/O was observed. Existing action-only cassettes expose "
-            "planned queries in `events.jsonl`; provider responses were not part of that capture.",
+                "No structured search I/O was observed. Existing action-only cassettes expose "
+                "planned queries in `events.jsonl`; provider responses were not part "
+                "of that capture.",
             ]
         )
     return "\n".join(lines) + "\n"
