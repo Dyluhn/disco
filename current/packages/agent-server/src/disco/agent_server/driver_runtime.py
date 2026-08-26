@@ -41,23 +41,11 @@ from disco.core.llm.vision_table import resolve_vision_status
 from disco.core.llm.wiring import build_providers, probe_all_vision_with_approvals
 from disco.core.loop import host_verify_authoritative_enabled
 
+from ._driver_runtime_helpers import _with_detail
 from .driver_context import DriverContextResolutionError, ResolvedDriverContext
 from .driver_context_state import DriverContextState
 
 logger = logging.getLogger(__name__)
-
-
-def _with_detail(exc: LLMError) -> str:
-    """Preflight text plus the provider's own account/config reason.
-
-    `str(exc)` is deliberately content-free ("provider X returned HTTP 403"),
-    which is undiagnosable for the failures an operator can actually fix — an
-    unpaid plan, an unaccepted data policy, an exhausted quota. The provider
-    states the fix in its error envelope; `provider_detail` carries the
-    sanitized form (empty for every non-account status)."""
-    detail = getattr(exc, "provider_detail", "")
-    return f"{exc} — {detail}" if detail else str(exc)
-
 
 _GENERATIVE_ROLES = (
     ModelRole.AGENT_DRIVER,

@@ -149,7 +149,7 @@
     "state": "active",
     "original_type": "DISTRIBUTED_CONCERN",
     "owner_package": "PKG-12-FE-SHELL",
-    "location": "current/packages/core/src/disco/core/events.py:Event:187-217 + current/packages/core/src/disco/core/wire.py:WSServerFrame:39-65 + current/frontend/src/types/agent.ts:AgentEvent/WSServerFrame:388-489",
+    "location": "current/packages/core/src/disco/core/events.py:Event:187-217 + current/packages/core/src/disco/core/wire.py:WSServerFrame:39-65 + current/frontend/src/types/agent.ts:AgentEvent/WSServerFrame:388-590",
     "role_category": "backend/frontend event and WS discriminator sets drift (three event kinds and token frame absent from TS; connection is UI-local)"
   },
   {

@@ -17,9 +17,7 @@ _QUERY_KEYS = frozenset({"query", "issued_query", "search_query", "probe"})
 _QUERY_LIST_KEYS = frozenset({"issued_queries"})
 _DEFICIENCY_KEYS = frozenset({"deficiencies", "deficiency", "review_notes", "review_failures"})
 _MALFORMED_KEYS = frozenset({"malformed", "parse_error", "invalid", "schema_error"})
-_RESEARCH_CONTROL_STAGES = frozenset(
-    {"research_turn", "research_control", "research_control_turn"}
-)
+_RESEARCH_CONTROL_STAGES = frozenset({"research_turn", "research_control", "research_control_turn"})
 _COUNT_KEYS = frozenset(
     {
         "added",
@@ -88,9 +86,7 @@ def _decision_queries(model_io: Sequence[Mapping[str, Any]]) -> list[str]:
         if not isinstance(raw, list):
             continue
         found.extend(
-            _normalize_query(item)
-            for item in raw
-            if isinstance(item, str) and item.strip()
+            _normalize_query(item) for item in raw if isinstance(item, str) and item.strip()
         )
     return found
 
@@ -128,29 +124,26 @@ def _malformed_count(events: Sequence[Any], model_io: Sequence[Mapping[str, Any]
     research-loop thrash.  Older event/model records do not carry a stage, so
     their historical malformed-field behavior remains unchanged.
     """
-    count = 0
-    sources: list[Any] = [*(getattr(event, "payload", event) for event in events)]
-    for source in sources:
-        for key, value in _walk(source):
-            if key in _MALFORMED_KEYS and bool(value):
-                count += 1
-        if isinstance(source, Mapping) and str(source.get("type") or "").lower() in {
-            "malformed",
-            "parse_error",
-        }:
-            count += 1
-    for source in model_io:
-        stage = source.get("stage")
-        if stage is not None:
-            normalized_stage = re.sub(r"[^a-z0-9]+", "_", str(stage).casefold()).strip("_")
-            if normalized_stage not in _RESEARCH_CONTROL_STAGES:
-                continue
-        for key, value in _walk(source):
-            if key in _MALFORMED_KEYS and bool(value):
-                count += 1
-        if str(source.get("type") or "").lower() in {"malformed", "parse_error"}:
-            count += 1
-    return count
+    return sum(_malformed_source(getattr(event, "payload", event)) for event in events) + sum(
+        _malformed_model_row(source) for source in model_io
+    )
+
+
+def _malformed_source(source: Any) -> int:
+    count = sum(1 for key, value in _walk(source) if key in _MALFORMED_KEYS and bool(value))
+    return count + int(
+        isinstance(source, Mapping)
+        and str(source.get("type") or "").lower() in {"malformed", "parse_error"}
+    )
+
+
+def _malformed_model_row(source: Mapping[str, Any]) -> int:
+    stage = source.get("stage")
+    if stage is not None:
+        normalized = re.sub(r"[^a-z0-9]+", "_", str(stage).casefold()).strip("_")
+        if normalized not in _RESEARCH_CONTROL_STAGES:
+            return 0
+    return _malformed_source(source)
 
 
 def _mapping_rows(value: Any) -> list[Mapping[str, Any]]:
@@ -207,9 +200,7 @@ def _observation_rows(events: Sequence[Any]) -> list[tuple[str, Mapping[str, Any
         if phase not in {"search", "extract", "gap"}:
             continue
         for row in _mapping_rows(payload):
-            if not any(
-                key in row for key in (*_COUNT_KEYS, "ok", "no_progress", "zero_progress")
-            ):
+            if not any(key in row for key in (*_COUNT_KEYS, "ok", "no_progress", "zero_progress")):
                 continue
             if "ok" not in row and "round" not in row and row is not payload:
                 continue
@@ -218,9 +209,7 @@ def _observation_rows(events: Sequence[Any]) -> list[tuple[str, Mapping[str, Any
                 continue
             seen.add(fingerprint)
             round_value = row.get("round")
-            key = (
-                f"{phase}:{round_value}" if round_value is not None else f"event:{event_index}"
-            )
+            key = f"{phase}:{round_value}" if round_value is not None else f"event:{event_index}"
             found.append((key, row))
     return found
 
@@ -246,48 +235,49 @@ def _no_progress_streak(events: Sequence[Any]) -> tuple[int, int]:
     failures remains visible as a failure signal but is not model thrash.
     """
     summaries = _summary_rows(events)
-    if summaries:
-        rows = summaries
-        groups: list[tuple[bool, bool]] = []
-        failure_turns = 0
-        for row in rows:
-            queries = row.get("queries", 0)
-            failed = row.get("failed_queries", 0)
-            if not isinstance(queries, int) or queries <= 0:
-                continue
-            if not isinstance(failed, int) or failed < 0:
-                failed = 0
-            successful = queries > failed
-            added = row.get("new_admitted")
-            progressed = isinstance(added, (int, float)) and added > 0
-            groups.append((successful, progressed))
-            if failed == queries:
-                failure_turns += 1
-    else:
-        grouped: dict[str, list[Mapping[str, Any]]] = {}
-        order: list[str] = []
-        for key, row in _observation_rows(events):
-            if key not in grouped:
-                grouped[key] = []
-                order.append(key)
-            grouped[key].append(row)
-        groups = []
-        failure_turns = 0
-        for key in order:
-            observations = grouped[key]
-            outcomes = [_row_progress(row) for row in observations]
-            successful = any(ok for ok, _added in outcomes)
-            progressed = any(added for ok, added in outcomes if ok)
-            if not successful and outcomes:
-                failure_turns += 1
-            groups.append((successful, progressed))
+    groups, failures = _summary_progress(summaries) if summaries else _legacy_progress(events)
+    return _progress_streak(groups), failures
 
+
+def _summary_progress(rows: Sequence[Mapping[str, Any]]) -> tuple[list[tuple[bool, bool]], int]:
+    groups: list[tuple[bool, bool]] = []
+    failures = 0
+    for row in rows:
+        queries = row.get("queries", 0)
+        failed = row.get("failed_queries", 0)
+        if not isinstance(queries, int) or queries <= 0:
+            continue
+        failed = failed if isinstance(failed, int) and failed >= 0 else 0
+        groups.append(
+            (
+                queries > failed,
+                isinstance(row.get("new_admitted"), (int, float)) and row["new_admitted"] > 0,
+            )
+        )
+        failures += failed == queries
+    return groups, failures
+
+
+def _legacy_progress(events: Sequence[Any]) -> tuple[list[tuple[bool, bool]], int]:
+    grouped: dict[str, list[Mapping[str, Any]]] = {}
+    for key, row in _observation_rows(events):
+        grouped.setdefault(key, []).append(row)
+    groups: list[tuple[bool, bool]] = []
+    failures = 0
+    for observations in grouped.values():
+        outcomes = [_row_progress(row) for row in observations]
+        successful = any(ok for ok, _added in outcomes)
+        groups.append((successful, any(added for ok, added in outcomes if ok)))
+        failures += int(not successful and bool(outcomes))
+    return groups, failures
+
+
+def _progress_streak(groups: Sequence[tuple[bool, bool]]) -> int:
     longest = current = 0
     for successful, progressed in groups:
-        zero_yield = successful and not progressed
-        current = current + 1 if zero_yield else 0
+        current = current + 1 if successful and not progressed else 0
         longest = max(longest, current)
-    return longest, failure_turns
+    return longest
 
 
 def analyze_thrash(

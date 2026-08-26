@@ -101,6 +101,28 @@ def _positive_int(value: object) -> int | None:
     return parsed if parsed > 0 else None
 
 
+def _openrouter_capabilities(arch: object, params: object, context_length: int) -> list[str]:
+    arch_map = arch if isinstance(arch, dict) else {}
+    parameter_list = params if isinstance(params, list) else []
+    capabilities: list[str] = []
+    if "image" in (arch_map.get("input_modalities") or []):
+        capabilities.append("vision")
+    if "tools" in parameter_list:
+        capabilities.append("tool_calling")
+    if "response_format" in parameter_list:
+        capabilities.append("json_mode")
+    if context_length >= 32_000:
+        capabilities.append("long_context")
+    return capabilities
+
+
+def _openrouter_price(value: object) -> float:
+    try:
+        return float(str(value)) * 1_000_000
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _note(entry) -> str:
     """A quiet provenance caption from REAL config: context window, quant, endpoint
     — so the settings catalogue reflects what's actually deployed, not seed labels."""
@@ -172,22 +194,6 @@ def normalize_openrouter(data: list[dict]) -> list[OpenRouterModelDTO]:
         top_provider = m.get("top_provider") or {}
         params = m.get("supported_parameters") or []
         ctx = int(m.get("context_length") or 0)
-        caps: list[str] = []
-        if "image" in (arch.get("input_modalities") or []):
-            caps.append("vision")
-        if "tools" in params:
-            caps.append("tool_calling")
-        if "response_format" in params:
-            caps.append("json_mode")
-        if ctx >= 32_000:
-            caps.append("long_context")
-
-        def _price(v: object) -> float:
-            try:
-                return float(str(v)) * 1_000_000  # OR prices are USD-per-token strings
-            except (TypeError, ValueError):
-                return 0.0
-
         out.append(
             OpenRouterModelDTO(
                 id=str(m.get("id")),
@@ -198,22 +204,26 @@ def normalize_openrouter(data: list[dict]) -> list[OpenRouterModelDTO]:
                     if isinstance(top_provider, dict)
                     else None
                 ),
-                price_in_per_m=_price(pricing.get("prompt")),
-                price_out_per_m=_price(pricing.get("completion")),
-                capabilities=caps,
-                vision_status=(
-                    "vision"
-                    if "image" in (arch.get("input_modalities") or [])
-                    else (
-                        "text-only"
-                        if arch.get("input_modalities")
-                        else "unknown"
-                    )
-                ),
-                image_output="image" in (arch.get("output_modalities") or []),
+                price_in_per_m=_openrouter_price(pricing.get("prompt")),
+                price_out_per_m=_openrouter_price(pricing.get("completion")),
+                capabilities=_openrouter_capabilities(arch, params, ctx),
+                vision_status=_openrouter_vision_status(arch),
+                image_output=_openrouter_image_output(arch),
             )
         )
     return out
+
+
+def _openrouter_vision_status(arch: object) -> Literal["vision", "text-only", "unknown"]:
+    modalities = arch.get("input_modalities") if isinstance(arch, dict) else None
+    if "image" in (modalities or []):
+        return "vision"
+    return "text-only" if modalities else "unknown"
+
+
+def _openrouter_image_output(arch: object) -> bool:
+    modalities = arch.get("output_modalities") if isinstance(arch, dict) else None
+    return "image" in (modalities or [])
 
 
 def _capabilities(values: list[str]) -> frozenset[Requirement]:

@@ -182,7 +182,10 @@ def _write_authority(root: Path, source_identity: str) -> None:
 def _setup(root: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     """Build an accepted frontend surface and leave HEAD on its sibling."""
     _init_git(root)
-    write(root / "development/architecture/contexts.json", json.dumps(_contexts_authority(), indent=2) + "\n")
+    write(
+        root / "development/architecture/contexts.json",
+        json.dumps(_contexts_authority(), indent=2) + "\n",
+    )
     _write_frontend(root)
     write(root / _DIAGRAM_REL, "# Generated fixture architecture\n")
     write(root / _CONTRACT_REL, '{"event":"message","version":1}\n')
@@ -194,7 +197,9 @@ def _setup(root: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     monkeypatch.setattr(
         public_api,
         "_ACCEPTED_AUTHORITY_SHA256",
-        hashlib.sha256((root / "development/architecture/public-api.json").read_bytes()).hexdigest(),
+        hashlib.sha256(
+            (root / "development/architecture/public-api.json").read_bytes()
+        ).hexdigest(),
     )
     public_api.regenerate_public_api(root, _checkpoint(root))
     git_add(root, "development/architecture/public-api.json")
@@ -377,15 +382,11 @@ class TestFrontendDeclarationAuthorized:
     def test_python_member_authority_is_unaffected(self) -> None:
         """The live authority still carries its Python member transitions.
 
-        Twenty as of PKG-19 v32, twenty-one after V36 added the bounded
-        visual-route method, twenty-three after settings, twenty-four after
-        the records policy correction added Entity.record_policy, and
-        twenty-six after the launch closeout widened WSClientFrame's type
-        Literal. The frontend declaration authority must stay disjoint from
-        the Python member authority however many rows the latter carries.
+        The live authority carries thirty-five Python member transitions. The
+        frontend declaration authority must stay disjoint from it.
         """
         baseline = public_api.load_public_api(REPO_ROOT)
-        assert len(baseline["member_transitions"]) == 27
+        assert len(baseline["member_transitions"]) == 35
         assert all(row["surface"] == "python" for row in baseline["member_transitions"])
         for row in baseline.get("frontend_declaration_transitions", []):
             assert row["surface"] == "frontend"

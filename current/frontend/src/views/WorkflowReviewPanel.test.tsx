@@ -24,7 +24,7 @@ async function card(name: string): Promise<HTMLElement> {
 }
 
 describe("WorkflowReviewPanel", () => {
-  it("presents workflows as Agent capabilities, not only draft records", async () => {
+  it("describes all workflow instances, not only drafts", async () => {
     renderPanel();
 
     expect(await screen.findByRole("heading", { name: "Workflows" })).toBeInTheDocument();
@@ -37,7 +37,7 @@ describe("WorkflowReviewPanel", () => {
     expect(screen.getAllByText("Needs setup").length).toBeGreaterThanOrEqual(1);
   });
 
-  it("keeps the default card human-sized and hides implementation details", async () => {
+  it("blocks approval when validation findings include an error", async () => {
     renderPanel();
 
     const valid = await card("Fixture Valid Workflow");
@@ -66,7 +66,7 @@ describe("WorkflowReviewPanel", () => {
     expect(within(blocked).getByRole("switch", { name: "Enable Fixture Blocked Workflow" })).toBeChecked();
   });
 
-  it("keeps sealed validation and capability payloads behind Advanced details", async () => {
+  it("renders the real compiled tool, MCP, skill, and policy surface payloads", async () => {
     const user = userEvent.setup();
     renderPanel();
     const valid = await card("Fixture Valid Workflow");

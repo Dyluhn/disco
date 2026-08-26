@@ -155,16 +155,7 @@ class DefaultToolExecutor:
         self._workspace_mutation_epoch = 0
         self._browser_generation = uuid4().hex
 
-    @property
-    def sandbox(self) -> SandboxInstance | None:
-        """The live sandbox instance, or None for a sandbox-less executor.
-
-        The agent loop reaches the sandbox through this duck-typed accessor
-        (getattr(executor, "sandbox", None)) — both for mid-session-recreation
-        generation tracking (engine._execute_and_observe) and for re-reading the
-        current on-disk workspace each turn (engine._workspace_snapshot_message).
-        Exposing it read-only keeps that seam working without leaking _sandbox."""
-        return self._sandbox
+    sandbox = property(lambda self: self._sandbox)
 
     async def prepare_for_events(self, events: list[Event]) -> None:
         """Run one optional host-owned workspace preparation hook.
@@ -255,10 +246,7 @@ class DefaultToolExecutor:
         allowed_tools), IGNORING advertised_tools."""
         return self._catalog.callable_tool_names(self._scope)
 
-    def known_tool_names_for_requery(self) -> frozenset[str]:
-        """Tool names the loop should treat as real before issuing unknown-tool hints."""
-
-        return self.callable_tool_names()
+    known_tool_names_for_requery = callable_tool_names
 
     def readonly_tool_names(self) -> frozenset[str]:
         """Names of in-scope tools that only OBSERVE (ToolDef.read_only)."""

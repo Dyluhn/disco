@@ -204,9 +204,7 @@ class Observation:
             and str(item.get("status") or state_status or "").upper() == "ERROR"
         )
         terminal_error = (
-            frame_type == "error"
-            or event_kind in {"error", "agent_error"}
-            or status_error
+            frame_type == "error" or event_kind in {"error", "agent_error"} or status_error
         )
         if terminal_error:
             message = self._error_message(item)

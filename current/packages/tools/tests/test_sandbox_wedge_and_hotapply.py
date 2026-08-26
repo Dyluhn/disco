@@ -250,21 +250,39 @@ def test_death_reason_helper_never_raises_on_bad_attrs():
 
 
 def test_wedge_guard_does_not_slow_healthy_clients():
-    """The wedge-guard must not add measurable latency to a HEALTHY client.
-    A healthy `reload()` is sub-ms; the guard is `Event.wait(timeout=0.5s)`
-    with a thread spawn, both of which should be dominated by the
-    call itself. We assert: 1000 healthy reloads complete in <1s on any
-    CI runner (i.e. <1ms per call on average)."""
+    """Healthy guard work should stay close to its mandatory thread/Event boundary.
+
+    Compare 1000 guarded reloads with 1000 equivalent daemon-thread/Event
+    round trips. The ratio normalizes away scheduler and runner load while
+    still catching an unexpectedly expensive healthy-client path.
+    """
     container = _FakeContainerBase()
     inst = _make_inst(container, reload_timeout_s=0.5)
+
+    def thread_event_boundary() -> None:
+        done = threading.Event()
+        threading.Thread(target=done.set, daemon=True).start()
+        assert done.wait(timeout=1.0)
+
+    iterations = 1000
     t0 = time.monotonic()
-    for _ in range(1000):
+    for _ in range(iterations):
+        thread_event_boundary()
+    boundary_elapsed = time.monotonic() - t0
+
+    t0 = time.monotonic()
+    for _ in range(iterations):
         inst._safe_reload()  # must return, NOT raise, for a healthy client
-    elapsed = time.monotonic() - t0
-    # 1000 calls in under 1s ⇒ <1ms each. A real healthy reload is sub-ms;
-    # the wedge-guard's per-call overhead (thread spawn + Event) dominates,
-    # and even on a busy CI runner that's well under 1ms/call.
-    assert elapsed < 1.0, f"1000 healthy reloads took {elapsed:.3f}s (added latency)"
+    guarded_elapsed = time.monotonic() - t0
+
+    # The guard necessarily performs the same thread spawn + Event wait as the
+    # baseline, plus the healthy reload and status bookkeeping. Allow one
+    # additional baseline unit for that work, without relying on scheduler-
+    # dependent absolute timing.
+    assert guarded_elapsed <= 2 * boundary_elapsed, (
+        f"healthy guard took {guarded_elapsed:.3f}s vs "
+        f"{boundary_elapsed:.3f}s for the mandatory thread/Event boundary"
+    )
 
 
 def test_wedge_guard_default_timeout_is_bounded():

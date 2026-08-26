@@ -60,9 +60,10 @@ def safe_reload(instance: ContainerInstance, obj: Any = None) -> bool:
     NEVER blocked.
 
     Cost on a HEALTHY client: one thread spawn + one Event wait per call.
-    A healthy reload is sub-ms, the guard's overhead is on the same order
-    — measured: 1000 healthy reloads complete in <100ms on any CI runner
-    (no measurable added latency).
+    That thread/Event boundary is mandatory for bounding a potentially
+    blocking client call; the healthy path adds only the reload and status
+    bookkeeping around it. Timing-sensitive checks should compare this path
+    with an equivalent boundary under the same runner load.
     """
     target = instance._container if obj is None else obj
     done = threading.Event()

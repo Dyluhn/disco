@@ -479,12 +479,16 @@ async def test_direct_tavily_429_ends_turn_without_model_pivot() -> None:
     assert len(router.requests) == 1
 
 
-async def test_empty_retrieval_is_an_error_not_a_dead_end_report() -> None:
+async def _assert_empty_retrieval_is_an_error_not_a_dead_end_report() -> None:
     router = _TurnRouter([_TURN0, _READY])
     with pytest.raises(
         ResearchAgentError, match="(without usable evidence|malformed research turns)"
     ):
         await _run(router, _FakeRetrieval(batches=[[]]))
+
+
+async def test_empty_retrieval_is_an_error_not_a_dead_end_report() -> None:
+    await _assert_empty_retrieval_is_an_error_not_a_dead_end_report()
 
 
 async def test_resume_coverage_and_history_seed_the_run() -> None:
@@ -862,3 +866,9 @@ async def test_research_decisions_use_provider_neutral_json_without_hidden_think
     assert all(request.enable_thinking is False for request in router.requests)
     retry = router.requests[1]
     assert not any(message.role == "assistant" for message in retry.messages)
+
+
+@pytest.mark.asyncio
+async def test_dead_end_only_when_terminal_and_pool_empty() -> None:
+    """Historical dead-end ID now guards the explicit empty-retrieval error."""
+    await _assert_empty_retrieval_is_an_error_not_a_dead_end_report()

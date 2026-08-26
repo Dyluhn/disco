@@ -33,10 +33,6 @@ jobs:
     # must be present; the verifier's live tests FAIL — never skip — without an engine.
     runs-on: [self-hosted, docker, export-track1-closeout]
     timeout-minutes: 60
-    env:
-      # Evidence lives OUTSIDE the checkout (plan §1.4); the verifier refuses an
-      # in-checkout path. RUNNER_TEMP is a sibling of the workspace.
-      EVIDENCE_DIR: ${{ runner.temp }}/closeout-evidence
     steps:
       - uses: actions/checkout@v4
         with:
@@ -72,6 +68,10 @@ jobs:
         run: uv run python development/scripts/gen_closeout_acceptance_manifest.py --check
 
       - name: Run the wired closeout verifier (all lanes, live + browser required)
+        env:
+          # `runner` is available at step scope, not job-level `env`. Keeping
+          # this outside the checkout preserves the verifier's evidence rule.
+          EVIDENCE_DIR: ${{ runner.temp }}/closeout-evidence
         run: >-
           uv run python development/scripts/verify_export_track1_closeout.py
           --all --evidence-dir "$EVIDENCE_DIR"

@@ -19,9 +19,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _helpers import assert_problem_contains, null_advance_row, write
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "development" / "scripts"))
-from architecture.test_inventory_parts import _transitions  # noqa: E402
-
 from architecture import inventory_static, test_inventory  # noqa: E402
+from architecture.test_inventory_parts import _transitions  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -663,10 +662,10 @@ class TestMappingStatic:
             # PKG-33-MCP-CONNECTIVITY: one new agent-server file for the
             # approved-origin egress bypass (6 ids) plus one id extending the
             # compose-environment file for the server image's JS runtime.
-            "python_test_file_count": 853,
-            "python_static_test_id_count": 10554,
-            "typescript_test_file_count": 254,
-            "typescript_static_test_id_count": 1274,
+            "python_test_file_count": 873,
+            "python_static_test_id_count": 10868,
+            "typescript_test_file_count": 264,
+            "typescript_static_test_id_count": 1319,
         }
         assert mapping["identity"] == baseline["source_identity"]
         assert {key: mapping[key] for key in expected_counts} == expected_counts
@@ -703,7 +702,7 @@ class TestMappingStatic:
         # one fixture, and the resource-manifest fold suite adds its
         # event_store fixture. The production-readiness wave adds five more
         # (MCP import client, session-hardening client, weak-secret latch reset).
-        assert len(fixtures) == 186
+        assert len(fixtures) == 185
         assert fixtures == sorted(fixtures, key=_canonical_row)
         assert len({_canonical_row(row) for row in fixtures}) == len(fixtures)
         assert all(
@@ -720,7 +719,7 @@ class TestMappingStatic:
     def test_mapping_static_skip_marker_count_drift_fails(self, monkeypatch: pytest.MonkeyPatch):
         baseline = test_inventory.load_test_inventory(REPO_ROOT)
         markers = baseline["mapping_static"]["markers"]
-        assert len(markers) == 86
+        assert len(markers) == 85
         assert markers == sorted(markers, key=_canonical_row)
         assert len({_canonical_row(row) for row in markers}) == len(markers)
         assert all(set(row) == {"framework", "path", "line", "marker", "source"} for row in markers)
@@ -799,12 +798,12 @@ class TestFrontendCollection:
                 len(frontend["vitest_files_list"]),
             )
             == (frontend["vitest_ids"], frontend["vitest_files"])
-            == (1223, 190)
+            == (1268, 200)
         )
         assert frontend["vitest_ids_list"] == sorted(frontend["vitest_ids_list"])
         assert frontend["vitest_files_list"] == sorted(frontend["vitest_files_list"])
-        assert len(set(frontend["vitest_ids_list"])) == 1223
-        assert len(set(frontend["vitest_files_list"])) == 190
+        assert len(set(frontend["vitest_ids_list"])) == 1268
+        assert len(set(frontend["vitest_files_list"])) == 200
         assert set(frontend["playwright_configs"]) == set(test_inventory.PLAYWRIGHT_CONFIGS)
         for config, authority in frontend["playwright_configs"].items():
             assert len(authority["ids"]) == authority["id_count"]
@@ -1077,7 +1076,7 @@ class TestCollectedCounts:
             # the host fallbacks the close-host-exec pass removed.
             # The MCP-connectivity fix adds 7 non-parametrized package ids:
             # six in one new agent-server file, one in the compose file.
-            "packages": 10973,
+            "packages": 11285,
             # 1288 from PKG-03-EDIT-EVIDENCE: +24 in the `harness` root, the
             # edit-evidence producer acceptance. The new ids land here and not
             # under `packages` because the producer is harness code; the
@@ -1153,7 +1152,7 @@ class TestCollectedCounts:
             # the native-copy and non-unique-resolution cases each expand twice.
             # V53 adds one controller/stack provenance boundary regression.
             # V56 adds two definitions plus two result-evidence mutation cases.
-            "harness": 1450,
+            "harness": 1492,
             # 1320 UNCHANGED at PKG-19-CONSTRAINT4-CONFIRMED-REPAIR: all 18 of that
             # seal's ids are product bytes under `packages`. The repair is at four
             # `disco.core.loop` emitting seams and the oracles were deliberately not
@@ -1203,11 +1202,11 @@ class TestCollectedCounts:
             # ids plus the F47 extension land under `packages`.
             # Fixture-line ownership adds one architecture fitness id. The
             # typed-field transition regression adds one more architecture id.
-            "tests": 396,
+            "tests": 402,
         }
         assert set(collected["roots"]) == set(test_inventory.PYTHON_ROOTS)
         assert collected["counts"] == expected
-        assert collected["total"] == 12828 == sum(expected.values())
+        assert collected["total"] == 13188 == sum(expected.values())
         for root in test_inventory.PYTHON_ROOTS:
             ids = collected["roots"][root]
             assert len(ids) == expected[root]
@@ -1223,7 +1222,7 @@ class TestCollectedCounts:
         problems: list[str] = []
         result = test_inventory._check_collected_ids(baseline, REPO_ROOT, problems)
         assert problems == []
-        assert result == {"collected_total": 12828}
+        assert result == {"collected_total": 13188}
 
         drifted = copy.deepcopy(baseline)
         drifted["collected"]["roots"]["tests"] = list(
@@ -1242,9 +1241,9 @@ class TestBaselineValidation:
         assert result == {
             "ok": True,
             "problems": [],
-            "python_static_ids": 10554,
-            "typescript_static_ids": 1274,
-            "collected_total": 12828,
+            "python_static_ids": 10868,
+            "typescript_static_ids": 1319,
+            "collected_total": 13188,
         }
 
         latest_identity = test_inventory.subprocess.check_output(

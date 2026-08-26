@@ -161,7 +161,7 @@ async def test_w10_markdown_export_route_uses_generated_title_not_raw_question()
         response = await client.post(f"/api/conversations/{cid}/report/export?fmt=md", json={})
     assert response.status_code == 200, response.text
     first_line = response.text.splitlines()[0]
-    assert first_line == f"# Deep Research: {generated_title}"
+    assert first_line == f"# {generated_title}"
     assert raw_question not in first_line
 
 
@@ -171,7 +171,7 @@ def test_w10_serializers_use_generated_title_for_markdown_and_pdf_title_page() -
     report = _report(raw_question)
 
     markdown = serialize_markdown(report, title=generated_title)
-    assert markdown.splitlines()[0] == f"# Deep Research: {generated_title}"
+    assert markdown.splitlines()[0] == f"# {generated_title}"
     assert raw_question not in markdown.splitlines()[0]
 
     html = _build_pdf_html(report, None, resolve_theme("disco", "light"), title=generated_title)

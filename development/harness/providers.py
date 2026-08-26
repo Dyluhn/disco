@@ -30,9 +30,15 @@ class RecordingSearchProvider:
         self._cas = cassette
         self.name = getattr(inner, "name", "search")
 
-    async def search(self, query, *, limit=10, domains_allow=None, domains_deny=None):
+    async def search(
+        self, query, *, limit=10, domains_allow=None, domains_deny=None, time_filter=None
+    ):
         hits = await self._inner.search(
-            query, limit=limit, domains_allow=domains_allow, domains_deny=domains_deny
+            query,
+            limit=limit,
+            domains_allow=domains_allow,
+            domains_deny=domains_deny,
+            time_filter=time_filter,
         )
         self._cas.record(
             "search", _search_payload(query, limit, domains_deny), [h.model_dump() for h in hits]
@@ -48,7 +54,9 @@ class ReplaySearchProvider:
     def __init__(self, cassette: Cassette):
         self._cas = cassette
 
-    async def search(self, query, *, limit=10, domains_allow=None, domains_deny=None):
+    async def search(
+        self, query, *, limit=10, domains_allow=None, domains_deny=None, time_filter=None
+    ):
         rows = self._cas.lookup("search", _search_payload(query, limit, domains_deny))
         return [SearchHit.model_validate(r) for r in rows]
 

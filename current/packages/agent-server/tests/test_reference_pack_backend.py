@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -58,6 +59,40 @@ def _create(store: ReferencePackStore, owner: str, files: dict[str, bytes]):
     return asyncio.run(
         store.acreate(owner, "Pack", "description", list(files), reader=Reader(files))
     )
+
+
+def test_sync_create_runs_inside_the_store_mutation_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = ReferencePackStore(tmp_path / "packs")
+    lock_held = False
+
+    @contextmanager
+    def mutation_lock():
+        nonlocal lock_held
+        assert not lock_held
+        lock_held = True
+        try:
+            yield
+        finally:
+            lock_held = False
+
+    class LockCheckingReader:
+        def is_file(self, _path: str) -> bool:
+            return True
+
+        def is_symlink(self, _path: str) -> bool:
+            return False
+
+        def read_bytes(self, _path: str) -> bytes:
+            assert lock_held
+            return b"reference"
+
+    monkeypatch.setattr(store, "mutation_lock", mutation_lock)
+    pack = store.create("owner", "Pack", "", ["reference.txt"], reader=LockCheckingReader())
+
+    assert pack.current.files[0].name == "reference.txt"
+    assert not lock_held
 
 
 def test_owner_isolation_and_exact_order_hashes(tmp_path: Path) -> None:

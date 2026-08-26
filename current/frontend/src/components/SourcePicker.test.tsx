@@ -22,7 +22,7 @@ afterEach(() => {
 });
 
 describe("SourcePicker", () => {
-  it("shows only additional sources — no configured-provider or Web chip", () => {
+  it("shows only the keyless federation sources — no provider chips, no 'Add in Settings'", () => {
     render(<Harness />);
 
     expect(screen.getByText("Additional sources")).toBeVisible();

@@ -11,6 +11,7 @@ the agent + research pipeline call.
 
 from __future__ import annotations
 
+import re
 from collections.abc import AsyncIterator
 
 from disco.core.llm.types import CompletionResponse, StreamChunk
@@ -18,6 +19,17 @@ from disco.core.llm.types import CompletionResponse, StreamChunk
 
 def _req_payload(req) -> dict:
     payload = req.model_dump(mode="json", exclude={"request_id", "metadata"})
+    # The research turn prompt includes a live countdown.  It is useful to the
+    # model, but elapsed wall time differs between capture and replay and is
+    # not part of the request's semantic identity.
+    for message in payload.get("messages", []):
+        content = message.get("content") if isinstance(message, dict) else None
+        if isinstance(content, str):
+            message["content"] = re.sub(
+                r"(BUDGET: )\d+(?:\.\d+)?s research time remaining",
+                r"\1<remaining>s research time remaining",
+                content,
+            )
     # `requirements` is a frozenset in the contract. Its order is not semantic,
     # so canonicalize the JSON list before hashing it.
     profile = payload.get("profile")

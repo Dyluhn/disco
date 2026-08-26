@@ -85,8 +85,18 @@ def test_ddgs_empty_is_a_truthful_valid_empty_result(monkeypatch):
     assert diagnostic["outcome"] == "empty"
 
 
-def test_ddgs_failure_is_diagnostic_and_single_shot(monkeypatch):
-    """A DDGS exception is visible to the ordinary Search boundary, without retries."""
+def test_ddgs_non_list_response_is_invalid_response(monkeypatch):
+    """A completed DDGS call returning the wrong top-level shape is malformed."""
+    prov = DdgsSearchProvider()
+    monkeypatch.setattr(prov, "_blocking_search", lambda q, n, tl=None: {"results": []})
+    hits, diagnostic = asyncio.run(prov.search_detailed("anything", limit=3))
+    assert hits == []
+    assert diagnostic["outcome"] == "invalid_response"
+    assert diagnostic["provider_error"] == "ValueError"
+
+
+def test_ddgs_degrades_to_empty_on_failure(monkeypatch):
+    """Historical ID retained while asserting the current typed failure diagnostic."""
     prov = DdgsSearchProvider()
     calls = 0
 

@@ -106,5 +106,5 @@ jobs:
             current/frontend/test-results/**
             current/frontend/e2e-live/**/*.png
             ${{ env.BACKEND_LOG_DIR }}/*.log
-          if-no-files-found: ignore
+          if-no-files-found: error
           retention-days: 14

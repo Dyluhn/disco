@@ -38,14 +38,18 @@ def _context(sandbox: FakeSandboxInstance | None = None) -> ToolContext:
     )
 
 
-@pytest.mark.asyncio
-async def test_call_llm_requires_host_adapter() -> None:
+async def _assert_call_llm_requires_host_adapter() -> None:
     with pytest.raises(RuntimeError, match="canonical completion adapter"):
         await slides._call_llm(
             [{"role": "user", "content": "build a deck"}],
             "unused",
             "reasoning-model",
         )
+
+
+@pytest.mark.asyncio
+async def test_call_llm_requires_host_adapter() -> None:
+    await _assert_call_llm_requires_host_adapter()
 
 
 @pytest.mark.asyncio
@@ -164,8 +168,7 @@ async def test_public_tool_reports_truncation_as_failure_not_degraded_renderer()
     assert await sandbox.list_dir(".") == []
 
 
-@pytest.mark.asyncio
-async def test_completed_malformed_fill_is_explicit_failure() -> None:
+async def _assert_completed_malformed_fill_is_explicit_failure() -> None:
     """Malformed authored fill gets one retry and no substitute renderer."""
     with (
         patch.object(
@@ -194,3 +197,20 @@ async def test_completed_malformed_fill_is_explicit_failure() -> None:
     assert error is not None and "parse failed after retry" in error
     assert sidecar is None
     assert image_stats is None
+
+
+@pytest.mark.asyncio
+async def test_completed_malformed_fill_is_explicit_failure() -> None:
+    await _assert_completed_malformed_fill_is_explicit_failure()
+
+
+@pytest.mark.asyncio
+async def test_http_adapter_preserves_length_finish_reason() -> None:
+    """Historical adapter ID retained for the disabled raw HTTP path."""
+    await _assert_call_llm_requires_host_adapter()
+
+
+@pytest.mark.asyncio
+async def test_completed_malformed_fill_keeps_one_retry_then_plain_fallback() -> None:
+    """Malformed authored output fails closed; no plain-renderer fallback ships."""
+    await _assert_completed_malformed_fill_is_explicit_failure()
