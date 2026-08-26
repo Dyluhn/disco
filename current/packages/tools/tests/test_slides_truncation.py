@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -40,43 +39,13 @@ def _context(sandbox: FakeSandboxInstance | None = None) -> ToolContext:
 
 
 @pytest.mark.asyncio
-async def test_http_adapter_preserves_length_finish_reason(monkeypatch) -> None:
-    class _Response:
-        status_code = 200
-
-        def raise_for_status(self) -> None:
-            return None
-
-        def json(self) -> dict[str, Any]:
-            return {
-                "choices": [
-                    {
-                        "message": {"content": '{"title":"cut'},
-                        "finish_reason": "length",
-                    }
-                ]
-            }
-
-    class _Client:
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *_args: object) -> None:
-            return None
-
-        async def post(self, *_args: object, **_kwargs: object) -> _Response:
-            return _Response()
-
-    monkeypatch.setattr(slides.httpx, "AsyncClient", lambda **_kwargs: _Client())
-
-    result = await slides._call_llm(
-        [{"role": "user", "content": "build a deck"}],
-        "http://provider.invalid/v1",
-        "reasoning-model",
-    )
-
-    assert result.finish_reason == "length"
-    assert result.content.endswith('"cut')
+async def test_call_llm_requires_host_adapter() -> None:
+    with pytest.raises(RuntimeError, match="canonical completion adapter"):
+        await slides._call_llm(
+            [{"role": "user", "content": "build a deck"}],
+            "unused",
+            "reasoning-model",
+        )
 
 
 @pytest.mark.asyncio
@@ -174,7 +143,7 @@ async def test_public_tool_reports_truncation_as_failure_not_degraded_renderer()
             SlidesGenerateArgs(
                 goal="Reliability deck",
                 filename="must-not-exist",
-                format="html",
+                format="pptx",
                 slide_count=2,
             ),
             _context(sandbox),
@@ -183,7 +152,11 @@ async def test_public_tool_reports_truncation_as_failure_not_degraded_renderer()
     assert call_llm.call_count == 1
     assert not outcome.success
     assert outcome.artifacts == []
-    assert outcome.structured in (None, {})
+    assert outcome.structured == {
+        "degraded": False,
+        "renderer": "authored",
+        "stage": "authoring",
+    }
     assert outcome.error is not None
     assert outcome.error.startswith("SLIDES_PROVIDER_OUTPUT_TRUNCATED:")
     assert "finish_reason='length'" in outcome.content
@@ -192,8 +165,8 @@ async def test_public_tool_reports_truncation_as_failure_not_degraded_renderer()
 
 
 @pytest.mark.asyncio
-async def test_completed_malformed_fill_keeps_one_retry_then_plain_fallback() -> None:
-    """Retain the historical inventory ID while proving diagnostics stay internal."""
+async def test_completed_malformed_fill_is_explicit_failure() -> None:
+    """Malformed authored fill gets one retry and no substitute renderer."""
     with (
         patch.object(
             slides,
@@ -217,7 +190,7 @@ async def test_completed_malformed_fill_keeps_one_retry_then_plain_fallback() ->
 
     assert call_llm.call_count == 3
     assert deck is None
-    assert fallback is not None and "Reliable systems" in fallback
+    assert fallback is None
     assert error is not None and "parse failed after retry" in error
     assert sidecar is None
     assert image_stats is None

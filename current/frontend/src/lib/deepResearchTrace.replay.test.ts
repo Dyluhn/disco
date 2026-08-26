@@ -29,12 +29,39 @@ import {
   deriveResearchCheckpoint,
   deriveAssemblingSections,
   deriveLiveTrace,
+  deriveAppliedSteerIds,
   deriveSourceTiers,
 } from "@/lib/deepResearchTrace";
 
 function asEvents(events: unknown[]): AgentEvent[] {
   return events as unknown as AgentEvent[];
 }
+
+describe("deriveAppliedSteerIds — durable host acknowledgment", () => {
+  it("returns only exact IDs from steer_applied actions", () => {
+    const events = asEvents([
+      {
+        kind: "action",
+        id: "applied-1",
+        thought: "",
+        tool_call: { tool_name: "steer_applied", arguments: { steer_id: "steer-1" } },
+      },
+      {
+        kind: "action",
+        id: "other-1",
+        thought: "",
+        tool_call: { tool_name: "phase", arguments: { phase: "gather" } },
+      },
+      {
+        kind: "action",
+        id: "applied-2",
+        thought: "",
+        tool_call: { tool_name: "steer_applied", arguments: { steer_id: "steer-1" } },
+      },
+    ]);
+    expect(deriveAppliedSteerIds(events)).toEqual(["steer-1"]);
+  });
+});
 
 // The run's opening brief, as the engine emits it: an ActionEvent whose
 // tool_name is "brief", mirrored as an assistant chat message.

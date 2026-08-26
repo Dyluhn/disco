@@ -28,9 +28,7 @@ import {
   MessageCircleQuestion,
   Presentation,
 } from "lucide-react";
-import { readVerboseAgentChat } from "@/lib/useVerboseAgentChat";
-import { createBuildConversation } from "@/api/agent";
-import { serializeReportToMarkdown } from "@/api/deepResearch";
+import { startReportDeck } from "@/api/reportDeck";
 import { useMode } from "@/shell/mode";
 import type { MessageEvent, ReportEvent } from "@/types/agent";
 import { ReportFollowUp } from "./ReportFollowUp";
@@ -81,49 +79,22 @@ export function NeedMoreCard({
 
   const toggleFollowUp = useCallback(() => setFollowUpOpen((v) => !v), []);
 
-  // A5: hand the finished report off to an AUTONOMOUS build that turns it into a slide
-  // deck. We create the build conversation (autonomous=true → the deck plan auto-
-  // approves for a frictionless "just build it"; per-action risk gates still apply),
-  // then navigate to it with the serialized report as the seed task — BuildSurface
-  // kicks it once. On failure we stay on the card so the user can retry (no dead end).
+  // Start the typed server-owned report → deck job. The server resolves the
+  // authoritative latest ReportEvent; the client sends no report prose or
+  // client-authored authority. On failure we stay on the card so the user can retry.
   const handleBuildDeck = useCallback(async () => {
     if (building) return;
     setBuilding(true);
     try {
-      // R3: keep the VISIBLE handoff message short (a one-liner the chat history
-      // shows), and pass the full report as hidden `seedContext` — stored as an
-      // ENVIRONMENT message the model receives but the user doesn't see as a
-      // screen-filling bubble. The "Deep research report …" framing also guarantees
-      // the hidden message can't be mistaken for a ⚠/upload notice (which would surface).
-      const q = (report.query || "").trim();
-      const seedTask = q
-        ? `Make slides for the deep research report: "${q}"`
-        : "Make slides for the deep research report.";
-      const seedContext =
-        "Deep research report to turn into a polished slide deck " +
-        "(use the slides_generate tool):\n\n" +
-        serializeReportToMarkdown(report);
-      // runthru-v2 #7: route slide-making to the AGENT surface (task framing, not the
-      // "software developer"/live-preview build framing). W-13: run it AUTONOMOUS
-      // (autonomous=true) so the seeded slides plan auto-approves for a frictionless
-      // "just build the deck" handoff — per-action risk gates still apply.
-      // model_override=null → server uses the last-selected pick.
-      const newCid = await createBuildConversation(
-        null,
-        "agent",
-        true,
-        null,
-        !readVerboseAgentChat(),
-      );
-      // W-24: this handoff lands on the AGENT surface (/agent/:cid). Sync the
-      // 3-way mode slider to "agent" so it reflects where we just navigated —
-      // otherwise the slider stayed on Search while the Agent surface rendered.
+      const job = await startReportDeck(cid);
+      // Agent is the user-facing task surface. The server independently pins
+      // this conversation to artifact mode and the sealed deck contract.
       setMode("agent");
-      navigate(`/agent/${newCid}`, { state: { seedTask, seedContext } });
+      navigate(`/agent/${job.conversation_id}`);
     } catch {
       setBuilding(false); // surface stays; the button re-enables for a retry
     }
-  }, [building, report, navigate, setMode]);
+  }, [building, cid, navigate, setMode]);
 
   // Export button: show include-modal first if follow-ups exist.
   const handleExportClick = useCallback(() => {

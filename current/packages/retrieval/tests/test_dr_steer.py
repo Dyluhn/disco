@@ -28,6 +28,7 @@ from __future__ import annotations
 import re
 from collections.abc import AsyncIterator
 from dataclasses import replace
+from types import SimpleNamespace
 from typing import Any
 
 from disco.core.llm import (
@@ -38,6 +39,7 @@ from disco.core.llm import (
     TokenUsage,
 )
 from disco.retrieval.deep_research import DeepResearchRun, DepthTier
+from disco.retrieval.deep_research.agent import _drain_hooks
 from disco.retrieval.models import Passage, RetrievalRequest, RetrievalResult, SearchHit
 from disco.retrieval.vectorstore import InMemoryVectorStore
 
@@ -134,6 +136,7 @@ class _ScriptedRouter(LLMRouter):
     def __init__(self, turns: list[str] | None = None) -> None:
         self._turns = list(turns or [])
         self.turn_prompts: list[str] = []
+        self.turn_contexts: list[str] = []
         self.calls: list[str] = []
 
     async def complete(
@@ -148,6 +151,7 @@ class _ScriptedRouter(LLMRouter):
         else:
             kind = "turn"
             self.turn_prompts.append(request.messages[-1].content)
+            self.turn_contexts.append(joined)
             text = self._turns.pop(0) if self._turns else _DONE
         self.calls.append(kind)
         return CompletionResponse(
@@ -307,6 +311,49 @@ async def test_steer_empty_returns_do_not_change_run() -> None:
     assert result.completed_probes == ["what is X"]
     assert result.bounded_by is None
     assert all("USER STEER" not in prompt for prompt in router.turn_prompts)
+
+
+async def test_id_steer_survives_malformed_turn_and_acknowledges_once() -> None:
+    """An ID-bearing steer is retained through a malformed/retried turn and
+    removed only after the first valid parsed response that received it."""
+    router = _ScriptedRouter([_TURN0, "not json", "still not json", _TURN_STEERED, _DONE])
+    run = _make_run(router, conversation_id="conv_steer_id")
+    captured, emit = _collect_events()
+    pending = [SimpleNamespace(steer_id="steer-42", text="focus on risks")]
+    acknowledged: list[str] = []
+    drains = 0
+
+    def pop_steers() -> list[object]:
+        nonlocal drains
+        drains += 1
+        return list(pending) if drains > 1 else []
+
+    def ack_steers(ids: list[str]) -> None:
+        acknowledged.extend(ids)
+        pending.clear()
+
+    result = await run.run(emit=emit, pop_steers=pop_steers, ack_steers=ack_steers)
+
+    # The malformed turn and its retry both carried the steer; the next valid
+    # turn also received it and then acknowledged the exact ID once.
+    assert len(router.turn_prompts) >= 4
+    assert all("USER STEER" in context for context in router.turn_contexts[1:4])
+    assert acknowledged == ["steer-42"]
+    applied = [payload for kind, payload in captured if kind == "steer_applied"]
+    assert applied == [{"steer_id": "steer-42"}]
+    assert result.bounded_by is None
+
+
+def test_id_steer_is_recorded_once_while_peeked_for_retry() -> None:
+    state = SimpleNamespace(trail=[])
+    steer = SimpleNamespace(steer_id="steer-42", text="focus on risks")
+
+    _drain_hooks(state, lambda: [steer], None)
+    _drain_hooks(state, lambda: [steer], None)
+
+    assert state.trail == [
+        {"kind": "steer", "text": "focus on risks", "steer_id": "steer-42"}
+    ]
 
 
 # ---- test 3: inject-source folds a passage into the evidence pool ------------

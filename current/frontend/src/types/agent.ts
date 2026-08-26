@@ -521,7 +521,7 @@ export interface FileStreamFrame {
 // finalizer alias). Omitting it leaves the run undeclared (CUSTOM).
 export type WSClientFrame =
   | { type: "send_message"; content: string; context?: string; build_brief?: Record<string, never> }
-  | { type: "steer"; steer_text: string } // redirect a running agent / DR mid-run steer (routes by context)
+  | { type: "steer"; steer_text: string; steer_id?: string } // DR correlates durable applied acknowledgment; optional for legacy Agent/Build steers
   | { type: "confirm"; action_id?: string }
   | { type: "reject"; action_id?: string }
   | { type: "approve_plan" } // approve the pending plan → start building

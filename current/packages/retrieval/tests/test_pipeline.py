@@ -5,12 +5,14 @@ from __future__ import annotations
 import asyncio
 import datetime
 
+import pytest
 from disco.retrieval import (
     DefaultRetrievalEngine,
     LexicalReranker,
     RetrievalRequest,
     reciprocal_rank_fusion,
 )
+from disco.retrieval.engine import ProviderOperationError
 from disco.retrieval.models import ExtractedDoc, Passage
 from disco.retrieval.source_adapters import MultiSearchProvider
 from research_fakes import FakeExtractionProvider, FakeRewriter, FakeSearchProvider, hit
@@ -302,6 +304,129 @@ async def test_retrieval_trace_classifies_extraction_failures_without_error_text
     assert "127.0.0.1" not in serialized
 
 
+async def test_exhausted_detailed_extraction_failure_is_typed():
+    class _FailedDetailedExtraction:
+        name = "firecrawl"
+
+        async def extract_many(self, urls: list[str]) -> list[ExtractedDoc]:
+            return [
+                ExtractedDoc(
+                    url=url,
+                    title=url,
+                    content="",
+                    fetched_ok=False,
+                    error="firecrawl rate_limited",
+                    status="error",
+                )
+                for url in urls
+            ]
+
+        async def extract_many_detailed(self, urls: list[str]):
+            return await self.extract_many(urls), {
+                "provider": "firecrawl",
+                "outcome": "rate_limited",
+                "attempts": len(urls) * 3,
+                "status_code": 429,
+            }
+
+    with pytest.raises(ProviderOperationError) as raised:
+        await DefaultRetrievalEngine(
+            FakeSearchProvider([hit("https://example.test/exhausted")]),
+            _FailedDetailedExtraction(),  # type: ignore[arg-type]
+            LexicalReranker(),
+        ).retrieve(RetrievalRequest(query="extraction outage", depth="shallow"))
+    assert raised.value.diagnostic == {
+        "extraction": {
+            "provider": "firecrawl",
+            "outcome": "rate_limited",
+            "attempts": 3,
+            "status_code": 429,
+        }
+    }
+
+
+async def test_detailed_extraction_empty_and_partial_success_remain_normal():
+    class _DetailedExtraction:
+        name = "firecrawl"
+
+        def __init__(self, docs: list[ExtractedDoc], outcome: str) -> None:
+            self._docs = docs
+            self._outcome = outcome
+
+        async def extract_many(self, urls: list[str]) -> list[ExtractedDoc]:
+            del urls
+            return self._docs
+
+        async def extract_many_detailed(self, urls: list[str]):
+            del urls
+            return self._docs, {
+                "provider": "firecrawl",
+                "outcome": self._outcome,
+                "attempts": 1,
+                "status_code": 200,
+            }
+
+    empty_url = "https://example.test/empty-content"
+    empty = await DefaultRetrievalEngine(
+        FakeSearchProvider([hit(empty_url)]),
+        _DetailedExtraction(
+            [
+                ExtractedDoc(
+                    url=empty_url,
+                    title=empty_url,
+                    content="",
+                    fetched_ok=False,
+                    error="no readable content",
+                    status="error",
+                )
+            ],
+            "empty",
+        ),
+        LexicalReranker(),
+    ).retrieve(RetrievalRequest(query="valid empty", depth="shallow"))
+    assert not empty.passages
+    assert empty.notes["retrieval_trace"]["extraction"]["provider_diagnostic"]["outcome"] == "empty"
+
+    good_url = "https://example.test/good"
+    bad_url = "https://example.test/bad"
+    partial = await DefaultRetrievalEngine(
+        FakeSearchProvider([hit(good_url), hit(bad_url)]),
+        _DetailedExtraction(
+            [
+                ExtractedDoc(
+                    url=good_url,
+                    title="Good",
+                    content="usable",
+                    fetched_ok=True,
+                    passages=[
+                        Passage(
+                            id="good-p0",
+                            source_url=good_url,
+                            source_title="Good",
+                            text="usable evidence",
+                        )
+                    ],
+                ),
+                ExtractedDoc(
+                    url=bad_url,
+                    title=bad_url,
+                    content="",
+                    fetched_ok=False,
+                    error="timeout",
+                    status="error",
+                ),
+            ],
+            "partial_outage",
+        ),
+        LexicalReranker(),
+    ).retrieve(RetrievalRequest(query="partial extraction", depth="shallow"))
+    assert partial.passages
+    assert (
+        partial.notes["retrieval_trace"]["extraction"]["provider_diagnostic"]["outcome"]
+        == "partial_outage"
+    )
+
+
 async def test_retrieval_trace_preserves_provider_degradation_diagnostic():
     class _DegradedSearch(FakeSearchProvider):
         async def search_detailed(
@@ -335,6 +460,67 @@ async def test_retrieval_trace_preserves_provider_degradation_diagnostic():
         {"providers": {"searxng": {"unresponsive_engines": ["slow-engine"]}}}
     ]
     assert trace["queries"][0]["provider_diagnostic"] == trace["provider_diagnostics"][0]
+
+
+async def test_all_paid_provider_failure_is_typed_not_no_hits():
+    class _FailedPaidSearch:
+        name = "multi"
+
+        async def search_detailed(self, query, **kwargs):
+            del query, kwargs
+            return [], {
+                "provider_aggregate": "all_failed",
+                "providers": {
+                    "tavily": {
+                        "provider": "tavily",
+                        "outcome": "rate_limited",
+                        "attempts": 3,
+                    }
+                }
+            }
+
+    with pytest.raises(ProviderOperationError):
+        await _engine(_FailedPaidSearch(), docs={}).retrieve(
+            RetrievalRequest(query="paid outage", depth="shallow")
+        )
+
+
+async def test_direct_paid_provider_failure_is_typed_not_no_hits():
+    class _DirectFailedPaidSearch:
+        name = "tavily"
+
+        async def search_detailed(self, query, **kwargs):
+            del query, kwargs
+            return [], {
+                "provider": "tavily",
+                "outcome": "rate_limited",
+                "attempts": 3,
+                "status_code": 429,
+            }
+
+    with pytest.raises(ProviderOperationError):
+        await _engine(_DirectFailedPaidSearch(), docs={}).retrieve(
+            RetrievalRequest(query="direct paid outage", depth="shallow")
+        )
+
+
+async def test_valid_paid_empty_remains_normal_zero_hits():
+    class _EmptyPaidSearch:
+        name = "tavily"
+
+        async def search_detailed(self, query, **kwargs):
+            del query, kwargs
+            return [], {
+                "provider": "tavily",
+                "outcome": "empty",
+                "attempts": 1,
+                "status_code": 200,
+            }
+
+    result = await _engine(_EmptyPaidSearch(), docs={}).retrieve(
+        RetrievalRequest(query="valid empty", depth="shallow")
+    )
+    assert result.all_hits == []
 
 
 async def test_request_local_provider_diagnostics_do_not_cross_concurrent_queries():

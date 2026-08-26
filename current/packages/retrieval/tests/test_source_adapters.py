@@ -270,6 +270,21 @@ class FakeMultiProvider:
         return self._hits[:limit]
 
 
+class DetailedMultiProvider(FakeMultiProvider):
+    def __init__(self, name: str, outcome: str, hits: list[SearchHit] | None = None):
+        super().__init__(name, hits)
+        self.outcome = outcome
+
+    async def search_detailed(self, query: str, **kwargs):
+        hits = await self.search(query, **kwargs)
+        return hits, {
+            "provider": self.name,
+            "outcome": self.outcome,
+            "attempts": 1,
+            "status_code": 429 if self.outcome == "rate_limited" else 200,
+        }
+
+
 async def test_multi_search_fans_out_merges_dedupes_and_ignores_failures():
     provider = MultiSearchProvider(
         (
@@ -334,6 +349,57 @@ async def test_multi_search_fans_out_merges_dedupes_and_ignores_failures():
     shared = hits[1]
     assert shared.title == "Shared best"
     assert shared.source_engine == "arxiv+ddgs"
+
+
+async def test_multi_search_aggregate_distinguishes_empty_partial_and_all_failed():
+    hit_a = SearchHit(url="https://example.com/a", title="A")
+    empty = await MultiSearchProvider(
+        (DetailedMultiProvider("tavily", "empty"),)
+    ).search_detailed("q")
+    assert empty[1]["provider_aggregate"] == "empty"
+
+    partial = await MultiSearchProvider(
+        (
+            DetailedMultiProvider("tavily", "rate_limited"),
+            DetailedMultiProvider("brave", "ok", [hit_a]),
+        )
+    ).search_detailed("q")
+    assert partial[1]["provider_aggregate"] == "partial_outage"
+    assert [hit.url for hit in partial[0]] == [hit_a.url]
+
+    failed = await MultiSearchProvider(
+        (DetailedMultiProvider("tavily", "rate_limited"),)
+    ).search_detailed("q")
+    assert failed[1]["provider_aggregate"] == "all_failed"
+
+
+async def test_legacy_empty_provider_prevents_false_all_failed_aggregate():
+    result = await MultiSearchProvider(
+        (
+            FakeMultiProvider("searxng"),
+            DetailedMultiProvider("tavily", "rate_limited"),
+        )
+    ).search_detailed("q")
+
+    assert result[1]["provider_aggregate"] == "partial_outage"
+
+
+async def test_multi_search_exceptions_are_aggregate_failures():
+    all_failed = await MultiSearchProvider(
+        (
+            FakeMultiProvider("one", raises=True),
+            FakeMultiProvider("two", raises=True),
+        )
+    ).search_detailed("q")
+    assert all_failed[1]["provider_aggregate"] == "all_failed"
+
+    mixed = await MultiSearchProvider(
+        (
+            FakeMultiProvider("legacy-empty"),
+            FakeMultiProvider("broken", raises=True),
+        )
+    ).search_detailed("q")
+    assert mixed[1]["provider_aggregate"] == "partial_outage"
 
 
 class FakeInnerSearchProvider:

@@ -650,6 +650,7 @@ version = "0.1.0"
 source = { editable = "current/packages/app-server" }
 dependencies = [
     { name = "disco-core" },
+    { name = "disco-retrieval" },
     { name = "fastapi" },
     { name = "httpx" },
     { name = "uvicorn" },
@@ -658,6 +659,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "disco-core", editable = "current/packages/core" },
+    { name = "disco-retrieval", editable = "current/packages/retrieval" },
     { name = "fastapi", specifier = ">=0.110" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "uvicorn", specifier = ">=0.30" },

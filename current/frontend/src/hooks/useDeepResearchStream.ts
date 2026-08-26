@@ -16,6 +16,7 @@ import { useEffect, useMemo, useReducer, useRef } from "react";
 import { subscribeConversation, type AgentHandle } from "@/api/agent";
 import {
   deriveAssemblingSections,
+  deriveAppliedSteerIds,
   deriveBrief,
   deriveLiveTrace,
   deriveReport,
@@ -152,7 +153,9 @@ export interface DeepResearchStream {
    * Only call while `status === "RUNNING"` and the WS is open — the control
    * is gated in the surface to enforce this.
    */
-  steer: (text: string) => void;
+  steer: (text: string, steerId?: string) => void;
+  /** IDs acknowledged by durable host-owned steer_applied facts. */
+  appliedSteerIds: string[];
   /**
    * D3 inject-source: fold a plaintext snippet into the DR run's corpus.
    * The server converts the text to a Passage and makes it available to
@@ -215,9 +218,20 @@ export function useDeepResearchStream(
   // Only meaningful while status === "RUNNING".
   // The user-facing control is `DeepSteerInput`, rendered by
   // DeepResearchRunView while the run is live.
-  const steer = (text: string) => {
+  const steer = (text: string, steerId?: string) => {
     const trimmed = text.trim();
-    if (trimmed) handle.current?.send({ type: "steer", steer_text: trimmed });
+    if (trimmed) {
+      // `steer_id` is added to the shared wire union by the parent fan-in. Keep
+      // this lane behind that seam so older clients remain compatible while the
+      // durable acknowledgment can match the exact submitted steer.
+      handle.current?.send(
+        {
+          type: "steer",
+          steer_text: trimmed,
+          ...(steerId ? { steer_id: steerId } : {}),
+        },
+      );
+    }
   };
   // D3: inject-source — sends a plaintext snippet into the DR corpus.
   // v1: text only; URL extraction is a follow-up.
@@ -243,6 +257,10 @@ export function useDeepResearchStream(
     [state.events],
   );
   const sources = useMemo(() => deriveSourceTiers(report), [report]);
+  const appliedSteerIds = useMemo(
+    () => deriveAppliedSteerIds(state.events),
+    [state.events],
+  );
 
   return {
     status: state.status,
@@ -260,6 +278,7 @@ export function useDeepResearchStream(
     resume,
     followUp,
     steer,
+    appliedSteerIds,
     injectSource,
   };
 }

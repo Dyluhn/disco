@@ -277,13 +277,16 @@ def build_steer_hooks(service: DeepResearchService, conversation_id: str):
     queues; the queues are removed in ``run_engine``'s ``finally`` so the
     presence of a key = "a DR run is currently in flight for this cid"."""
 
-    def pop_steers() -> list[str]:
+    def pop_steers() -> list[Any]:
         return service._live_state.pop_steers(conversation_id)
+
+    def ack_steers(steer_ids: list[str]) -> None:
+        service._live_state.ack_steers(conversation_id, steer_ids)
 
     def pop_injected_sources() -> list[Passage]:
         return service._live_state.pop_injected_sources(conversation_id)
 
-    return pop_steers, pop_injected_sources
+    return pop_steers, pop_injected_sources, ack_steers
 
 
 async def run_engine(
@@ -312,7 +315,7 @@ async def run_engine(
 
     # D3: initialise per-cid steer/inject queues on the research owner.
     service._live_state.begin(conversation_id)
-    pop_steers, pop_injected_sources = build_steer_hooks(service, conversation_id)
+    pop_steers, pop_injected_sources, ack_steers = build_steer_hooks(service, conversation_id)
 
     try:
         return await run.run(
@@ -326,6 +329,7 @@ async def run_engine(
             resume_research_trail=resume_research_trail,
             pop_steers=pop_steers,
             pop_injected_sources=pop_injected_sources,
+            ack_steers=ack_steers,
         )
     finally:
         service._cancellations.clear(conversation_id)

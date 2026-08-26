@@ -1,5 +1,4 @@
-"""Slide generation tool — writes rendered slide decks (HTML/PDF/PPTX) to
-the workspace.
+"""Slide generation tool — writes structured authored decks to the workspace.
 
 Primary path (C2): when a ``goal`` is supplied, the staged C2 pipeline
 (outline → fill → assets → lower_deck → C3 render) generates a structured
@@ -9,33 +8,26 @@ plain substitute under the authored-deck request.
 Provider-declared truncation is different: it fails explicitly without rendering
 an incomplete or plain substitute deck.
 
-Marp path: when ``markdown`` mode is explicitly supplied, the tool uses Marp
-CLI (or the pure-HTML fallback when Marp is absent).
-
-Format support:
-  - html: always works (C3 brand HTML, or Marp CLI, or self-contained fallback).
-  - pdf: requires marp + Chromium or LibreOffice in the sandbox image.
-  - pptx: C3 native editable PPTX (real text boxes) via python-pptx; or
-          Marp --pptx (image-based) when the C2 path is not used.
+The model-facing contract is deliberately narrow: ``goal`` is grounded by the
+host's authoritative report, and the structured pipeline emits native editable
+PPTX plus authored JSON and branded HTML preview. The old Markdown splitter is
+kept import-compatible for callers, but is not a selectable product path.
 
 Internal layout
 ----------------
-The C1-deck-render path, the Marp-CLI-in-sandbox helpers, the dependency-free
-markdown-fallback renderer, and the export-render fact stamping all live in
-the private `slides_parts` subpackage (split by real responsibility — see
-`slides_parts/__init__.py`). This module remains the sole public
-compatibility/export facade: it re-imports every name unchanged, so every
-existing import path (production code and tests) keeps working.
+The C1-deck-render path and export-render fact stamping live in the private
+`slides_parts` subpackage (split by real responsibility — see
+`slides_parts/__init__.py`). This module remains the public compatibility
+facade for the small set of legacy helpers still used by callers and tests.
 """
 
 from __future__ import annotations
 
 import re
-import shlex
 from typing import Literal
 
 from disco.core.effects import EffectCapability
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from ..anatomy import Capability, ToolContext, ToolDef, ToolOutcome
 from ..behavior import declares
@@ -56,49 +48,7 @@ from .slides_parts._export_stamp import (
     check_export_render as check_export_render,
 )
 from .slides_parts._markdown_fallback import (
-    _BOLD_RE as _BOLD_RE,
-)
-from .slides_parts._markdown_fallback import (
-    _FENCE_RE as _FENCE_RE,
-)
-from .slides_parts._markdown_fallback import (
-    _IMAGE_RE as _IMAGE_RE,
-)
-from .slides_parts._markdown_fallback import (
-    _INLINE_CODE_RE as _INLINE_CODE_RE,
-)
-from .slides_parts._markdown_fallback import (
-    _ITALIC_RE as _ITALIC_RE,
-)
-from .slides_parts._markdown_fallback import (
-    _LINK_RE as _LINK_RE,
-)
-from .slides_parts._markdown_fallback import (
-    _MARP_MINIMAL_THEME as _MARP_MINIMAL_THEME,
-)
-from .slides_parts._markdown_fallback import (
-    _basic_md_to_html as _basic_md_to_html,
-)
-from .slides_parts._markdown_fallback import (
-    _fallback_html as _fallback_html,
-)
-from .slides_parts._markdown_fallback import (
-    _inline_markdown_to_html as _inline_markdown_to_html,
-)
-from .slides_parts._markdown_fallback import (
     _split_slides as _split_slides,
-)
-from .slides_parts._markdown_fallback import (
-    dedent as dedent,
-)
-from .slides_parts._markdown_fallback import (
-    html as html,
-)
-from .slides_parts._marp_path import (
-    _marp_available as _marp_available,
-)
-from .slides_parts._marp_path import (
-    _marp_render_in_sandbox as _marp_render_in_sandbox,
 )
 
 # ---- args model --------------------------------------------------------------
@@ -107,59 +57,52 @@ from .slides_parts._marp_path import (
 class SlidesGenerateArgs(BaseModel):
     """Arguments for the slides_generate tool."""
 
+    # Legacy markdown/mode inputs stay constructible for compatibility with old
+    # callers, but are not in the generated tool schema and are rejected by run().
+    model_config = ConfigDict(
+        extra="allow",
+        # Keep old direct Python callers diagnosable while preventing the
+        # model-facing JSON schema from advertising arbitrary legacy inputs.
+        json_schema_extra={"additionalProperties": False},
+    )
+
     goal: str | None = Field(
         default=None,
         description=(
-            "REQUIRED for deck generation (unless you supply ``markdown``). The deck's "
+            "REQUIRED for deck generation. The deck's "
             "content AND intent, in natural language — e.g. 'A 7-slide technical brief "
             "on post-training quantization for LLMs: executive summary, the methods "
             "landscape, weight-only vs weight+activation, bit-width as the dominant "
             "degradation driver, model-scale effects, a cross-source comparison, and "
             "limitations'. The C2 pipeline builds a structured, themed, image-bearing "
             "deck from this. This tool CANNOT see the conversation or any research "
-            "report — the content must be in ``goal`` (``theme``, ``slide_count``, and "
-            "``format`` carry no content). Takes priority over ``markdown``."
-        ),
-    )
-    markdown: str = Field(
-        default="",
-        description=(
-            "Marp-compatible markdown source for the slide deck (backward-compat "
-            "path). Use CommonMark with '---' (three dashes on their own line) to "
-            "separate slides. Ignored when ``goal`` is supplied."
+            "report — the content must be supplied by the typed host handoff (``theme``, "
+            "``slide_count``, and ``format`` carry no factual content)."
         ),
     )
     filename: str = Field(
         description=(
-            "Base filename WITHOUT extension (e.g. 'my-deck'). The tool appends "
-            ".html, .pdf, or .pptx based on the format argument."
+            "Base filename WITHOUT extension (e.g. 'my-deck'). The tool writes a "
+            ".pptx plus authored JSON and branded HTML preview."
         )
     )
-    format: str = Field(
+    format: Literal["pptx"] = Field(
         default="pptx",
         description=(
-            "Output format: 'pptx' (default — a presentable, editable deck), 'pdf', or "
-            "'html'. Prefer 'pptx' for a deliverable the user opens/presents; 'html' is a "
-            "self-contained web deck."
+            "Canonical output format: native editable 'pptx'. The tool also emits "
+            "authored JSON and a branded HTML editor preview alongside it."
         ),
     )
     theme: str | None = Field(
         default=None,
-        description="Optional Marp theme CSS to include inline (e.g. custom colors, fonts).",
+        description="Optional branded theme name for the authored deck.",
     )
     slide_count: int = Field(
         default=5,
         ge=2,
         le=30,
         description=(
-            "Approximate number of slides (used by the C2 pipeline; ignored for markdown path)."
-        ),
-    )
-    mode: Literal["deck", "markdown"] = Field(
-        default="deck",
-        description=(
-            "'deck' uses the C2 structured pipeline (default when goal supplied). "
-            "'markdown' forces the Marp/fallback path regardless of goal."
+            "Approximate number of slides used by the structured authored-deck pipeline."
         ),
     )
 
@@ -171,18 +114,15 @@ class SlidesTool:
     definition = ToolDef(
         name="slides_generate",
         description=(
-            "Write a slide deck (HTML/PDF/PPTX) to the workspace.\n\n"
+            "Write a structured authored slide deck (native editable PPTX plus "
+            "authored JSON and branded HTML preview) to the workspace.\n\n"
             "Primary path (recommended): supply ``goal`` (e.g. 'A 6-slide investor "
             "pitch for an EV battery startup') and the C2 pipeline generates a "
             "structured, brand-themed deck automatically (native editable PPTX + "
             "brand HTML). Malformed authored output receives one correction attempt "
             "and then fails without delivering a plain substitute.\n\n"
-            "Markdown path (backward-compat): supply ``markdown`` with '---' slide "
-            "separators; rendered via Marp CLI (image-based PPTX) or the HTML "
-            "fallback. Provider-truncated output fails explicitly instead of being "
-            "misclassified as malformed JSON.\n\n"
-            "Explicit markdown mode can still use Marp. PDF and native PPTX require "
-            "the sandbox toolchain."
+            "Provider-truncated or unavailable structured generation fails explicitly; "
+            "the tool never substitutes Markdown, Marp, or basic HTML."
         ),
         args_model=SlidesGenerateArgs,
         needs=frozenset({Capability.FILESYSTEM}),
@@ -193,17 +133,28 @@ class SlidesTool:
         # The C2 path is two LLM stages (outline + fill) + one image generation PER
         # SLIDE (~10-30s each on a remote backend) + a render. On a real image-rich
         # deck that legitimately runs into minutes; the generic 300s executor cap was
-        # killing it three times over → silent plain-Marp fallback. 15 min headroom.
+        # killing it three times over → incomplete authored output. 15 min headroom.
         timeout_s=900,
     )
 
     def execution_scope(self, args: SlidesGenerateArgs) -> str:
-        if args.goal and args.mode != "markdown":
+        if args.goal:
             return "in_process"
         return "sandbox"
 
     async def run(self, args: SlidesGenerateArgs, ctx: ToolContext) -> ToolOutcome:
         assert ctx.sandbox is not None  # sandbox tools always receive an instance
+
+        legacy = args.model_extra or {}
+        if "markdown" in legacy or "mode" in legacy:
+            return ToolOutcome(
+                success=False,
+                content=(
+                    "Markdown/Marp slide inputs are retired; use the structured "
+                    "authored-deck goal for native PPTX output."
+                ),
+                error="legacy_markdown_slide_path_disabled",
+            )
 
         # Filename hygiene (gauntlet e-web 2026-07-07): the driver passed
         # filename='>residential-…' and every artifact landed with a literal '>'
@@ -225,47 +176,27 @@ class SlidesTool:
             )
 
         fmt = args.format.lower()
-        if fmt not in ("html", "pdf", "pptx"):
+        if fmt != "pptx":
             return ToolOutcome(
                 success=False,
-                content=f"Unsupported format: {fmt!r}. Use 'html', 'pdf', or 'pptx'.",
+                content=f"Unsupported format: {fmt!r}. Only native 'pptx' is supported.",
                 error=f"Unsupported format: {fmt!r}.",
             )
 
-        # NO-CONTENT GUARD (gauntlet root-cause 2026-07-07): the tool has TWO content
-        # sources — `goal` (→ C2 structured pipeline) and `markdown` (→ Marp path) —
-        # and it cannot see the conversation/report. A capable driver sometimes calls
-        # slides_generate with only theme/slide_count/format (deck INTENT) but omits
-        # `goal`; the old `use_c2 = bool(args.goal)` gate then silently fell through to
-        # the Marp path with EMPTY content → a 1-slide, zero-text deck reported as
-        # success (the media-only export-render heuristic passed it). Fail LOUDLY and
-        # actionably instead so the driver re-calls with `goal` populated (→ real deck),
-        # rather than shipping a blank deliverable. Covers mode="markdown" with empty
-        # markdown too — there is genuinely nothing to render either way.
-        if not (args.goal and args.goal.strip()) and not args.markdown.strip():
+        # The only model-facing content source is the structured goal. The host
+        # supplies the authoritative report separately through the typed handoff.
+        if not (args.goal and args.goal.strip()):
             return ToolOutcome(
                 success=False,
                 content=(
-                    f"slides_generate (mode={args.mode!r}) has no deck content to "
-                    "render. Provide `goal` — a "
-                    "natural-language description AND the source content for the deck "
-                    "(the C2 pipeline builds a structured, themed, image-bearing deck "
-                    "from it) — OR `markdown` (Marp source with '---' slide separators). "
-                    "You supplied neither, so there is nothing to turn into slides. This "
-                    "tool CANNOT see the conversation or the research report: you must "
-                    "pass the report's key content/instructions in `goal` (theme, "
-                    "slide_count, and format do not carry any content on their own)."
+                    "slides_generate requires a structured `goal` grounded by the "
+                    "authoritative report. No deck was written."
                 ),
-                error="slides_generate called with neither goal nor markdown content",
+                error="slides_generate requires a structured goal",
             )
 
-        # ---- C2 deck pipeline (primary path when goal is supplied) ----
-        use_c2 = bool(args.goal) and args.mode != "markdown"
-        if use_c2:
-            outcome = await self._run_c2_pipeline(args, ctx, fmt)
-        else:
-            # ---- Marp / markdown path (fallback or explicit mode="markdown") ----
-            outcome = await self._run_marp_path(args, ctx, fmt)
+        # ---- structured authored-deck pipeline ----
+        outcome = await self._run_c2_pipeline(args, ctx, fmt)
 
         # ROOT-4 (slides spiral): completion recognition. A generated deck is a
         # finished BINARY deliverable — once it is written + delivered the agent must
@@ -333,12 +264,14 @@ class SlidesTool:
         except ImageGenNotConfigured:
             backend = None
 
-        c1_deck, fallback_md, err, authored_sidecar, image_stats = await generate_deck(
+        c1_deck, _fallback_md, err, authored_sidecar, image_stats = await generate_deck(
             args.goal,
             args.filename,
             ctx,
             backend,
             slide_count=args.slide_count,
+            source_report=getattr(ctx, "source_report", None),
+            completion=getattr(ctx, "provider_completion", None),
         )
 
         if c1_deck is not None:
@@ -353,29 +286,19 @@ class SlidesTool:
                 image_stats=image_stats,
             )
 
-        # A goal requested the authored C2/C3 product. Never convert its failure
-        # into a successful plain Marp artifact: that changes the deliverable while
-        # claiming completion and caused duplicate, sentence-per-slide decks live.
-        # Explicit mode="markdown" remains the honest way to request Marp.
-        if fallback_md:
-            return ToolOutcome(
-                success=False,
-                content=(
-                    "Authored slide generation failed before delivery; no substitute "
-                    f"deck was written. {err or 'The structured author did not complete.'}"
-                ),
-                error=err or "authored_deck_generation_failed",
-                structured={
-                    "degraded": False,
-                    "renderer": "authored",
-                    "stage": "authoring",
-                },
-            )
-
+        # Never convert a structured failure into a successful lesser product.
         return ToolOutcome(
             success=False,
-            content=f"Deck generation failed: {err}",
+            content=(
+                "Authored slide generation failed before delivery; no substitute deck "
+                f"was written. {err or 'The structured author did not complete.'}"
+            ),
             error=err or "deck_generation_failed",
+            structured={
+                "degraded": False,
+                "renderer": "authored",
+                "stage": "authoring",
+            },
         )
 
     async def _render_c1_deck(
@@ -399,142 +322,4 @@ class SlidesTool:
         and its numbers in `structured.images`."""
         return await _render_c1_deck_impl(
             deck, args, ctx, fmt, editable_source=editable_source, image_stats=image_stats
-        )
-
-    async def _run_marp_path(
-        self, args: SlidesGenerateArgs, ctx: ToolContext, fmt: str
-    ) -> ToolOutcome:
-        """Run the Marp/markdown rendering path."""
-        out_filename = f"{args.filename}.{fmt}"
-
-        # Prepare markdown: inject theme as frontmatter if provided
-        markdown = args.markdown
-        if args.theme:
-            theme_block = f"<!-- theme: custom -->\n<style>\n{args.theme}\n</style>\n\n"
-            markdown = theme_block + markdown
-
-        have_marp = await _marp_available(ctx)
-
-        if fmt == "html":
-            if have_marp:
-                return await self._render_with_marp(markdown, out_filename, fmt, ctx, args)
-            return await self._render_html_fallback(markdown, out_filename, ctx, args)
-
-        if not have_marp:
-            # codex P1 / compat: now that the default format is pptx, a no-goal markdown
-            # caller in a Marp-less sandbox must NOT hard-fail (the old default was html,
-            # which always worked). Degrade to the always-available pure-HTML render so the
-            # default-format change stays compatibility-neutral — a deck is still produced.
-            html_name = out_filename.rsplit(".", 1)[0] + ".html"
-            outcome = await self._render_html_fallback(markdown, html_name, ctx, args)
-            # codex round-2 honesty: make the format DOWNGRADE explicit — the caller asked for
-            # pptx/pdf but Marp is absent, so an HTML deck was produced instead of silently
-            # implying the requested format succeeded.
-            return outcome.model_copy(
-                update={
-                    "content": (
-                        f"{outcome.content}\nNOTE: {fmt.upper()} was requested but the Marp "
-                        f"CLI is unavailable in this sandbox — produced an HTML deck instead."
-                    ),
-                    "structured": {
-                        **(outcome.structured or {}),
-                        "requested_format": fmt,
-                        "degraded_to": "html",
-                    },
-                }
-            )
-
-        return await self._render_with_marp(markdown, out_filename, fmt, ctx, args)
-
-    async def _render_with_marp(
-        self,
-        markdown: str,
-        out_filename: str,
-        fmt: str,
-        ctx: ToolContext,
-        args: SlidesGenerateArgs,
-    ) -> ToolOutcome:
-        """Render via marp INSIDE the sandbox: write the markdown source into the
-        jailed workspace, run marp in-box (output lands directly in the
-        workspace), then clean up the source. No host temp files, no read-back."""
-        assert ctx.sandbox is not None  # slides tool declares runs_in="sandbox"
-        # A hidden workspace-relative source file marp reads (workdir = workspace).
-        src_name = f".{args.filename}.marp-src.md"
-        await ctx.sandbox.write_file(src_name, markdown.encode("utf-8"))
-        try:
-            ok, err = await _marp_render_in_sandbox(ctx, src_name, out_filename, fmt)
-        finally:
-            # Best-effort cleanup of the transient source inside the sandbox.
-            try:
-                await ctx.sandbox.exec_shell(f"rm -f {shlex.quote(src_name)}", timeout_s=10)
-            except Exception:
-                pass
-
-        if not ok:
-            return ToolOutcome(
-                success=False,
-                content=f"Marp render failed: {err}",
-                error=f"Marp render failed: {err}",
-            )
-        # The output already lives in the workspace at out_filename (marp wrote it
-        # there) — jailed by construction; nothing to read back.
-
-        note = ""
-        if fmt == "pptx":
-            note = (
-                "\nNOTE: Marp PPTX output is image-based slides (each slide is a static image). "
-                "Native editable PPTX with real text boxes is available via the C3 renderer "
-                "(_pptx_render.py) when a structured deck is supplied (C2 pipeline)."
-            )
-
-        slide_count = len(_split_slides(args.markdown))
-        return ToolOutcome(
-            success=True,
-            content=(
-                f"Slide deck '{args.filename}' written to {out_filename}\n"
-                f"Format: {fmt.upper()}\n"
-                f"Slides: {slide_count}{note}"
-            ),
-            artifacts=[out_filename],
-            structured={
-                "filename": out_filename,
-                "base_name": args.filename,
-                "format": fmt,
-                "slide_count": slide_count,
-                "renderer": "marp",
-            },
-        )
-
-    async def _render_html_fallback(
-        self,
-        markdown: str,
-        out_filename: str,
-        ctx: ToolContext,
-        args: SlidesGenerateArgs,
-    ) -> ToolOutcome:
-        """Fallback HTML renderer: produces a self-contained HTML deck without
-        Marp. Used when marp CLI is not installed."""
-        assert ctx.sandbox is not None  # slides tool declares runs_in="sandbox"
-        html_content = _fallback_html(markdown, args.theme)
-        html_bytes = html_content.encode("utf-8")
-
-        # Write THROUGH the sandbox.
-        await ctx.sandbox.write_file(out_filename, html_bytes)
-
-        slide_count = len(_split_slides(args.markdown))
-        return ToolOutcome(
-            success=True,
-            content=(
-                f"Slide deck '{args.filename}' written to {out_filename}\n"
-                f"Format: HTML (fallback renderer — marp CLI not found)\n"
-                f"Slides: {slide_count}"
-            ),
-            artifacts=[out_filename],
-            structured={
-                "filename": out_filename,
-                "base_name": args.filename,
-                "format": "html",
-                "slide_count": slide_count,
-                "renderer": "fallback",
-            },
         )

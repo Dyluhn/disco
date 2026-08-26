@@ -479,9 +479,12 @@ class MultiSearchProvider:
         )
         rows_by_provider: list[list[SearchHit]] = []
         diagnostics: dict[str, object] = {}
+        explicit_outcomes: list[str] = []
+        failed_providers = 0
         for provider, result in zip(self._providers, gathered, strict=True):
             provider_name = str(getattr(provider, "name", type(provider).__name__))[:80]
             if isinstance(result, BaseException):
+                failed_providers += 1
                 diagnostics[provider_name] = {"provider_error": type(result).__name__}
                 _LOG.warning(
                     "search provider %s failed: %s: %s",
@@ -493,9 +496,30 @@ class MultiSearchProvider:
             rows, provider_diagnostic = result
             if provider_diagnostic:
                 diagnostics[provider_name] = provider_diagnostic
+            # Legacy providers have no explicit paid-provider outcome; a
+            # completed empty response remains healthy/unknown.
+            if isinstance(provider_diagnostic, dict) and "outcome" in provider_diagnostic:
+                outcome = str(provider_diagnostic["outcome"])
+                explicit_outcomes.append(outcome)
+                if outcome not in {"ok", "empty"}:
+                    failed_providers += 1
             if not rows:
                 continue
             rows_by_provider.append(list(rows))
+        if explicit_outcomes or failed_providers:
+            failed = failed_providers > 0
+            if failed and failed_providers == len(self._providers):
+                aggregate = "all_failed"
+            elif failed:
+                aggregate = "partial_outage"
+            elif rows_by_provider:
+                aggregate = "success"
+            else:
+                aggregate = "empty"
+            return rows_by_provider, {
+                "provider_aggregate": aggregate,
+                "providers": diagnostics,
+            }
         return rows_by_provider, ({"providers": diagnostics} if diagnostics else {})
 
     @staticmethod

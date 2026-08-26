@@ -51,6 +51,40 @@ _TRACE_SECRET_VALUE = re.compile(
 )
 
 
+class ProviderOperationError(RuntimeError):
+    """A configured detailed provider failed every retrieval operation."""
+
+    def __init__(self, diagnostic: object) -> None:
+        self.diagnostic = _trace_diagnostic(diagnostic)
+        super().__init__("configured retrieval provider failed all retrieval operations")
+
+
+_PAID_PROVIDER_NAMES = frozenset({"tavily", "brave", "firecrawl"})
+_NON_FAILURE_OUTCOMES = frozenset({"ok", "empty"})
+
+
+def _is_explicit_provider_failure(diagnostic: object) -> bool:
+    """Recognize only explicit paid-provider or aggregate failure facts.
+
+    Legacy providers intentionally have no outcome field; their empty result
+    is healthy/unknown rather than evidence of an outage.  Multi-provider
+    adapters expose the aggregate beside the provider map, so the classifier
+    accepts that stable top-level fact as well as the flat adapter shape.
+    """
+
+    if not isinstance(diagnostic, dict):
+        return False
+    if diagnostic.get("provider_aggregate") == "all_failed":
+        return True
+    provider = diagnostic.get("provider")
+    outcome = diagnostic.get("outcome")
+    return (
+        provider in _PAID_PROVIDER_NAMES
+        and isinstance(outcome, str)
+        and outcome not in _NON_FAILURE_OUTCOMES
+    )
+
+
 def _trace_text(value: object, limit: int) -> str:
     """Return bounded single-line diagnostic text."""
 
@@ -192,9 +226,21 @@ async def extract_discovered_hits(
     additionally implement ``extract_hits`` when discovery provenance determines
     which extractor can read a result (notably MCP search/fetch pairs).
     """
+    docs, _diagnostic = await extract_discovered_hits_detailed(extraction, hits)
+    return docs
+
+
+async def extract_discovered_hits_detailed(
+    extraction: ExtractionProvider, hits: list[SearchHit]
+) -> tuple[list[ExtractedDoc], object]:
+    """Extract discovered hits and retain an optional bounded provider fact."""
+
     if isinstance(extraction, HitExtractionProvider):
-        return await extraction.extract_hits(hits)
-    return await extraction.extract_many([hit.url for hit in hits])
+        return await extraction.extract_hits(hits), {}
+    detailed = getattr(extraction, "extract_many_detailed", None)
+    if callable(detailed):
+        return await cast(Any, detailed)([hit.url for hit in hits])
+    return await extraction.extract_many([hit.url for hit in hits]), {}
 
 
 def annotate_passage_dates(
@@ -284,6 +330,7 @@ class DefaultRetrievalEngine:
             return [], [], []
         hit_lists: list[list[SearchHit]] = []
         diagnostics: list[object] = []
+        all_provider_failures = 0
         for q in queries:
             detailed = getattr(self._search, "search_detailed", None)
             if callable(detailed):
@@ -303,8 +350,12 @@ class DefaultRetrievalEngine:
                     time_filter=req.recency_window,
                 )
                 diagnostic = {}
+            if _is_explicit_provider_failure(diagnostic):
+                all_provider_failures += 1
             hit_lists.append(hits)
             diagnostics.append(_trace_diagnostic(diagnostic))
+        if queries and all_provider_failures == len(queries):
+            raise ProviderOperationError({"queries": diagnostics})
         return reciprocal_rank_fusion(hit_lists), hit_lists, diagnostics
 
     async def _corpus_passages(self, req: RetrievalRequest) -> list[Passage]:
@@ -323,8 +374,16 @@ class DefaultRetrievalEngine:
         all_hits, raw_hit_lists, provider_diagnostics = await self._discover(req, queries)
         candidate_cap = min(self._candidate_cap, req.extract_cap or self._candidate_cap)
         candidate_hits = all_hits[:candidate_cap]
+        extraction_diagnostic: object = {}
         if candidate_hits:
-            extracted = await extract_discovered_hits(self._extraction, candidate_hits)
+            extracted, extraction_diagnostic = await extract_discovered_hits_detailed(
+                self._extraction, candidate_hits
+            )
+            if (
+                (not extracted or all(not doc.fetched_ok for doc in extracted))
+                and _is_explicit_provider_failure(extraction_diagnostic)
+            ):
+                raise ProviderOperationError({"extraction": extraction_diagnostic})
             extracted = annotate_passage_dates(extracted, candidate_hits)
         else:
             extracted = []
@@ -419,6 +478,11 @@ class DefaultRetrievalEngine:
                         "success": sum(1 for doc in extracted if doc.fetched_ok),
                         "failure": sum(1 for doc in extracted if not doc.fetched_ok),
                         "statuses": extraction_statuses,
+                        **(
+                            {"provider_diagnostic": _trace_diagnostic(extraction_diagnostic)}
+                            if extraction_diagnostic
+                            else {}
+                        ),
                     },
                     "reranked_passage_count": len(ranked),
                 },

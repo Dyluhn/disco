@@ -2,6 +2,11 @@
 import { ChevronDown, SlidersHorizontal } from "lucide-react";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
+import {
+  isResearchAttachmentAccepted,
+  RESEARCH_ATTACHMENT_ACCEPT,
+  RESEARCH_ATTACHMENT_NOTICE,
+} from "@/api/deepResearch";
 import { UploadComposer } from "@/components/build/BuildSurface";
 import { DriverModelNotice } from "@/components/DriverModelNotice";
 import { focusModelControl } from "@/lib/focusModelControl";
@@ -109,7 +114,17 @@ export function DeepResearchComposer({ r, draftValue, setDraftValue, onScopeChan
                   />
                   {/* G1/DR-4: opening options mounts the upload affordance. It
                       creates a conversation only after a real file selection. */}
-                  <UploadComposer cid={r.preCid} ensureCid={r.ensurePreCid} />
+                  <UploadComposer
+                    cid={r.preCid}
+                    ensureCid={r.ensurePreCid}
+                    accept={RESEARCH_ATTACHMENT_ACCEPT}
+                    attachmentTitle={RESEARCH_ATTACHMENT_NOTICE}
+                    validateFiles={(files) =>
+                      files.some((file) => !isResearchAttachmentAccepted(file))
+                        ? RESEARCH_ATTACHMENT_NOTICE
+                        : null
+                    }
+                  />
                 </div>
               )}
               <div className="flex justify-end">

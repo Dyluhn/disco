@@ -179,8 +179,10 @@ class DeepResearchService:
         self._state = state or DeepResearchState()
         self._live_state = live_state or DeepResearchLiveState()
 
-    def enqueue_steer(self, conversation_id: str, text: str) -> bool:
-        return self._live_state.enqueue_steer(conversation_id, text)
+    def enqueue_steer(
+        self, conversation_id: str, text: str, steer_id: str | None = None
+    ) -> bool:
+        return self._live_state.enqueue_steer(conversation_id, text, steer_id)
 
     def inject_source(self, conversation_id: str, passage: Passage) -> bool:
         return self._live_state.inject_source(conversation_id, passage)

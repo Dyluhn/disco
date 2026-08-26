@@ -16,7 +16,12 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { serializeReportToMarkdown } from "@/api/deepResearch";
+import {
+  isResearchAttachmentAccepted,
+  RESEARCH_ATTACHMENT_ACCEPT,
+  RESEARCH_ATTACHMENT_NOTICE,
+  serializeReportToMarkdown,
+} from "@/api/deepResearch";
 import type { ReportEvent } from "@/types/agent";
 import type { exportReport as exportReportFn } from "@/api/deepResearch";
 
@@ -176,6 +181,34 @@ describe("exportReport", () => {
     await expect(exportReport("conv_any", "md")).resolves.toBe(true);
     const [url] = exportCall(stub);
     expect(url).toContain("/conversations/conv_any/report/export?fmt=md");
+  });
+});
+
+describe("research attachment contract", () => {
+  it("advertises exactly the formats the research ingester accepts", () => {
+    expect(RESEARCH_ATTACHMENT_NOTICE).toBe(
+      "Accepted for research: PDF, TXT, Markdown (.md), CSV, and HTML (.html or .htm).",
+    );
+    expect(RESEARCH_ATTACHMENT_ACCEPT).toContain(".pdf");
+    expect(RESEARCH_ATTACHMENT_ACCEPT).toContain(".txt");
+    expect(RESEARCH_ATTACHMENT_ACCEPT).toContain(".md");
+    expect(RESEARCH_ATTACHMENT_ACCEPT).toContain(".csv");
+    expect(RESEARCH_ATTACHMENT_ACCEPT).toContain(".html");
+    expect(RESEARCH_ATTACHMENT_ACCEPT).toContain(".htm");
+    expect(RESEARCH_ATTACHMENT_ACCEPT).not.toContain(".docx");
+  });
+
+  it("rejects unsupported files before upload, including mixed-case names", () => {
+    expect(isResearchAttachmentAccepted(new File(["x"], "REPORT.PDF"))).toBe(true);
+    expect(isResearchAttachmentAccepted(new File(["x"], "notes.md"))).toBe(true);
+    expect(isResearchAttachmentAccepted(new File(["x"], "notes.markdown"))).toBe(false);
+    expect(isResearchAttachmentAccepted(new File(["x"], "notes.docx"))).toBe(false);
+    expect(
+      isResearchAttachmentAccepted(new File(["x"], "notes.docx", { type: "text/plain" })),
+    ).toBe(false);
+    expect(
+      isResearchAttachmentAccepted(new File(["x"], "untitled", { type: "text/plain" })),
+    ).toBe(false);
   });
 });
 

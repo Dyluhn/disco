@@ -34,7 +34,12 @@ afterEach(() => {
 describe("UploadComposer", () => {
   it("renders the paperclip attach button", () => {
     render(<UploadComposer cid="conv_test" />);
-    expect(screen.getByRole("button", { name: /attach files/i })).toBeInTheDocument();
+    const button = screen.getByRole("button", { name: /attach files/i });
+    expect(button).toBeInTheDocument();
+    expect(button).toHaveAttribute("title", "Upload files to uploads/");
+    expect(screen.getByTestId("upload-composer").querySelector("input")).not.toHaveAttribute(
+      "accept",
+    );
   });
 
   it("disables the button when cid is null", () => {

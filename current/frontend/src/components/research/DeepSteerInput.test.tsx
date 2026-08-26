@@ -21,6 +21,7 @@ describe("DeepSteerInput", () => {
 
     expect(onSteer).toHaveBeenCalledExactlyOnceWith(
       "focus on peer-reviewed sources",
+      expect.any(String),
     );
     expect(box).toHaveValue("");
   });
@@ -32,7 +33,25 @@ describe("DeepSteerInput", () => {
     await user.type(screen.getByLabelText("Steer the research"), "check 2026 data");
     await user.click(screen.getByRole("button", { name: "Send steer" }));
 
-    expect(screen.getByRole("status")).toHaveTextContent(/check 2026 data/);
+    expect(screen.getByRole("status")).toHaveTextContent(/Pending delivery.*check 2026 data/i);
+    expect(screen.getByRole("status").querySelector("svg")).toBeInTheDocument();
+  });
+
+  it("shows a green applied check only for the matching durable fact", async () => {
+    const user = userEvent.setup();
+    const onSteer = vi.fn();
+    const { rerender } = render(<DeepSteerInput onSteer={onSteer} appliedSteerIds={[]} />);
+    await user.type(screen.getByLabelText("Steer the research"), "check 2026 data");
+    await user.click(screen.getByRole("button", { name: "Send steer" }));
+    const steerId = onSteer.mock.calls[0][1];
+    expect(steerId).toEqual(expect.any(String));
+    expect(screen.getByRole("status")).toHaveTextContent(/Pending delivery/i);
+
+    rerender(<DeepSteerInput onSteer={onSteer} appliedSteerIds={["other-id"]} />);
+    expect(screen.getByRole("status")).toHaveTextContent(/Pending delivery/i);
+    rerender(<DeepSteerInput onSteer={onSteer} appliedSteerIds={[steerId]} />);
+    expect(screen.getByRole("status")).toHaveTextContent(/Applied to a research turn/i);
+    expect(screen.getByRole("status").querySelector("svg")).toBeInTheDocument();
   });
 
   it("never sends empty or whitespace-only guidance", async () => {

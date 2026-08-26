@@ -11,27 +11,34 @@
  * Only rendered while the run is live — steering a finished report is a
  * follow-up question, which the report view owns.
  */
-import { Send } from "lucide-react";
+import { Check, Loader2, Send } from "lucide-react";
 import { useState } from "react";
 
 interface Props {
-  onSteer: (text: string) => void;
+  onSteer: (text: string, steerId?: string) => void;
   disabled?: boolean;
+  /** Durable host facts, not an optimistic send result. */
+  appliedSteerIds?: readonly string[];
 }
 
-export function DeepSteerInput({ onSteer, disabled }: Props) {
+function newSteerId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `steer-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+export function DeepSteerInput({ onSteer, disabled, appliedSteerIds = [] }: Props) {
   const [text, setText] = useState("");
-  const [sent, setSent] = useState<string | null>(null);
+  const [submitted, setSubmitted] = useState<Array<{ id: string; text: string }>>([]);
 
   const submit = () => {
     const trimmed = text.trim();
     if (!trimmed || disabled) return;
-    onSteer(trimmed);
+    const id = newSteerId();
+    onSteer(trimmed, id);
     setText("");
-    // The agent picks a steer up at its next turn boundary, not instantly;
-    // echo it so the user sees the instruction was accepted rather than
-    // wondering whether the box did anything.
-    setSent(trimmed);
+    setSubmitted((current) => [...current, { id, text: trimmed }]);
   };
 
   return (
@@ -51,23 +58,35 @@ export function DeepSteerInput({ onSteer, disabled }: Props) {
           placeholder="Steer the research — e.g. focus on peer-reviewed sources"
           aria-label="Steer the research"
           data-disco-control="dr-steer-input"
-          className="min-w-0 flex-1 rounded-control border border-border bg-surface px-3 py-1.5 font-ui text-[0.86rem] text-text placeholder:text-text-muted focus:border-accent focus:outline-none disabled:opacity-50"
+          className="min-h-11 min-w-0 flex-1 rounded-control border border-hairline bg-surface-1 px-inline py-hair font-ui text-[0.86rem] text-text outline-none transition-colors placeholder:text-text-faint focus-within:border-hairline-strong focus:border-hairline-strong disabled:opacity-50 lg:min-h-0"
         />
         <button
           type="submit"
           disabled={disabled || !text.trim()}
           aria-label="Send steer"
           data-disco-control="dr-steer-send"
-          className="inline-flex items-center gap-1 rounded-control border border-border px-3 py-1.5 font-ui text-[0.82rem] text-text-muted transition-colors hover:border-accent hover:text-text disabled:cursor-not-allowed disabled:opacity-40"
+          className="inline-flex min-h-11 items-center gap-1 rounded-control border border-hairline bg-surface-1 px-inline py-hair font-ui text-[0.82rem] text-text-muted transition-colors hover:border-hairline-strong hover:text-text disabled:cursor-not-allowed disabled:opacity-40 lg:min-h-0"
         >
           <Send className="size-3.5" aria-hidden />
           Steer
         </button>
       </form>
-      {sent && (
-        <p className="font-ui text-[0.78rem] text-text-muted" role="status">
-          Steering the next research turn: “{sent}”
-        </p>
+      {submitted.length > 0 && (
+        <div className="flex flex-col gap-hair" role="status" aria-live="polite">
+          {submitted.map(({ id, text: steerText }) => {
+            const applied = appliedSteerIds.includes(id);
+            return (
+              <p key={id} className="flex items-center gap-hair font-ui text-[0.78rem] text-text-muted">
+                {applied ? (
+                  <Check className="size-3.5 text-supported" aria-label="applied" />
+                ) : (
+                  <Loader2 className="size-3.5 animate-spin text-accent" aria-label="pending" />
+                )}
+                {applied ? "Applied to a research turn" : "Pending delivery"}: “{steerText}”
+              </p>
+            );
+          })}
+        </div>
       )}
     </div>
   );

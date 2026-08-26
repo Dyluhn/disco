@@ -39,6 +39,13 @@ def _resolve_search_wiring(
     search_url = search_base_url or (
         _env_url(e, "DISCO_SEARXNG_URL") if search_provider == "searxng" else ""
     )
+    if search_provider == "tavily" and search_url.rstrip("/") not in {
+        "",
+        "https://api.tavily.com",
+    }:
+        raise ProviderConfigError(
+            "tavily accepts only the official API origin; refusing a custom keyed endpoint"
+        )
     search_trust_url = {
         "tavily": "https://api.tavily.com",
         "brave": search_url or "https://api.search.brave.com",

@@ -31,6 +31,31 @@ export interface DeepResearchSubmit {
   sources?: string[];
 }
 
+/** The ingestion contract is intentionally narrower than the generic upload
+ * route. Keep this value shared by the picker and the pre-upload validator so
+ * the research affordance cannot advertise files the pipeline ignores. */
+export const RESEARCH_ATTACHMENT_ACCEPT =
+  ".pdf,.txt,.md,.csv,.html,.htm";
+export const RESEARCH_ATTACHMENT_NOTICE =
+  "Accepted for research: PDF, TXT, Markdown (.md), CSV, and HTML (.html or .htm).";
+
+const RESEARCH_ATTACHMENT_EXTENSIONS = new Set([
+  ".pdf",
+  ".txt",
+  ".md",
+  ".csv",
+  ".html",
+  ".htm",
+]);
+
+export function isResearchAttachmentAccepted(file: File): boolean {
+  const name = file.name.toLowerCase();
+  const extension = name.includes(".") ? name.slice(name.lastIndexOf(".")) : "";
+  // The server ingestion contract is extension-based. Matching it exactly is
+  // what prevents a successful upload from later contributing zero corpus.
+  return RESEARCH_ATTACHMENT_EXTENSIONS.has(extension);
+}
+
 /** Fixture cid for offline rendering — the fixture stream replays a canned
  * Deep Research conversation so the UI renders without a live backend. */
 export const FIXTURE_DEEP_CID = "conv_deep_fixture";

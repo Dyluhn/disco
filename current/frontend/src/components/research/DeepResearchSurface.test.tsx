@@ -133,6 +133,13 @@ describe("Deep Research surface — full lifecycle", () => {
     );
     await user.keyboard("{Enter}");
 
+    // Activity is collapsed for live and finished runs; expand it explicitly
+    // before asserting the model brief inside the disclosure body.
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /How it researched/i })).toBeInTheDocument(),
+    );
+    await user.click(screen.getByRole("button", { name: /How it researched/i }));
+
     // The brief — the model's first visible output — arrives with no gate in
     // between. It renders inside the progress strip.
     const brief = await waitFor(

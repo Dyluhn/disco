@@ -12,9 +12,49 @@ from __future__ import annotations
 
 import httpx
 
+
+def _provider_probe_result(
+    root: str,
+    action: str,
+    diagnostic: dict[str, object],
+    *,
+    usable_count: int,
+) -> tuple[bool, str, str]:
+    """Map the retrieval adapter's bounded diagnostic to ProbeResult vocabulary."""
+    outcome = str(diagnostic.get("outcome", "upstream"))
+    status_code = diagnostic.get("status_code")
+    code = f" (HTTP {status_code})" if isinstance(status_code, int) else ""
+    if (
+        outcome == "ok"
+        and usable_count > 0
+        and isinstance(status_code, int)
+        and 200 <= status_code < 300
+    ):
+        return True, "ok", f"{root} parsed {action} successfully ({usable_count} result(s))."
+    if outcome == "auth":
+        return False, "unauthorized", f"{root} rejected the credential{code}."
+    if outcome == "timeout":
+        return False, "unreachable", f"{root} timed out while testing {action}."
+    return False, "error", f"{root} returned no usable {action} ({outcome}{code})."
+
 # A short, fixed budget — a "test" button must feel instant and never hang the
 # settings UI on a black-holed host. Connect + read both bounded.
 _TIMEOUT = httpx.Timeout(6.0, connect=4.0)
+
+
+def _provider_probe_executor(
+    provider: str,
+    transport: httpx.AsyncBaseTransport | None,
+):
+    """Use production request mapping under the Settings button's short SLA."""
+    from disco.retrieval.provider_http import BoundedHttpExecutor, HttpAttemptPolicy
+
+    return BoundedHttpExecutor(
+        provider,
+        transport=transport,
+        policy=HttpAttemptPolicy(deadline_s=6.0, max_attempts=1),
+        concurrency=1,
+    )
 
 
 def _v1(base_url: str, suffix: str) -> str:
@@ -149,10 +189,9 @@ def _classify_vendor_probe(resp: httpx.Response, root: str, action: str) -> tupl
         return True, "ok", f"{root} answered {action} — the key works."
     if resp.status_code == 429:
         return (
-            True,
-            "ok",
-            f"{root} answered 429 (rate-limited) on {action} — the key authenticated; "
-            "you're just over a rate limit right now.",
+            False,
+            "error",
+            f"{root} answered 429 (rate-limited) on {action} — connection test did not succeed.",
         )
     return False, "error", f"{root} answered {resp.status_code} on {action}."
 
@@ -173,21 +212,17 @@ async def probe_brave_search(
     ``httpx.MockTransport``) — production callers never pass it, so the default
     ``None`` makes a real connection.
     """
+    from disco.retrieval.bundled_providers import BraveSearchProvider
+
     root = base_url.rstrip("/")
-    url = f"{root}/res/v1/web/search"
-    headers = {"X-Subscription-Token": api_key} if api_key else {}
-    try:
-        async with httpx.AsyncClient(
-            timeout=_TIMEOUT, transport=transport, trust_env=False, follow_redirects=False
-        ) as client:
-            resp = await client.get(
-                url, params={"q": "disco connectivity test", "count": 1}, headers=headers
-            )
-    except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout) as exc:
-        return False, "unreachable", f"Couldn't reach {root}: {type(exc).__name__}."
-    except httpx.HTTPError as exc:
-        return False, "unreachable", f"Request to {root} failed: {exc}."
-    return _classify_vendor_probe(resp, root, "a real search query")
+    hits, diagnostic = await BraveSearchProvider(
+        api_key or "",
+        base_url=root,
+        executor=_provider_probe_executor("brave", transport),
+    ).search_detailed("disco connectivity test", limit=1)
+    return _provider_probe_result(
+        root, "search result", diagnostic, usable_count=len(hits)
+    )
 
 
 async def probe_tavily_search(
@@ -196,24 +231,30 @@ async def probe_tavily_search(
     api_key: str | None = None,
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> tuple[bool, str, str]:
-    """The REAL Tavily probe: one real query against ``POST {base}/search`` with
-    Tavily's actual auth shape — the key in the JSON body, no header at all.
+    """The REAL Tavily probe through the production retrieval adapter. It makes
+    one real query against ``POST {base}/search`` with Tavily's current Bearer
+    auth shape and requires a parsed hit.
 
     ``transport`` is test-only, see ``probe_brave_search``.
     """
+    from disco.retrieval.bundled_providers import TavilySearchProvider
+
     root = base_url.rstrip("/")
-    url = f"{root}/search"
-    payload = {"api_key": api_key or "", "query": "disco connectivity test", "max_results": 1}
     try:
-        async with httpx.AsyncClient(
-            timeout=_TIMEOUT, transport=transport, trust_env=False, follow_redirects=False
-        ) as client:
-            resp = await client.post(url, json=payload)
-    except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout) as exc:
-        return False, "unreachable", f"Couldn't reach {root}: {type(exc).__name__}."
-    except httpx.HTTPError as exc:
-        return False, "unreachable", f"Request to {root} failed: {exc}."
-    return _classify_vendor_probe(resp, root, "a real search query")
+        hits, diagnostic = await TavilySearchProvider(
+            api_key or "",
+            base_url=root,
+            executor=_provider_probe_executor("tavily", transport),
+        ).search_detailed("disco connectivity test", limit=1)
+    except ValueError:
+        return (
+            False,
+            "misconfigured",
+            "Tavily requires the official API origin https://api.tavily.com.",
+        )
+    return _provider_probe_result(
+        root, "search result", diagnostic, usable_count=len(hits)
+    )
 
 
 async def probe_firecrawl_extract(
@@ -222,22 +263,19 @@ async def probe_firecrawl_extract(
     api_key: str | None = None,
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> tuple[bool, str, str]:
-    """The REAL Firecrawl probe: one real scrape against ``POST {base}/v1/scrape``
-    using Firecrawl's actual auth shape — ``Authorization: Bearer <key>``.
+    """The REAL Firecrawl probe through the production retrieval adapter: one
+    V2 scrape using ``Authorization: Bearer <key>`` and a readable passage.
 
     ``transport`` is test-only, see ``probe_brave_search``.
     """
+    from disco.retrieval.bundled_providers import FirecrawlExtractionProvider
+
     root = base_url.rstrip("/")
-    url = f"{root}/v1/scrape"
-    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
-    payload = {"url": "https://example.com", "formats": ["markdown"]}
-    try:
-        async with httpx.AsyncClient(
-            timeout=_TIMEOUT, transport=transport, trust_env=False, follow_redirects=False
-        ) as client:
-            resp = await client.post(url, json=payload, headers=headers)
-    except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout) as exc:
-        return False, "unreachable", f"Couldn't reach {root}: {type(exc).__name__}."
-    except httpx.HTTPError as exc:
-        return False, "unreachable", f"Request to {root} failed: {exc}."
-    return _classify_vendor_probe(resp, root, "a real scrape request")
+    doc, diagnostic = await FirecrawlExtractionProvider(
+        api_key or "",
+        base_url=root,
+        executor=_provider_probe_executor("firecrawl", transport),
+    ).extract_detailed("https://example.com")
+    return _provider_probe_result(
+        root, "readable passage", diagnostic, usable_count=len(doc.passages)
+    )

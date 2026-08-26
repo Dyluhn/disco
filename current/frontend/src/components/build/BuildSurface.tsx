@@ -20,9 +20,22 @@ interface UploadComposerProps {
    *  pipeline (standard search / deep research / build). Returns null when it
    *  can't create one (offline) → the attach is a no-op rather than a 404. */
   ensureCid?: () => Promise<string | null>;
+  /** Optional input allowlist for surfaces with narrower ingestion contracts. */
+  accept?: string;
+  /** Optional truthful tooltip for a narrowed attachment contract. */
+  attachmentTitle?: string;
+  /** Return user-facing copy to reject a batch before cid creation/upload. */
+  validateFiles?: (files: File[]) => string | null;
 }
 
-export function UploadComposer({ cid, onUploaded, ensureCid }: UploadComposerProps) {
+export function UploadComposer({
+  cid,
+  onUploaded,
+  ensureCid,
+  accept,
+  attachmentTitle = "Upload files to uploads/",
+  validateFiles,
+}: UploadComposerProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const { show } = useToast();
   const [busy, setBusy] = useState(false);
@@ -35,6 +48,12 @@ export function UploadComposer({ cid, onUploaded, ensureCid }: UploadComposerPro
     if (!files) return;
     const list = Array.from(files);
     if (list.length === 0) return;
+    const validationError = validateFiles?.(list);
+    if (validationError) {
+      show({ title: "Attachment rejected", body: validationError, tone: "neutral" });
+      if (inputRef.current) inputRef.current.value = "";
+      return;
+    }
     setBusy(true);
     try {
       // W-07: resolve a target cid — use the existing one, else lazily pre-create
@@ -107,7 +126,7 @@ export function UploadComposer({ cid, onUploaded, ensureCid }: UploadComposerPro
         disabled={busy || !canAttach}
         onClick={() => inputRef.current?.click()}
         aria-label="Attach files"
-        title="Upload files to uploads/"
+        title={attachmentTitle}
         data-disco-control="upload-files"
         className={cn(
           "flex max-lg:min-h-11 items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:text-text disabled:opacity-40",
@@ -122,6 +141,7 @@ export function UploadComposer({ cid, onUploaded, ensureCid }: UploadComposerPro
         id="build-upload-input"
         data-disco-control="build.upload-input"
         type="file"
+        accept={accept}
         multiple
         className="sr-only"
         tabIndex={-1}

@@ -39,8 +39,9 @@ _LOG = logging.getLogger(__name__)
 # Callable types for mid-run steer / inject hooks (D3).
 # Both default to None in every public-API call → the OFF-path is byte-identical
 # to a run without hooks installed.
-PopSteersFn = Callable[[], list[str]] | None
+PopSteersFn = Callable[[], list[Any]] | None
 PopInjectedSourcesFn = Callable[[], list[RetrievalPassage]] | None
+AckSteersFn = Callable[[list[str]], None] | None
 
 # Same EmitFn shape across the submodule. The agent-server installs a callback
 # that takes (event_kind: str, payload: dict) and appends an ActionEvent or
@@ -209,6 +210,7 @@ class DeepResearchRun:
         resume_research_trail: list[dict[str, Any]] | None = None,
         pop_steers: PopSteersFn = None,
         pop_injected_sources: PopInjectedSourcesFn = None,
+        ack_steers: AckSteersFn = None,
     ) -> ReportFromRun:
         """Execute the run. Returns the assembled report. `emit` is awaited
         between phases so the agent-server can write events to the
@@ -251,6 +253,7 @@ class DeepResearchRun:
             should_cancel=should_cancel,
             pop_steers=pop_steers,
             pop_injected_sources=pop_injected_sources,
+            ack_steers=ack_steers,
             recency_window=self._recency_window,
             corpus_ids=self._corpus_ids,
             upload_passages=list(self._upload_passages) or None,

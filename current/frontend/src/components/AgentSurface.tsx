@@ -16,8 +16,7 @@ export function AgentSurface({
   seedContext,
 }: {
   resumeCid?: string | null;
-  // runthru-v2 #7: the report→slides handoff seeds the AGENT surface; forward the
-  // seed task/context to BuildSurface so the deck job actually starts.
+  // Preserve the generic seeded-Agent ingress for callers that explicitly use it.
   seedTask?: string | null;
   seedContext?: string | null;
 } = {}) {

@@ -9,6 +9,7 @@ frames (state → token… → final → state) — the same contract the fixtur
 from __future__ import annotations
 
 from disco.agent_server import ConversationRuntime, create_app
+from disco.agent_server.deep_research_state import DeepResearchLiveState
 from disco.core import SqliteEventStore
 from disco.core.llm import (
     CompletionResponse,
@@ -25,6 +26,22 @@ from disco.retrieval.models import ExtractedDoc, Passage, SearchHit
 from fastapi.testclient import TestClient
 
 _ANSWER = "Paris is the capital of France. [[wiki_p0]]"
+
+
+def test_deep_research_steer_queue_peeks_until_matching_ack() -> None:
+    state = DeepResearchLiveState()
+    state.begin("conv-steer")
+    assert state.enqueue_steer("conv-steer", "focus on risks", "steer-1")
+
+    first = state.pop_steers("conv-steer")
+    second = state.pop_steers("conv-steer")
+    assert [(item.steer_id, item.text) for item in first] == [("steer-1", "focus on risks")]
+    assert [(item.steer_id, item.text) for item in second] == [("steer-1", "focus on risks")]
+
+    state.ack_steers("conv-steer", ["other-id"])
+    assert state.pop_steers("conv-steer")
+    state.ack_steers("conv-steer", ["steer-1"])
+    assert state.pop_steers("conv-steer") == []
 
 
 class _FakeProvider:

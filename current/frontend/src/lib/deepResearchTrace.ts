@@ -152,6 +152,21 @@ export function deriveLiveTrace(
   return computeLiveTrace(events, status);
 }
 
+/** IDs acknowledged by a durable host-owned `steer_applied` action. A steer
+ * remains pending in the composer until this exact ID appears; model prose,
+ * retries, and unrelated actions cannot make it look applied. */
+export function deriveAppliedSteerIds(events: AgentEvent[]): string[] {
+  const ids = new Set<string>();
+  for (const event of events) {
+    if (event.kind !== "action" || event.tool_call?.tool_name !== "steer_applied") {
+      continue;
+    }
+    const id = event.tool_call.arguments.steer_id;
+    if (typeof id === "string" && id.trim()) ids.add(id);
+  }
+  return [...ids];
+}
+
 // ---- source tiers ----------------------------------------------------------
 
 export interface SourceTiers {

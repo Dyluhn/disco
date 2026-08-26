@@ -236,7 +236,9 @@ async def _handle_steer_frame(
     # OFF-path (no DR run active): falls through to the original agent-loop kick,
     # now routed through the pinned Build kernel (A1 finding #1; disco ⇒ identical).
     steer_text = frame.steer_text or ""
-    if runtime is not None and runtime.deep_research.enqueue_steer(conversation_id, steer_text):
+    if runtime is not None and runtime.deep_research.enqueue_steer(
+        conversation_id, steer_text, frame.steer_id
+    ):
         return
     if runtime is not None:
         await runtime.send_user_turn(conversation_id, steer_text, steer=True)

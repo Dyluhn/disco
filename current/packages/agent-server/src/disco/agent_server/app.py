@@ -39,6 +39,7 @@ from .auth import AgentAuthMiddleware, make_auth_router
 from .host_proxy import HostPreviewProxyMiddleware, make_preview_session_resolver
 from .host_service_bus import make_host_service_bus_router
 from .host_token_store import HostTokenStore
+from .report_deck_service import ReportDeckRunService
 from .routes import (
     make_activity_router,
     make_conversation_library_router,
@@ -55,6 +56,7 @@ from .routes import (
     make_probes_router,
     make_projects_router,
     make_release_router,
+    make_report_decks_router,
     make_report_router,
     make_sandbox_router,
     make_schedules_router,
@@ -343,6 +345,13 @@ def _include_routers(
     app.include_router(make_ws_router(store, runtime))
     app.include_router(make_export_router(store, runtime))
     app.include_router(make_report_router(store, runtime))
+    app.include_router(
+        make_report_decks_router(
+            store,
+            runtime,
+            None if runtime is None else ReportDeckRunService(store, runtime).start_port(),
+        )
+    )
     app.include_router(make_share_router(store, runtime))
     app.include_router(make_debug_router(store, runtime))
     app.include_router(make_probes_router(store))

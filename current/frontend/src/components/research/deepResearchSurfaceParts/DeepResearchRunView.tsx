@@ -60,7 +60,9 @@ export function DeepResearchRunView({ r }: Props) {
           until v2 — without this the user can watch the research but not
           redirect it. Live only while the run is, and only when a report has
           not landed (after that, questions are follow-ups). */}
-      {r.status === "RUNNING" && !r.report && <DeepSteerInput onSteer={r.steer} />}
+      {r.status === "RUNNING" && !r.report && (
+        <DeepSteerInput onSteer={r.steer} appliedSteerIds={r.appliedSteerIds} />
+      )}
 
       {/* The bounded-by honest notice — when the engine bounded out */}
       {r.report?.bounded_by && (

@@ -591,8 +591,13 @@ def test_tool_context_has_no_secret_field():
         "assist",  # T1: weak-model-assist gate flag (a bool, not a secret)
         # ROOT-5: (base_url, model_id, api_key_env) — the conversation's effective driver
         # endpoint. The api_key_env is the env-var NAME, NOT the secret value (§6 holds).
-        "driver_llm",
-        # CW-6: the capability-derived file_read page budget (an int, not a secret).
+            "driver_llm",
+            # Host-only canonical completion callback; provider payloads and secrets
+            # remain behind the core router boundary.
+            "provider_completion",
+            # Host-only bounded authoritative report projection for direct deck jobs.
+            "source_report",
+            # CW-6: the capability-derived file_read page budget (an int, not a secret).
         "read_char_budget",
         # P7: the active contract's starter_kit name (e.g. "app_shell") — a str, not a secret.
         "starter_kit",

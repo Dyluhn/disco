@@ -628,7 +628,7 @@ def _make_search(provider: str, base_url: str, api_key: str):
     if provider == "searxng":
         return SearxngSearchProvider(base_url)
     if provider == "tavily":
-        return TavilySearchProvider(api_key)
+        return TavilySearchProvider(api_key, base_url=base_url or "https://api.tavily.com")
     if provider == "brave":
         return BraveSearchProvider(api_key, base_url=base_url or "https://api.search.brave.com")
     if provider == "arxiv":

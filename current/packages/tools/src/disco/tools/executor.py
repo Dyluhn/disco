@@ -25,7 +25,7 @@ from disco.core import ToolCall, ToolResult
 from disco.core.appkit.primitives import PrimitiveLiveVerifier
 from disco.core.contract import ContractScopeGuard
 from disco.core.effects import ActionProfile, EffectCapability
-from disco.core.llm import ModelExecutionPolicy, ToolSpec
+from disco.core.llm import CompletionRequest, CompletionResponse, ModelExecutionPolicy, ToolSpec
 from pydantic import BaseModel
 
 from .anatomy import Tool, ToolContext, ToolDef, ToolOutcome
@@ -74,6 +74,9 @@ class DefaultToolExecutor:
         default_timeout_s: int = 300,
         model_policy: ModelExecutionPolicy = _STANDARD_POLICY,
         driver_llm: tuple[str, str, str | None] | None = None,
+        provider_completion: Callable[[CompletionRequest], Awaitable[CompletionResponse]]
+        | None = None,
+        source_report: str | None = None,
         read_char_budget: int | None = None,
         scope_guard: ContractScopeGuard | None = None,
         on_tool_success: Callable[[str], None] | None = None,
@@ -124,6 +127,8 @@ class DefaultToolExecutor:
         # ROOT-5: the conversation's effective (override-aware) driver endpoint,
         # stamped onto every ToolContext for LLM-using tools (slides_generate).
         self._driver_llm = driver_llm
+        self._provider_completion = provider_completion
+        self._source_report = source_report
         # CW-6: the capability-derived file_read page budget, stamped onto every
         # ToolContext so files.py can read a file that fits the snapshot pin in one
         # shot. None ⇒ files.py uses its static default (assist-ON parity).
@@ -395,6 +400,8 @@ class DefaultToolExecutor:
             conversation_id=self._conversation_id,
             assist=self._model_policy.assist,
             driver_llm=self._driver_llm,
+            provider_completion=self._provider_completion,
+            source_report=self._source_report,
             read_char_budget=self._read_char_budget,
             starter_kit=self._starter_kit,
             workflow_events=self._workflow_events,

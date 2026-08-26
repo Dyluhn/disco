@@ -117,16 +117,22 @@ function makeSseResponse(events: Array<Record<string, unknown>>) {
   };
 }
 
-// A5: spy on navigation + the build-conversation create for the "Build a deck" handoff.
+// A5: spy on navigation + the typed server-owned report-deck job.
 const _navMock = vi.hoisted(() => vi.fn());
 vi.mock("react-router-dom", async (orig) => ({
   ...(await orig<typeof import("react-router-dom")>()),
   useNavigate: () => _navMock,
 }));
-const _createBuild = vi.hoisted(() => vi.fn().mockResolvedValue("conv_new_deck"));
-vi.mock("@/api/agent", async (orig) => ({
-  ...(await orig<typeof import("@/api/agent")>()),
-  createBuildConversation: _createBuild,
+const _startReportDeck = vi.hoisted(() => vi.fn().mockResolvedValue({
+  ok: true,
+  conversation_id: "conv_new_deck",
+  job_id: "conv_new_deck",
+  source_event_id: "evt_report_test",
+  contract: "deck",
+  format: "pptx",
+}));
+vi.mock("@/api/reportDeck", () => ({
+  startReportDeck: _startReportDeck,
 }));
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -225,35 +231,22 @@ describe("NeedMoreCard", () => {
     expect(screen.getByRole("heading", { name: /Need More/i })).toBeInTheDocument();
   });
 
-  // A5: the "Build a deck" handoff creates a conversation on the AGENT surface and
-  // navigates to it with the serialized report as the seed task. runthru-v2 #7 routes
-  // slide-making to the AGENT surface (task framing, not the build/live-preview
-  // framing); W-13 runs it AUTONOMOUS so the seeded slides plan auto-approves —
-  // createBuildConversation(null, "agent", true) + navigate to /agent/<cid>.
-  it("A5/W-13: 'Build a deck' starts an autonomous agent run seeded with the report", async () => {
+  // The server resolves the authoritative report and starts a typed deck job
+  // behind the Agent surface; the client sends only the source conversation id.
+  it("A5: 'Build a deck' starts the typed server-owned report job", async () => {
     const user = userEvent.setup();
     renderCard();
 
     await user.click(screen.getByRole("button", { name: /Build a deck/i }));
 
-    await waitFor(() => expect(_createBuild).toHaveBeenCalledWith(null, "agent", true, null, expect.any(Boolean)));
+    await waitFor(() => expect(_startReportDeck).toHaveBeenCalledWith(STUB_CID));
     await waitFor(() => expect(_navMock).toHaveBeenCalled());
-    const [path, opts] = _navMock.mock.calls[0] as [
-      string,
-      { state: { seedTask: string; seedContext: string } },
-    ];
+    const [path, opts] = _navMock.mock.calls[0] as [string, undefined];
     expect(path).toBe("/agent/conv_new_deck");
-    // R3: the VISIBLE seed is a short one-liner (not the whole report dumped inline).
-    expect(opts.state.seedTask).toMatch(/make slides for the deep research report/i);
-    expect(opts.state.seedTask).not.toContain("# Report");
-    // The serialized report rides along as HIDDEN seedContext (an ENVIRONMENT message).
-    expect(opts.state.seedContext).toContain("# Report");
-    expect(opts.state.seedContext).toMatch(/slides_generate/);
+    expect(opts).toBeUndefined();
   });
 
-  // W-24: the slide handoff lands on the AGENT surface, so the 3-way mode slider
-  // must switch to Agent — otherwise it stayed on Search while Agent rendered.
-  it("W-24: 'Build a deck' switches the mode to Agent", async () => {
+  it("'Build a deck' switches the mode to Agent", async () => {
     const user = userEvent.setup();
     renderCard();
 
@@ -262,7 +255,7 @@ describe("NeedMoreCard", () => {
 
     await user.click(screen.getByRole("button", { name: /Build a deck/i }));
 
-    // After the handoff the mode is Agent (the slider reflects Agent).
+    // The visible task stays in Agent while the host enforces the deck contract.
     await waitFor(() =>
       expect(screen.getByTestId("active-mode")).toHaveTextContent("agent"),
     );

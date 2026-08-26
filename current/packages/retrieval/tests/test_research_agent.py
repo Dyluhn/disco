@@ -20,6 +20,7 @@ from disco.core.llm import (
     StreamChunk,
     TokenUsage,
 )
+from disco.retrieval import DefaultRetrievalEngine, LexicalReranker
 from disco.retrieval.deep_research import agent as agent_mod
 from disco.retrieval.deep_research._budget import SourceBudget
 from disco.retrieval.deep_research.agent import (
@@ -28,12 +29,14 @@ from disco.retrieval.deep_research.agent import (
     run_research_agent,
 )
 from disco.retrieval.deep_research.depth import DepthBound
+from disco.retrieval.engine import ProviderOperationError
 from disco.retrieval.models import (
     Passage,
     RetrievalRequest,
     RetrievalResult,
     SearchHit,
 )
+from research_fakes import FakeExtractionProvider
 
 # ---- doubles ----------------------------------------------------------------
 
@@ -433,6 +436,47 @@ async def test_retrieval_failure_is_observed_and_loop_continues() -> None:
         ResearchAgentError, match="(without usable evidence|malformed research turns)"
     ):
         await _run(router, _FailingRetrieval())
+
+
+async def test_all_paid_provider_failures_end_turn_without_model_pivot() -> None:
+    class _AllPaidFailed:
+        async def retrieve(self, req: RetrievalRequest) -> RetrievalResult:
+            del req
+            raise ProviderOperationError(
+                {
+                    "providers": {
+                        "provider_aggregate": "all_failed",
+                        "tavily": {"outcome": "rate_limited"},
+                    }
+                }
+            )
+
+    router = _TurnRouter([_TURN0, _PIVOT])
+    with pytest.raises(ProviderOperationError):
+        await _run(router, _AllPaidFailed())
+    assert len(router.requests) == 1
+
+
+async def test_direct_tavily_429_ends_turn_without_model_pivot() -> None:
+    class _Direct429Search:
+        name = "tavily"
+
+        async def search_detailed(self, query, **kwargs):
+            del query, kwargs
+            return [], {
+                "provider": "tavily",
+                "outcome": "rate_limited",
+                "attempts": 3,
+                "status_code": 429,
+            }
+
+    retrieval = DefaultRetrievalEngine(
+        _Direct429Search(), FakeExtractionProvider({}), LexicalReranker()
+    )
+    router = _TurnRouter([_TURN0, _PIVOT])
+    with pytest.raises(ProviderOperationError):
+        await _run(router, retrieval)
+    assert len(router.requests) == 1
 
 
 async def test_empty_retrieval_is_an_error_not_a_dead_end_report() -> None:

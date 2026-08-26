@@ -17,6 +17,7 @@ from disco.retrieval.live import (
     SearxngSearchProvider,
     SidecarNLIVerifier,
     TeiReranker,
+    _make_search,
     _resolve_extraction_wiring,
     _resolve_search_wiring,
     build_multi_search,
@@ -159,6 +160,15 @@ def test_build_multi_search_raises_when_requested_sources_are_unconstructible():
 def test_unapproved_search_origin_raises_instead_of_silent_ddgs():
     with pytest.raises(ProviderConfigError, match="approved trust origin"):
         _resolve_search_wiring("tavily", "", "key", "", {}, lambda *_a: False)
+
+
+def test_tavily_custom_base_url_is_rejected_before_keyed_request():
+    with pytest.raises(ValueError, match="official API origin"):
+        _make_search("tavily", "https://proxy.example.test", "key")
+    with pytest.raises(ProviderConfigError, match="official API origin"):
+        _resolve_search_wiring(
+            "tavily", "https://proxy.example.test", "key", "", {}, lambda *_a: True
+        )
 
 
 def test_unapproved_extraction_origin_raises_instead_of_silent_local():

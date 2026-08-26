@@ -10,10 +10,52 @@ patch keeps working regardless of where the implementation itself lives.
 
 from __future__ import annotations
 
-import httpx
+from collections.abc import Awaitable, Callable, Sequence
+from typing import Literal, cast
+
+import httpx  # noqa: F401 - compatibility re-export from the pipeline facade
+from disco.core import LLMMessage
+from disco.core.llm import (
+    CapabilityProfile,
+    CompletionRequest,
+    CompletionResponse,
+    Difficulty,
+    ModelRole,
+)
 
 from ._constants import _VALID_THEMES_STR
 from ._types import LLMResponse, LLMResponseLike, SlidesGenerationIncompleteError
+
+type ProviderCompletion = Callable[[CompletionRequest], Awaitable[CompletionResponse]]
+
+
+def _provider_neutral_request(
+    messages: Sequence[dict[str, str]], *, model: str
+) -> CompletionRequest:
+    """Build the one provider-neutral request used by the slide author.
+
+    ``model`` is retained as opaque metadata for injected adapters. The router
+    remains the authority for concrete model selection; the field is useful to
+    small host seams that already have a pinned model and harmlessly ignored by
+    router-backed callbacks.
+    """
+    return CompletionRequest(
+        profile=CapabilityProfile(
+            role=ModelRole.AGENT_DRIVER,
+            difficulty=Difficulty.HARD,
+        ),
+        messages=[
+            LLMMessage(
+                role=cast(Literal["system", "user", "assistant", "tool"], m["role"]),
+                content=m["content"],
+            )
+            for m in messages
+        ],
+        temperature=0.7,
+        max_tokens=24576,
+        response_format="json",
+        metadata={"slides": True, "requested_model": model},
+    )
 
 
 def _retry_msg(err: str) -> str:
@@ -36,65 +78,29 @@ async def _call_llm(
     model: str,
     *,
     api_key: str | None = None,
+    completion: ProviderCompletion | None = None,
     temperature: float = 0.7,
     max_tokens: int = 24576,
 ) -> LLMResponse:
-    """Call the endpoint without discarding its completion status.
+    """Call the host-provided canonical completion adapter.
 
-    Sends a Bearer Authorization header when `api_key` is provided so a remote
-    driver (OpenRouter / paid endpoint) authenticates; local keyless endpoints
-    pass api_key=None and send no auth header (unchanged).
-
-    Gauntlet run-1 root cause (2026-07-07): reasoning drivers (MiniMax M3) think
-    for minutes on outline/fill-sized prompts — the old 120s cap produced
-    ``httpx.ReadTimeout`` whose ``str()`` is EMPTY, so the degraded note carried a
-    blank reason and every deck silently fell back to the plain renderer. Read
-    timeout is now generous (the deck author is a background step, not a UI
-    turn), timeouts raise with a NAMED reason, and the returned content goes
-    through the canonical think-strip — this raw path bypasses the router, so
-    nothing else removes a reasoning model's ``<think>`` span before JSON
-    parsing."""
-    payload = {
-        "model": model,
-        "messages": messages,
-        "temperature": temperature,
-        "max_tokens": max_tokens,
-    }
-    headers = {"Content-Type": "application/json"}
-    if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
-    data: dict | None = None
-    try:
-        async with httpx.AsyncClient(
-            timeout=httpx.Timeout(600.0, connect=30.0),
-            trust_env=False,
-            follow_redirects=False,
-        ) as client:
-            for attempt in range(2):
-                resp = await client.post(
-                    f"{llm_url}/chat/completions",
-                    json=payload,
-                    headers=headers,
-                )
-                if attempt == 0 and (resp.status_code == 429 or resp.status_code >= 500):
-                    continue
-                resp.raise_for_status()
-                data = resp.json()
-                break
-    except httpx.TimeoutException as e:
+    The old slides-specific HTTP transport is intentionally gone. Production
+    hosts must inject ``DefaultLLMRouter.complete`` through the host-only
+    ``ToolContext`` seam; standalone callers fail closed instead of bypassing
+    provider routing, secrets, policy, or shape normalization.
+    """
+    del llm_url, api_key, temperature, max_tokens
+    if completion is None:
         raise RuntimeError(
-            f"{type(e).__name__} after 600s from {llm_url} (reasoning models can "
-            "exceed short caps; the driver endpoint may be slow or wedged)"
-        ) from e
-    if data is None:  # pragma: no cover - the bounded loop returns or raises
-        raise RuntimeError("slide author returned no response payload")
+            "slides_generate requires the host canonical completion adapter; "
+            "raw slides-specific HTTP is disabled"
+        )
+    response = await completion(_provider_neutral_request(messages, model=model))
     from disco.core.think import strip_think_spans
 
-    choice = data["choices"][0]
-    content = choice["message"].get("content") or ""
     return LLMResponse(
-        content=strip_think_spans(content),
-        finish_reason=choice.get("finish_reason"),
+        content=strip_think_spans(response.text),
+        finish_reason=response.finish_reason,
     )
 
 
@@ -102,7 +108,7 @@ def _complete_response_content(response: LLMResponseLike, *, stage: str) -> str:
     """Return content only when the provider did not report an incomplete stop.
 
     Plain strings remain accepted for test and legacy adapters whose completion
-    status is unknown. The production HTTP adapter always returns ``LLMResponse``.
+    status is unknown. The canonical host adapter always returns ``LLMResponse``.
     """
     if isinstance(response, str):
         return response

@@ -113,6 +113,10 @@ class WSClientFrame(BaseModel):
     # steer: redirect a running agent without losing context (BoD §13.4).
     # Also routes to DR mid-run steer when a DR run is active (see ws.py).
     steer_text: str | None = None
+    # Deep Research uses this client correlation id to acknowledge the exact
+    # steer only after a valid model turn has consumed it. Optional preserves
+    # older Agent/Build clients, whose ordinary steers do not expose delivery UI.
+    steer_id: str | None = None
     # inject_source (D3): plaintext snippet to add to the DR run's corpus.
     inject_source_text: str | None = None
     # sent on (re)connect to request replay of events after this seq.

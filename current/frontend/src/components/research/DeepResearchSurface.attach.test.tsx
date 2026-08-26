@@ -133,4 +133,25 @@ describe("DeepResearchSurface — G1/DR-4 attach (empty state)", () => {
       expect(uploadFiles).toHaveBeenCalledWith("cid_test_deep", [file]),
     );
   });
+
+  it("rejects unsupported research formats before creating a cid or uploading", async () => {
+    const { createDeepResearchConversation } = await import("@/api/deepResearch");
+    const { uploadFiles } = await import("@/api/agent");
+    renderSurface();
+
+    fireEvent.click(screen.getByRole("button", { name: /^Options/ }));
+    const input = document.querySelector(
+      '[data-disco-control="build.upload-input"]',
+    ) as HTMLInputElement;
+    const unsupported = new File(["binary"], "notes.docx", {
+      type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    });
+    fireEvent.change(input, { target: { files: [unsupported] } });
+
+    await waitFor(() => expect(uploadFiles).not.toHaveBeenCalled());
+    expect(createDeepResearchConversation).not.toHaveBeenCalled();
+    expect(
+      screen.getByTitle(/Accepted for research: PDF, TXT, Markdown \(\.md\), CSV, and HTML/i),
+    ).toBeInTheDocument();
+  });
 });

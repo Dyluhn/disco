@@ -171,6 +171,22 @@ def test_data_sources_config_reports_configured_sources(client, state):
     assert "tavily" in body["configured_sources"]
 
 
+def test_data_sources_save_rejects_non_official_tavily_origin(client):
+    response = client.put(
+        "/api/data-sources/config",
+        json={
+            "search_provider": "tavily",
+            "search_base_url": "https://proxy.example.test",
+            "search_api_key_env": "TAVILY_API_KEY",
+            "extraction_provider": "local",
+            "extraction_base_url": "",
+            "extraction_api_key_env": "",
+        },
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"]["reason"] == "invalid_origin"
+
+
 def test_data_source_selfhost_without_url_is_misconfigured(client, state):
     from disco.app_server.config.dtos import DataSourcesConfigDTO
 
@@ -239,7 +255,9 @@ async def test_probe_brave_search_sends_subscription_token_not_bearer():
     def handler(request: httpx.Request) -> httpx.Response:
         captured["url"] = str(request.url)
         captured["headers"] = request.headers
-        return httpx.Response(200, json={"web": {"results": []}})
+        return httpx.Response(
+            200, json={"web": {"results": [{"url": "https://example.com", "title": "Example"}]}}
+        )
 
     ok, status, detail = await probe_brave_search(
         "https://api.search.brave.com",
@@ -275,19 +293,18 @@ async def test_probe_brave_search_bad_key_is_credential_failure_not_reachable():
     assert "rejected" in detail
 
 
-async def test_probe_tavily_search_puts_key_in_json_body():
-    """Tavily's real auth shape is the key inside the JSON body — no header at
-    all — against the real /search endpoint."""
+async def test_probe_tavily_search_uses_bearer_and_requires_a_hit():
+    """Tavily's current auth shape is Bearer, and a parsed hit is required for green."""
     from disco.app_server.probe_clients import probe_tavily_search
 
     captured: dict = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
-        import json
-
         captured["url"] = str(request.url)
-        captured["body"] = json.loads(request.content)
-        return httpx.Response(200, json={"results": []})
+        captured["headers"] = request.headers
+        return httpx.Response(
+            200, json={"results": [{"url": "https://example.com", "title": "Example"}]}
+        )
 
     ok, status, _ = await probe_tavily_search(
         "https://api.tavily.com",
@@ -296,7 +313,7 @@ async def test_probe_tavily_search_puts_key_in_json_body():
     )
     assert ok is True and status == "ok"
     assert captured["url"] == "https://api.tavily.com/search"
-    assert captured["body"]["api_key"] == "tvly-live"
+    assert captured["headers"].get("authorization") == "Bearer tvly-live"
 
 
 async def test_probe_tavily_search_bad_key_is_credential_failure():
@@ -311,9 +328,18 @@ async def test_probe_tavily_search_bad_key_is_credential_failure():
     assert ok is False and status == "unauthorized"
 
 
-async def test_probe_firecrawl_extract_uses_bearer_on_real_scrape_endpoint():
-    """Firecrawl's real auth shape IS `Authorization: Bearer`, but against the
-    real /v1/scrape endpoint, not a bare root GET."""
+async def test_probe_tavily_rejects_custom_root_as_misconfigured():
+    from disco.app_server.probe_clients import probe_tavily_search
+
+    ok, status, detail = await probe_tavily_search(
+        "https://proxy.example.test", api_key="probe-secret"
+    )
+    assert ok is False and status == "misconfigured"
+    assert "official API origin" in detail
+
+
+async def test_probe_firecrawl_extract_uses_bearer_on_v2_scrape_endpoint():
+    """Firecrawl uses Bearer against V2 and requires a readable passage."""
     from disco.app_server.probe_clients import probe_firecrawl_extract
 
     captured: dict = {}
@@ -321,7 +347,16 @@ async def test_probe_firecrawl_extract_uses_bearer_on_real_scrape_endpoint():
     def handler(request: httpx.Request) -> httpx.Response:
         captured["url"] = str(request.url)
         captured["headers"] = request.headers
-        return httpx.Response(200, json={"data": {"markdown": "ok"}})
+        return httpx.Response(
+            200,
+            json={
+                "success": True,
+                "data": {
+                    "markdown": "A readable passage with enough words for citation. " * 3,
+                    "metadata": {"title": "Example"},
+                },
+            },
+        )
 
     ok, status, _ = await probe_firecrawl_extract(
         "https://api.firecrawl.dev",
@@ -329,7 +364,7 @@ async def test_probe_firecrawl_extract_uses_bearer_on_real_scrape_endpoint():
         transport=httpx.MockTransport(handler),
     )
     assert ok is True and status == "ok"
-    assert captured["url"] == "https://api.firecrawl.dev/v1/scrape"
+    assert captured["url"] == "https://api.firecrawl.dev/v2/scrape"
     assert captured["headers"].get("authorization") == "Bearer fc-live"
 
 
@@ -343,6 +378,123 @@ async def test_probe_firecrawl_extract_bad_key_is_credential_failure():
         "https://api.firecrawl.dev", api_key="bad", transport=httpx.MockTransport(handler)
     )
     assert ok is False and status == "unauthorized"
+
+
+@pytest.mark.parametrize(
+    ("probe_name", "response"),
+    [
+        ("tavily", {"results": []}),
+        ("brave", {"web": {"results": []}}),
+        ("firecrawl", {"success": True, "data": {"markdown": ""}}),
+    ],
+)
+async def test_paid_probe_empty_200_is_not_green(probe_name, response):
+    from disco.app_server.probe_clients import (
+        probe_brave_search,
+        probe_firecrawl_extract,
+        probe_tavily_search,
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=response)
+
+    probes = {
+        "tavily": probe_tavily_search,
+        "brave": probe_brave_search,
+        "firecrawl": probe_firecrawl_extract,
+    }
+    root = "https://api.tavily.com" if probe_name == "tavily" else f"https://{probe_name}.example"
+    ok, status, detail = await probes[probe_name](
+        root,
+        api_key="probe-secret",
+        transport=httpx.MockTransport(handler),
+    )
+    assert ok is False and status == "error"
+    assert "probe-secret" not in detail
+
+
+@pytest.mark.parametrize(
+    ("probe_name", "response"),
+    [
+        ("tavily", {"results": [{"url": "https://example.com", "title": "Example"}]}),
+        ("brave", {"web": {"results": [{"url": "https://example.com", "title": "Example"}]}}),
+        (
+            "firecrawl",
+            {
+                "success": True,
+                "data": {
+                    "markdown": "A readable passage with enough words for citation. " * 3,
+                    "metadata": {"title": "Example"},
+                },
+            },
+        ),
+    ],
+)
+async def test_paid_probe_429_is_not_green(probe_name, response):
+    """Settings probes reuse each production adapter but allow only one request.
+
+    A production retry policy would turn this 429 → 200 sequence into a green
+    probe. The Settings-specific single-attempt policy must report the first
+    rate-limited response honestly instead.
+    """
+    from disco.app_server.probe_clients import (
+        probe_brave_search,
+        probe_firecrawl_extract,
+        probe_tavily_search,
+    )
+
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return httpx.Response(429, headers={"Retry-After": "0"})
+        return httpx.Response(200, json=response)
+
+    probes = {
+        "tavily": probe_tavily_search,
+        "brave": probe_brave_search,
+        "firecrawl": probe_firecrawl_extract,
+    }
+    root = "https://api.tavily.com" if probe_name == "tavily" else f"https://{probe_name}.example"
+    ok, status, detail = await probes[probe_name](
+        root,
+        api_key="probe-secret",
+        transport=httpx.MockTransport(handler),
+    )
+    assert calls == 1
+    assert ok is False and status == "error"
+    assert "rate_limited" in detail
+
+
+def test_paid_probe_executor_uses_settings_budget():
+    """Settings probes use one short-lived slot and one bounded attempt."""
+    from disco.app_server.probe_clients import _provider_probe_executor
+
+    for provider in ("brave", "tavily", "firecrawl"):
+        executor = _provider_probe_executor(provider, None)
+        assert executor.policy.deadline_s == 6.0
+        assert executor.policy.max_attempts == 1
+        assert executor.concurrency == 1
+
+
+async def test_paid_probe_redirect_with_usable_body_is_not_green():
+    from disco.app_server.probe_clients import probe_brave_search
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            302,
+            headers={"Location": "https://example.com/next"},
+            json={"web": {"results": [{"url": "https://example.com", "title": "Example"}]}},
+        )
+
+    ok, status, _detail = await probe_brave_search(
+        "https://api.search.brave.com",
+        api_key="probe-secret",
+        transport=httpx.MockTransport(handler),
+    )
+    assert ok is False and status == "error"
 
 
 # ---- route-level: the Settings probe actually dispatches to the vendor-real probe

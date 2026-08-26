@@ -520,6 +520,31 @@ class RunSupervisor:
             )
         return task, generation
 
+    def create_operation_task(
+        self,
+        conversation_id: str,
+        operation: Callable[[], Awaitable[ConversationState]],
+    ) -> tuple[RunTask, int]:
+        """Register one host-owned operation under the normal run lifecycle.
+
+        Direct artifact handoffs already know the exact tool to execute, so they
+        do not need an ``AgentLoop`` or a second scheduler.  They still use the
+        same registry and completion callback as every conversational run.
+        """
+
+        if self._registry.active_task(conversation_id) is not None:
+            raise RuntimeError("conversation already has a live run task")
+
+        async def run_operation() -> ConversationState:
+            return await operation()
+
+        task = asyncio.create_task(run_operation())
+        generation = self._registry.register_task(conversation_id, task)
+        task.add_done_callback(
+            lambda completed: self.on_task_done(conversation_id, completed, generation)
+        )
+        return task, generation
+
     def on_task_done(
         self,
         conversation_id: str,

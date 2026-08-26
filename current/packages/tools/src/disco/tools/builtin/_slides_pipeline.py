@@ -152,6 +152,9 @@ from ._slides_pipeline_parts._json_deck_parse import (
 from ._slides_pipeline_parts._llm_client import (
     LLMResponse as LLMResponse,
 )
+from ._slides_pipeline_parts._llm_client import (
+    ProviderCompletion as ProviderCompletion,
+)
 from ._slides_pipeline_parts._llm_client import _call_llm, _complete_response_content, _retry_msg
 from ._slides_pipeline_parts._llm_client import (
     httpx as httpx,
@@ -196,6 +199,8 @@ async def _stage_outline(
     llm_url: str,
     model: str,
     api_key: str | None = None,
+    source_report: str | None = None,
+    completion: ProviderCompletion | None = None,
 ) -> tuple[AuthoredDeck | None, str, str]:
     """Generate a minimal outline deck (type+title per slide).
 
@@ -206,12 +211,17 @@ async def _stage_outline(
         {
             "role": "user",
             "content": _OUTLINE_USER_TMPL.format(
-                goal=goal, n=slide_count, archetypes=_ARCHETYPES_STR
+                goal=goal,
+                n=slide_count,
+                archetypes=_ARCHETYPES_STR,
+                source_report=source_report or "(No separate report source was supplied.)",
             ),
         },
     ]
     try:
-        response = await _call_llm(messages, llm_url, model, api_key=api_key)
+        response = await _call_llm_with_adapter(
+            messages, llm_url, model, api_key=api_key, completion=completion
+        )
     except Exception as e:  # noqa: BLE001
         return None, "", f"LLM outline call failed: {type(e).__name__}: {e}"
     raw = _complete_response_content(response, stage="outline")
@@ -225,7 +235,9 @@ async def _stage_outline(
     messages.append({"role": "assistant", "content": raw})
     messages.append({"role": "user", "content": _retry_msg(err)})
     try:
-        response2 = await _call_llm(messages, llm_url, model, api_key=api_key)
+        response2 = await _call_llm_with_adapter(
+            messages, llm_url, model, api_key=api_key, completion=completion
+        )
     except Exception as e:  # noqa: BLE001
         return None, raw, f"Outline retry failed: {e}"
     raw2 = _complete_response_content(response2, stage="outline correction")
@@ -247,6 +259,8 @@ async def _stage_fill(
     llm_url: str,
     model: str,
     api_key: str | None = None,
+    source_report: str | None = None,
+    completion: ProviderCompletion | None = None,
 ) -> tuple[AuthoredDeck | None, str]:
     """Fill body/notes/image_prompt for each slide in the outline.
 
@@ -255,10 +269,18 @@ async def _stage_fill(
     outline_json = outline.model_dump_json(indent=2)
     messages = [
         {"role": "system", "content": system_prompt},
-        {"role": "user", "content": _FILL_USER_TMPL.format(outline_json=outline_json)},
+        {
+            "role": "user",
+            "content": _FILL_USER_TMPL.format(
+                outline_json=outline_json,
+                source_report=source_report or "(No separate report source was supplied.)",
+            ),
+        },
     ]
     try:
-        response = await _call_llm(messages, llm_url, model, api_key=api_key)
+        response = await _call_llm_with_adapter(
+            messages, llm_url, model, api_key=api_key, completion=completion
+        )
     except Exception as e:  # noqa: BLE001
         return None, f"LLM fill call failed: {type(e).__name__}: {e}"
     raw = _complete_response_content(response, stage="fill")
@@ -272,7 +294,9 @@ async def _stage_fill(
     messages.append({"role": "assistant", "content": raw})
     messages.append({"role": "user", "content": _retry_msg(err)})
     try:
-        response2 = await _call_llm(messages, llm_url, model, api_key=api_key)
+        response2 = await _call_llm_with_adapter(
+            messages, llm_url, model, api_key=api_key, completion=completion
+        )
     except Exception as e:  # noqa: BLE001
         return None, f"Fill retry failed: {e}"
     raw2 = _complete_response_content(response2, stage="fill correction")
@@ -463,12 +487,13 @@ async def _stage_assets(
 
 
 # ---------------------------------------------------------------------------
-# Fallback markdown generator (used when fill stage fails)
+# Legacy diagnostic helper retained for import compatibility. It is never used
+# as a delivery path; structured generation failures are explicit errors.
 # ---------------------------------------------------------------------------
 
 
 def _outline_to_markdown(outline: AuthoredDeck | None, goal: str) -> str:
-    """Convert an outline (or None) to minimal Marp markdown as a fallback."""
+    """Convert an outline to diagnostic markdown for legacy callers only."""
     if outline is None or not outline.slides:
         # Bare minimum fallback
         return f"# {goal}\n\n---\n\n*Deck generation failed — please try again.*"
@@ -486,6 +511,31 @@ def _outline_to_markdown(outline: AuthoredDeck | None, goal: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+async def _call_llm_with_adapter(
+    messages: list[dict[str, str]],
+    llm_url: str,
+    model: str,
+    *,
+    api_key: str | None,
+    completion: ProviderCompletion | None,
+) -> LLMResponseLike:
+    """Call the injected provider boundary, retaining the legacy HTTP seam.
+
+    Keeping this branch in the pipeline facade means existing monkeypatches of
+    ``_call_llm`` remain valid while host integration can inject the canonical
+    router completion interface.
+    """
+    if completion is None:
+        return await _call_llm(messages, llm_url, model, api_key=api_key)
+    return await _call_llm(
+        messages,
+        llm_url,
+        model,
+        api_key=api_key,
+        completion=completion,
+    )
+
+
 async def generate_deck(
     goal: str,
     filename: str,
@@ -493,6 +543,8 @@ async def generate_deck(
     backend: ImageBackend | None,
     *,
     slide_count: int = 5,
+    source_report: str | None = None,
+    completion: ProviderCompletion | None = None,
 ) -> tuple[Deck | None, str | None, str | None, str | None, ImageGenStats | None]:
     """Run the full C2 generation pipeline.
 
@@ -506,7 +558,7 @@ async def generate_deck(
     generated / failed + first error) for the tool result.
 
     On success: (Deck, None, None, sidecar-or-None, stats)
-    On fill-stage failure: (None, fallback_markdown_str, error_msg, None, None)
+    On any structured-stage failure: (None, None, error_msg, None, None).
     """
     # ROOT-5: honor the CONVERSATION's effective (override-aware) driver model when the
     # executor supplied it — so a deck authored in a conversation that picked a specific
@@ -522,14 +574,14 @@ async def generate_deck(
         cfg = store.load()
         purpose = _purpose_for_model_endpoint(cfg, llm_url, api_key_env)
         if not store.approvals.origin_approved(llm_url, purpose, api_key_env):
-            return None, _outline_to_markdown(None, goal), "LLM origin not approved", None, None
+            return None, None, "LLM origin not approved", None, None
         if not secret_ref_allowed_for_origin(api_key_env, llm_url):
-            return None, _outline_to_markdown(None, goal), "LLM secret_ref not allowed", None, None
+            return None, None, "LLM secret_ref not allowed", None, None
         api_key = _resolve_llm_key(api_key_env)
     else:
         llm_url, model, api_key = _resolve_slides_llm()
     if not llm_url:
-        return None, _outline_to_markdown(None, goal), "LLM origin not approved", None, None
+        return None, None, "LLM origin not approved", None, None
     system = _WEAK_SYSTEM if ctx.assist else _CAPABLE_SYSTEM
 
     # Stage 1: Outline. A provider-declared incomplete response is not ordinary
@@ -537,7 +589,14 @@ async def generate_deck(
     # plain deck that could be mistaken for the requested authored deliverable.
     try:
         outline, _raw_outline, outline_err = await _stage_outline(
-            goal, slide_count, system, llm_url, model, api_key
+            goal,
+            slide_count,
+            system,
+            llm_url,
+            model,
+            api_key,
+            source_report,
+            completion,
         )
     except SlidesGenerationIncompleteError as exc:
         _LOG.error("Slide generation stopped explicitly: %s", exc)
@@ -545,21 +604,27 @@ async def generate_deck(
 
     if outline is None:
         _LOG.warning("Outline stage failed: %s", outline_err)
-        fallback_md = _outline_to_markdown(None, goal)
-        return None, fallback_md, outline_err, None, None
+        return None, None, outline_err, None, None
 
     # Stage 2: Fill uses the same explicit classification. The valid outline is
     # kept in memory only; no sidecar or rendered artifact is written.
     try:
-        filled, fill_err = await _stage_fill(outline, system, llm_url, model, api_key)
+        filled, fill_err = await _stage_fill(
+            outline,
+            system,
+            llm_url,
+            model,
+            api_key,
+            source_report,
+            completion,
+        )
     except SlidesGenerationIncompleteError as exc:
         _LOG.error("Slide generation stopped explicitly: %s", exc)
         return None, None, str(exc), None, None
 
     if filled is None:
-        _LOG.warning("Fill stage failed: %s — using outline as fallback", fill_err)
-        fallback_md = _outline_to_markdown(outline, goal)
-        return None, fallback_md, fill_err, None, None
+        _LOG.warning("Fill stage failed: %s", fill_err)
+        return None, None, fill_err, None, None
 
     # Stage 3: Assets (image_prompt → image bytes + sandbox files)
     image_assets, image_stats = await _stage_assets(filled, ctx, backend, filename)
@@ -574,9 +639,8 @@ async def generate_deck(
             brand_override=await direction_brand_override(ctx),
         )
     except Exception as e:  # noqa: BLE001
-        _LOG.warning("lower_deck failed: %s — falling back to Marp", e)
-        fallback_md = _outline_to_markdown(filled, goal)
-        return None, fallback_md, str(e), None, None
+        _LOG.warning("lower_deck failed: %s", e)
+        return None, None, str(e), None, None
 
     # A2.0: persist the editable AuthoredDeck source alongside the renders so the
     # in-app deck editor (+ deck_patch tool) can read it back. Best-effort: a write

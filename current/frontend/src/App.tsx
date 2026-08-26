@@ -153,9 +153,9 @@ function ResumeProject() {
     setMode("build");
     clearFreshMode("build");
   }, [setMode]);
-  // A5: a "Build a deck from this report" handoff navigates here with the serialized
-  // report in router state — BuildSurface seeds+kicks it ONCE. A plain resume (no
-  // state) just reopens the existing build (view ≠ start).
+  // Legacy callers may navigate here with a seed task in router state;
+  // BuildSurface seeds+kicks it ONCE. A plain resume (no state) just reopens the
+  // existing build (view ≠ start).
   //
   // React Router persists navigation state in window.history.state and RESTORES it on
   // reload, so we capture the seed on first render (ref) and then CLEAR the history
@@ -189,17 +189,14 @@ function ResumeProject() {
  * ResumeProject, agent framing. The stored surface stays "agent"; resume never
  * re-sets it (the WS just replays history-then-live).
  *
- * runthru-v2 #7: the "Build a deck" report→slides handoff now targets the AGENT
- * surface (task framing, not software-dev), so ResumeAgent must capture the
- * seedTask/seedContext from router state + seed-kick ONCE, exactly like
- * ResumeProject — otherwise it landed here without ever starting the deck job. */
+ * Legacy seeded Agent routes still capture seedTask/seedContext from router
+ * state and kick once, exactly like ResumeProject. Typed report-to-deck tasks
+ * are already started by the server and arrive here as plain Agent resumes. */
 function ResumeAgent() {
   const { cid } = useParams<{ cid: string }>();
   const location = useLocation();
   const navigate = useNavigate();
-  // W-24: sync the 3-way mode slider to Agent — the "Build Slides" handoff (and a
-  // direct /agent/:cid open or reload) lands here, and the slider must reflect it
-  // rather than staying on Search/Build.
+  // Sync the 3-way mode slider to Agent on a direct /agent/:cid open or reload.
   const { setMode } = useMode();
   useEffect(() => {
     setMode("agent");

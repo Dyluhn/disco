@@ -19,9 +19,8 @@
  * event counts, and the engine's current phase. It does not invent a planned
  * denominator for work the engine never promised.
  *
- * When the run finishes the strip collapses to a single line: "How it
- * researched · 12 searches · 30 sources · [ ▸ Expand ]". Click to re-open the
- * full trace (transparency preserved, not discarded).
+ * The strip defaults to a single-line disclosure during and after the run.
+ * The user can expand it at any time; incoming activity never resets that choice.
  */
 
 import { ChevronDown, ChevronRight, Loader2 } from "lucide-react";
@@ -152,80 +151,83 @@ function phaseLabel(phase: string): string {
 }
 
 export function DeepProgressStrip({ brief, trace, stats, status, followUpStatus }: Props) {
-  const isFinished = status === "FINISHED" || status === "IDLE";
   // runActive: the research run itself is working (not a follow-up answer).
   // When followUpStatus === "follow_up", the loop re-entered for a follow-up
   // but this strip must stay calm — only the follow-up indicator (WALK-12,
   // separate lane) shows activity.
   const runActive = status === "RUNNING" && followUpStatus !== "follow_up";
-  const [expandedWhenFinished, setExpandedWhenFinished] = useState(false);
-  // Finished reports begin compact. A user can expand the trace explicitly;
-  // active runs stay expanded regardless of the finished-view preference.
-  const collapsed = isFinished && !expandedWhenFinished;
-
-  if (collapsed) {
-    return (
-      <section className="rounded-card border border-hairline bg-surface-1 px-body py-inline">
-        <button
-          type="button"
-          onClick={() => setExpandedWhenFinished(true)}
-          className="group flex min-h-11 w-full items-center gap-inline text-left lg:min-h-0"
-        >
-          <ChevronRight className="size-3.5 text-text-faint transition-colors group-hover:text-text" aria-hidden />
-          <span className="font-ui text-[0.82rem] text-text-muted transition-colors group-hover:text-text">
-            How it researched
-          </span>
-          <span className="ml-auto">
-            <StatsRow stats={stats} status={status} runActive={runActive} />
-          </span>
-        </button>
-      </section>
-    );
-  }
+  // Activity is an optional disclosure for both live and finished runs. Keep
+  // this state local to the mounted strip so event replay/renders cannot reset
+  // a user's choice while the activity feed grows.
+  const [expanded, setExpanded] = useState(false);
+  const collapsed = !expanded;
 
   return (
     <section className="rounded-card border border-hairline bg-surface-1">
-      <header className="flex items-center gap-inline border-b border-hairline px-body py-inline">
-        {isFinished && (
-          <button
-            type="button"
-            onClick={() => setExpandedWhenFinished(false)}
-            className="grid size-11 shrink-0 place-items-center rounded-control border border-hairline text-text-faint transition-colors hover:text-text lg:size-7"
-            aria-label="Collapse progress"
-          >
-            <ChevronDown className="size-3.5" aria-hidden />
-          </button>
+      <header
+        className={cn(
+          "flex items-center gap-inline px-body py-inline",
+          expanded && "border-b border-hairline",
         )}
-        <StatsRow stats={stats} status={status} runActive={runActive} />
+      >
+        <button
+          type="button"
+          onClick={() => setExpanded((open) => !open)}
+          className="group flex min-h-11 w-full items-center gap-inline text-left lg:min-h-0"
+          aria-expanded={expanded}
+          aria-controls="deep-research-activity"
+          aria-label={collapsed ? "How it researched" : "Collapse progress"}
+        >
+          {collapsed ? (
+            <ChevronRight
+              className="size-3.5 shrink-0 text-text-faint transition-colors group-hover:text-text"
+              aria-hidden
+            />
+          ) : (
+            <ChevronDown
+              className="size-3.5 shrink-0 text-text-faint transition-colors group-hover:text-text"
+              aria-hidden
+            />
+          )}
+          <span className="sr-only">{collapsed ? "How it researched" : "Collapse progress"}</span>
+          <span className="shrink-0 font-ui text-[0.78rem] text-text-muted transition-colors group-hover:text-text">
+            Research activity
+          </span>
+          <StatsRow stats={stats} status={status} runActive={runActive} />
+        </button>
       </header>
 
-      {/* The heartbeat — what's happening RIGHT NOW + the engine's latest thought. */}
-      <Heartbeat stats={stats} runActive={runActive} />
+      {!collapsed && (
+        <div id="deep-research-activity">
+          {/* The heartbeat — what's happening RIGHT NOW + the engine's latest thought. */}
+          <Heartbeat stats={stats} runActive={runActive} />
 
-      {/* The brief — the model's own read of the question. First visible
-          output of a gateless run, so it leads the strip's body. */}
-      {brief && (
-        <div className="border-b border-hairline px-body py-body" data-dr-brief="">
-          <div className="mb-inline font-ui text-[0.7rem] font-semibold uppercase tracking-wide text-text-faint">
-            Research brief
-          </div>
-          <p className="font-reading text-[0.86rem] leading-snug text-text-muted">
-            {brief}
-          </p>
-        </div>
-      )}
+          {/* The brief — the model's own read of the question. First visible
+              output of a gateless run, so it leads the strip's body. */}
+          {brief && (
+            <div className="border-b border-hairline px-body py-body" data-dr-brief="">
+              <div className="mb-inline font-ui text-[0.7rem] font-semibold uppercase tracking-wide text-text-faint">
+                Research brief
+              </div>
+              <p className="font-reading text-[0.86rem] leading-snug text-text-muted">
+                {brief}
+              </p>
+            </div>
+          )}
 
-      {/* Live trace — the activity feed. Skipped when there's nothing yet. */}
-      {trace.length > 0 && (
-        <div className="px-body py-body">
-          <div
-            className={cn(
-              "mb-inline font-ui text-[0.7rem] font-semibold uppercase tracking-wide text-text-faint",
-            )}
-          >
-            Live trace
-          </div>
-          <ActivityFeed items={trace} />
+          {/* Live trace — the activity feed. Skipped when there's nothing yet. */}
+          {trace.length > 0 && (
+            <div className="px-body py-body">
+              <div
+                className={cn(
+                  "mb-inline font-ui text-[0.7rem] font-semibold uppercase tracking-wide text-text-faint",
+                )}
+              >
+                Live trace
+              </div>
+              <ActivityFeed items={trace} />
+            </div>
+          )}
         </div>
       )}
     </section>

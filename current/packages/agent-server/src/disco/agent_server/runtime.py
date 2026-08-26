@@ -7,6 +7,7 @@ their owning services.
 
 from __future__ import annotations
 
+import asyncio
 import ctypes
 import ctypes.util
 import gc
@@ -115,6 +116,7 @@ if TYPE_CHECKING:
     from .deep_research_service import DeepResearchService
     from .driver_runtime import DriverPreflight, DriverRuntime
     from .lifecycle import LifecycleManager
+    from .lifecycle_command_service import LifecycleCommandService
     from .lifecycle_idle_sweep import LifecycleIdleSweeper
     from .live_session_directory import LiveSessionDirectory
     from .mcp_manager import McpManager
@@ -123,7 +125,7 @@ if TYPE_CHECKING:
     from .resume_service import ResumeService
     from .run_controller import RunController
     from .run_lifecycle_service import RunLifecycleService
-    from .run_registry import RunRegistry
+    from .run_registry import CancellationRegistry, RunRegistry
     from .run_stranded_sweep import RunStrandedSweep
     from .run_supervisor import (
         RunPersistenceSupervisor,
@@ -230,9 +232,11 @@ class ConversationRuntime:
         workspace: WorkspaceCoordinator
 
         _config_store: ConfigStore
+        _cancellations: CancellationRegistry
         _build_platform: BuildPlatformRuntime
         _driver_preflight: DriverPreflight
         _idle_sweeper: LifecycleIdleSweeper
+        _lifecycle_commands: LifecycleCommandService
         _loop_factory: BuildLoopFactory
         _resume: ResumeService
         _run_execution: RunPersistenceSupervisor
@@ -503,7 +507,18 @@ async def execute_disco_tool(
         tool_call=tool_call,
     )
     await self._store.append(conversation_id, action)
-    result = await executor.execute(tool_call)
+    try:
+        result = await executor.execute(tool_call)
+    except asyncio.CancelledError:
+        await self._store.append(
+            conversation_id,
+            AgentErrorEvent(
+                error="cancelled",
+                action_id=action.id,
+                tool_call_id=tool_call.call_id,
+            ),
+        )
+        raise
     if result.success:
         await self._store.append(
             conversation_id, ObservationEvent(tool_result=result, action_id=action.id)

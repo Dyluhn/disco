@@ -15,6 +15,50 @@ const stats: DeepStats = {
 };
 
 describe("DeepProgressStrip", () => {
+  it("collapses live activity by default and keeps the choice while events arrive", async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <DeepProgressStrip
+        brief="A live research brief"
+        trace={[{ id: "a1", kind: "search", label: "Searching", detail: "first" }]}
+        stats={stats}
+        status="RUNNING"
+        followUpStatus={null}
+      />,
+    );
+
+    const toggle = screen.getByRole("button", { name: /How it researched/i });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(toggle).toHaveAttribute("aria-controls", "deep-research-activity");
+    expect(screen.getByText("Research activity")).toBeVisible();
+    expect(screen.queryByText("A live research brief")).not.toBeInTheDocument();
+
+    await user.click(toggle);
+    expect(screen.getByRole("button", { name: /Collapse progress/i })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+    expect(screen.getByText("A live research brief")).toBeInTheDocument();
+
+    rerender(
+      <DeepProgressStrip
+        brief="A live research brief"
+        trace={[
+          { id: "a1", kind: "search", label: "Searching", detail: "first" },
+          { id: "a2", kind: "search", label: "Searching", detail: "second" },
+        ]}
+        stats={{ ...stats, searches: 5 }}
+        status="RUNNING"
+        followUpStatus={null}
+      />,
+    );
+    expect(screen.getByText("A live research brief")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Collapse progress/i })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+  });
+
   it("collapses completed research by default while preserving an explicit expansion", async () => {
     const user = userEvent.setup();
     render(

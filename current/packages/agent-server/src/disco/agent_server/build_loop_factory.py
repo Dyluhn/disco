@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from collections.abc import Awaitable, Callable
 from typing import Any, cast
 
 from disco.core import (
@@ -14,7 +15,14 @@ from disco.core import (
     current_workspace_agent_view_id,
     latest_workspace_run_intent,
 )
-from disco.core.llm import DefaultLLMRouter, ModelExecutionPolicy, OperatingMode, RouterSummarizer
+from disco.core.llm import (
+    CompletionRequest,
+    CompletionResponse,
+    DefaultLLMRouter,
+    ModelExecutionPolicy,
+    OperatingMode,
+    RouterSummarizer,
+)
 from disco.core.loop import AgentLoop, BuildAgent, NeverConfirm, ResearchAgent, RouterAgent
 from disco.core.security import RuleBasedAnalyzer
 from disco.core.workflow import WorkflowRun, compile_workflow_scope
@@ -64,6 +72,8 @@ from .vision_inspection import VisionInspectionCapability
 from .workflow_events import handle_workflow_tool_event
 
 logger = logging.getLogger(__name__)
+
+ProviderCompletion = Callable[[CompletionRequest], Awaitable[CompletionResponse]]
 
 _BUILD_LIKE_SURFACES = frozenset({"build", "agent"})
 
@@ -266,6 +276,16 @@ class BuildExecutorFactory:
         self._contract = contract
         self._loops = loops
         self._event_store = event_store
+        # Host-only, bounded report projections for direct artifact jobs. The
+        # typed source remains owned by the handoff service; this cache carries
+        # only the serialized prompt projection into the executor context.
+        self._source_reports: dict[str, str] = {}
+
+    def set_source_report(self, conversation_id: str, source_report: str) -> None:
+        self._source_reports[conversation_id] = source_report
+
+    def clear_source_report(self, conversation_id: str) -> None:
+        self._source_reports.pop(conversation_id, None)
 
     def create(
         self,
@@ -274,12 +294,14 @@ class BuildExecutorFactory:
         broker: CapabilityBroker,
         context: ComposeContext,
         sealed_workflow_run: WorkflowRun | None,
+        provider_completion: ProviderCompletion | None = None,
     ) -> DefaultToolExecutor:
         common = self._common_kwargs(
             conversation_id,
             session,
             broker,
             context,
+            provider_completion,
         )
         modes = context.modes
         if modes.appkit_mode:
@@ -298,6 +320,7 @@ class BuildExecutorFactory:
         session: SandboxSession,
         broker: CapabilityBroker,
         context: ComposeContext,
+        provider_completion: ProviderCompletion | None,
     ) -> dict[str, Any]:
         async def execution_admission(agent_view_id: str | None) -> str | None:
             events = agent_view_consistent_events(
@@ -322,6 +345,8 @@ class BuildExecutorFactory:
             "conversation_id": conversation_id,
             "model_policy": policy.model_policy,
             "driver_llm": self._settings._effective_driver_endpoint(conversation_id),
+            "provider_completion": provider_completion,
+            "source_report": self._source_reports.get(conversation_id),
             "read_char_budget": policy.read_char_budget,
             "scope_guard": policy.scope_guard,
             "on_tool_success": policy.on_tool_success,
@@ -443,6 +468,12 @@ class BuildLoopComposer:
         self._resources = resources
         self._assembler = assembler
 
+    def set_source_report(self, conversation_id: str, source_report: str) -> None:
+        self._executors.set_source_report(conversation_id, source_report)
+
+    def clear_source_report(self, conversation_id: str) -> None:
+        self._executors.clear_source_report(conversation_id)
+
     def build_broker(self) -> CapabilityBroker:
         return self._brokers.build()
 
@@ -482,6 +513,7 @@ class BuildLoopComposer:
             self._brokers.build(router=router, conversation_id=conversation_id),
             context,
             sealed_workflow_run,
+            provider_completion=router.complete,
         )
         risks = self._mcp_configurator.configure(
             conversation_id,
@@ -528,6 +560,12 @@ class BuildLoopFactory:
         self._resources = resources
         self._contexts = contexts
         self._mode = mode
+
+    def set_source_report(self, conversation_id: str, source_report: str) -> None:
+        self._composer.set_source_report(conversation_id, source_report)
+
+    def clear_source_report(self, conversation_id: str) -> None:
+        self._composer.clear_source_report(conversation_id)
 
     def build_broker(self) -> CapabilityBroker:
         return self._composer.build_broker()

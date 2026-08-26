@@ -8,12 +8,14 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator
+from types import SimpleNamespace
 from unittest import mock
 
 import httpx
 import pytest
 from disco.agent_server import create_app
-from disco.core import SqliteEventStore
+from disco.agent_server.routes.ws import _handle_steer_frame
+from disco.core import SqliteEventStore, WSClientFrame
 from fastapi.testclient import TestClient
 
 
@@ -390,3 +392,28 @@ def test_steer_over_ws_is_recorded_as_user_message(client):
         assert ev["event"]["source"] == "user"
         assert ev["event"]["message"]["content"] == "focus on Y instead"
         assert ev["event"]["meta"]["steer"] is True
+
+
+@pytest.mark.asyncio
+async def test_steer_route_preserves_id_and_old_clients_omit_it():
+    store = SqliteEventStore(":memory:")
+    enqueue = mock.Mock(return_value=True)
+    runtime = SimpleNamespace(deep_research=SimpleNamespace(enqueue_steer=enqueue))
+
+    await _handle_steer_frame(
+        store,
+        "conv_route",
+        WSClientFrame(type="steer", steer_text="focus on Y instead"),
+        runtime,
+    )
+    await _handle_steer_frame(
+        store,
+        "conv_route",
+        WSClientFrame(type="steer", steer_text="focus on Z", steer_id="steer-9"),
+        runtime,
+    )
+
+    assert enqueue.call_args_list == [
+        mock.call("conv_route", "focus on Y instead", None),
+        mock.call("conv_route", "focus on Z", "steer-9"),
+    ]

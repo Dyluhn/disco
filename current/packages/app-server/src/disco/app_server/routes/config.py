@@ -50,6 +50,15 @@ async def _test_sandbox(state: ConfigState, dto: SandboxConfigDTO) -> ProbeResul
     return await state.sandbox.test_sandbox(dto)
 
 
+def _put_data_sources_config(
+    state: ConfigState, dto: DataSourcesConfigDTO
+) -> DataSourcesConfigDTO:
+    try:
+        return state.features.update_data_sources_config(dto)
+    except ConfigValidationError as exc:
+        raise _validation_error(exc) from exc
+
+
 async def _sandbox_health(state: ConfigState) -> SandboxHealthDTO:
     """Reachability of the ACTIVE (persisted) sandbox backend — the cheap signal the
     app shell polls to surface an unreachable sandbox BEFORE a run is started. Same
@@ -156,7 +165,7 @@ def make_config_router(state: ConfigState) -> APIRouter:
 
     @router.put("/api/data-sources/config")
     async def put_data_sources_config(dto: DataSourcesConfigDTO) -> DataSourcesConfigDTO:
-        return state.features.update_data_sources_config(dto)
+        return _put_data_sources_config(state, dto)
 
     @router.get("/api/role-fallback/config")
     async def get_role_fallback_config() -> RoleFallbackConfigDTO:

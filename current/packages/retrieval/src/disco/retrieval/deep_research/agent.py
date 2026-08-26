@@ -18,7 +18,7 @@ import datetime
 import json
 import re
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Literal
 from urllib.parse import urlparse
@@ -35,7 +35,7 @@ from disco.core.llm import (
 )
 from disco.core.think import strip_think_spans
 
-from ..engine import RetrievalEngine
+from ..engine import ProviderOperationError, RetrievalEngine
 from ..models import Passage, RetrievalRequest, RetrievalResult, SearchHit
 from ..ranking import merge_search_hits
 from ..url_policy import source_url_key
@@ -44,6 +44,7 @@ from .depth import DepthBound
 from .source_identity import distinct_work_count
 
 EmitFn = Callable[[str, dict[str, Any]], Awaitable[None]]
+AckSteersFn = Callable[[list[str]], None] | None
 
 # Module attribute (not a bare `time.monotonic` call site) so hermetic tests
 # can drive the research clock without patching the global `time` module.
@@ -837,10 +838,13 @@ async def _execute_search_turn(
     admitted_this_turn = 0
     yield_reasons: list[str] = []
     failed_queries = 0
+    provider_failures: list[ProviderOperationError] = []
     for query, label, result in zip(queries, labels, results, strict=True):
         state.searches += 1
         if isinstance(result, BaseException):
             failed_queries += 1
+            if isinstance(result, ProviderOperationError):
+                provider_failures.append(result)
             state.trail.append(
                 {
                     "kind": "search",
@@ -921,6 +925,8 @@ async def _execute_search_turn(
                 "yield_reasons": sorted(set(yield_reasons)),
             }
         )
+    if queries and len(provider_failures) == len(queries):
+        raise provider_failures[0]
     if queries and admitted_this_turn == 0:
         reasons = ", ".join(sorted(set(yield_reasons))) or "retrieval failures"
         pivot = (
@@ -938,20 +944,52 @@ async def _execute_search_turn(
 
 def _drain_hooks(
     state: _AgentState,
-    pop_steers: Callable[[], list[str]] | None,
+    pop_steers: Callable[[], list[Any]] | None,
     pop_injected_sources: Callable[[], list[Passage]] | None,
-) -> list[str]:
+) -> tuple[list[str], list[str]]:
     """Drain mid-run steer strings + user-injected passages at the turn
     boundary; both are recorded in the trail. Injected passages are admitted
     directly (user-provided → exempt from the quality filter)."""
-    steers = pop_steers() if pop_steers is not None else []
-    for steer in steers:
-        state.trail.append({"kind": "steer", "text": steer})
+    raw_steers = pop_steers() if pop_steers is not None else []
+    steers: list[str] = []
+    steer_ids: list[str] = []
+    for raw in raw_steers:
+        if isinstance(raw, str):
+            text, steer_id = raw, None
+        elif isinstance(raw, Mapping):
+            text = str(raw.get("text", "") or "")
+            steer_id = raw.get("steer_id")
+        else:
+            text = str(getattr(raw, "text", "") or "")
+            steer_id = getattr(raw, "steer_id", None)
+            if not isinstance(steer_id, str) or not steer_id.strip():
+                steer_id = None
+        if not text.strip():
+            continue
+        steers.append(text)
+        if steer_id is not None:
+            steer_ids.append(steer_id)
+        # ID-bearing steers are intentionally *peeked* until a valid model
+        # turn consumes them. Keep retrying with the same guidance, but record
+        # the audit fact once rather than making malformed responses look like
+        # repeated user steering.
+        already_recorded = steer_id is not None and any(
+            entry.get("kind") == "steer" and entry.get("steer_id") == steer_id
+            for entry in state.trail
+        )
+        if not already_recorded:
+            state.trail.append(
+                {
+                    "kind": "steer",
+                    "text": text,
+                    **({"steer_id": steer_id} if steer_id else {}),
+                }
+            )
     injected = pop_injected_sources() if pop_injected_sources is not None else []
     if injected:
         fresh = state.admit_exempt(injected)
         state.trail.append({"kind": "injected", "count": len(fresh)})
-    return steers
+    return steers, steer_ids
 
 
 async def _handle_parsed_turn(
@@ -1088,8 +1126,9 @@ async def _turn_loop(
     bound: DepthBound,
     emit: EmitFn,
     should_cancel: Callable[[], bool] | None,
-    pop_steers: Callable[[], list[str]] | None,
+    pop_steers: Callable[[], list[Any]] | None,
     pop_injected_sources: Callable[[], list[Passage]] | None,
+    ack_steers: AckSteersFn,
     recency_window: Literal["month", "week"] | None,
     corpus_ids: frozenset[str],
     started: float,
@@ -1120,7 +1159,7 @@ async def _turn_loop(
             if state.pool:
                 return "sources"
             raise ResearchAgentError("research exhausted its source budget without usable evidence")
-        steers = _drain_hooks(state, pop_steers, pop_injected_sources)
+        steers, steer_ids = _drain_hooks(state, pop_steers, pop_injected_sources)
         user_message = _turn_user_message(
             query, state, steers, remaining_s=remaining, total_s=total_s, bound=bound
         )
@@ -1142,6 +1181,15 @@ async def _turn_loop(
             turn += 1
             continue
         malformed_streak = 0
+        if steer_ids:
+            # A valid parse is the only point at which the host can say the
+            # turn consumed the steer. Persist the fact before removing it
+            # from the live queue, so malformed/retried turns keep receiving it.
+            unique_steer_ids = list(dict.fromkeys(steer_ids))
+            for steer_id in unique_steer_ids:
+                await emit("steer_applied", {"steer_id": steer_id})
+            if ack_steers is not None:
+                ack_steers(unique_steer_ids)
         done = await _handle_parsed_turn(
             state,
             parsed,
@@ -1166,8 +1214,9 @@ async def run_research_agent(
     namespace: str,
     emit: EmitFn,
     should_cancel: Callable[[], bool] | None = None,
-    pop_steers: Callable[[], list[str]] | None = None,
+    pop_steers: Callable[[], list[Any]] | None = None,
     pop_injected_sources: Callable[[], list[Passage]] | None = None,
+    ack_steers: AckSteersFn = None,
     recency_window: Literal["month", "week"] | None = None,
     corpus_ids: frozenset[str] = frozenset(),
     upload_passages: list[Passage] | None = None,
@@ -1199,6 +1248,7 @@ async def run_research_agent(
         should_cancel=should_cancel,
         pop_steers=pop_steers,
         pop_injected_sources=pop_injected_sources,
+        ack_steers=ack_steers,
         recency_window=recency_window,
         corpus_ids=corpus_ids,
         started=started,

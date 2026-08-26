@@ -2,12 +2,22 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Literal, TypeVar, cast
+from uuid import uuid4
 
 from disco.retrieval.deep_research import DepthTier
 from disco.retrieval.models import Passage
 
 _T = TypeVar("_T")
+
+
+@dataclass(frozen=True)
+class SteerInput:
+    """One steer retained until a valid model turn consumes it."""
+
+    steer_id: str
+    text: str
 
 
 class DeepResearchState:
@@ -57,7 +67,7 @@ class DeepResearchLiveState:
     """Own inputs queued for an active Deep Research run."""
 
     def __init__(self) -> None:
-        self._steers: dict[str, list[str]] = {}
+        self._steers: dict[str, list[SteerInput]] = {}
         self._injected_sources: dict[str, list[Passage]] = {}
 
     def forget(self, conversation_id: str) -> None:
@@ -68,11 +78,13 @@ class DeepResearchLiveState:
         self._steers[conversation_id] = []
         self._injected_sources[conversation_id] = []
 
-    def enqueue_steer(self, conversation_id: str, text: str) -> bool:
+    def enqueue_steer(
+        self, conversation_id: str, text: str, steer_id: str | None = None
+    ) -> bool:
         queue = self._steers.get(conversation_id)
         if queue is None:
             return False
-        queue.append(text)
+        queue.append(SteerInput(steer_id=steer_id or f"steer-{uuid4().hex}", text=text))
         return True
 
     def inject_source(self, conversation_id: str, passage: Passage) -> bool:
@@ -82,8 +94,19 @@ class DeepResearchLiveState:
         queue.append(passage)
         return True
 
-    def pop_steers(self, conversation_id: str) -> list[str]:
-        return self._drain(self._steers.get(conversation_id))
+    def pop_steers(self, conversation_id: str) -> list[SteerInput]:
+        # Peek, rather than drain: malformed/retried turns must receive the
+        # same steer again until the agent emits the durable applied fact.
+        return list(self._steers.get(conversation_id, ()))
+
+    def ack_steers(self, conversation_id: str, steer_ids: list[str]) -> None:
+        queue = self._steers.get(conversation_id)
+        if not queue or not steer_ids:
+            return
+        acknowledged = set(steer_ids)
+        self._steers[conversation_id] = [
+            item for item in queue if item.steer_id not in acknowledged
+        ]
 
     def pop_injected_sources(self, conversation_id: str) -> list[Passage]:
         return self._drain(self._injected_sources.get(conversation_id))

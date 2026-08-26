@@ -130,10 +130,19 @@ class ConfigFeatures:
         its research providers when these change → effective on the NEXT research run."""
         from disco.core.llm import ExtractionSettings, SearchSettings
 
+        search_base_url = dto.search_base_url.strip()
+        if dto.search_provider == "tavily" and search_base_url.rstrip("/") not in {
+            "",
+            "https://api.tavily.com",
+        }:
+            raise ConfigValidationError(
+                "invalid_origin",
+                detail="Tavily requires the official API origin https://api.tavily.com.",
+            )
         self._store.sections.save_search(
             SearchSettings(
                 provider=dto.search_provider,
-                base_url=dto.search_base_url.strip(),
+                base_url=search_base_url,
                 api_key_env=dto.search_api_key_env.strip(),
             )
         )
@@ -220,8 +229,8 @@ class ConfigFeatures:
         as such, never as a remote "ok". Self-host tiers (searxng/crawl4ai) probe
         the configured base URL for bare reachability. Paid tiers (tavily/brave/
         firecrawl) make a REAL functional call in that vendor's actual auth shape
-        (Brave: X-Subscription-Token header; Tavily: key in the JSON body;
-        Firecrawl: Authorization: Bearer) against the real search/scrape endpoint —
+        (Brave: X-Subscription-Token header; Tavily: Authorization: Bearer;
+        Firecrawl: Authorization: Bearer) through the production retrieval adapters —
         so a bad key is exercised and reported as `unauthorized`, not as a
         root-URL "reachable"."""
         from .probe_clients import (

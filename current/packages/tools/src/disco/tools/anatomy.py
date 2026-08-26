@@ -26,7 +26,7 @@ from disco.core import SecurityRisk
 from disco.core.appkit.primitives import PrimitiveLiveVerifier
 from disco.core.effects import EffectReceipt, ToolBehavior
 from disco.core.events import RuntimeConstraintDeclaration
-from disco.core.llm import ToolSpec
+from disco.core.llm import CompletionRequest, CompletionResponse, ToolSpec
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .release_intent import ReleaseIntentWriter
@@ -74,6 +74,13 @@ class ToolContext(BaseModel):
     # the tool resolves the secret itself. None ⇒ the tool falls back to the global
     # AGENT_DRIVER from ConfigStore (behavior-preserving for non-build executors).
     driver_llm: tuple[str, str, str | None] | None = None
+    # Host-only canonical completion seam for tools that need generation. The
+    # provider-neutral router owns wire-shape normalization; tools never receive
+    # provider payloads or credentials.
+    provider_completion: Callable[[CompletionRequest], Awaitable[CompletionResponse]] | None = None
+    # Host-only bounded authoritative source projection for direct artifact jobs.
+    # It is never model-supplied tool input and is absent for ordinary runs.
+    source_report: str | None = None
     # P7: the active Build contract's starter_kit name (app_shell / lead_form), threaded
     # from the runtime so scaffold_starter materializes THIS build's host-owned starter —
     # active-contract-bound, not a free-for-all. None ⇒ no contract starter for this run.

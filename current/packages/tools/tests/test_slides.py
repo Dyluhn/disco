@@ -1,12 +1,9 @@
 """Unit tests for the slides_generate tool.
 
 Proves:
-  - markdown → slides split (3 '---'-separated slides → 3 slides in output).
-  - HTML path works end-to-end: markdown → HTML deck artifact written to
-    jailed workspace; assert slide count.
-  - marp-absent → PDF/PPTX return clean failure (success=False + message);
-    HTML still succeeds via the fallback.
-  - Format routing: invalid format → clean failure.
+  - legacy markdown helpers still split slides for compatibility.
+  - the model-facing schema rejects non-PPTX and reports legacy inputs explicitly.
+  - structured output stays native PPTX with no basic-HTML degradation.
   - Sandbox-jailed write proven (the sheets.py test pattern): file lands in
     the workspace, NOT host cwd; '../escape' rejected.
   - AGENT_TOOLS registration + scoping.
@@ -23,7 +20,7 @@ from unittest.mock import patch
 
 import pytest
 from disco.core.llm import ModelExecutionPolicy
-from disco.tools.anatomy import Capability, ToolContext
+from disco.tools.anatomy import Capability, ToolContext, ToolOutcome
 from disco.tools.builtin import build_default_registry
 from disco.tools.builtin.slides import (
     SlidesGenerateArgs,
@@ -35,6 +32,7 @@ from disco.tools.registry import agent_scope, research_scope
 from disco.tools.sandbox.base import SandboxSpec
 from disco.tools.sandbox.process import ProcessSandboxInstance
 from disco.tools.secrets import CapabilityBroker
+from pydantic import ValidationError
 from tool_fakes import FakeSandboxInstance, call
 
 
@@ -131,112 +129,12 @@ def test_split_slides_strips_marp_frontmatter():
     assert len(_split_slides("\n---\n# Real\n---\n")) == 1
 
 
-# ---- HTML fallback renderer --------------------------------------------------
-
-
-async def test_html_fallback_writes_artifact(tmp_workspace):
-    """When marp is absent, HTML is rendered via the fallback and lands in the
-    workspace."""
-    tool = SlidesTool()
-    ctx = _ctx(_jailed_sandbox(tmp_workspace))
-
-    with patch("disco.tools.builtin.slides._marp_available", return_value=False):
-        outcome = await tool.run(
-            SlidesGenerateArgs(
-                markdown=_THREE_SLIDE_MD,
-                filename="test-deck",
-                format="html",
-            ),
-            ctx,
-        )
-
-    assert outcome.success, f"Tool failed: {outcome.error}"
-    assert outcome.artifacts == ["test-deck.html"]
-
-    # File landed in workspace
-    file_path = tmp_workspace / "test-deck.html"
-    assert file_path.exists()
-    content = file_path.read_text("utf-8")
-
-    # Basic HTML structure
-    assert "<!DOCTYPE html>" in content
-    assert '<section class="slide"' in content
-    # Three slides
-    assert content.count('<section class="slide"') == 3
-    # Slide content
-    assert "Slide 1" in content
-    assert "Bullet one" in content
-    assert "Final slide" in content
-
-    assert outcome.structured["renderer"] == "fallback"
-    assert outcome.structured["slide_count"] == 3
-
-
-async def test_html_fallback_with_theme(tmp_workspace):
-    """Custom theme CSS is injected into the fallback HTML."""
-    tool = SlidesTool()
-    ctx = _ctx(_jailed_sandbox(tmp_workspace))
-
-    custom_theme = "body { background: #f0f; }"
-
-    with patch("disco.tools.builtin.slides._marp_available", return_value=False):
-        outcome = await tool.run(
-            SlidesGenerateArgs(
-                markdown="# One\n\n---\n\n# Two",
-                filename="themed",
-                format="html",
-                theme=custom_theme,
-            ),
-            ctx,
-        )
-
-    assert outcome.success
-    content = (tmp_workspace / "themed.html").read_text("utf-8")
-    assert "background: #f0f" in content
-
-
-async def test_html_fallback_slide_count_in_result(tmp_workspace):
-    """The structured result reports the correct slide count."""
-    tool = SlidesTool()
-    ctx = _ctx(_jailed_sandbox(tmp_workspace))
-
-    with patch("disco.tools.builtin.slides._marp_available", return_value=False):
-        outcome = await tool.run(
-            SlidesGenerateArgs(
-                markdown=_THREE_SLIDE_MD,
-                filename="count",
-                format="html",
-            ),
-            ctx,
-        )
-
-    assert outcome.success
-    assert outcome.structured["slide_count"] == 3
-    assert "Slides: 3" in outcome.content
-
-
-# ---- format routing ----------------------------------------------------------
-
-
-async def test_invalid_format_rejected(tmp_workspace):
-    """Unknown format returns a clean failure."""
-    tool = SlidesTool()
-    ctx = _ctx(_jailed_sandbox(tmp_workspace))
-
-    outcome = await tool.run(
-        SlidesGenerateArgs(
-            markdown="# Test",
-            filename="bad",
-            format="docx",
-        ),
-        ctx,
-    )
-
-    assert not outcome.success
-    assert "Unsupported format" in outcome.content
-    assert "docx" in outcome.content
-    # No file was written
-    assert not (tmp_workspace / "bad.docx").exists()
+def test_legacy_markdown_and_format_inputs_are_rejected():
+    """The model-facing schema cannot select Marp or a non-PPTX product."""
+    legacy = SlidesGenerateArgs(markdown=_THREE_SLIDE_MD, filename="test-deck", format="pptx")
+    assert "markdown" in (legacy.model_extra or {})
+    with pytest.raises(ValidationError, match="format"):
+        SlidesGenerateArgs(goal="A deck", filename="bad", format="html")
 
 
 async def test_no_content_fails_loudly_instead_of_blank_deck(tmp_workspace):
@@ -261,91 +159,31 @@ async def test_no_content_fails_loudly_instead_of_blank_deck(tmp_workspace):
 
     assert not outcome.success
     assert "goal" in outcome.content
-    assert outcome.error and "neither goal nor markdown" in outcome.error
+    assert outcome.error and "requires a structured goal" in outcome.error
     # Critically: NOTHING was written — no blank deck shipped.
     assert not (tmp_workspace / "ptq-llm-deep-research.pptx").exists()
     assert not (tmp_workspace / "ptq-llm-deep-research.html").exists()
 
 
-async def test_hostile_filename_chars_stripped(tmp_workspace):
-    """Gauntlet e-web (2026-07-07): the driver passed filename='>deck-name' and every
-    artifact landed with a literal '>' prefix. OS/shell-hostile chars are stripped;
-    the sanitized name is used for all artifacts."""
-    tool = SlidesTool()
-    ctx = _ctx(_jailed_sandbox(tmp_workspace))
-
-    with patch("disco.tools.builtin.slides._marp_available", return_value=False):
-        outcome = await tool.run(
-            SlidesGenerateArgs(markdown=_THREE_SLIDE_MD, filename=">my|deck?", format="html"),
-            ctx,
-        )
-
-    assert outcome.success
-    assert (tmp_workspace / "mydeck.html").exists()
-    assert not any(p.name.startswith(">") for p in tmp_workspace.iterdir())
+def test_legacy_markdown_filename_is_rejected():
+    legacy = SlidesGenerateArgs(markdown=_THREE_SLIDE_MD, filename=">my|deck?", format="pptx")
+    assert "markdown" in (legacy.model_extra or {})
 
 
-async def test_all_invalid_filename_rejected(tmp_workspace):
-    """A filename that is NOTHING BUT invalid characters fails loudly."""
-    tool = SlidesTool()
-    ctx = _ctx(_jailed_sandbox(tmp_workspace))
-    outcome = await tool.run(
-        SlidesGenerateArgs(markdown=_THREE_SLIDE_MD, filename=">>??", format="html"), ctx
+def test_legacy_mode_is_rejected_explicitly():
+    legacy = SlidesGenerateArgs(
+        markdown="   \n  ", filename="empty", format="pptx", mode="markdown"
     )
-    assert not outcome.success
-    assert "invalid" in (outcome.error or "")
+    assert set(legacy.model_extra or {}) == {"markdown", "mode"}
 
 
-async def test_whitespace_markdown_also_refused(tmp_workspace):
-    """mode='markdown' with effectively-empty markdown is the same no-content case."""
-    tool = SlidesTool()
-    ctx = _ctx(_jailed_sandbox(tmp_workspace))
-
-    outcome = await tool.run(
-        SlidesGenerateArgs(markdown="   \n  ", filename="empty", format="pptx", mode="markdown"),
-        ctx,
-    )
-
-    assert not outcome.success
-    assert not (tmp_workspace / "empty.pptx").exists()
-
-
-# ---- marp-absent clean failures ----------------------------------------------
-
-
-async def test_pdf_degrades_to_html_when_marp_absent(tmp_workspace):
-    """codex P1 / compat: now that the default format is pptx, a no-goal markdown caller in a
-    Marp-less sandbox must NOT hard-fail. pdf/pptx DEGRADE to the always-available HTML deck —
-    honestly written as `deck.html` (not a fake .pdf), so the deck is still produced."""
-    tool = SlidesTool()
-    ctx = _ctx(_jailed_sandbox(tmp_workspace))
-
-    with patch("disco.tools.builtin.slides._marp_available", return_value=False):
-        outcome = await tool.run(
-            SlidesGenerateArgs(markdown=_THREE_SLIDE_MD, filename="deck", format="pdf"),
-            ctx,
-        )
-
-    assert outcome.success
-    # an HTML deck was produced (honest extension), NOT a fake .pdf
-    assert (tmp_workspace / "deck.html").exists()
-    assert not (tmp_workspace / "deck.pdf").exists()
-
-
-async def test_pptx_degrades_to_html_when_marp_absent(tmp_workspace):
-    """PPTX likewise degrades to an HTML deck when Marp is absent (no hard-fail)."""
-    tool = SlidesTool()
-    ctx = _ctx(_jailed_sandbox(tmp_workspace))
-
-    with patch("disco.tools.builtin.slides._marp_available", return_value=False):
-        outcome = await tool.run(
-            SlidesGenerateArgs(markdown=_THREE_SLIDE_MD, filename="deck", format="pptx"),
-            ctx,
-        )
-
-    assert outcome.success
-    assert (tmp_workspace / "deck.html").exists()
-    assert not (tmp_workspace / "deck.pptx").exists()
+@pytest.mark.asyncio
+async def test_legacy_markdown_runtime_returns_explicit_error(tmp_workspace):
+    args = SlidesGenerateArgs(markdown="# Legacy", filename="legacy", format="pptx")
+    outcome = await SlidesTool().run(args, _ctx(_jailed_sandbox(tmp_workspace)))
+    assert outcome.success is False
+    assert outcome.error == "legacy_markdown_slide_path_disabled"
+    assert outcome.artifacts == []
 
 
 # ---- sandbox-jailed write ----------------------------------------------------
@@ -362,52 +200,26 @@ async def test_path_traversal_filename_rejected(tmp_workspace):
         sandbox=_jailed_sandbox(tmp_workspace),
     )
 
-    escape_target = tmp_workspace.parent / "escape.html"
+    escape_target = tmp_workspace.parent / "escape.pptx"
     assert not escape_target.exists()
 
     res = await ex.execute(
         call(
             "slides_generate",
-            markdown="# Test",
+            goal="Test",
             filename="../escape",
-            format="html",
+            format="pptx",
         )
     )
 
-    # With marp absent, the fallback HTML path is taken — its sandbox.write_file
-    # will reject the ../ path.
+    # Filename hygiene rejects traversal before any renderer writes.
     assert res.success is False
     assert not escape_target.exists(), "no file may be written outside the workspace"
 
 
-async def test_file_lands_in_workspace_not_host_cwd(tmp_workspace):
-    """Prove the artifact lands INSIDE the jailed workspace, not the host's CWD."""
-    tool = SlidesTool()
-    sbx = _jailed_sandbox(tmp_workspace)
-    ctx = _ctx(sbx)
-
-    with patch("disco.tools.builtin.slides._marp_available", return_value=False):
-        outcome = await tool.run(
-            SlidesGenerateArgs(
-                markdown="# Hello",
-                filename="host-cwd-test",
-                format="html",
-            ),
-            ctx,
-        )
-
-    assert outcome.success
-    assert outcome.artifacts == ["host-cwd-test.html"]
-
-    # File must exist in the TEMP workspace, not the current directory
-    assert (tmp_workspace / "host-cwd-test.html").exists(), (
-        "artifact must be written to jail workspace"
-    )
-    # The host CWD (the test's working dir) should NOT have this file
-    cwd_file = Path.cwd() / "host-cwd-test.html"
-    assert not cwd_file.exists(), (
-        f"artifact leaked to host CWD: {cwd_file} — must only be in workspace"
-    )
+def test_legacy_markdown_never_reaches_workspace_renderer():
+    legacy = SlidesGenerateArgs(markdown="# Hello", filename="host-cwd-test", format="pptx")
+    assert "markdown" in (legacy.model_extra or {})
 
 
 async def test_result_carries_delivery_note_and_real_paths(tmp_workspace):
@@ -418,10 +230,16 @@ async def test_result_carries_delivery_note_and_real_paths(tmp_workspace):
     sbx = _jailed_sandbox(tmp_workspace)
     ctx = _ctx(sbx)
 
-    with patch("disco.tools.builtin.slides._marp_available", return_value=False):
+    async def fake_c2(args, fake_ctx, fmt):
+        del args, fmt
+        await fake_ctx.sandbox.write_file("deck.pptx", b"not-a-real-pptx")
+        return ToolOutcome(
+            success=True, content="deck ready", artifacts=["deck.pptx"], structured={}
+        )
+
+    with patch.object(SlidesTool, "_run_c2_pipeline", side_effect=fake_c2):
         outcome = await tool.run(
-            SlidesGenerateArgs(markdown="# Hello", filename="deck", format="html"),
-            ctx,
+            SlidesGenerateArgs(goal="A deck", filename="deck", format="pptx"), ctx
         )
 
     assert outcome.success
@@ -430,10 +248,10 @@ async def test_result_carries_delivery_note_and_real_paths(tmp_workspace):
     assert "no further" in outcome.content.lower()
     assert "finish" in outcome.content.lower()
     # The REAL absolute on-disk path is included (so no /workspace shell hunt).
-    expected = str(tmp_workspace.resolve() / "deck.html")
+    expected = str(tmp_workspace.resolve() / "deck.pptx")
     assert expected in outcome.content
     # The note does not disturb the artifacts list.
-    assert outcome.artifacts == ["deck.html"]
+    assert "deck.pptx" in outcome.artifacts
 
 
 # ---- AGENT_TOOLS registration + scoping --------------------------------------
