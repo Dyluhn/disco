@@ -213,54 +213,42 @@ class ReferencePackBindingStore:
         with packs.mutation_lock():
             return self._bind(owner_id, conversation_id, selections, packs=packs)
 
-    def _bind(
-        self,
-        owner_id: str,
-        conversation_id: str,
+    @staticmethod
+    def _parse_selections(
         selections: Iterable[ReferencePackSelection | Mapping[str, Any] | str],
-        *,
-        packs: ReferencePackStore,
-    ) -> ReferencePackBinding:
+    ) -> list[ReferencePackSelection]:
         parsed: list[ReferencePackSelection] = []
         for raw in selections:
             if isinstance(raw, ReferencePackSelection):
                 parsed.append(raw)
-            elif isinstance(raw, Mapping):
-                try:
-                    parsed.append(
-                        ReferencePackSelection(
-                            str(raw["pack_id"]),
-                            str(raw["version_id"]),
-                            str(raw["content_sha256"]),
-                        )
-                    )
-                except KeyError as exc:
-                    raise ReferencePackError(
-                        "each pack selection requires pack_id, version_id, and content_sha256"
-                    ) from exc
-            else:
+                continue
+            if not isinstance(raw, Mapping):
                 raise ReferencePackError(
                     "pack selection identity is required (pack_id, version_id, content_sha256)"
                 )
+            try:
+                parsed.append(
+                    ReferencePackSelection(
+                        str(raw["pack_id"]), str(raw["version_id"]), str(raw["content_sha256"])
+                    )
+                )
+            except KeyError as exc:
+                raise ReferencePackError(
+                    "each pack selection requires pack_id, version_id, and content_sha256"
+                ) from exc
         if not parsed:
             raise ReferencePackError("at least one Reference Pack must be selected")
         if len({item.pack_id for item in parsed}) != len(parsed):
             raise ReferencePackError("duplicate Reference Pack selection")
-        existing = self._read(owner_id, conversation_id)
-        if existing is not None:
-            # A Build can be resumed repeatedly, but its initial selection is immutable.
-            same = tuple((item.pack_id, item.version_id) for item in existing.packs) == tuple(
-                (item.pack_id, item.version_id) for item in parsed
-            ) and all(
-                item.content_sha256 == selected.content_sha256
-                for item, selected in zip(existing.packs, parsed, strict=True)
-            )
-            if not same:
-                raise ReferencePackBindingConflict(
-                    "conversation already has a different Reference Pack snapshot"
-                )
-            return existing
-        selected: list[tuple[ReferencePack, tuple[tuple[ReferencePackFile, bytes], ...]]] = []
+        return parsed
+
+    @staticmethod
+    def _copy_selected(
+        owner_id: str,
+        parsed: list[ReferencePackSelection],
+        packs: ReferencePackStore,
+    ) -> list[tuple[ReferencePack, tuple[tuple[ReferencePackFile, bytes], ...]]]:
+        selected = []
         for selection in parsed:
             pack = packs.get(owner_id, selection.pack_id)
             if (
@@ -270,7 +258,7 @@ class ReferencePackBindingStore:
                 raise ReferencePackBindingConflict(
                     f"Reference Pack {selection.pack_id!r} changed after selection"
                 )
-            copied: list[tuple[ReferencePackFile, bytes]] = []
+            copied = []
             for item in pack.current.files:
                 data = packs.read_version_file(
                     owner_id, pack.id, pack.current_version_id, item.name
@@ -279,10 +267,19 @@ class ReferencePackBindingStore:
                     raise ReferencePackError("pack bytes failed hash verification during binding")
                 copied.append((item, data))
             selected.append((pack, tuple(copied)))
+        return selected
+
+    def _install_binding(
+        self,
+        owner_id: str,
+        conversation_id: str,
+        parsed: list[ReferencePackSelection],
+        selected: list[tuple[ReferencePack, tuple[tuple[ReferencePackFile, bytes], ...]]],
+    ) -> ReferencePackBinding:
         binding_id = uuid4().hex
         stage = Path(tempfile.mkdtemp(prefix=f".{binding_id}.", dir=self.root))
         try:
-            pinned: list[PinnedReferencePack] = []
+            pinned = []
             for pack, copied_files in selected:
                 pack_stage = stage / "packs" / pack.id / pack.current_version_id / "files"
                 pack_stage.mkdir(parents=True, exist_ok=True)
@@ -306,40 +303,57 @@ class ReferencePackBindingStore:
             self._atomic_json(stage / "binding.json", binding.as_dict())
             target = self._conversation_root(owner_id, conversation_id)
             target.parent.mkdir(parents=True, exist_ok=True)
-            def existing_winner() -> ReferencePackBinding:
-                # A concurrent creator may have won the immutable race. Accept
-                # it only after proving it is a complete binding for the exact
-                # same observed selection; a corrupt/pre-existing path is not a
-                # successful snapshot.
-                winner = self._read(owner_id, conversation_id)
-                if winner is None:
-                    raise ReferencePackError(
-                        "an existing Reference Pack binding is unreadable"
-                    )
-                same = tuple(
-                    (item.pack_id, item.version_id, item.content_sha256)
-                    for item in winner.packs
-                ) == tuple(
-                    (item.pack_id, item.version_id, item.content_sha256)
-                    for item in parsed
-                )
-                if not same:
-                    raise ReferencePackBindingConflict(
-                        "conversation already has a different Reference Pack snapshot"
-                    )
-                return winner
             if target.exists():
-                return existing_winner()
+                return self._existing_winner(owner_id, conversation_id, parsed)
             try:
                 os.replace(stage, target)
             except FileExistsError:
-                # The target appeared between the existence check and the
-                # atomic directory install. Reconcile with the winner using
-                # the same exact identity check as the pre-existing path.
-                return existing_winner()
+                return self._existing_winner(owner_id, conversation_id, parsed)
             return binding
         finally:
             shutil.rmtree(stage, ignore_errors=True)
+
+    def _existing_winner(
+        self, owner_id: str, conversation_id: str, parsed: list[ReferencePackSelection]
+    ) -> ReferencePackBinding:
+        winner = self._read(owner_id, conversation_id)
+        if winner is None:
+            raise ReferencePackError("an existing Reference Pack binding is unreadable")
+        same = tuple(
+            (item.pack_id, item.version_id, item.content_sha256) for item in winner.packs
+        ) == tuple((item.pack_id, item.version_id, item.content_sha256) for item in parsed)
+        if not same:
+            raise ReferencePackBindingConflict(
+                "conversation already has a different Reference Pack snapshot"
+            )
+        return winner
+
+    def _bind(
+        self,
+        owner_id: str,
+        conversation_id: str,
+        selections: Iterable[ReferencePackSelection | Mapping[str, Any] | str],
+        *,
+        packs: ReferencePackStore,
+    ) -> ReferencePackBinding:
+        parsed = self._parse_selections(selections)
+        existing = self._read(owner_id, conversation_id)
+        if existing is not None:
+            # A Build can be resumed repeatedly, but its initial selection is immutable.
+            same = tuple((item.pack_id, item.version_id) for item in existing.packs) == tuple(
+                (item.pack_id, item.version_id) for item in parsed
+            ) and all(
+                item.content_sha256 == selected.content_sha256
+                for item, selected in zip(existing.packs, parsed, strict=True)
+            )
+            if not same:
+                raise ReferencePackBindingConflict(
+                    "conversation already has a different Reference Pack snapshot"
+                )
+            return existing
+        return self._install_binding(
+            owner_id, conversation_id, parsed, self._copy_selected(owner_id, parsed, packs)
+        )
 
     def read_file(self, binding: ReferencePackBinding, pack_id: str, name: str) -> bytes:
         pack = next((item for item in binding.packs if item.pack_id == pack_id), None)
@@ -472,10 +486,13 @@ def _pdf_text_with_page_markers(data: bytes) -> str:
             pages = []
     if not pages:
         pages = [""]
-    return "\n\n".join(
-        f"--- Page {number} ---\n{text or '[No extractable text on this page]'}"
-        for number, text in enumerate(pages, start=1)
-    ) + "\n"
+    return (
+        "\n\n".join(
+            f"--- Page {number} ---\n{text or '[No extractable text on this page]'}"
+            for number, text in enumerate(pages, start=1)
+        )
+        + "\n"
+    )
 
 
 async def amaterialize_reference_binding(

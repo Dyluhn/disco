@@ -168,7 +168,7 @@ def test_workflow_policies_reject_invalid_egress_hosts(entry: str) -> None:
         WorkflowPolicies(egress_allow=(entry,))
 
 
-def test_validate_definition_blocks_browser_without_declared_egress() -> None:
+def test_validate_definition_warns_browser_without_declared_egress() -> None:
     defn = _defn(tools=("browser",), policies=WorkflowPolicies())
 
     findings = validate_definition(

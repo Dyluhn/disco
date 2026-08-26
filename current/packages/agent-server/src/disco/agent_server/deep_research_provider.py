@@ -178,9 +178,7 @@ class DeepResearchProvider:
 
             return {
                 **configured,
-                "search": compose_search_providers(
-                    configured["search"], (search_override,)
-                ),
+                "search": compose_search_providers(configured["search"], (search_override,)),
             }
         if search_override is not None:
             # Build the configured set once, then compose only the search slot.
@@ -192,9 +190,7 @@ class DeepResearchProvider:
 
             return {
                 **configured,
-                "search": compose_search_providers(
-                    configured["search"], (search_override,)
-                ),
+                "search": compose_search_providers(configured["search"], (search_override,)),
             }
         cfg = self._config_store.load()
         enc, sch, ext = cfg.encoders, cfg.search, cfg.extraction
@@ -260,31 +256,14 @@ class DeepResearchProvider:
             self._research_encoders_key = key
         return self._research_providers
 
-    def search_override_for_sources(
-        self,
-        sources: Sequence[str] | None,
-    ) -> Any | None:
-        """Build additive source providers for one run.
-
-        The configured Settings provider is composed later by :meth:`research`.
-        Only keyless/additional research sources are accepted here; an explicit
-        unsupported source is a configuration error rather than a silently
-        dropped request or an implicit DDGS fallback.
-        """
+    @staticmethod
+    def _clean_sources(sources: Sequence[str] | None) -> list[str]:
         allowed = frozenset({"arxiv", "news", "semantic_scholar"})
-        legacy_baseline = frozenset(
-            {"ddgs", "searxng", "tavily", "brave", "site_scoped"}
-        )
+        legacy = frozenset({"ddgs", "searxng", "tavily", "brave", "site_scoped"})
         clean: list[str] = []
         for raw in sources or ():
             source = str(raw).strip().lower()
-            if not source:
-                continue
-            # Older checkpoints could persist the then-visible baseline search
-            # provider as a source chip.  It is already composed from Settings,
-            # so normalize that legacy value away instead of querying it twice
-            # or making an otherwise resumable report fail.
-            if source in legacy_baseline:
+            if not source or source in legacy:
                 continue
             if source not in allowed:
                 from disco.retrieval.live import ProviderConfigError
@@ -295,80 +274,70 @@ class DeepResearchProvider:
                 )
             if source not in clean:
                 clean.append(source)
-        if not clean:
-            return None
-        cfg = self._config_store.load()
-        sch = cfg.search
+        return clean
+
+    def _source_key(
+        self, sch: Any, provider: str, urls: dict[str, str], names: tuple[str, ...]
+    ) -> str:
         from disco.core.llm.secret_refs import secret_ref_allowed_for_origin
 
-        provider_urls = {
-            "tavily": "https://api.tavily.com",
-            "semantic_scholar": (
-                sch.base_url
-                if sch.provider == "semantic_scholar" and sch.base_url
-                else "https://api.semanticscholar.org"
-            ),
-            "brave": (
-                sch.base_url
-                if sch.provider == "brave" and sch.base_url
-                else "https://api.search.brave.com"
-            ),
-        }
-
-        def key_for(provider: str, *fallback_names: str) -> str:
-            target_url = provider_urls.get(provider, "")
-            purpose = f"search:{provider}"
-            if not target_url:
-                return ""
-            if sch.provider == provider and sch.api_key_env:
-                key = (
-                    self._resolve_secret(sch.api_key_env)
-                    if self._origin_approved(target_url, purpose, sch.api_key_env)
-                    and secret_ref_allowed_for_origin(sch.api_key_env, target_url)
-                    else None
-                )
-                if key:
-                    return key
-            for name in fallback_names:
-                key = (
-                    self._resolve_secret(name)
-                    if self._origin_approved(target_url, purpose, name)
-                    and secret_ref_allowed_for_origin(name, target_url)
-                    else None
-                )
-                if key:
-                    return key
+        target = urls.get(provider, "")
+        if not target:
             return ""
+        candidates = (
+            (sch.api_key_env,) if sch.provider == provider and sch.api_key_env else ()
+        ) + names
+        for name in candidates:
+            if self._origin_approved(
+                target, f"search:{provider}", name
+            ) and secret_ref_allowed_for_origin(name, target):
+                key = self._resolve_secret(name)
+                if key:
+                    return key
+        return ""
 
+    def search_override_for_sources(self, sources: Sequence[str] | None) -> Any | None:
+        """Build additive source providers for one run."""
+        clean = self._clean_sources(sources)
+        if not clean:
+            return None
+        sch = self._config_store.load().search
+        urls = {
+            "tavily": "https://api.tavily.com",
+            "semantic_scholar": sch.base_url
+            if sch.provider == "semantic_scholar" and sch.base_url
+            else "https://api.semanticscholar.org",
+            "brave": sch.base_url
+            if sch.provider == "brave" and sch.base_url
+            else "https://api.search.brave.com",
+        }
         from disco.retrieval.live import build_multi_search
 
         return build_multi_search(
             clean,
-            searxng_url=(
-                sch.base_url
-                if sch.provider == "searxng"
-                and self._origin_approved(sch.base_url, "search:searxng", "")
-                else ""
+            searxng_url=sch.base_url
+            if sch.provider == "searxng"
+            and self._origin_approved(sch.base_url, "search:searxng", "")
+            else "",
+            tavily_key=self._source_key(
+                sch, "tavily", urls, ("TAVILY_API_KEY", "DISCO_TAVILY_API_KEY")
             ),
-            tavily_key=key_for("tavily", "TAVILY_API_KEY", "DISCO_TAVILY_API_KEY"),
-            ss_key=key_for(
+            ss_key=self._source_key(
+                sch,
                 "semantic_scholar",
-                "SEMANTIC_SCHOLAR_API_KEY",
-                "DISCO_SEMANTIC_SCHOLAR_API_KEY",
-                "S2_API_KEY",
+                urls,
+                ("SEMANTIC_SCHOLAR_API_KEY", "DISCO_SEMANTIC_SCHOLAR_API_KEY", "S2_API_KEY"),
             ),
-            brave_key=key_for(
+            brave_key=self._source_key(
+                sch,
                 "brave",
-                "BRAVE_SEARCH_API_KEY",
-                "DISCO_BRAVE_SEARCH_API_KEY",
-                "BRAVE_API_KEY",
+                urls,
+                ("BRAVE_SEARCH_API_KEY", "DISCO_BRAVE_SEARCH_API_KEY", "BRAVE_API_KEY"),
             ),
-            brave_url=(
-                sch.base_url
-                if sch.provider == "brave"
-                and self._origin_approved(sch.base_url, "search:brave", sch.api_key_env)
-                else ""
-            ),
+            brave_url=sch.base_url
+            if sch.provider == "brave"
+            and self._origin_approved(sch.base_url, "search:brave", sch.api_key_env)
+            else "",
             site_scoped_sites=sch.base_url if sch.provider == "site_scoped" else "",
         )
 

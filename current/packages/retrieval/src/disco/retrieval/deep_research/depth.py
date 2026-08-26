@@ -72,6 +72,7 @@ class DepthBound:
             "min_evidence_sources": self.min_evidence_sources,
         }
 
+
 _TIERS: dict[DepthTier, DepthBound] = {
     # Quick: fast verification runs. 4 starting probes (up to 6 total), 2
     # rounds each. Suitable for "what's the consensus on X" — small enough to

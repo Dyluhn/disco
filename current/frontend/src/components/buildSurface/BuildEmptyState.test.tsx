@@ -47,7 +47,7 @@ vi.mock("@/hooks/useDriverModels", () => ({
 vi.mock("@/components/build/BuildModelPicker", () => ({
   BuildModelPicker: () => <div data-testid="stub-model-picker" />,
 }));
-vi.mock("@/components/build/ReferencePackPicker", () => ({
+vi.mock("./ReferencePackPicker", () => ({
   ReferencePackPicker: ({ onChange }: { onChange: (packs: unknown[]) => void }) => (
     <button
       type="button"

@@ -100,51 +100,31 @@ class ReplayTransport:
         if frames is None:
             frames = self._legacy_projection(rows, request)
             for row in rows:
-                seam = str(row.get("seam") or "")
-                if seam == "search":
-                    payload = row.get("input") or {}
-                    observer.record(
-                        {
-                            "type": "search",
-                            "query": payload.get("query") if isinstance(payload, Mapping) else None,
-                            "rows": len(row.get("output") or []),
-                        },
-                        kind="cassette",
-                    )
-                elif seam == "extract":
-                    payload = row.get("input") or {}
-                    output = row.get("output") or {}
-                    observer.record(
-                        {
-                            "type": "extract",
-                            "url": payload.get("url") if isinstance(payload, Mapping) else None,
-                            "passage_count": len(output.get("passages") or [])
-                            if isinstance(output, Mapping)
-                            else 0,
-                        },
-                        kind="cassette",
-                    )
+                _record_legacy_observation(row, observer)
         for frame in frames:
             observer.record(frame, kind="replay")
         # Restore diagnostic seams verbatim so replay preserves model I/O and
         # inspect evidence instead of recomputing only from public frames.
-        model_io = self._seam_output(rows, "research.model_io")
+        self._restore_diagnostics(rows, observer)
+        return frames
+
+    @classmethod
+    def _restore_diagnostics(cls, rows, observer) -> None:
+        model_io = cls._seam_output(rows, "research.model_io")
         if model_io is not None:
             observer.model_io.clear()
-            values = model_io if isinstance(model_io, list) else [model_io]
-            for item in values:
+            for item in model_io if isinstance(model_io, list) else [model_io]:
                 if isinstance(item, Mapping):
                     observer.record_model_io(item)
-        provider_attempts = self._seam_output(rows, "research.provider_attempts")
+        provider_attempts = cls._seam_output(rows, "research.provider_attempts")
         if isinstance(provider_attempts, list):
             observer.provider_attempts.clear()
             for item in provider_attempts:
                 if isinstance(item, Mapping):
                     observer.record_provider_attempt(item)
-        inspect_trace = self._seam_output(rows, "research.inspect")
+        inspect_trace = cls._seam_output(rows, "research.inspect")
         if isinstance(inspect_trace, Mapping):
             observer.record_inspect_trace(inspect_trace)
-        return frames
 
     async def correlate_deck(
         self, request: ResearchRequest, report: Mapping[str, Any]
@@ -185,9 +165,7 @@ class ReplayTransport:
                 hits.extend(dict(x) for x in row["output"] if isinstance(x, Mapping))
             elif row.get("seam") == "extract" and isinstance(row.get("output"), Mapping):
                 passages.extend(
-                    dict(x)
-                    for x in (row["output"].get("passages") or [])
-                    if isinstance(x, Mapping)
+                    dict(x) for x in (row["output"].get("passages") or []) if isinstance(x, Mapping)
                 )
             elif row.get("seam") == "llm.complete" and isinstance(row.get("output"), Mapping):
                 answer_text = answer_text or str(row["output"].get("text") or "")
@@ -223,6 +201,29 @@ class ReplayTransport:
             {"type": "final", "answer": report},
             {"type": "state", "status": "finished"},
         ]
+
+
+def _record_legacy_observation(row: Mapping[str, Any], observer: Observation) -> None:
+    seam = str(row.get("seam") or "")
+    if seam not in {"search", "extract"}:
+        return
+    payload = row.get("input") or {}
+    output = row.get("output") or {}
+    if seam == "search":
+        frame = {
+            "type": "search",
+            "query": payload.get("query") if isinstance(payload, Mapping) else None,
+            "rows": len(output) if isinstance(output, list) else 0,
+        }
+    else:
+        frame = {
+            "type": "extract",
+            "url": payload.get("url") if isinstance(payload, Mapping) else None,
+            "passage_count": len(output.get("passages") or [])
+            if isinstance(output, Mapping)
+            else 0,
+        }
+    observer.record(frame, kind="cassette")
 
 
 class LiveWebSocketTransport:
@@ -336,94 +337,15 @@ class LiveWebSocketTransport:
         }
         if not source_id:
             return {**base, "ok": False, "error": "deck_requires_deep_research_conversation"}
-        import httpx
-        import websockets
-
-        session_headers, mutation_headers = await self._session_credentials(request)
-        origin = session_headers.pop("Origin")
-        timeout = request.deck_timeout_s or 1200.0
-        async with httpx.AsyncClient(
-            base_url=self.base_url,
-            headers={**session_headers, **mutation_headers, "Origin": origin},
-            timeout=timeout,
-        ) as client:
-            try:
-                response = await client.post(
-                    f"/api/conversations/{source_id}/report/deck",
-                )
-                body = response.json()
-            except Exception as exc:  # network/control failure is a deck diagnostic
-                return {**base, "ok": False, "error": _safe_error(exc)}
-        if response.status_code >= 400 or not isinstance(body, Mapping):
-            return {
-                **base,
-                "ok": False,
-                "http_status": response.status_code,
-                "error": _safe_error(body if isinstance(body, Mapping) else response.text),
-            }
-        target_id = str(body.get("conversation_id") or body.get("job_id") or "")
-        if not target_id:
-            return {**base, "ok": False, "error": "deck_handoff_missing_target_id"}
-        base.update(
-            {
-                "target_conversation_id": target_id,
-                "job_id": str(body.get("job_id") or target_id),
-                "source_event_id": str(body.get("source_event_id") or ""),
-                "format": str(body.get("format") or "pptx"),
-            }
-        )
-        url = self.base_url.replace("https://", "wss://").replace("http://", "ws://")
-        frames: list[dict[str, Any]] = []
-        elapsed: list[int] = []
-        max_observed_frames = 512
-        started = time.monotonic()
-        try:
-            async with _connect(
-                websockets,
-                f"{url}/ws/conversations/{target_id}",
-                session_headers,
-                timeout,
-                origin=origin,
-            ) as ws:
-                initial_raw = await asyncio.wait_for(
-                    ws.recv(), timeout=min(timeout, 10.0)
-                )
-                initial = json.loads(initial_raw)
-                if not isinstance(initial, Mapping):
-                    raise RuntimeError("deck WebSocket did not return a state frame")
-                frames.append(dict(initial))
-                elapsed.append(round((time.monotonic() - started) * 1000))
-                if not _deck_frame_is_terminal(initial):
-                    async with asyncio.timeout(timeout):
-                        async for raw in ws:
-                            frame = json.loads(raw)
-                            if not isinstance(frame, Mapping):
-                                continue
-                            frames.append(dict(frame))
-                            elapsed.append(round((time.monotonic() - started) * 1000))
-                            if len(frames) > max_observed_frames:
-                                frames.pop(0)
-                                elapsed.pop(0)
-                            if _deck_frame_is_terminal(frame):
-                                break
-        except Exception as exc:
-            diagnostic = summarize_frames(frames, elapsed_ms=elapsed)
-            return {**base, **diagnostic, "ok": False, "error": _safe_error(exc)}
-        diagnostic = summarize_frames(frames, elapsed_ms=elapsed)
-        terminal = str(diagnostic.get("terminal_status") or "")
-        validation = diagnostic.get("artifact_validation")
-        typed_ok = isinstance(validation, Mapping) and bool(validation.get("typed_slides"))
-        native_ok = isinstance(validation, Mapping) and bool(validation.get("native_pptx"))
-        return {
-            **base,
-            **diagnostic,
-            "ok": terminal == "FINISHED"
-            and typed_ok
-            and native_ok
-            and not bool(validation.get("degraded"))
-            if isinstance(validation, Mapping)
-            else False,
-        }
+        handoff = await _request_deck_handoff(self, request, source_id)
+        if isinstance(handoff, str):
+            return {**base, "ok": False, "error": handoff}
+        base.update(handoff[0])
+        diagnostic = await _observe_deck_socket(self, handoff[1], request.deck_timeout_s or 1200.0)
+        if isinstance(diagnostic, str):
+            return {**base, "ok": False, "error": diagnostic}
+        ok = _deck_observation_ok(diagnostic)
+        return {**base, **diagnostic, "ok": ok}
 
     async def _research_socket(
         self, request: ResearchRequest, observer: Observation
@@ -569,6 +491,85 @@ class LiveWebSocketTransport:
                 observer.record({"type": "harness_diagnostic", "inspect_error": str(exc)})
             except Exception:
                 pass
+
+
+async def _request_deck_handoff(transport, request, source_id):
+    import httpx
+
+    session_headers, mutation_headers = await transport._session_credentials(request)
+    origin = session_headers.pop("Origin")
+    timeout = request.deck_timeout_s or 1200.0
+    async with httpx.AsyncClient(
+        base_url=transport.base_url,
+        headers={**session_headers, **mutation_headers, "Origin": origin},
+        timeout=timeout,
+    ) as client:
+        try:
+            response = await client.post(f"/api/conversations/{source_id}/report/deck")
+            body = response.json()
+        except Exception as exc:
+            return _safe_error(exc)
+    if response.status_code >= 400 or not isinstance(body, Mapping):
+        return _safe_error(body if isinstance(body, Mapping) else response.text)
+    target_id = str(body.get("conversation_id") or body.get("job_id") or "")
+    if not target_id:
+        return "deck_handoff_missing_target_id"
+    details = {
+        "target_conversation_id": target_id,
+        "job_id": str(body.get("job_id") or target_id),
+        "source_event_id": str(body.get("source_event_id") or ""),
+        "format": str(body.get("format") or "pptx"),
+    }
+    url = transport.base_url.replace("https://", "wss://").replace("http://", "ws://")
+    return details, (url, target_id, session_headers, origin, timeout)
+
+
+async def _observe_deck_socket(transport, details, timeout):
+    import websockets
+
+    url, target_id, headers, origin, _ = details
+    frames: list[dict[str, Any]] = []
+    elapsed: list[int] = []
+    started = time.monotonic()
+    try:
+        async with _connect(
+            websockets, f"{url}/ws/conversations/{target_id}", headers, timeout, origin=origin
+        ) as ws:
+            initial = json.loads(await asyncio.wait_for(ws.recv(), timeout=min(timeout, 10.0)))
+            if not isinstance(initial, Mapping):
+                raise RuntimeError("deck WebSocket did not return a state frame")
+            _append_deck_frame(frames, elapsed, initial, started)
+            if not _deck_frame_is_terminal(initial):
+                async with asyncio.timeout(timeout):
+                    async for raw in ws:
+                        frame = json.loads(raw)
+                        if not isinstance(frame, Mapping):
+                            continue
+                        _append_deck_frame(frames, elapsed, frame, started)
+                        if _deck_frame_is_terminal(frame):
+                            break
+    except Exception as exc:
+        return {**summarize_frames(frames, elapsed_ms=elapsed), "error": _safe_error(exc)}
+    return summarize_frames(frames, elapsed_ms=elapsed)
+
+
+def _append_deck_frame(frames, elapsed, frame, started):
+    frames.append(dict(frame))
+    elapsed.append(round((time.monotonic() - started) * 1000))
+    if len(frames) > 512:
+        frames.pop(0)
+        elapsed.pop(0)
+
+
+def _deck_observation_ok(diagnostic: Mapping[str, Any]) -> bool:
+    validation = diagnostic.get("artifact_validation")
+    return (
+        isinstance(validation, Mapping)
+        and diagnostic.get("terminal_status") == "FINISHED"
+        and bool(validation.get("typed_slides"))
+        and bool(validation.get("native_pptx"))
+        and not bool(validation.get("degraded"))
+    )
 
 
 def _transport_for(request: ResearchRequest) -> ResearchTransport:

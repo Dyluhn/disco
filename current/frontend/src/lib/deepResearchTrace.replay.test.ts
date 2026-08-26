@@ -8,11 +8,10 @@
  * streaming/report views: deriveBrief, deriveStats, deriveReport,
  * deriveAssemblingSections, deriveLiveTrace, deriveSourceTiers.
  *
- * v2 (gateless deep research): there is no plan and no approval gate, so the
- * plan derivers (derivePlan / derivePlanProgress) are gone along with the
- * cases that covered them — progress now comes from the search / observation /
- * phase / section_done events the engine really emits, and the model's brief
- * is the first visible output.
+ * v2 (gateless deep research): there is no plan and no approval gate. The
+ * deprecated plan selectors remain as fail-closed compatibility exports, but
+ * progress comes from the search / observation / phase / section_done events
+ * the engine really emits, and the model's brief is the first visible output.
  *
  * REGRESSION net only (memory: feedback-live-model-proves-works): green proves
  * the events → DR-views wiring didn't break, NOT that a live DR run works.
@@ -30,12 +29,28 @@ import {
   deriveAssemblingSections,
   deriveLiveTrace,
   deriveAppliedSteerIds,
+  derivePlan,
+  derivePlanProgress,
   deriveSourceTiers,
 } from "@/lib/deepResearchTrace";
+import { fixturePlan, fixtureRunningEvents } from "@/fixtures/deepResearchTrace";
 
 function asEvents(events: unknown[]): AgentEvent[] {
   return events as unknown as AgentEvent[];
 }
+
+describe("legacy plan compatibility stays gateless", () => {
+  it("never turns historical plan-shaped input into a current plan", () => {
+    const events = asEvents([fixturePlan]);
+    expect(derivePlan(events)).toBeNull();
+    expect(derivePlanProgress(events, null)).toEqual(new Map());
+  });
+
+  it("does not emit the compatibility plan in the running fixture", () => {
+    expect(fixtureRunningEvents).not.toContain(fixturePlan);
+    expect(fixtureRunningEvents.some((event) => event.kind === "plan")).toBe(false);
+  });
+});
 
 describe("deriveAppliedSteerIds — durable host acknowledgment", () => {
   it("returns only exact IDs from steer_applied actions", () => {
@@ -137,7 +152,7 @@ describe("deriveStats — live header strip stats", () => {
     expect(stats.sectionsDone).toBe(1);
   });
 
-  it("does not invent a sub-question or round denominator", () => {
+  it("tracks the active sub-question + round from the latest search", () => {
     const events = asEvents([
       { kind: "action", id: "a1", thought: "", tool_call: { tool_name: "search", arguments: { subquestion: "Market size", round: 2, rounds_max: 4 } } },
     ]);
@@ -146,7 +161,7 @@ describe("deriveStats — live header strip stats", () => {
     expect(stats).not.toHaveProperty("activeRound");
   });
 
-  it("maps actual writing and review phases", () => {
+  it("clears the search indicator once gather is over", () => {
     const events = asEvents([
       { kind: "action", id: "a1", thought: "", tool_call: { tool_name: "search", arguments: { subquestion: "Market size", round: 2, rounds_max: 4 } } },
       { kind: "action", id: "a2", thought: "", tool_call: { tool_name: "phase", arguments: { phase: "synthesize" } } },

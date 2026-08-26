@@ -160,24 +160,21 @@ jobs:
       # and Epic 12-A closed the remaining event-kind and frame-type gaps, so
       # development/harness/tests/test_contract.py is green and its allowlists are empty.
       # That parity is now also enforced fail-closed in the required job by
-      # current/packages/core/tests/test_frontend_contract_parity.py, which reads the TS
+      # development/tests/architecture/test_frontend_contract_parity.py, which reads the TS
       # side with the pinned compiler instead of a regex.
-      #
-      # This job stays advisory for the one KNOWN remaining failure here:
-      # test_replay_runner.py::test_deterministic_replay_reproduces_recorded_events
-      # (unrelated to contract parity, reproduces at the Epic 12-A parent
-      # a9daf96d, unowned as of this writing).
+      # The deterministic replay fixture now follows the current gateless
+      # research path and is part of the hermetic harness run below.
       # PKG-19-CERT-STRUCTURAL finding F2: this named development/harness/tests only, so the
       # certified harness ids outside it — build_soak, marathon, replay — ran in
       # no lane at all. Widened to the whole tree to match `make harness`;
       # F6-b's `live` marker on the marathon phases keeps it hermetic.
       - name: Harness tests (contract/fuzz/eval — advisory)
-        run: PYTHONPATH=. uv run pytest harness
+        run: PYTHONPATH=. uv run pytest development/harness -m "not live and not sandbox_integration"
 
       # PKG-19-CERT-STRUCTURAL finding F2: the `integrations` root carried 9
       # certified ids and was named by no Makefile target and no CI step.
       - name: Integrations tests (advisory)
-        run: PYTHONPATH=. uv run pytest integrations
+        run: PYTHONPATH=. uv run pytest current/integrations
 
       - name: Set up Node
         uses: actions/setup-node@v4

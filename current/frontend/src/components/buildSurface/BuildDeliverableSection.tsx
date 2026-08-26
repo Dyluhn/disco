@@ -18,6 +18,77 @@ import type { DeliverableView } from "@/lib/buildTrace";
 import type { CommittedFinish } from "@/lib/committedFinish";
 import type { BuildController } from "./types";
 
+function releaseErrorMessage(error: Error): string {
+  return error.name === "ReleaseSealMismatchError"
+    ? "Self-host details no longer match the finished workspace."
+    : "Self-host details could not be loaded.";
+}
+
+function SelfHostReleaseState({
+  ready,
+  cid,
+  release,
+  download,
+}: {
+  ready: boolean;
+  cid: string | null | undefined;
+  release: ReturnType<typeof useProjectRelease>;
+  download: ReturnType<typeof useDownloadProject>;
+}) {
+  const loading = ready && (release.isLoading || release.isFetching);
+  const error = ready ? release.error : null;
+  if (loading) {
+    return (
+      <div
+        role="status"
+        aria-busy="true"
+        data-disco-control="build.self-host-loading"
+        className="flex items-center gap-hair rounded-control border border-hairline px-body py-inline font-ui text-[0.78rem] text-text-muted"
+      >
+        <LoaderCircle className="size-3.5 animate-spin" aria-hidden />
+        Preparing self-host details…
+      </div>
+    );
+  }
+  if (error) {
+    return (
+      <div
+        role="alert"
+        data-disco-control="build.self-host-error"
+        className="flex items-center gap-inline rounded-control border border-unsupported/40 bg-unsupported/5 px-body py-inline"
+      >
+        <p className="flex-1 font-ui text-[0.78rem] text-unsupported">
+          {releaseErrorMessage(error)} Try again to refresh it.
+        </p>
+        <button
+          type="button"
+          onClick={() => void release.refetch()}
+          disabled={release.isFetching}
+          className="inline-flex shrink-0 items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted hover:text-text disabled:opacity-50"
+        >
+          <RefreshCw className="size-3.5" aria-hidden />
+          {release.isFetching ? "Retrying…" : "Retry"}
+        </button>
+      </div>
+    );
+  }
+  if (!ready || !release.data) return null;
+  return (
+    <SelfHostPanel
+      release={release.data}
+      onDownload={() => {
+        const value = release.data;
+        if (!cid || !value) return;
+        const binding =
+          value.self_host && value.version_seq !== null && value.spec_digest !== null
+            ? { version_seq: value.version_seq, spec_digest: value.spec_digest }
+            : null;
+        download.mutate({ id: cid, binding });
+      }}
+    />
+  );
+}
+
 export function BuildDeliverableSection({
   b,
   deliverable,
@@ -35,12 +106,6 @@ export function BuildDeliverableSection({
 }) {
   const toast = useToast();
   const handoffReady = b.status === "FINISHED" && committedFinish !== null;
-  const releaseLoading = handoffReady && (release.isLoading || release.isFetching);
-  const releaseError = handoffReady ? release.error : null;
-  const releaseErrorMessage =
-    releaseError?.name === "ReleaseSealMismatchError"
-      ? "Self-host details no longer match the finished workspace."
-      : "Self-host details could not be loaded.";
   return (
     <>
       {/* finished-artifact handoff: open the live app / download the files.
@@ -77,58 +142,12 @@ export function BuildDeliverableSection({
           verdict ALONE (no mode/framing knowledge), so Build and Agent surfaces
           inherit an identical panel. Shown alongside the DeliverablePanel once
           the run is finished and the verdict has resolved. */}
-      {releaseLoading && (
-        <div
-          role="status"
-          aria-busy="true"
-          data-disco-control="build.self-host-loading"
-          className="flex items-center gap-hair rounded-control border border-hairline px-body py-inline font-ui text-[0.78rem] text-text-muted"
-        >
-          <LoaderCircle className="size-3.5 animate-spin" aria-hidden />
-          Preparing self-host details…
-        </div>
-      )}
-      {releaseError && (
-        <div
-          role="alert"
-          data-disco-control="build.self-host-error"
-          className="flex items-center gap-inline rounded-control border border-unsupported/40 bg-unsupported/5 px-body py-inline"
-        >
-          <p className="flex-1 font-ui text-[0.78rem] text-unsupported">
-            {releaseErrorMessage} Try again to refresh it.
-          </p>
-          <button
-            type="button"
-            onClick={() => void release.refetch()}
-            disabled={release.isFetching}
-            className="inline-flex shrink-0 items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted hover:text-text disabled:opacity-50"
-          >
-            <RefreshCw className="size-3.5" aria-hidden />
-            {release.isFetching ? "Retrying…" : "Retry"}
-          </button>
-        </div>
-      )}
-      {handoffReady && release.data && (
-        <SelfHostPanel
-          release={release.data}
-          onDownload={() => {
-            const r = release.data;
-            if (!b.cid || !r) return;
-            // Bind the download to the release ONLY when it is a genuine
-            // self-host candidate whose source is fully named — both
-            // version_seq AND spec_digest concrete. This narrowing is the guard:
-            // because the release type makes those fields nullable, passing them
-            // without the `!== null` narrowing is a compile error (a null binding
-            // can never ride a bound URL). A non-candidate (needs_review / not_web)
-            // downloads the plain, unbound zip.
-            const binding =
-              r.self_host && r.version_seq !== null && r.spec_digest !== null
-                ? { version_seq: r.version_seq, spec_digest: r.spec_digest }
-                : null;
-            download.mutate({ id: b.cid, binding });
-          }}
-        />
-      )}
+      <SelfHostReleaseState
+        ready={handoffReady}
+        cid={b.cid}
+        release={release}
+        download={download}
+      />
     </>
   );
 }

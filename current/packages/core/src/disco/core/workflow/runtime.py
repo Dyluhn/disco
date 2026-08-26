@@ -97,12 +97,36 @@ def evaluate_workflow_readiness(
     runtime-neutral callers that do not have a host connector surface.
     """
 
+    reasons, blocking = _readiness_findings(
+        instance, owner_id, current_surface_digest, available_connector_bindings
+    )
+    if blocking:
+        reasons.append("blocking_findings")
+    compiled, compile_error = _compile_readiness_scope(instance, available_mcp_tool_names)
+    if compile_error:
+        reasons.append("scope_compile_failed")
+        blocking.append(compile_error)
+    return WorkflowReadiness(
+        ready=not reasons and not blocking,
+        status=_readiness_status(instance, reasons, blocking),
+        reasons=tuple(dict.fromkeys(reasons)),
+        blocking_findings=tuple(dict.fromkeys(blocking)),
+        compiled_scope=compiled,
+    )
+
+
+def _readiness_findings(
+    instance: WorkflowInstance,
+    owner_id: str,
+    current_surface_digest: str,
+    available_connector_bindings: frozenset[str] | None,
+) -> tuple[list[str], list[str]]:
     reasons: list[str] = []
     blocking: list[str] = []
     if instance.owner_id != owner_id:
         reasons.append("owner_mismatch")
     if instance.definition_digest != instance.definition.digest():
-        reasons.append("definition_digest_invalid")
+        reasons.extend(("definition_digest_invalid",))
         blocking.append("definition_digest_invalid")
     if not instance.enabled:
         reasons.append("disabled")
@@ -110,47 +134,32 @@ def evaluate_workflow_readiness(
         reasons.append("not_approved")
     elif instance.approval.surface_shown_digest != current_surface_digest:
         reasons.append("surface_digest_stale")
-
-    for finding in instance.validation_findings:
-        if finding.severity == "error":
-            blocking.append(finding.code)
-    # Browser-backed workflows need an explicit allowlist.  Keep this host
-    # predicate here as well as in pre-approval findings so legacy instances
-    # carrying only the old warning cannot become Ready by accident.
+    blocking.extend(f.code for f in instance.validation_findings if f.severity == "error")
     if "browser" in instance.definition.tools and not instance.definition.policies.egress_allow:
         blocking.append("browser_without_egress")
-    if available_connector_bindings is not None:
-        missing_connectors = sorted(
-            connection_id
-            for connection_id in instance.connector_bindings.values()
-            if connection_id not in available_connector_bindings
-        )
-        if missing_connectors:
-            blocking.append("connector_bindings_unavailable")
-    if blocking:
-        reasons.append("blocking_findings")
+    if available_connector_bindings is not None and any(
+        connection_id not in available_connector_bindings
+        for connection_id in instance.connector_bindings.values()
+    ):
+        blocking.append("connector_bindings_unavailable")
+    return reasons, blocking
 
-    compiled: WorkflowScope | None = None
+
+def _compile_readiness_scope(
+    instance: WorkflowInstance, available_mcp_tool_names: frozenset[str]
+) -> tuple[WorkflowScope | None, str | None]:
     try:
-        compiled = compile_workflow_scope(instance.definition, available_mcp_tool_names)
+        return compile_workflow_scope(instance.definition, available_mcp_tool_names), None
     except ValueError as exc:
-        reasons.append("scope_compile_failed")
-        blocking.append(str(exc))
+        return None, str(exc)
 
-    status: Literal["ready", "needs_setup", "off"]
+
+def _readiness_status(
+    instance: WorkflowInstance, reasons: list[str], blocking: list[str]
+) -> Literal["ready", "needs_setup", "off"]:
     if not instance.enabled and instance.approval is not None:
-        status = "off"
-    elif not reasons and not blocking:
-        status = "ready"
-    else:
-        status = "needs_setup"
-    return WorkflowReadiness(
-        ready=not reasons and not blocking,
-        status=status,
-        reasons=tuple(dict.fromkeys(reasons)),
-        blocking_findings=tuple(dict.fromkeys(blocking)),
-        compiled_scope=compiled,
-    )
+        return "off"
+    return "ready" if not reasons and not blocking else "needs_setup"
 
 
 def workflow_surface_digest(surface: object) -> str:
@@ -264,15 +273,7 @@ def _validate_schema_value(
     issues: list[WorkflowParameterIssue],
 ) -> None:
     expected = schema.get("type")
-    if not isinstance(expected, str) or expected not in {
-        "string",
-        "integer",
-        "number",
-        "boolean",
-        "array",
-        "object",
-        "null",
-    }:
+    if not _schema_type_supported(expected):
         issues.append(
             WorkflowParameterIssue(
                 field=field,
@@ -281,17 +282,7 @@ def _validate_schema_value(
             )
         )
         return
-    type_checks = {
-        "string": isinstance(value, str),
-        "integer": isinstance(value, int) and not isinstance(value, bool),
-        "number": isinstance(value, int | float) and not isinstance(value, bool),
-        "boolean": isinstance(value, bool),
-        "array": isinstance(value, list),
-        "object": isinstance(value, dict),
-        "null": value is None,
-    }
-    valid = type_checks.get(expected, True) if isinstance(expected, str) else True
-    if not valid:
+    if not _schema_value_matches(expected, value):
         issues.append(
             WorkflowParameterIssue(
                 field=field,
@@ -301,6 +292,41 @@ def _validate_schema_value(
             )
         )
         return
+    _validate_scalar_constraints(schema, value, field, issues)
+    if isinstance(value, list):
+        _validate_array_items(schema, value, field, issues)
+    elif isinstance(value, dict):
+        _validate_object_items(schema, value, field, issues)
+
+
+def _schema_type_supported(expected: object) -> bool:
+    return isinstance(expected, str) and expected in {
+        "string",
+        "integer",
+        "number",
+        "boolean",
+        "array",
+        "object",
+        "null",
+    }
+
+
+def _schema_value_matches(expected: object, value: Any) -> bool:
+    checks: dict[str, bool] = {
+        "string": isinstance(value, str),
+        "integer": isinstance(value, int) and not isinstance(value, bool),
+        "number": isinstance(value, int | float) and not isinstance(value, bool),
+        "boolean": isinstance(value, bool),
+        "array": isinstance(value, list),
+        "object": isinstance(value, dict),
+        "null": value is None,
+    }
+    return checks.get(expected if isinstance(expected, str) else "", True)
+
+
+def _validate_scalar_constraints(
+    schema: Mapping[str, Any], value: Any, field: str, issues: list[WorkflowParameterIssue]
+) -> None:
     enum = schema.get("enum")
     if isinstance(enum, list) and value not in enum:
         issues.append(
@@ -312,42 +338,52 @@ def _validate_schema_value(
         _check_numeric_bound(schema, len(value), field, issues, "minLength", "maxLength")
     elif isinstance(value, list):
         _check_numeric_bound(schema, len(value), field, issues, "minItems", "maxItems")
-        item_schema = schema.get("items")
-        if isinstance(item_schema, Mapping):
-            for index, item in enumerate(value):
-                _validate_schema_value(item_schema, item, field=f"{field}[{index}]", issues=issues)
-    elif isinstance(value, dict):
-        properties = schema.get("properties", {})
-        properties = properties if isinstance(properties, Mapping) else {}
-        required = schema.get("required", ())
-        required = (
-            required if isinstance(required, Sequence) and not isinstance(required, str) else ()
-        )
-        for name in required:
-            if isinstance(name, str) and name not in value:
+    elif isinstance(value, int | float) and not isinstance(value, bool):
+        _check_numeric_bound(schema, value, field, issues, "minimum", "maximum")
+
+
+def _validate_array_items(
+    schema: Mapping[str, Any], value: list[Any], field: str, issues: list[WorkflowParameterIssue]
+) -> None:
+    item_schema = schema.get("items")
+    if isinstance(item_schema, Mapping):
+        for index, item in enumerate(value):
+            _validate_schema_value(item_schema, item, field=f"{field}[{index}]", issues=issues)
+
+
+def _validate_object_items(
+    schema: Mapping[str, Any],
+    value: dict[Any, Any],
+    field: str,
+    issues: list[WorkflowParameterIssue],
+) -> None:
+    properties = schema.get("properties", {})
+    properties = properties if isinstance(properties, Mapping) else {}
+    required = schema.get("required", ())
+    required = required if isinstance(required, Sequence) and not isinstance(required, str) else ()
+    for name in required:
+        if isinstance(name, str) and name not in value:
+            issues.append(
+                WorkflowParameterIssue(
+                    field=f"{field}.{name}",
+                    code="required",
+                    message=f"{field}.{name!r} is required",
+                )
+            )
+    if schema.get("additionalProperties") is False:
+        for name in value:
+            if name not in properties:
                 issues.append(
                     WorkflowParameterIssue(
                         field=f"{field}.{name}",
-                        code="required",
-                        message=f"{field}.{name!r} is required",
+                        code="unexpected",
+                        message=f"unexpected parameter {field}.{name}",
                     )
                 )
-        if schema.get("additionalProperties") is False:
-            for name in value:
-                if name not in properties:
-                    issues.append(
-                        WorkflowParameterIssue(
-                            field=f"{field}.{name}",
-                            code="unexpected",
-                            message=f"unexpected parameter {field}.{name}",
-                        )
-                    )
-        for name, item in value.items():
-            item_schema = properties.get(name)
-            if isinstance(item_schema, Mapping):
-                _validate_schema_value(item_schema, item, field=f"{field}.{name}", issues=issues)
-    elif isinstance(value, int | float) and not isinstance(value, bool):
-        _check_numeric_bound(schema, value, field, issues, "minimum", "maximum")
+    for name, item in value.items():
+        item_schema = properties.get(name)
+        if isinstance(item_schema, Mapping):
+            _validate_schema_value(item_schema, item, field=f"{field}.{name}", issues=issues)
 
 
 def _check_numeric_bound(
@@ -382,9 +418,7 @@ class WorkflowRunBrief(BaseModel):
     outcome_rules: tuple[str, ...]
 
     def render(self) -> str:
-        params_json = json.dumps(
-            self.validated_params, sort_keys=True, ensure_ascii=False
-        )
+        params_json = json.dumps(self.validated_params, sort_keys=True, ensure_ascii=False)
         if len(params_json) > 16_000:
             raise ValueError("validated workflow parameters exceed the brief size limit")
         card_json = json.dumps(self.workflow_card, ensure_ascii=False)
@@ -539,31 +573,11 @@ def project_pinned_workflow_state(
 ) -> WorkflowResumeProjection:
     """Reconstruct a pinned seal, or fail closed with a visible reason."""
 
-    if state.definition_snapshot.digest() != state.definition_digest:
-        return _failed_projection(state.status, "pinned_definition_digest_invalid")
-    if require_current_instance and current_instance is None:
-        return _failed_projection(state.status, "workflow_instance_missing")
-    if require_current_instance and current_surface_digest is None:
-        return _failed_projection(state.status, "workflow_surface_digest_unavailable")
-    if current_surface_digest is not None and current_surface_digest != state.surface_digest:
-        return _failed_projection(state.status, "workflow_surface_digest_changed")
-    if current_instance is not None and (
-        current_instance.owner_id != state.owner_id
-        or not current_instance.enabled
-        or current_instance.approval is None
-    ):
-        if current_instance.owner_id != state.owner_id:
-            return _failed_projection(state.status, "workflow_owner_changed")
-        if not current_instance.enabled:
-            return _failed_projection(state.status, "workflow_disabled")
-        return _failed_projection(state.status, "workflow_not_approved")
-    if (
-        current_instance is not None
-        and current_instance.approval is not None
-        and current_surface_digest is not None
-        and current_instance.approval.surface_shown_digest != current_surface_digest
-    ):
-        return _failed_projection(state.status, "workflow_approval_surface_stale")
+    reason = _projection_guard_reason(
+        state, current_instance, current_surface_digest, require_current_instance
+    )
+    if reason:
+        return _failed_projection(state.status, reason)
     if current_instance is not None and any(
         finding.severity == "error" for finding in current_instance.validation_findings
     ):
@@ -581,10 +595,7 @@ def project_pinned_workflow_state(
         )
         if "connector_bindings_unavailable" in readiness.blocking_findings:
             return _failed_projection(state.status, "connector_bindings_unavailable")
-    if current_instance is not None and (
-        current_instance.definition_digest != state.definition_digest
-        or current_instance.definition.digest() != state.definition_digest
-    ):
+    if current_instance is not None and _definition_changed(current_instance, state):
         return _failed_projection(state.status, "workflow_definition_digest_changed")
     try:
         compile_workflow_scope(state.definition_snapshot, available_mcp_tool_names)
@@ -605,6 +616,45 @@ def project_pinned_workflow_state(
             definition=state.definition_snapshot,
             params=state.validated_params,
         ),
+    )
+
+
+def _projection_guard_reason(
+    state: PinnedWorkflowInvocationState,
+    current_instance: WorkflowInstance | None,
+    current_surface_digest: str | None,
+    require_current_instance: bool,
+) -> str | None:
+    if state.definition_snapshot.digest() != state.definition_digest:
+        return "pinned_definition_digest_invalid"
+    if require_current_instance and current_instance is None:
+        return "workflow_instance_missing"
+    if require_current_instance and current_surface_digest is None:
+        return "workflow_surface_digest_unavailable"
+    if current_surface_digest is not None and current_surface_digest != state.surface_digest:
+        return "workflow_surface_digest_changed"
+    if current_instance is None:
+        return None
+    if current_instance.owner_id != state.owner_id:
+        return "workflow_owner_changed"
+    if not current_instance.enabled:
+        return "workflow_disabled"
+    if current_instance.approval is None:
+        return "workflow_not_approved"
+    if (
+        current_surface_digest is not None
+        and current_instance.approval.surface_shown_digest != current_surface_digest
+    ):
+        return "workflow_approval_surface_stale"
+    return None
+
+
+def _definition_changed(
+    current_instance: WorkflowInstance, state: PinnedWorkflowInvocationState
+) -> bool:
+    return (
+        current_instance.definition_digest != state.definition_digest
+        or current_instance.definition.digest() != state.definition_digest
     )
 
 

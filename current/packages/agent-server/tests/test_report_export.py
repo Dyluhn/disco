@@ -135,7 +135,7 @@ def test_markdown_byte_parity() -> None:
     )
 
 
-def test_finished_report_rejects_empty_sections() -> None:
+def test_markdown_empty_sections() -> None:
     """A checkpoint cannot masquerade as a finished blank report."""
     with pytest.raises(ValueError, match="at least one section"):
         ReportEvent(
@@ -165,7 +165,7 @@ def test_markdown_no_bounded_by() -> None:
     assert "bounded by **" not in result
 
 
-def test_finished_report_rejects_missing_summary() -> None:
+def test_markdown_missing_summary() -> None:
     """A finished report must have a non-empty executive summary."""
     with pytest.raises(ValueError, match="executive summary"):
         ReportEvent(
