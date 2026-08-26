@@ -2,9 +2,7 @@
 diff — is tested on REAL event objects (constructed from the real classes), proving
 it strips exactly the volatile fields and catches a real output divergence. The
 full deterministic engine re-run is gated on a captured (event-log + cassette) pair
-(`_capture_loop_demo.py`); it skips cleanly when that fixture is absent or still
-the checked-in legacy plan-gate capture, the same
-env-blocked heavy capture as the Phase 2 --replay e2e.
+(`_capture_loop_demo.py`); it skips only when that fixture is absent.
 
 Run: PYTHONPATH=. uv run pytest development/harness/tests/test_replay_runner.py
 """
@@ -13,7 +11,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
 from disco.core import LLMMessage
 from disco.core.events import (
     ActionEvent,
@@ -139,31 +136,24 @@ def test_legacy_plan_fixture_is_detected() -> None:
     assert not is_legacy_plan_fixture([])
 
 
-# ---- full deterministic replay (gated on the captured fixture) --------------
+# ---- full deterministic replay ----------------------------------------------
 
 _FIXTURE = Path(__file__).resolve().parents[1] / "cassettes" / "loop_demo.events.jsonl"
 
 
-@pytest.mark.skipif(
-    not _FIXTURE.exists(), reason="needs the captured loop fixture (make capture-loop)"
-)
 async def test_deterministic_replay_reproduces_recorded_events():
     from disco.core import SqliteEventStore
-    from disco.core.events import EventKind
     from harness.cassette import Cassette
     from harness.replay_runner import load_events, replay_conversation
     from harness.runtime import build_replay_runtime
 
     cassette = Cassette.load(str(_FIXTURE.with_name("loop_demo.cassette.jsonl")))
     recorded = load_events(_FIXTURE)
-    if any(event.kind == EventKind.PLAN for event in recorded):
-        pytest.skip(
-            "checked-in fixture is legacy plan-gate; rerun `make capture-loop` "
-            "before enabling gateless replay"
-        )
 
     def _builder(store):
-        return build_replay_runtime(cassette, store)
+        runtime = build_replay_runtime(cassette, store)
+        runtime.deep_research.set_depth("replay", "quick")
+        return runtime
 
     outputs = await replay_conversation(
         recorded,

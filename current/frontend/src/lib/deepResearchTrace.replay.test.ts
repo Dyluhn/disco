@@ -137,7 +137,7 @@ describe("deriveStats — live header strip stats", () => {
     expect(stats.sectionsDone).toBe(1);
   });
 
-  it("does not invent a sub-question or round denominator", () => {
+  it("tracks the active sub-question + round from the latest search", () => {
     const events = asEvents([
       { kind: "action", id: "a1", thought: "", tool_call: { tool_name: "search", arguments: { subquestion: "Market size", round: 2, rounds_max: 4 } } },
     ]);
@@ -146,7 +146,7 @@ describe("deriveStats — live header strip stats", () => {
     expect(stats).not.toHaveProperty("activeRound");
   });
 
-  it("maps actual writing and review phases", () => {
+  it("clears the search indicator once gather is over", () => {
     const events = asEvents([
       { kind: "action", id: "a1", thought: "", tool_call: { tool_name: "search", arguments: { subquestion: "Market size", round: 2, rounds_max: 4 } } },
       { kind: "action", id: "a2", thought: "", tool_call: { tool_name: "phase", arguments: { phase: "synthesize" } } },

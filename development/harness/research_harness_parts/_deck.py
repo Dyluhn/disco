@@ -69,47 +69,11 @@ def _artifact_name(value: Any) -> str | None:
 
 def validate_frames(frames: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     """Validate only public typed deck evidence; never infer success from prose."""
-    tool_seen = False
-    tool_success = False
-    typed_structured = False
-    degraded = False
     formats: list[str] = []
     artifacts: list[str] = []
-    for mapping in _walk(list(frames)):
-        tool_name = str(mapping.get("tool_name") or mapping.get("name") or "")
-        structured = mapping.get("structured")
-        if tool_name == "slides_generate":
-            tool_seen = True
-            tool_success = tool_success or mapping.get("success") is True
-            if isinstance(structured, Mapping):
-                # The typed tool envelope is present when structured output
-                # has a deck/slides payload or explicitly declares its format.
-                typed_structured = typed_structured or (
-                    isinstance(structured.get("slides"), list)
-                    or isinstance(structured.get("deck"), Mapping)
-                    or isinstance(structured.get("artifact"), Mapping)
-                )
-                fmt = structured.get("format")
-                if isinstance(fmt, str) and fmt:
-                    formats.append(fmt[:40])
-            for key in ("degraded", "fallback", "fallback_used"):
-                if mapping.get(key) is True or (
-                    isinstance(structured, Mapping) and structured.get(key) is True
-                ):
-                    degraded = True
-        for key in ("artifact", "artifacts", "structured"):
-            for candidate in _walk(mapping.get(key)):
-                name = _artifact_name(candidate)
-                if name and name not in artifacts:
-                    artifacts.append(name)
-                    if len(artifacts) >= _MAX_ARTIFACTS:
-                        break
-        if len(artifacts) >= _MAX_ARTIFACTS:
-            break
-    terminal = next(
-        (frame_status(frame) for frame in reversed(frames) if frame_status(frame)),
-        "",
-    )
+    tool_seen, tool_success, typed_structured, degraded = _deck_tool_facts(frames, formats)
+    _deck_artifacts(frames, artifacts)
+    terminal = next((frame_status(frame) for frame in reversed(frames) if frame_status(frame)), "")
     native_pptx = any(fmt.casefold() == "pptx" for fmt in formats) or any(
         name.casefold().endswith(".pptx") for name in artifacts
     )
@@ -125,6 +89,52 @@ def validate_frames(frames: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
             "terminal_status": terminal,
         }
     )
+
+
+def _deck_tool_facts(
+    frames: Sequence[Mapping[str, Any]], formats: list[str]
+) -> tuple[bool, bool, bool, bool]:
+    tool_seen = tool_success = typed_structured = degraded = False
+    for mapping in _walk(list(frames)):
+        facts = _deck_tool_mapping_facts(mapping, formats)
+        tool_seen = tool_seen or facts[0]
+        tool_success = tool_success or facts[1]
+        typed_structured = typed_structured or facts[2]
+        degraded = degraded or facts[3]
+    return tool_seen, tool_success, typed_structured, degraded
+
+
+def _deck_tool_mapping_facts(
+    mapping: Mapping[str, Any], formats: list[str]
+) -> tuple[bool, bool, bool, bool]:
+    if str(mapping.get("tool_name") or mapping.get("name") or "") != "slides_generate":
+        return False, False, False, False
+    structured = mapping.get("structured")
+    typed = isinstance(structured, Mapping) and (
+        isinstance(structured.get("slides"), list)
+        or isinstance(structured.get("deck"), Mapping)
+        or isinstance(structured.get("artifact"), Mapping)
+    )
+    fmt = structured.get("format") if isinstance(structured, Mapping) else None
+    if isinstance(fmt, str) and fmt:
+        formats.append(fmt[:40])
+    degraded = any(
+        mapping.get(key) is True
+        or (isinstance(structured, Mapping) and structured.get(key) is True)
+        for key in ("degraded", "fallback", "fallback_used")
+    )
+    return True, mapping.get("success") is True, typed, degraded
+
+
+def _deck_artifacts(frames: Sequence[Mapping[str, Any]], artifacts: list[str]) -> None:
+    for mapping in _walk(list(frames)):
+        for key in ("artifact", "artifacts", "structured"):
+            for candidate in _walk(mapping.get(key)):
+                name = _artifact_name(candidate)
+                if name and name not in artifacts:
+                    artifacts.append(name)
+                    if len(artifacts) >= _MAX_ARTIFACTS:
+                        return
 
 
 def summarize_frames(

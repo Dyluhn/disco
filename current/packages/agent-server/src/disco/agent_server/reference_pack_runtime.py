@@ -247,22 +247,11 @@ class ReferencePackRuntime:
             )
             for pack in binding.packs
         )
+        existing_binding, existing_prompt = await self._existing_binding_state(
+            sink, conversation_id, binding, paths, selections
+        )
         expected_id = _event_id(binding.id, paths)
-        existing_binding: ReferencePackBindingEvent | None = None
-        existing_prompt = False
         prompt_id = _prompt_event_id(binding.id, paths)
-        for event in await sink.get_events(conversation_id):
-            if not isinstance(event, ReferencePackBindingEvent):
-                if isinstance(event, MessageEvent) and event.id == prompt_id:
-                    existing_prompt = True
-                continue
-            if event.binding_id == binding.id:
-                if event.selections != selections or event.materialized_paths != paths:
-                    raise ReferencePackError(
-                        "existing Reference Pack binding event does not match "
-                        "the immutable snapshot"
-                    )
-                existing_binding = event
         candidate = ReferencePackBindingEvent(
             id=expected_id,
             binding_id=binding.id,
@@ -279,8 +268,6 @@ class ReferencePackRuntime:
             pending.append(candidate)
         if not existing_prompt:
             pending.append(prompt)
-        # The immutable fact and its model-visible read funnel land atomically.
-        # Deterministic ids make concurrent resume/recreate attempts idempotent.
         stored = await sink.append_many(conversation_id, pending) if pending else []
         binding_event = existing_binding or next(
             (event for event in stored if isinstance(event, ReferencePackBindingEvent)),
@@ -289,6 +276,31 @@ class ReferencePackRuntime:
         if not isinstance(binding_event, ReferencePackBindingEvent):
             raise ReferencePackError("event store returned the wrong Reference Pack event type")
         return binding_event
+
+    async def _existing_binding_state(
+        self,
+        sink: ReferencePackEventStore,
+        conversation_id: str,
+        binding: ReferencePackBinding,
+        paths: tuple[str, ...],
+        selections: tuple[ReferencePackBindingSelection, ...],
+    ) -> tuple[ReferencePackBindingEvent | None, bool]:
+        existing_binding: ReferencePackBindingEvent | None = None
+        existing_prompt = False
+        prompt_id = _prompt_event_id(binding.id, paths)
+        for event in await sink.get_events(conversation_id):
+            if not isinstance(event, ReferencePackBindingEvent):
+                if isinstance(event, MessageEvent) and event.id == prompt_id:
+                    existing_prompt = True
+                continue
+            if event.binding_id == binding.id:
+                if event.selections != selections or event.materialized_paths != paths:
+                    raise ReferencePackError(
+                        "existing Reference Pack binding event does not match "
+                        "the immutable snapshot"
+                    )
+                existing_binding = event
+        return existing_binding, existing_prompt
 
     async def materialize_before_model(
         self,

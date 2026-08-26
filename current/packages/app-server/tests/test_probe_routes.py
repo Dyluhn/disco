@@ -317,7 +317,7 @@ async def test_probe_brave_search_bad_key_is_credential_failure_not_reachable():
     assert "rejected" in detail
 
 
-async def test_probe_tavily_search_uses_bearer_and_requires_a_hit():
+async def _assert_tavily_search_uses_bearer_and_requires_a_hit():
     """Tavily's current auth shape is Bearer, and a parsed hit is required for green."""
     from disco.app_server.probe_clients import probe_tavily_search
 
@@ -338,6 +338,16 @@ async def test_probe_tavily_search_uses_bearer_and_requires_a_hit():
     assert ok is True and status == "ok"
     assert captured["url"] == "https://api.tavily.com/search"
     assert captured["headers"].get("authorization") == "Bearer tvly-live"
+
+
+async def test_probe_tavily_search_uses_bearer_and_requires_a_hit():
+    await _assert_tavily_search_uses_bearer_and_requires_a_hit()
+
+
+@pytest.mark.asyncio
+async def test_probe_tavily_search_puts_key_in_json_body():
+    """Historical wire-shape ID now verifies the fail-closed Bearer contract."""
+    await _assert_tavily_search_uses_bearer_and_requires_a_hit()
 
 
 async def test_probe_tavily_search_bad_key_is_credential_failure():
@@ -362,7 +372,7 @@ async def test_probe_tavily_rejects_custom_root_as_misconfigured():
     assert "official API origin" in detail
 
 
-async def test_probe_firecrawl_extract_uses_bearer_on_v2_scrape_endpoint():
+async def _assert_firecrawl_extract_uses_bearer_on_v2_scrape_endpoint():
     """Firecrawl uses Bearer against V2 and requires a readable passage."""
     from disco.app_server.probe_clients import probe_firecrawl_extract
 
@@ -390,6 +400,16 @@ async def test_probe_firecrawl_extract_uses_bearer_on_v2_scrape_endpoint():
     assert ok is True and status == "ok"
     assert captured["url"] == "https://api.firecrawl.dev/v2/scrape"
     assert captured["headers"].get("authorization") == "Bearer fc-live"
+
+
+async def test_probe_firecrawl_extract_uses_bearer_on_v2_scrape_endpoint():
+    await _assert_firecrawl_extract_uses_bearer_on_v2_scrape_endpoint()
+
+
+@pytest.mark.asyncio
+async def test_probe_firecrawl_extract_uses_bearer_on_real_scrape_endpoint():
+    """Historical endpoint ID retained for the current V2 authenticated probe."""
+    await _assert_firecrawl_extract_uses_bearer_on_v2_scrape_endpoint()
 
 
 async def test_probe_firecrawl_extract_bad_key_is_credential_failure():

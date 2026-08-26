@@ -13,15 +13,12 @@ a `ResearchAgentError`, never a report-shaped diagnostic.
 
 from __future__ import annotations
 
-import asyncio
 import datetime
 import json
-import re
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Literal
-from urllib.parse import urlparse
 
 from disco.core import LLMMessage
 from disco.core.inspect import record_model_io
@@ -35,13 +32,28 @@ from disco.core.llm import (
 )
 from disco.core.think import strip_think_spans
 
-from ..engine import ProviderOperationError, RetrievalEngine
-from ..models import Passage, RetrievalRequest, RetrievalResult, SearchHit
-from ..ranking import merge_search_hits
-from ..url_policy import source_url_key
+from ..engine import RetrievalEngine
+from ..models import Passage, SearchHit
+from ._agent_messages import fresh_queries as _fresh_queries
+from ._agent_messages import turn_user_message as _turn_user_message
+from ._agent_parsing import Turn as _Turn
+from ._agent_parsing import decode_json_object as _decode_json_object
+from ._agent_parsing import parse_turn as _parse_turn
+from ._agent_parsing import turn_payload as _turn_payload
+from ._agent_readiness import apply_readiness_feedback
+from ._agent_search import execute_search_turn as _execute_search_turn_impl
+from ._agent_state import AgentState as _AgentState
+from ._agent_turn import one_model_turn as _one_model_turn_impl
 from ._budget import SourceBudget
 from .depth import DepthBound
-from .source_identity import distinct_work_count
+
+__all__ = [
+    "_AgentState",
+    "_decode_json_object",
+    "_parse_turn",
+    "run_research_agent",
+    "ResearchOutcome",
+]
 
 EmitFn = Callable[[str, dict[str, Any]], Awaitable[None]]
 AckSteersFn = Callable[[list[str]], None] | None
@@ -212,130 +224,6 @@ def research_seconds_left(bound: DepthBound, started: float) -> float:
 # ---------------------------------------------------------------------------
 
 
-@dataclass(frozen=True)
-class _Turn:
-    brief: str
-    decision_summary: str
-    coverage: dict[str, Any]
-    queries: tuple[str, ...] = ()
-    ready_to_write: bool = False
-
-
-def _decode_json_object(text: str) -> tuple[dict[str, Any] | None, str | None]:
-    candidate = text.strip()
-    fence = re.search(r"```(?:json)?\s*(.*?)```", candidate, re.DOTALL)
-    if fence is not None:
-        candidate = fence.group(1).strip()
-    try:
-        value: Any = json.loads(candidate)
-    except json.JSONDecodeError as exc:
-        start, end = candidate.find("{"), candidate.rfind("}")
-        if not (0 <= start < end):
-            return None, f"not valid JSON: {exc}"
-        try:
-            value = json.loads(candidate[start : end + 1])
-        except json.JSONDecodeError:
-            return None, f"not valid JSON: {exc}"
-    if not isinstance(value, dict):
-        return None, (f"the top-level JSON value must be an object, got {type(value).__name__}")
-    return value, None
-
-
-def _parse_queries(value: dict[str, Any]) -> tuple[tuple[str, ...] | None, str | None]:
-    raw = value.get("queries")
-    if not isinstance(raw, list):
-        return None, '"queries" must be a JSON array of 1-3 non-empty strings'
-    queries = [item.strip() for item in raw if isinstance(item, str) and item.strip()]
-    if not queries:
-        return None, '"queries" must contain at least one non-empty string'
-    return tuple(queries[:_MAX_QUERIES_PER_TURN]), None
-
-
-def _parse_coverage(value: dict[str, Any]) -> tuple[dict[str, Any] | None, str | None]:
-    raw = value.get("coverage")
-    if not isinstance(raw, dict):
-        return None, '"coverage" must be an object with covered, open, and contradictions_checked'
-    covered_raw = raw.get("covered")
-    open_raw = raw.get("open")
-    checked_raw = raw.get("contradictions_checked")
-    if (
-        not isinstance(covered_raw, list)
-        or not isinstance(open_raw, list)
-        or not isinstance(checked_raw, list)
-    ):
-        return None, '"coverage" fields covered, open, and contradictions_checked must be arrays'
-    covered: list[dict[str, Any]] = []
-    for item in covered_raw:
-        if isinstance(item, str):
-            angle = item.strip()
-            if not angle:
-                return None, 'each covered item must have a non-empty string "angle"'
-            covered.append({"angle": angle, "evidence_ids": []})
-            continue
-        if (
-            not isinstance(item, dict)
-            or not isinstance(item.get("angle"), str)
-            or not item["angle"].strip()
-        ):
-            return None, 'each covered item must have a string "angle"'
-        # Some otherwise usable control responses describe an angle before
-        # they have mapped it to admitted passages. Treat an omitted/null
-        # mapping as unresolved coverage; the host readiness gates below still
-        # require non-empty, admitted evidence ids before writing.
-        evidence_ids = item.get("evidence_ids")
-        if evidence_ids is None:
-            evidence_ids = []
-        if not isinstance(evidence_ids, list) or not all(
-            isinstance(item_id, str) for item_id in evidence_ids
-        ):
-            return None, 'each covered item must have an "evidence_ids" string array'
-        covered.append(
-            {
-                "angle": item["angle"].strip(),
-                "evidence_ids": [item_id.strip() for item_id in evidence_ids if item_id.strip()],
-            }
-        )
-
-    def strings(items: list[Any]) -> list[str]:
-        return [item.strip() for item in items if isinstance(item, str) and item.strip()]
-
-    return {
-        "covered": covered,
-        "open": strings(open_raw),
-        "contradictions_checked": strings(checked_raw),
-    }, None
-
-
-def _parse_turn(text: str, *, expect_brief: bool) -> tuple[_Turn | None, str | None]:
-    """Parse one turn response. Returns `(turn, None)` or `(None, precise
-    parse error)` — the error text goes verbatim into the one re-ask."""
-    value, error = _decode_json_object(text)
-    if value is None:
-        return None, error
-    raw_brief = value.get("brief", "")
-    if not isinstance(raw_brief, str) or (expect_brief and not raw_brief.strip()):
-        return None, '"brief" must be a non-empty string on the first turn'
-    raw_decision = value.get("decision_summary")
-    if not isinstance(raw_decision, str) or not raw_decision.strip():
-        return None, '"decision_summary" must be a non-empty string'
-    coverage, error = _parse_coverage(value)
-    if coverage is None:
-        return None, error
-    ready = value.get("ready_to_write")
-    if not isinstance(ready, bool):
-        return None, '"ready_to_write" must be a boolean'
-    queries, error = _parse_queries(value)
-    if queries is None and not ready:
-        return None, error
-    return _Turn(
-        brief=raw_brief.strip(),
-        decision_summary=raw_decision.strip(),
-        coverage=coverage,
-        queries=queries or (),
-        ready_to_write=ready,
-    ), None
-
-
 async def _complete_turn(
     router: LLMRouter, messages: list[LLMMessage], *, namespace: str
 ) -> tuple[str, CompletionResponse, int]:
@@ -357,18 +245,6 @@ async def _complete_turn(
     response = await router.complete(request)
     latency_ms = max(0, int((time.perf_counter() - started) * 1_000))
     return strip_think_spans(response.text), response, latency_ms
-
-
-def _turn_payload(turn: _Turn | None) -> dict[str, Any] | None:
-    if turn is None:
-        return None
-    return {
-        "brief": turn.brief,
-        "decision_summary": turn.decision_summary,
-        "coverage": turn.coverage,
-        "queries": list(turn.queries),
-        "ready_to_write": turn.ready_to_write,
-    }
 
 
 def _record_turn_io(
@@ -414,52 +290,17 @@ async def _one_model_turn(
     expect_brief: bool,
     namespace: str,
 ) -> tuple[_Turn | None, str | None]:
-    """One turn = one model call, plus at most one re-ask carrying the exact
-    parse error and the required schema (precise feedback, never a bare no)."""
-    messages = [
-        LLMMessage(role="system", content=system_prompt),
-        LLMMessage(role="user", content=user_message),
-    ]
-    text, response, latency_ms = await _complete_turn(router, messages, namespace=namespace)
-    parsed, error = _parse_turn(text, expect_brief=expect_brief)
-    _record_turn_io(
-        namespace,
-        messages,
-        text,
-        response,
-        parsed=parsed,
-        error=error,
-        attempt=1,
-        latency_ms=latency_ms,
+    return await _one_model_turn_impl(
+        router,
+        system_prompt,
+        user_message,
+        expect_brief=expect_brief,
+        namespace=namespace,
+        complete_turn=_complete_turn,
+        record_turn_io=_record_turn_io,
+        first_schema=_FIRST_TURN_SCHEMA,
+        later_schema=_LATER_TURN_SCHEMA,
     )
-    if parsed is not None:
-        return parsed, None
-    schema = _FIRST_TURN_SCHEMA if expect_brief else _LATER_TURN_SCHEMA
-    retry_messages = [
-        *messages,
-        LLMMessage(
-            role="user",
-            content=(
-                f"Your response could not be used: {error}. Reply again with "
-                f"ONE strict JSON object matching exactly this schema: {schema}"
-            ),
-        ),
-    ]
-    text, response, latency_ms = await _complete_turn(
-        router, retry_messages, namespace=namespace
-    )
-    parsed, error = _parse_turn(text, expect_brief=expect_brief)
-    _record_turn_io(
-        namespace,
-        retry_messages,
-        text,
-        response,
-        parsed=parsed,
-        error=error,
-        attempt=2,
-        latency_ms=latency_ms,
-    )
-    return parsed, error
 
 
 # ---------------------------------------------------------------------------
@@ -467,341 +308,13 @@ async def _one_model_turn(
 # ---------------------------------------------------------------------------
 
 
-def _report_usable_passage(passage: Passage) -> bool:
-    """Reject obvious extraction furniture before it consumes source capacity.
-    Retrieval remains auditable through ``all_hits``; the filter is structural
-    and conservative so substantive claims are never dropped on an inferred
-    topic judgment. (Moved from the v1 gather loop.)"""
-    text = " ".join(passage.text.split())
-    if len(re.findall(r"[A-Za-z][\w'-]*", text)) < 5:
-        return False
-    lowered = text.casefold()
-    return not (
-        lowered.startswith(("last verified:", "last updated:", "published:"))
-        or "privacy policy" in lowered
-        or "terms of service" in lowered
-        or text.count("|") >= 2
-    )
-
-
-@dataclass
-class _AgentState:
-    budget: SourceBudget
-    pool: list[Passage] = field(default_factory=list)
-    all_hits: list[SearchHit] = field(default_factory=list)
-    trail: list[dict[str, Any]] = field(default_factory=list)
-    seen_ids: set[str] = field(default_factory=set)
-    seen_urls: set[str] = field(default_factory=set)
-    seen_hit_urls: set[str] = field(default_factory=set)
-    last_admitted: set[str] = field(default_factory=set)
-    brief: str = ""
-    decision_summary: str = ""
-    coverage: dict[str, Any] = field(
-        default_factory=lambda: {
-            "covered": [],
-            "open": [],
-            "contradictions_checked": [],
-        }
-    )
-    turns_completed: int = 0
-    feedback: str = ""
-    searches: int = 0
-
-    def admit_exempt(self, passages: list[Passage]) -> list[Passage]:
-        """Admit user-provided passages directly: exempt from the quality
-        filter AND the web-source budget (uploads/injections never consume
-        the retrieval allowance)."""
-        fresh: list[Passage] = []
-        for passage in passages:
-            if passage.id in self.seen_ids:
-                continue
-            self.seen_ids.add(passage.id)
-            if passage.source_url:
-                self.seen_urls.add(source_url_key(passage.source_url))
-            self.pool.append(passage)
-            fresh.append(passage)
-        return fresh
-
-    def admit_retrieved(self, retrieval: RetrievalResult) -> int:
-        """Quality-filter, dedup (id + url), and budget-charge one retrieval
-        result's passages; accumulate its deduped discovery hits."""
-        candidates: list[Passage] = []
-        candidate_ids: set[str] = set()
-        candidate_urls: set[str] = set()
-        for passage in retrieval.passages:
-            key = source_url_key(passage.source_url)
-            if (
-                passage.id in self.seen_ids
-                or passage.id in candidate_ids
-                or key in self.seen_urls
-                or key in candidate_urls
-                or not _report_usable_passage(passage)
-            ):
-                continue
-            candidate_ids.add(passage.id)
-            candidate_urls.add(key)
-            candidates.append(passage)
-        admitted, _charged = self.budget.admit(candidates)
-        for passage in admitted:
-            self.seen_ids.add(passage.id)
-            self.seen_urls.add(source_url_key(passage.source_url))
-            self.pool.append(passage)
-            self.last_admitted.add(passage.id)
-        for hit in retrieval.all_hits:
-            key = source_url_key(hit.url)
-            if key in self.seen_hit_urls:
-                for index, existing in enumerate(self.all_hits):
-                    if source_url_key(existing.url) == key:
-                        self.all_hits[index] = merge_search_hits(existing, hit)
-                        break
-                continue
-            self.seen_hit_urls.add(key)
-            self.all_hits.append(hit)
-        return len(admitted)
-
-    def restore_trail_state(self) -> None:
-        """Restore model-owned state from a stopped run's audit trail."""
-        search_turns = {
-            entry["turn"]
-            for entry in self.trail
-            if entry.get("kind") == "search" and isinstance(entry.get("turn"), int)
-        }
-        for entry in self.trail:
-            if entry.get("kind") == "brief" and isinstance(entry.get("text"), str):
-                self.brief = entry["text"]
-            elif entry.get("kind") == "decision" and isinstance(entry.get("text"), str):
-                self.decision_summary = entry["text"]
-            elif entry.get("kind") == "coverage" and isinstance(entry.get("coverage"), dict):
-                self.coverage = entry["coverage"]
-        # A research turn earns effort credit only when it issued a fresh
-        # query. Multiple queries in one turn count once; queryless decisions,
-        # malformed turns, and rejected repeats do not.
-        self.turns_completed = len(search_turns)
-
-
 def _normalize_query(query: str) -> str:
     return " ".join(query.casefold().split())
-
-
-def _query_history(state: _AgentState) -> list[dict[str, Any]]:
-    return [
-        {
-            key: entry[key]
-            for key in (
-                "turn",
-                "query",
-                "admitted",
-                "result",
-                "yield_reason",
-                "error",
-                "rejected",
-            )
-            if key in entry
-        }
-        for entry in state.trail
-        if entry.get("kind") in {"search", "query_rejected"}
-    ]
-
-
-def _upstream_zero_yield_warning(state: _AgentState) -> str:
-    """Give the lead a bounded pivot after two fresh, empty research turns."""
-    streak = 0
-    summaries = [entry for entry in state.trail if entry.get("kind") == "search_turn_summary"]
-    for summary in reversed(summaries):
-        if summary.get("queries", 0) <= 0 or summary.get("new_admitted", 0) != 0:
-            break
-        # Queries reach this point only after _fresh_queries has rejected
-        # repeats, so consecutive empty turns represent distinct attempts.
-        streak += 1
-    if streak < 2:
-        return ""
-    return (
-        "Two distinct research turns chasing an upstream lead yielded no new "
-        "admitted evidence. Stop paraphrasing or retrying that named "
-        "publisher/report; mark the claim or angle unresolved or single-source "
-        "if appropriate, and pivot to a different authoritative class (primary "
-        "paper, filing, regulator, official documentation, or independent "
-        "reporting). If the host evidence floors are already met, proceed toward "
-        "writing."
-    )
-
-
-def _fresh_queries(state: _AgentState, queries: tuple[str, ...]) -> tuple[list[str], list[str]]:
-    seen = {
-        _normalize_query(str(entry["query"]))
-        for entry in state.trail
-        if entry.get("kind") in {"search", "query_rejected"} and entry.get("query")
-    }
-    fresh: list[str] = []
-    repeated: list[str] = []
-    for query in queries:
-        normalized = _normalize_query(query)
-        if not normalized or normalized in seen:
-            repeated.append(query)
-            continue
-        seen.add(normalized)
-        fresh.append(query)
-    return fresh, repeated
-
-
-def _domain(url: str) -> str:
-    netloc = urlparse(url).netloc if url else ""
-    return netloc or "(user-provided)"
-
-
-def _digest_lines(passages: list[Passage], fresh_ids: set[str]) -> list[str]:
-    lines: list[str] = []
-    for passage in passages:
-        date = passage.published_at.isoformat() if passage.published_at else "date unknown"
-        title = (passage.source_title or passage.source_url or passage.id)[:120]
-        lines.append(f"  [{passage.id}] {title} — {passage.source_url} ({date})")
-        limit = _FRESH_GIST_CHARS if passage.id in fresh_ids else _GIST_CHARS
-        gist = " ".join(passage.text.split())[:limit]
-        lines.append(f"    {gist}")
-    return lines
-
-
-def _evidence_digest(pool: list[Passage], fresh_ids: set[str]) -> str:
-    if not pool:
-        return "EVIDENCE POOL: empty — nothing admitted yet."
-    by_domain: dict[str, list[Passage]] = {}
-    for passage in pool:
-        by_domain.setdefault(_domain(passage.source_url), []).append(passage)
-    lines = [f"EVIDENCE POOL ({len(pool)} sources, grouped by domain):"]
-    for domain in sorted(by_domain):
-        lines.append(f"{domain}:")
-        lines.extend(_digest_lines(by_domain[domain], fresh_ids))
-    return "\n".join(lines)
-
-
-def _budget_line(
-    remaining_s: float, total_s: float, bound: DepthBound, slots: int, searches: int
-) -> str:
-    line = (
-        f"BUDGET: {int(remaining_s)}s research time remaining of {int(total_s)}s; "
-        f"{slots} of {bound.max_sources} source slots remaining; "
-        f"{searches} searches issued so far."
-    )
-    if total_s > 0 and remaining_s < _WRAP_UP_FRACTION * total_s:
-        line += (
-            "\nWRAP-UP WARNING: less than 25% of the research budget remains — "
-            "finish your current leads and mark ready_to_write only when the "
-            "host readiness floor is satisfied."
-        )
-    return line
-
-
-def _depth_directive(bound: DepthBound, turn: int) -> str:
-    """Scale breadth and audit prompts without introducing fixed subquestions."""
-    if bound.retrieval_depth == "shallow":
-        return (
-            "DEPTH GUIDANCE (quick): keep the map broad, then perform one targeted "
-            "counterevidence check and a brief primary-source/upstream audit before wrap-up."
-        )
-    if bound.retrieval_depth == "deep":
-        if turn and turn % 2 == 0:
-            return (
-                "DEPTH GUIDANCE (exhaustive): refresh the coverage map now; pursue a missing "
-                "angle or minority view, trace load-bearing claims upstream, and seek independent "
-                "counterevidence before deciding readiness."
-            )
-        return (
-            "DEPTH GUIDANCE (exhaustive): broaden the map, include minority viewpoints, and "
-            "treat every named study, benchmark, filing, or dataset as an upstream lead."
-        )
-    if turn and turn % 2 == 0:
-        return (
-            "DEPTH GUIDANCE (standard): refresh coverage and audit load-bearing secondary claims "
-            "to their original sources; use the next search for an independent counterexample "
-            "where a claim is surprising or disputed."
-        )
-    return (
-        "DEPTH GUIDANCE (standard): map major angles first, then follow named sources upstream "
-        "and reserve a targeted search for criticism or negative results."
-    )
-
-
-def _turn_user_message(
-    query: str,
-    state: _AgentState,
-    steers: list[str],
-    *,
-    remaining_s: float,
-    total_s: float,
-    bound: DepthBound,
-) -> str:
-    parts = [f"QUESTION: {query}"]
-    if state.brief:
-        parts.append(f"YOUR BRIEF: {state.brief}")
-    if state.decision_summary:
-        parts.append(f"YOUR LAST DECISION: {state.decision_summary}")
-    if steers:
-        parts.append(
-            "USER STEER (priority user guidance — act on these in your next "
-            "searches):\n" + "\n".join(f"- {steer}" for steer in steers)
-        )
-    parts.append(_evidence_digest(state.pool, state.last_admitted))
-    parts.append(
-        "MODEL-OWNED COVERAGE STATE:\n"
-        + json.dumps(state.coverage, ensure_ascii=False, sort_keys=True)
-    )
-    history = _query_history(state)
-    parts.append(
-        "FULL QUERY OUTCOME HISTORY:\n"
-        + (json.dumps(history, ensure_ascii=False) if history else "(none yet)")
-    )
-    if state.feedback:
-        parts.append(f"HOST FEEDBACK — correct this on the next turn: {state.feedback}")
-    parts.append(_depth_directive(bound, state.turns_completed))
-    parts.append(_budget_line(remaining_s, total_s, bound, state.budget.remaining, state.searches))
-    return "\n\n".join(parts)
 
 
 # ---------------------------------------------------------------------------
 # Search execution — ≤3 concurrent retrievals per turn.
 # ---------------------------------------------------------------------------
-
-
-def _query_label(query: str) -> str:
-    return query if len(query) <= 80 else query[:77] + "..."
-
-
-def _zero_yield_reason(state: _AgentState, retrieval: RetrievalResult) -> str:
-    """Explain an empty admission so the next model turn can pivot intelligently."""
-    if not retrieval.all_hits:
-        return "no_hits"
-    if not retrieval.passages:
-        if not retrieval.extracted or all(not doc.fetched_ok for doc in retrieval.extracted):
-            return "extraction_failure"
-        return "duplicates_or_filtered"
-    usable = sum(_report_usable_passage(passage) for passage in retrieval.passages)
-    if usable == 0:
-        return "duplicates_or_filtered"
-    # If useful passages were returned but none survived admission, they were
-    # already represented or the source budget was consumed.
-    if state.budget.remaining <= 0:
-        return "budget"
-    return "duplicates_or_filtered"
-
-
-async def _retrieve_one(
-    retrieval_engine: RetrievalEngine,
-    query: str,
-    bound: DepthBound,
-    slots: int,
-    recency_window: Literal["month", "week"] | None,
-    corpus_ids: frozenset[str],
-) -> RetrievalResult:
-    request = RetrievalRequest(
-        query=query,
-        depth=bound.retrieval_depth,
-        top_k=min(bound.rerank_top_k, max(1, slots)),
-        discover_limit=bound.discover_limit,
-        extract_cap=min(bound.extract_cap, max(1, slots)),
-        recency_window=recency_window,
-        corpus_ids=corpus_ids,
-    )
-    return await retrieval_engine.retrieve(request)
 
 
 async def _execute_search_turn(
@@ -815,126 +328,17 @@ async def _execute_search_turn(
     corpus_ids: frozenset[str],
     emit: EmitFn,
 ) -> None:
-    """Run one turn's queries concurrently; admit through the quality filter
-    + SourceBudget; emit the same search/observation event shapes the UI
-    already parses. A retrieval exception becomes an ok=False observation and
-    the loop continues (the budget keeps ticking)."""
-    state.last_admitted = set()
-    round_no = turn + 1
-    labels = [_query_label(query) for query in queries]
-    slots = state.budget.remaining
-    for query, label in zip(queries, labels, strict=True):
-        await emit(
-            "search",
-            {"subquestion": label, "query": query, "round": round_no},
-        )
-    results: list[RetrievalResult | BaseException] = await asyncio.gather(
-        *(
-            _retrieve_one(retrieval_engine, query, bound, slots, recency_window, corpus_ids)
-            for query in queries
-        ),
-        return_exceptions=True,
+    """Run one turn's concurrent retrievals through the admission pipeline."""
+    await _execute_search_turn_impl(
+        state,
+        queries,
+        turn,
+        retrieval_engine=retrieval_engine,
+        bound=bound,
+        recency_window=recency_window,
+        corpus_ids=corpus_ids,
+        emit=emit,
     )
-    admitted_this_turn = 0
-    yield_reasons: list[str] = []
-    failed_queries = 0
-    provider_failures: list[ProviderOperationError] = []
-    for query, label, result in zip(queries, labels, results, strict=True):
-        state.searches += 1
-        if isinstance(result, BaseException):
-            failed_queries += 1
-            if isinstance(result, ProviderOperationError):
-                provider_failures.append(result)
-            state.trail.append(
-                {
-                    "kind": "search",
-                    "turn": turn,
-                    "query": query,
-                    "admitted": 0,
-                    "final_admitted_count": 0,
-                    "error": type(result).__name__,
-                    # Preserve the existing failure behavior while making a
-                    # provider exception distinguishable from a genuine
-                    # zero-hit RetrievalResult in the persisted trail.
-                    "provider_error": type(result).__name__,
-                    "result": "failed",
-                }
-            )
-            await emit(
-                "observation",
-                {
-                    "subquestion": label,
-                    "query": query,
-                    "round": round_no,
-                    "ok": False,
-                    "provider_error": type(result).__name__,
-                    "detail": f"retrieval failed: {type(result).__name__}: {result}",
-                },
-            )
-            continue
-        added = state.admit_retrieved(result)
-        admitted_this_turn += added
-        yield_reason = None if added else _zero_yield_reason(state, result)
-        if yield_reason:
-            yield_reasons.append(yield_reason)
-        state.trail.append(
-            {
-                "kind": "search",
-                "turn": turn,
-                "query": query,
-                "admitted": added,
-                "final_admitted_count": added,
-                "result": "evidence" if added else "empty",
-                "retrieval_trace": result.notes.get("retrieval_trace", {}),
-                **({"yield_reason": yield_reason} if yield_reason else {}),
-            }
-        )
-        await emit(
-            "observation",
-            {
-                "subquestion": label,
-                "round": round_no,
-                "ok": True,
-                "added": added,
-                "total_for_subq": len(state.pool),
-                "remaining_budget": state.budget.remaining,
-                "retrieval_trace": result.notes.get("retrieval_trace", {}),
-                **(
-                    {
-                        "yield_reason": yield_reason,
-                        "detail": (
-                            "No usable evidence: "
-                            + yield_reason.replace("_", " ")
-                            + ". Pivot the query or trace the named source upstream."
-                        ),
-                    }
-                    if yield_reason
-                    else {}
-                ),
-            },
-        )
-    if queries:
-        state.trail.append(
-            {
-                "kind": "search_turn_summary",
-                "turn": turn,
-                "round": round_no,
-                "queries": len(queries),
-                "new_admitted": admitted_this_turn,
-                "failed_queries": failed_queries,
-                "yield_reasons": sorted(set(yield_reasons)),
-            }
-        )
-    if queries and len(provider_failures) == len(queries):
-        raise provider_failures[0]
-    if queries and admitted_this_turn == 0:
-        reasons = ", ".join(sorted(set(yield_reasons))) or "retrieval failures"
-        pivot = (
-            "The last research turn admitted no new evidence "
-            f"({reasons}). Do not paraphrase those queries. Pivot by changing "
-            "the angle, source/domain, or specificity, and trace named works upstream."
-        )
-        state.feedback = f"{state.feedback} {pivot}".strip()
 
 
 # ---------------------------------------------------------------------------
@@ -954,16 +358,7 @@ def _drain_hooks(
     steers: list[str] = []
     steer_ids: list[str] = []
     for raw in raw_steers:
-        if isinstance(raw, str):
-            text, steer_id = raw, None
-        elif isinstance(raw, Mapping):
-            text = str(raw.get("text", "") or "")
-            steer_id = raw.get("steer_id")
-        else:
-            text = str(getattr(raw, "text", "") or "")
-            steer_id = getattr(raw, "steer_id", None)
-            if not isinstance(steer_id, str) or not steer_id.strip():
-                steer_id = None
+        text, steer_id = _coerce_steer(raw)
         if not text.strip():
             continue
         steers.append(text)
@@ -990,6 +385,102 @@ def _drain_hooks(
         fresh = state.admit_exempt(injected)
         state.trail.append({"kind": "injected", "count": len(fresh)})
     return steers, steer_ids
+
+
+def _coerce_steer(raw: object) -> tuple[str, str | None]:
+    if isinstance(raw, str):
+        return raw, None
+    if isinstance(raw, Mapping):
+        return str(raw.get("text", "") or ""), _valid_steer_id(raw.get("steer_id"))
+    return str(getattr(raw, "text", "") or ""), _valid_steer_id(getattr(raw, "steer_id", None))
+
+
+def _valid_steer_id(value: object) -> str | None:
+    return value if isinstance(value, str) and value.strip() else None
+
+
+def _initial_turn(state: _AgentState) -> int:
+    turns = (entry.get("turn", -1) for entry in state.trail)
+    return max((turn for turn in turns if isinstance(turn, int)), default=-1) + 1
+
+
+def _loop_terminal(
+    state: _AgentState,
+    bound: DepthBound,
+    started: float,
+    should_cancel: Callable[[], bool] | None,
+) -> str | None:
+    if should_cancel is not None and should_cancel():
+        return "stopped"
+    remaining = research_seconds_left(bound, started)
+    if remaining <= 0:
+        if state.pool:
+            return "wall_clock"
+        raise ResearchAgentError("research exhausted its wall-clock budget without usable evidence")
+    if state.budget.remaining <= 0:
+        if state.pool:
+            return "sources"
+        raise ResearchAgentError("research exhausted its source budget without usable evidence")
+    return None
+
+
+async def _run_turn_step(
+    state: _AgentState,
+    turn: int,
+    *,
+    query: str,
+    router: LLMRouter,
+    retrieval_engine: RetrievalEngine,
+    bound: DepthBound,
+    emit: EmitFn,
+    pop_steers: Callable[[], list[Any]] | None,
+    pop_injected_sources: Callable[[], list[Passage]] | None,
+    ack_steers: AckSteersFn,
+    recency_window: Literal["month", "week"] | None,
+    corpus_ids: frozenset[str],
+    remaining: float,
+    total_s: float,
+    system_prompt: str,
+    namespace: str,
+    malformed_streak: int,
+) -> tuple[bool, int]:
+    steers, steer_ids = _drain_hooks(state, pop_steers, pop_injected_sources)
+    user_message = _turn_user_message(
+        query, state, steers, remaining_s=remaining, total_s=total_s, bound=bound
+    )
+    parsed, error = await _one_model_turn(
+        router,
+        system_prompt,
+        user_message,
+        expect_brief=not state.brief,
+        namespace=namespace,
+    )
+    if parsed is None:
+        next_streak = malformed_streak + 1
+        state.trail.append({"kind": "malformed", "turn": turn, "error": error or ""})
+        if next_streak >= _MAX_MALFORMED_TURNS:
+            raise ResearchAgentError(
+                f"{_MAX_MALFORMED_TURNS} consecutive malformed research turns; "
+                f"last parse error: {error}"
+            )
+        return False, next_streak
+    if steer_ids:
+        unique_steer_ids = list(dict.fromkeys(steer_ids))
+        for steer_id in unique_steer_ids:
+            await emit("steer_applied", {"steer_id": steer_id})
+        if ack_steers is not None:
+            ack_steers(unique_steer_ids)
+    done = await _handle_parsed_turn(
+        state,
+        parsed,
+        turn,
+        retrieval_engine=retrieval_engine,
+        bound=bound,
+        recency_window=recency_window,
+        corpus_ids=corpus_ids,
+        emit=emit,
+    )
+    return done, 0
 
 
 async def _handle_parsed_turn(
@@ -1037,84 +528,7 @@ async def _handle_parsed_turn(
         corpus_ids=corpus_ids,
         emit=emit,
     )
-    if not parsed.ready_to_write:
-        warning = _upstream_zero_yield_warning(state)
-        if warning:
-            state.feedback = f"{state.feedback} {warning}".strip()
-        return False
-    unknown_ids = sorted(
-        {
-            evidence_id
-            for item in state.coverage.get("covered", [])
-            for evidence_id in item.get("evidence_ids", [])
-            if evidence_id not in state.seen_ids
-        }
-    )
-    supported_themes = sum(
-        bool(item.get("angle"))
-        and bool(item.get("evidence_ids"))
-        and all(evidence_id in state.seen_ids for evidence_id in item["evidence_ids"])
-        for item in state.coverage.get("covered", [])
-    )
-    if state.turns_completed < bound.minimum_research_turns:
-        if not fresh:
-            state.feedback = (
-                "Readiness rejected: issue at least one new research query as a fresh "
-                "pivot before trying again."
-            )
-        else:
-            state.feedback = (
-                f"Continue researching: at least {bound.minimum_research_turns} research turns "
-                f"are required; {state.turns_completed} completed."
-            )
-    elif len(state.pool) < bound.minimum_useful_sources:
-        state.feedback = (
-            f"Continue researching: at least {bound.minimum_useful_sources} useful sources "
-            f"are required; {len(state.pool)} admitted."
-        )
-    elif distinct_work_count(state.pool) < bound.min_evidence_sources:
-        state.feedback = (
-            f"Continue researching: at least {bound.min_evidence_sources} distinct works "
-            f"are required; {distinct_work_count(state.pool)} admitted. Multiple passages "
-            "or mirrors of one work do not count as independent evidence."
-        )
-    elif unknown_ids:
-        state.feedback = (
-            "Coverage references evidence ids that are not admitted: "
-            + ", ".join(unknown_ids)
-            + ". Cite only admitted ids."
-        )
-    elif supported_themes < bound.min_evidence_themes:
-        state.feedback = (
-            f"Continue the top-down coverage pass: at least {bound.min_evidence_themes} "
-            f"evidence-backed major angles are required at this depth; {supported_themes} "
-            "are recorded. Add only natural angles for this question and cite their "
-            "admitted evidence ids."
-        )
-    elif state.coverage.get("open"):
-        state.feedback = (
-            "Resolve these critical open coverage gaps before marking readiness: "
-            + "; ".join(str(gap) for gap in state.coverage["open"])
-        )
-    elif not state.coverage.get("contradictions_checked"):
-        state.feedback = (
-            "Before marking readiness, run a targeted search for the strongest "
-            "published objection, negative result, or conflicting evidence and record "
-            "what was checked in contradictions_checked."
-        )
-    else:
-        state.trail.append({"kind": "ready", "turn": turn})
-        return True
-    warning = _upstream_zero_yield_warning(state)
-    if warning:
-        state.feedback = f"{state.feedback} {warning}".strip()
-    if parsed.ready_to_write and not fresh:
-        state.feedback = (
-            state.feedback + " Readiness also requires at least one new research query as a fresh "
-            "pivot before trying again."
-        )
-    state.trail.append({"kind": "ready_rejected", "turn": turn, "reason": state.feedback})
-    return False
+    return apply_readiness_feedback(state, parsed, bound, fresh, turn)
 
 
 async def _turn_loop(
@@ -1138,67 +552,30 @@ async def _turn_loop(
 ) -> str | None:
     """Run turns until a terminal condition; returns `bounded_by`."""
     malformed_streak = 0
-    turn = (
-        max(
-            (entry.get("turn", -1) for entry in state.trail if isinstance(entry.get("turn"), int)),
-            default=-1,
-        )
-        + 1
-    )
+    turn = _initial_turn(state)
     while True:
-        if should_cancel is not None and should_cancel():
-            return "stopped"
+        terminal = _loop_terminal(state, bound, started, should_cancel)
+        if terminal is not None:
+            return terminal
         remaining = research_seconds_left(bound, started)
-        if remaining <= 0:
-            if state.pool:
-                return "wall_clock"
-            raise ResearchAgentError(
-                "research exhausted its wall-clock budget without usable evidence"
-            )
-        if state.budget.remaining <= 0:
-            if state.pool:
-                return "sources"
-            raise ResearchAgentError("research exhausted its source budget without usable evidence")
-        steers, steer_ids = _drain_hooks(state, pop_steers, pop_injected_sources)
-        user_message = _turn_user_message(
-            query, state, steers, remaining_s=remaining, total_s=total_s, bound=bound
-        )
-        parsed, error = await _one_model_turn(
-            router,
-            system_prompt,
-            user_message,
-            expect_brief=not state.brief,
-            namespace=namespace,
-        )
-        if parsed is None:
-            malformed_streak += 1
-            state.trail.append({"kind": "malformed", "turn": turn, "error": error or ""})
-            if malformed_streak >= _MAX_MALFORMED_TURNS:
-                raise ResearchAgentError(
-                    f"{_MAX_MALFORMED_TURNS} consecutive malformed research turns; "
-                    f"last parse error: {error}"
-                )
-            turn += 1
-            continue
-        malformed_streak = 0
-        if steer_ids:
-            # A valid parse is the only point at which the host can say the
-            # turn consumed the steer. Persist the fact before removing it
-            # from the live queue, so malformed/retried turns keep receiving it.
-            unique_steer_ids = list(dict.fromkeys(steer_ids))
-            for steer_id in unique_steer_ids:
-                await emit("steer_applied", {"steer_id": steer_id})
-            if ack_steers is not None:
-                ack_steers(unique_steer_ids)
-        done = await _handle_parsed_turn(
+        done, malformed_streak = await _run_turn_step(
             state,
-            parsed,
             turn,
+            query=query,
+            router=router,
             retrieval_engine=retrieval_engine,
             bound=bound,
             recency_window=recency_window,
             corpus_ids=corpus_ids,
             emit=emit,
+            pop_steers=pop_steers,
+            pop_injected_sources=pop_injected_sources,
+            ack_steers=ack_steers,
+            remaining=remaining,
+            total_s=total_s,
+            system_prompt=system_prompt,
+            namespace=namespace,
+            malformed_streak=malformed_streak,
         )
         if done:
             return None

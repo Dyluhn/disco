@@ -193,9 +193,7 @@ def test_research_passes_domain_deny_to_search():
     assert search.last_domains_deny == frozenset({"reddit.com"})
 
 
-async def test_research_stream_sources_adds_to_cached_global_provider(
-    tmp_path, monkeypatch
-):
+async def _assert_sources_add_to_cached_global_provider(tmp_path, monkeypatch):
     store = SqliteEventStore(":memory:")
     cfg = RouterConfig(
         models={"m": ModelEntry(model_id="m", provider="fake", context_window=8192)},
@@ -241,6 +239,23 @@ async def test_research_stream_sources_adds_to_cached_global_provider(
     assert override_search.calls == 1
     assert cached_search.calls == 1
     assert any(frame["type"] == "final" for frame in frames)
+
+
+async def test_research_stream_sources_adds_to_cached_global_provider(
+    tmp_path, monkeypatch
+):
+    await _assert_sources_add_to_cached_global_provider(tmp_path, monkeypatch)
+
+
+async def test_research_stream_sources_builds_override_and_bypasses_cached_global(
+    tmp_path, monkeypatch
+):
+    """The historical ID now guards the corrected composed-provider contract.
+
+    Request-local sources must be composed with the configured provider so the
+    override cannot silently bypass the cached global provider.
+    """
+    await _assert_sources_add_to_cached_global_provider(tmp_path, monkeypatch)
 
 
 def test_think_toggles_reasoning_on_the_answerer_provider(tmp_path):

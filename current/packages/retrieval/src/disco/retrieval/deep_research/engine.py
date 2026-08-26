@@ -111,10 +111,7 @@ class ReportFromRun:
         if self.bounded_by == "stopped":
             checkpoint = ResearchCheckpointEvent(
                 query=self.query,
-                passages=[
-                    p.model_dump()
-                    for p in [*self.cited_passages, *self.reviewed_passages]
-                ],
+                passages=[p.model_dump() for p in [*self.cited_passages, *self.reviewed_passages]],
                 all_hits=[h.model_dump() for h in self.all_hits],
                 trail=self.research_trail,
                 completed_queries=self.completed_probes,

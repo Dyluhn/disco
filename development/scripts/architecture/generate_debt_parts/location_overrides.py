@@ -14,6 +14,10 @@ except ImportError:
 
 LOCATION_OVERRIDES = {
     **CURRENT_LOCATION_OVERRIDES,
+    "DM-008": (
+        "current/packages/retrieval/src/disco/retrieval/streaming.py + "
+        "current/packages/retrieval/src/disco/retrieval/deep_research/writer.py"
+    ),
     "DM-001": (
         "current/packages/agent-server/src/disco/agent_server/runtime.py:ConversationRuntime:810-5369"
     ),
@@ -35,7 +39,7 @@ LOCATION_OVERRIDES = {
     "DM-017": (
         "current/packages/core/src/disco/core/events.py:Event:187-217 + "
         "current/packages/core/src/disco/core/wire.py:WSServerFrame:39-65 + "
-        "current/frontend/src/types/agent.ts:AgentEvent/WSServerFrame:388-489"
+        "current/frontend/src/types/agent.ts:AgentEvent/WSServerFrame:388-590"
     ),
     "PY-0189": (
         "current/packages/agent-server/src/disco/agent_server/build_kernel/disco_kernel.py:"
@@ -84,9 +88,15 @@ LOCATION_OVERRIDES = {
     "PY-0308": (
         "current/packages/agent-server/src/disco/agent_server/runtime.py:ConversationRuntime:810-5369"
     ),
-    "PY-0309": ("current/packages/agent-server/src/disco/agent_server/runtime.py:__init__:832-1166"),
-    "PY-0310": ("current/packages/agent-server/src/disco/agent_server/runtime.py:__init__:832-1166"),
-    "PY-0311": ("current/packages/agent-server/src/disco/agent_server/runtime.py:_surface_of:1318-1389"),
+    "PY-0309": (
+        "current/packages/agent-server/src/disco/agent_server/runtime.py:__init__:832-1166"
+    ),
+    "PY-0310": (
+        "current/packages/agent-server/src/disco/agent_server/runtime.py:__init__:832-1166"
+    ),
+    "PY-0311": (
+        "current/packages/agent-server/src/disco/agent_server/runtime.py:_surface_of:1318-1389"
+    ),
     "PY-0312": (
         "current/packages/agent-server/src/disco/agent_server/runtime.py:_resolve_driver_context:1433-1505"
     ),
@@ -135,5 +145,7 @@ LOCATION_OVERRIDES = {
         "current/packages/agent-server/src/disco/agent_server/workspace_service.py:"
         "WorkspaceCoordinator:125-815"
     ),
-    "PY-0359": ("current/packages/agent-server/src/disco/agent_server/workspace_service.py:<module>:1-815"),
+    "PY-0359": (
+        "current/packages/agent-server/src/disco/agent_server/workspace_service.py:<module>:1-815"
+    ),
 }

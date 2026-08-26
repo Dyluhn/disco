@@ -297,8 +297,7 @@ async def test_router_phase_denies_file_write_with_workflow_routing_hint() -> No
     assert "file_write" in executor.known_tool_names_for_requery()
 
 
-@pytest.mark.asyncio
-async def test_workflow_run_denial_text_names_available_recovery() -> None:
+async def _assert_workflow_run_denial_text_names_available_recovery() -> None:
     state = WorkflowPhaseState(
         phase=WorkflowPhase.RUN,
         instance_id="wf_read_only",
@@ -337,6 +336,11 @@ async def test_workflow_run_denial_text_names_available_recovery() -> None:
     )
     assert "enter_workflow" not in result.content
     assert "general_workspace_task" not in result.content
+
+
+@pytest.mark.asyncio
+async def test_workflow_run_denial_text_names_available_recovery() -> None:
+    await _assert_workflow_run_denial_text_names_available_recovery()
 
 
 @pytest.mark.asyncio
@@ -1036,3 +1040,9 @@ def test_build_workflow_definition_matches_draft_tool_shape() -> None:
     }
     assert defn.tools == ("file_read", "search")
     assert defn.output_contract.path_template == "outputs/{query}.md"
+
+
+@pytest.mark.asyncio
+async def test_workflow_run_denial_text_names_workflow_exit() -> None:
+    """Historical wording ID retained for the current actionable recovery text."""
+    await _assert_workflow_run_denial_text_names_available_recovery()

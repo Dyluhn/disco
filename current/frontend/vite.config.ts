@@ -71,6 +71,11 @@ export default defineConfig({
     globals: true,
     setupFiles: ["./src/test/setup.ts"],
     css: true,
+    // Keep async UI tests inside their real per-test deadlines on both
+    // two-core hosted runners and high-core developer machines. Letting Vitest
+    // fan 200 jsdom files out to every visible CPU creates scheduler starvation,
+    // false timeouts, and late React updates after a timed-out test exits.
+    maxWorkers: 2,
     // The Playwright E2E specs (e2e/*.spec.ts, e2e-live/*.spec.ts, e2e-full/*.spec.ts,
     // and e2e-policy/*.spec.ts)
     // are NOT vitest tests — they run under `npm run test:e2e` / the VM-201 evidence
