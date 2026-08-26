@@ -41,6 +41,7 @@ from disco.core.events import (
     QuestionsV2Item,
     ReportEvent,
     ReportSection,
+    ResearchCheckpointEvent,
     RuntimeConstraintEvent,
     ScheduleEvent,
     ScheduleRunEvent,
@@ -232,6 +233,15 @@ _PAYLOAD_KEYS = {
         "summary_ref_path",
     ),
     "context_summary": ("range_id", "rel_path", "summary", "artifact_kind"),
+    "research_checkpoint": (
+        "query",
+        "passages",
+        "all_hits",
+        "trail",
+        "completed_queries",
+        "depth_tier",
+        "recency_window",
+    ),
 }
 
 # These hashes were generated from the accepted pre-extraction implementation.
@@ -264,6 +274,7 @@ _EXPECTED_DIGESTS = {
     "questions_v2": "aa1f2bf5e9820268d6cbbfe17b775eaed6a8f86f19bbeab0becb17c8da076ead",
     "context_resolved": "cf583c5d51c2676e1942b010712251705f35db0ef904c07daad88b37796f575c",
     "context_summary": "405fe8a026cb1a610b5ebd8d332a1b5455b414b8f797c4469a1d747c45e8decc",
+    "research_checkpoint": "352e949885c9efb3a54742f059422ec8d4a136442d7aa2d018c3a106a671753e",
 }
 
 
@@ -498,6 +509,15 @@ def make_event_corpus() -> tuple[BaseEvent, ...]:
             summary="Deterministic context summary.",
             artifact_kind="summary",
         ),
+        ResearchCheckpointEvent(
+            **_envelope(29),
+            query="What is pinned?",
+            passages=[{"id": "passage-1", "text": "checkpoint fixture"}],
+            all_hits=[{"url": "https://example.invalid/checkpoint"}],
+            trail=[{"kind": "search", "query": "pinned event contract"}],
+            completed_queries=["pinned event contract"],
+            depth_tier="standard_deep",
+        ),
     )
 
 
@@ -521,7 +541,7 @@ def test_corpus_exactly_matches_ordered_event_union_and_kind_enum() -> None:
     union_members = get_args(get_args(Event)[0])
     assert tuple(type(event) for event in CORPUS) == union_members
     assert {event.kind for event in CORPUS} == set(EventKind)
-    assert len(CORPUS) == len(EventKind) == 28
+    assert len(CORPUS) == len(EventKind) == 29
 
 
 @pytest.mark.parametrize("event", CORPUS, ids=lambda event: event.kind.value)
@@ -583,13 +603,37 @@ def test_historical_deliverable_without_kind_is_migrated_only_on_read() -> None:
     assert restored.artifact_kind == "app"
 
 
+def test_finished_report_cannot_be_empty_and_legacy_stop_migrates_to_checkpoint() -> None:
+    with pytest.raises(ValidationError, match="executive summary"):
+        ReportEvent(query="question", summary="", sections=[])
+
+    report = next(event for event in CORPUS if isinstance(event, ReportEvent))
+    raw = event_to_json_dict(report)
+    raw.update(
+        {
+            "summary": "",
+            "sections": [],
+            "bounded_by": "stopped",
+            "completed_probes": ["first query"],
+        }
+    )
+
+    migrated = migrate_event(raw)
+    restored = event_from_json_dict(migrated)
+
+    assert isinstance(restored, ResearchCheckpointEvent)
+    assert restored.completed_queries == ["first query"]
+    assert [passage["id"] for passage in restored.passages] == ["passage-1", "passage-2"]
+    assert migrate_event(migrated) == migrated
+
+
 def test_frozen_corpus_produces_the_accepted_canonical_fold() -> None:
     expected = {
         "conversation_id": "corpus",
         "execution_status": "ERROR",
         "iteration": 1,
         "max_iterations": 42,
-        "last_seq": 28,
+        "last_seq": 29,
         "active_agent_view_id": None,
         "active_agent_view_seq": None,
         "agent_view_pending": False,

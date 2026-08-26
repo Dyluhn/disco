@@ -1,17 +1,14 @@
-"""Capture ONE real deep-research plan-gate turn into an (event-log + cassette)
-fixture pair, so the Phase 3 deterministic replay (`make replay` +
-`test_replay_runner.py::test_deterministic_replay_reproduces_recorded_events`)
-has real inputs/outputs to reproduce.
+"""Capture ONE real gateless Deep Research run into an event-log + cassette
+fixture pair for deterministic replay (`make replay`).
 
 Targets the DEEP_RESEARCH surface deliberately: its tools are exactly
 search/extract/LLM, all of which `build_replay_runtime` serves from the cassette,
 so the replay is fully deterministic (the `build` surface would also need a
 sandbox-replay seam — see replay_runner.py's SURFACE CAVEAT).
 
-The capture makes the calls a current first turn owns — one QUERY_REWRITER for
-the plan and one or two SUMMARIZER attempts for the conversation title — then
-intentionally stops at the plan-approval gate. Configure the normal stores through `DISCO_CONFIG`,
-`DISCO_SECRETS`, `DISCO_APPROVALS`, and `DISCO_SECRET_KEY` before running it:
+The capture runs through a terminal ReportEvent. Configure the normal stores
+through `DISCO_CONFIG`, `DISCO_SECRETS`, `DISCO_APPROVALS`, and
+`DISCO_SECRET_KEY` before running it:
 
     PYTHONPATH=. setsid uv run python -m harness._capture_loop_demo   # = make capture-loop
 """
@@ -58,22 +55,27 @@ async def _main() -> None:
         MessageEvent(source=EventSource.USER, message=LLMMessage(role="user", content=_QUERY)),
     )
 
-    # This fixture owns one deterministic turn: query → plan → approval gate.
-    # Full post-approval captures may contain search/extraction/synthesis rows, but
-    # this small fixture deliberately does not spend that live-service budget.
+    # Gateless Deep Research starts on the user message and must finish with a
+    # real report. There is no plan gate or approval input in the current flow.
     await _kick_and_wait(rt, CID)
 
     events = await store.get_events(CID)
     state = await store.get_state(CID)
     kinds = [event.kind for event in events]
-    if state.execution_status != ConversationStatus.AWAITING_PLAN_APPROVAL:
-        raise RuntimeError("capture did not reach the plan-approval gate")
-    if kinds != [EventKind.MESSAGE, EventKind.STATUS, EventKind.PLAN, EventKind.STATUS]:
-        raise RuntimeError(f"capture emitted an unexpected event sequence: {kinds!r}")
+    if state.execution_status != ConversationStatus.FINISHED:
+        raise RuntimeError(f"capture did not finish Deep Research: {state.execution_status!r}")
+    if EventKind.PLAN in kinds:
+        raise RuntimeError("capture emitted retired PlanEvent protocol")
+    reports = [event for event in events if event.kind == EventKind.REPORT]
+    if len(reports) != 1:
+        raise RuntimeError(f"capture expected one terminal ReportEvent, got {len(reports)}")
+    report = reports[0]
+    if not getattr(report, "summary", "").strip() or not getattr(report, "sections", ()):
+        raise RuntimeError("capture emitted an empty ReportEvent")
     seams = cas.seams()
-    if set(seams) != {"llm.complete"} or seams["llm.complete"] not in {2, 3}:
+    if "llm.complete" not in seams:
         raise RuntimeError(
-            f"capture did not record one planner plus one or two title calls: {seams!r}"
+            f"capture did not record the gateless model calls: {seams!r}"
         )
     _OUT.mkdir(exist_ok=True)
     log_path = _OUT / "loop_demo.events.jsonl"

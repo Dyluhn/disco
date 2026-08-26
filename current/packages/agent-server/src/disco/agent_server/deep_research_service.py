@@ -13,6 +13,7 @@ from disco.core import (
     MessageEvent,
     NoOpCondenser,
     ReportEvent,
+    ResearchCheckpointEvent,
 )
 from disco.core.llm import (
     DefaultLLMRouter,
@@ -386,7 +387,7 @@ class DeepResearchService:
         self,
         conversation_id: str,
         *,
-        resume_from: ReportEvent | None = None,
+        resume_from: ResearchCheckpointEvent | None = None,
     ) -> None:
         """Run the v2 engine on the conversation's research question (the
         first user message + any pre-run additions), emitting the brief and
@@ -394,7 +395,7 @@ class DeepResearchService:
         ReportEvent + StatusEvent(FINISHED). See ``execute_parts.run_execute``
         for the full sequencing.
 
-        `resume_from` is a prior stopped run's checkpoint ReportEvent: its
+        `resume_from` is a prior stopped run's ResearchCheckpointEvent: its
         gathered evidence + issued queries are carried into the engine so
         resume continues from the checkpoint instead of redoing the searches
         that already ran."""

@@ -35,6 +35,7 @@ from .research_harness_parts._checks import (
     _PUNCTUATION_ONLY,
     _SECTION_MIN_WORDS,
     _SUMMARY_DIAGNOSTIC_LANGUAGE,
+    _depth_word_bounds,
     _failure_text,
     _heading_hierarchy_is_valid,
     _is_stopped_checkpoint,
@@ -67,6 +68,7 @@ from .research_harness_parts._observe import (
     phase_for,
     redact,
 )
+from .research_harness_parts._quality_metrics import report_quality_metrics
 from .research_harness_parts._run import (
     SCHEMA_VERSION,
     HarnessFailure,
@@ -77,6 +79,8 @@ from .research_harness_parts._run import (
     run_harness,
     write_artifacts,
 )
+from .research_harness_parts._search_io import collect_search_io, render_search_timeline
+from .research_harness_parts._thrash import analyze_thrash
 from .research_harness_parts._transports import (
     FakeTransport,
     LiveWebSocketTransport,
@@ -84,6 +88,7 @@ from .research_harness_parts._transports import (
     ResearchTransport,
     _connect,
     _conversation_status,
+    _is_terminal_research_frame,
     _transport_for,
 )
 
@@ -106,6 +111,10 @@ __all__ = [
     "render_report_markdown",
     "write_artifacts",
     "render_summary_markdown",
+    "analyze_thrash",
+    "report_quality_metrics",
+    "collect_search_io",
+    "render_search_timeline",
     "redact",
     "phase_for",
     "main",
@@ -114,6 +123,7 @@ __all__ = [
     "_CITATION",
     "_DEPTH_TIMEOUTS_S",
     "_DEPTH_WORD_TARGETS",
+    "_depth_word_bounds",
     "_FAILURE_WORDS",
     "_FOOTNOTE_CITATION",
     "_MARKDOWN_HEADING",
@@ -125,6 +135,7 @@ __all__ = [
     "_citation_ids",
     "_connect",
     "_conversation_status",
+    "_is_terminal_research_frame",
     "_failure_text",
     "_heading_hierarchy_is_valid",
     "_is_stopped_checkpoint",

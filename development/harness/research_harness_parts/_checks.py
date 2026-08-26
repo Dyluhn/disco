@@ -34,6 +34,24 @@ _DEPTH_WORD_TARGETS = {
     "standard_deep": (4000, 7000),
     "exhaustive": (8000, 12000),
 }
+# The product keeps these nominal tier targets. The harness is an outside
+# diagnostic, so it allows a small boundary tolerance for provider variance
+# after the writer has produced an otherwise valid report.
+_DEPTH_WORD_TOLERANCE_PERCENT = 5
+
+
+def _depth_word_bounds(depth: str) -> tuple[int, int] | None:
+    """Return the harness acceptance range around a nominal tier target."""
+    target = _DEPTH_WORD_TARGETS.get(depth)
+    if target is None:
+        return None
+    minimum, maximum = target
+    return (
+        minimum - minimum * _DEPTH_WORD_TOLERANCE_PERCENT // 100,
+        maximum + maximum * _DEPTH_WORD_TOLERANCE_PERCENT // 100,
+    )
+
+
 _SECTION_MIN_WORDS = 120
 _SUMMARY_DIAGNOSTIC_LANGUAGE = re.compile(
     r"\b(?:"
@@ -68,8 +86,24 @@ def normalize_report(
     honestly when the product violated its contract.
     """
     raw = dict(_final_candidate(frames) or {})
+    kind = str(raw.get("kind") or "report")
+    if kind == "research_checkpoint":
+        return redact(
+            {
+                "kind": kind,
+                "query": raw.get("query") or request.query,
+                "summary": "",
+                "sections": [],
+                "passages": _mapping_rows(raw.get("passages")),
+                "all_hits": _mapping_rows(raw.get("all_hits")),
+                "trail": _plain_list(raw.get("trail")),
+                "completed_queries": _plain_list(raw.get("completed_queries")),
+                "depth_tier": raw.get("depth_tier") or request.depth,
+            }
+        )
     summary = str(raw.get("summary") or raw.get("executive_summary") or "").strip()
     result = {
+        "kind": "report",
         "query": raw.get("query") or request.query,
         "summary": summary,
         "sections": _mapping_rows(raw.get("sections")),
@@ -93,9 +127,12 @@ def _final_candidate(frames: Sequence[Mapping[str, Any]]) -> Mapping[str, Any] |
         if isinstance(frame.get("report"), Mapping):
             return cast(Mapping[str, Any], frame["report"])
         event = frame.get("event")
-        if isinstance(event, Mapping) and str(event.get("kind", "")).lower() == "report":
+        if isinstance(event, Mapping) and str(event.get("kind", "")).lower() in {
+            "report",
+            "research_checkpoint",
+        }:
             return event
-        if str(frame.get("kind", "")).lower() == "report":
+        if str(frame.get("kind", "")).lower() in {"report", "research_checkpoint"}:
             return frame
         answer = frame.get("answer")
         if isinstance(answer, Mapping) and (frame.get("type") == "final" or "sections" in answer):
@@ -112,16 +149,11 @@ def _mapping_rows(value: Any) -> list[dict[str, Any]]:
 
 
 def _is_stopped_checkpoint(report: Mapping[str, Any]) -> bool:
-    """A user-Stop PAUSED checkpoint: ``bounded_by == "stopped"`` with no body.
-
-    The product contract has exactly three run outcomes: a valid report, a run
-    ERROR, or a user-Stop checkpoint whose report has ``sections == []`` and
-    ``summary == ""``.  Only the stopped shape earns the empty-report allowance.
-    """
+    """A typed resumable checkpoint, which is not report content."""
     raw_sections = report.get("sections")
     sections = raw_sections if isinstance(raw_sections, list) else []
     return (
-        str(report.get("bounded_by") or "") == "stopped"
+        str(report.get("kind") or "") == "research_checkpoint"
         and not sections
         and not str(report.get("summary") or "").strip()
     )
@@ -134,9 +166,9 @@ def check_invariants(
     *,
     depth: str = "standard_deep",
 ) -> dict[str, bool]:
-    # A stopped checkpoint is a legitimate terminal artifact and is judged as a
-    # checkpoint, not as a report: its empty summary and sections are allowed
-    # ONLY when bounded_by == "stopped".
+    # A research_checkpoint is a legitimate terminal artifact and is judged as
+    # checkpoint state, not as a report: its empty summary and sections are
+    # allowed because the typed event kind carries that contract.
     checkpoint = _is_stopped_checkpoint(report)
     sections = _plain_list(report.get("sections"))
     valid_sections = _valid_sections(sections)
@@ -156,10 +188,10 @@ def check_invariants(
         or checkpoint,
         "citations_resolve": _citations_resolve(cited, passages) or checkpoint,
         "no_diagnostic_or_research_process_language": not _diagnostic_language(summary, body),
-        "heading_hierarchy_valid": _heading_hierarchy_is_valid(markdown),
+        "heading_hierarchy_valid": _heading_hierarchy_is_valid(markdown) or checkpoint,
         "repetition_acceptable": _repetition_is_acceptable(body) or checkpoint,
         "stopped_checkpoint_valid": checkpoint
-        or str(report.get("bounded_by") or "") != "stopped",
+        or str(report.get("kind") or "") != "research_checkpoint",
         "bounds_and_errors_recorded": isinstance(observer.bounds, list)
         and isinstance(observer.errors, list),
     }

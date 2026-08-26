@@ -1,8 +1,9 @@
-"""Event-log replay runner (plan Phase 3). The pure machinery — normalize / split /
+"""Event-log replay runner. The pure machinery — normalize / split /
 diff — is tested on REAL event objects (constructed from the real classes), proving
 it strips exactly the volatile fields and catches a real output divergence. The
 full deterministic engine re-run is gated on a captured (event-log + cassette) pair
-(`_capture_loop_demo.py`); it skips cleanly when that fixture is absent, the same
+(`_capture_loop_demo.py`); it skips cleanly when that fixture is absent or still
+the checked-in legacy plan-gate capture, the same
 env-blocked heavy capture as the Phase 2 --replay e2e.
 
 Run: PYTHONPATH=. uv run pytest development/harness/tests/test_replay_runner.py
@@ -22,10 +23,10 @@ from disco.core.events import (
     ToolCall,
     ToolResult,
 )
-
 from harness.replay_runner import (
     diff_sequences,
     is_input,
+    is_legacy_plan_fixture,
     normalize_event,
     split_io,
 )
@@ -131,6 +132,13 @@ def test_diff_catches_a_kind_change():
     assert diffs and "kind" in diffs[0]
 
 
+def test_legacy_plan_fixture_is_detected() -> None:
+    from disco.core.events import PlanEvent
+
+    assert is_legacy_plan_fixture([PlanEvent(summary="old", steps=[], revision=1)])
+    assert not is_legacy_plan_fixture([])
+
+
 # ---- full deterministic replay (gated on the captured fixture) --------------
 
 _FIXTURE = Path(__file__).resolve().parents[1] / "cassettes" / "loop_demo.events.jsonl"
@@ -141,13 +149,18 @@ _FIXTURE = Path(__file__).resolve().parents[1] / "cassettes" / "loop_demo.events
 )
 async def test_deterministic_replay_reproduces_recorded_events():
     from disco.core import SqliteEventStore
-
+    from disco.core.events import EventKind
     from harness.cassette import Cassette
     from harness.replay_runner import load_events, replay_conversation
     from harness.runtime import build_replay_runtime
 
     cassette = Cassette.load(str(_FIXTURE.with_name("loop_demo.cassette.jsonl")))
     recorded = load_events(_FIXTURE)
+    if any(event.kind == EventKind.PLAN for event in recorded):
+        pytest.skip(
+            "checked-in fixture is legacy plan-gate; rerun `make capture-loop` "
+            "before enabling gateless replay"
+        )
 
     def _builder(store):
         return build_replay_runtime(cassette, store)

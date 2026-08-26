@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from disco.core import EventSource, ReportSection, SqliteEventStore
+from disco.core import (
+    EventSource,
+    ReportSection,
+    ResearchCheckpointEvent,
+    SqliteEventStore,
+)
 from disco.retrieval.deep_research.engine import ReportFromRun
 from disco.retrieval.models import Passage, SearchHit
 
@@ -126,3 +131,44 @@ def test_small_report_event_remains_lossless() -> None:
     assert event.reviewed_passages == [reviewed[0].model_dump()]
     assert event.all_hits == [hits[0].model_dump()]
     assert event.meta == {}
+
+
+async def test_oversized_stop_persists_as_bounded_checkpoint_not_report() -> None:
+    passages = [_passage(index, cited=False) for index in range(240)]
+    hits = [_hit(index) for index in range(900)]
+    trail = [
+        {"kind": "search", "query": f"research angle {index}", "admitted": 1}
+        for index in range(80)
+    ]
+    result = ReportFromRun(
+        query="Paused investigation",
+        summary="",
+        sections=[],
+        cited_passages=[],
+        reviewed_passages=passages,
+        all_hits=hits,
+        unsupported_count=0,
+        bounded_by="stopped",
+        depth_tier="exhaustive",
+        completed_probes=[entry["query"] for entry in trail],
+        research_trail=trail,
+        recency_window="month",
+    )
+
+    event = result.to_event()
+
+    assert isinstance(event, ResearchCheckpointEvent)
+    assert event.query == "Paused investigation"
+    assert event.trail == trail
+    assert event.completed_queries == [entry["query"] for entry in trail]
+    assert event.recency_window == "month"
+    assert event.passages
+    assert event.all_hits
+    assert event.meta["checkpoint_evidence_compacted"] is True
+
+    store = SqliteEventStore(":memory:")
+    stored = await store.append("paused-report", event)
+    replayed = await store.get_events("paused-report")
+    assert isinstance(stored, ResearchCheckpointEvent)
+    assert replayed == [stored]
+    store.close()

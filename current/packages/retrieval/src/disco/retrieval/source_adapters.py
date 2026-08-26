@@ -10,16 +10,17 @@ import re
 import xml.etree.ElementTree as ET
 from collections.abc import Mapping
 from html.parser import HTMLParser
+from typing import Any, cast
 from urllib.parse import urlencode, urlparse
 
 import httpx
 from disco.core.host_egress import EgressDenied, GuardedResponse, guarded_get
 
 from .models import SearchHit
-
-_LOG = logging.getLogger(__name__)
 from .providers import SearchProvider
 from .url_policy import parse_source_date, source_url_key, url_allowed
+
+_LOG = logging.getLogger(__name__)
 
 _ATOM_NS = {"a": "http://www.w3.org/2005/Atom"}
 
@@ -403,7 +404,25 @@ class MultiSearchProvider:
         domains_deny: frozenset[str] | None = None,
         time_filter: str | None = None,
     ) -> list[SearchHit]:
-        rows_by_provider = await self._gather_rows(
+        hits, _diagnostic = await self.search_detailed(
+            query,
+            limit=limit,
+            domains_allow=domains_allow,
+            domains_deny=domains_deny,
+            time_filter=time_filter,
+        )
+        return hits
+
+    async def search_detailed(
+        self,
+        query: str,
+        *,
+        limit: int = 10,
+        domains_allow: frozenset[str] | None = None,
+        domains_deny: frozenset[str] | None = None,
+        time_filter: str | None = None,
+    ) -> tuple[list[SearchHit], dict[str, object]]:
+        rows_by_provider, diagnostic = await self._gather_rows_detailed(
             query,
             limit=limit,
             domains_allow=domains_allow,
@@ -411,9 +430,9 @@ class MultiSearchProvider:
             time_filter=time_filter,
         )
         if not rows_by_provider:
-            return []
+            return [], diagnostic
         by_url, ordered_urls = self._merge_by_url(rows_by_provider)
-        return self._finalize(by_url, ordered_urls, limit)
+        return self._finalize(by_url, ordered_urls, limit), diagnostic
 
     async def _gather_rows(
         self,
@@ -424,11 +443,30 @@ class MultiSearchProvider:
         domains_deny: frozenset[str] | None,
         time_filter: str | None,
     ) -> list[list[SearchHit]]:
+        rows, _diagnostic = await self._gather_rows_detailed(
+            query,
+            limit=limit,
+            domains_allow=domains_allow,
+            domains_deny=domains_deny,
+            time_filter=time_filter,
+        )
+        return rows
+
+    async def _gather_rows_detailed(
+        self,
+        query: str,
+        *,
+        limit: int,
+        domains_allow: frozenset[str] | None,
+        domains_deny: frozenset[str] | None,
+        time_filter: str | None,
+    ) -> tuple[list[list[SearchHit]], dict[str, object]]:
         if not self._providers or limit <= 0:
-            return []
+            return [], {}
         gathered = await asyncio.gather(
             *[
-                provider.search(
+                self._search_provider(
+                    provider,
                     query,
                     limit=limit,
                     domains_allow=domains_allow,
@@ -440,8 +478,11 @@ class MultiSearchProvider:
             return_exceptions=True,
         )
         rows_by_provider: list[list[SearchHit]] = []
+        diagnostics: dict[str, object] = {}
         for provider, result in zip(self._providers, gathered, strict=True):
+            provider_name = str(getattr(provider, "name", type(provider).__name__))[:80]
             if isinstance(result, BaseException):
+                diagnostics[provider_name] = {"provider_error": type(result).__name__}
                 _LOG.warning(
                     "search provider %s failed: %s: %s",
                     getattr(provider, "name", type(provider).__name__),
@@ -449,10 +490,43 @@ class MultiSearchProvider:
                     result,
                 )
                 continue
-            if not result:
+            rows, provider_diagnostic = result
+            if provider_diagnostic:
+                diagnostics[provider_name] = provider_diagnostic
+            if not rows:
                 continue
-            rows_by_provider.append(list(result))
-        return rows_by_provider
+            rows_by_provider.append(list(rows))
+        return rows_by_provider, ({"providers": diagnostics} if diagnostics else {})
+
+    @staticmethod
+    async def _search_provider(
+        provider: SearchProvider,
+        query: str,
+        *,
+        limit: int,
+        domains_allow: frozenset[str] | None,
+        domains_deny: frozenset[str] | None,
+        time_filter: str | None,
+    ) -> tuple[list[SearchHit], dict[str, object]]:
+        detailed = getattr(provider, "search_detailed", None)
+        if callable(detailed):
+            return await cast(Any, detailed)(
+                query,
+                limit=limit,
+                domains_allow=domains_allow,
+                domains_deny=domains_deny,
+                time_filter=time_filter,
+            )
+        return (
+            await provider.search(
+                query,
+                limit=limit,
+                domains_allow=domains_allow,
+                domains_deny=domains_deny,
+                time_filter=time_filter,
+            ),
+            {},
+        )
 
     @staticmethod
     def _merge_by_url(

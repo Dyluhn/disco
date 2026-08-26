@@ -140,6 +140,20 @@ class GroundingPipeline:
 
 _CITE = re.compile(r"\[\[([\w-]+)\]\]")
 _SENT = re.compile(r"(?<=[.!?])\s+")
+_ABBREVIATION = re.compile(
+    r"(?:\bet\s+al|\be\.g|\bi\.e|\b(?:Mr|Mrs|Ms|Dr|Prof|Sr|Jr|vs|Fig|Eq|No))\.$",
+    re.IGNORECASE,
+)
+# Short lowercase abbreviations that qualify a following number (for example
+# ``c. 1200`` or ``ca. 1200``) are not sentence endings.  Keep this generic:
+# the same shape occurs in dates, measurements, page references, and ranges.
+_NUMERIC_ABBREVIATION = re.compile(r"\b[a-z]{1,3}\.$")
+# Initialisms can be part of a hyphenated compound (``U.S.-China``) or
+# qualify a following word (``the U.S. Department``).  In either case, the
+# period after the final initial is not a prose boundary. A citation follows
+# the sentence-ending form, so bracketed text remains a valid boundary.
+_INITIALISM = re.compile(r"\b(?:[A-Za-z]\.){2,}$")
+_PERSON_INITIAL = re.compile(r"\b[A-Z]\.$")
 _CLUSTER = re.compile(r"(.*?)((?:\[\[[\w-]+\]\]\s*)+)", re.DOTALL)
 _MD = re.compile(r"[*`#_>]+")
 _MD_IMG = re.compile(r"!\[[^\]]*\]\([^)]*\)")
@@ -162,6 +176,38 @@ class _ClaimSpan(NamedTuple):
     cited_passage_ids: tuple[str, ...]
 
 
+def _sentence_boundaries(text: str) -> list[re.Match[str]]:
+    """Return prose boundaries, excluding abbreviations and open quotations."""
+    boundaries: list[re.Match[str]] = []
+    for boundary in _SENT.finditer(text):
+        prefix = text[: boundary.start()]
+        following = text[boundary.end() :].lstrip()
+        if _ABBREVIATION.search(prefix):
+            continue
+        if _NUMERIC_ABBREVIATION.search(prefix) and following[:1].isdigit():
+            continue
+        if _INITIALISM.search(prefix) and (
+            following[:1].isalpha() or following.startswith("-")
+        ):
+            continue
+        if _PERSON_INITIAL.search(prefix) and following[:1].isupper():
+            continue
+        if prefix.count('"') % 2 or prefix.count("“") > prefix.count("”"):
+            continue
+        boundaries.append(boundary)
+    return boundaries
+
+
+def _split_sentences(text: str) -> list[str]:
+    parts: list[str] = []
+    cursor = 0
+    for boundary in _sentence_boundaries(text):
+        parts.append(text[cursor : boundary.start() + 1])
+        cursor = boundary.end()
+    parts.append(text[cursor:])
+    return parts
+
+
 def _plain(text: str) -> str:
     """Strip markdown emphasis so the NLI hypothesis is clean prose."""
     return _MD.sub("", text).strip()
@@ -178,7 +224,7 @@ def _best_entail(passage_text: str, claim: str, nli: _NLILike) -> tuple[str, flo
     """Return the verdict of the passage sentence most relevant to a claim."""
     cleaned = _clean_premise(passage_text)
     sentences = [
-        sentence.strip() for sentence in _SENT.split(cleaned) if len(sentence.strip()) > 15
+        sentence.strip() for sentence in _split_sentences(cleaned) if len(sentence.strip()) > 15
     ]
     sentences = sentences[:12] or [cleaned]
     best_score, best_label = -1.0, "neutral"
@@ -205,7 +251,7 @@ def _is_gfm_table_divider(line: str) -> bool:
 def _claim_start_in_lead(lead: str) -> int:
     """Find the final sentence or line immediately preceding a citation."""
     start = 0
-    for boundary in _SENT.finditer(lead.rstrip()):
+    for boundary in _sentence_boundaries(lead.rstrip()):
         start = boundary.end()
     start = max(start, lead.rfind("\n", start) + 1)
     while start < len(lead) and lead[start].isspace():
@@ -277,7 +323,7 @@ def _uncited_line_spans(text: str, line: str, offset: int) -> list[_ClaimSpan]:
     content_end = len(line.rstrip("\r\n"))
     cursor = content_start
     spans: list[_ClaimSpan] = []
-    for boundary in _SENT.finditer(line[content_start:content_end]):
+    for boundary in _sentence_boundaries(line[content_start:content_end]):
         end = content_start + boundary.start() + 1
         span = _substantive_uncited_span(text, offset + cursor, offset + end)
         if span is not None:

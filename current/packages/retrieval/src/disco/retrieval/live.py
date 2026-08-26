@@ -24,6 +24,7 @@ import asyncio
 import hashlib
 import logging
 import os
+import time
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Literal
 
@@ -34,6 +35,7 @@ from .local_encoders import EncoderUnavailable
 from .models import ExtractedDoc, Passage, SearchHit
 from .nli import Entailment
 from .providers import SearchProvider
+from .ranking import deduplicate_search_hits
 from .url_policy import parse_source_date, url_allowed
 
 _LOG = logging.getLogger(__name__)
@@ -95,9 +97,27 @@ class SearxngSearchProvider:
         domains_deny: frozenset[str] | None = None,
         time_filter: str | None = None,
     ) -> list[SearchHit]:
+        hits, _diagnostic = await self.search_detailed(
+            query,
+            limit=limit,
+            domains_allow=domains_allow,
+            domains_deny=domains_deny,
+            time_filter=time_filter,
+        )
+        return hits
+
+    async def search_detailed(
+        self,
+        query: str,
+        *,
+        limit: int = 10,
+        domains_allow: frozenset[str] | None = None,
+        domains_deny: frozenset[str] | None = None,
+        time_filter: str | None = None,
+    ) -> tuple[list[SearchHit], dict[str, object]]:
         params = self._build_params(query, time_filter)
-        results = await self._fetch_results(params)
-        return self._to_hits(results, domains_allow, domains_deny, limit)
+        results, diagnostic = await self._fetch_results(params)
+        return self._to_hits(results, domains_allow, domains_deny, limit), diagnostic
 
     def _build_params(self, query: str, time_filter: str | None) -> dict:
         # DR-3 E1: SearXNG uses `time_range` param; accept "month"/"week".
@@ -107,7 +127,8 @@ class SearxngSearchProvider:
             params["time_range"] = time_filter
         return params
 
-    async def _fetch_results(self, params: dict) -> list:
+    async def _fetch_results(self, params: dict) -> tuple[list, dict[str, object]]:
+        started = time.perf_counter()
         try:
             async with httpx.AsyncClient(
                 timeout=self._timeout,
@@ -117,13 +138,33 @@ class SearxngSearchProvider:
             ) as client:
                 resp = await client.get(f"{self._base}/search", params=params)
                 resp.raise_for_status()
-                return resp.json().get("results", [])
+                payload = resp.json()
+                results = payload.get("results", [])
+                unresponsive = payload.get("unresponsive_engines", [])
+                diagnostic: dict[str, object] = {
+                    "status_code": resp.status_code,
+                    "result_count": len(results) if isinstance(results, list) else 0,
+                    "latency_ms": max(0, int((time.perf_counter() - started) * 1_000)),
+                }
+                if isinstance(unresponsive, list) and unresponsive:
+                    diagnostic["unresponsive_engines"] = [
+                        str(item)[:80] for item in unresponsive[:20]
+                    ]
+                return results if isinstance(results, list) else [], diagnostic
         except (httpx.HTTPError, ValueError) as exc:
             # Discovery failure degrades to no hits for THIS round (the run's
             # zero-evidence gate raises later if nothing was ever admitted),
             # but is never silent.
             _LOG.warning("SearXNG search failed: %s: %s", type(exc).__name__, exc)
-            return []
+            status_code = (
+                exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
+            )
+            return [], {
+                "provider_error": type(exc).__name__,
+                "status_code": status_code,
+                "result_count": 0,
+                "latency_ms": max(0, int((time.perf_counter() - started) * 1_000)),
+            }
 
     def _to_hits(
         self,
@@ -139,21 +180,27 @@ class SearxngSearchProvider:
                 continue
             if not url_allowed(url, domains_allow, domains_deny):
                 continue
+            raw_engines = res.get("engines")
+            engines = (
+                [str(item).strip() for item in raw_engines if str(item).strip()]
+                if isinstance(raw_engines, list)
+                else []
+            )
+            if not engines:
+                engines = [str(res.get("engine") or "searxng")]
             hits.append(
                 SearchHit(
                     url=url,
                     title=res.get("title") or url,
                     snippet=res.get("content") or "",
-                    source_engine=res.get("engine") or "searxng",
+                    source_engine="+".join(dict.fromkeys(engines)),
                     rank=i,
                     published_at=parse_source_date(
                         res.get("publishedDate") or res.get("published_date")
                     ),
                 )
             )
-            if len(hits) >= limit:
-                break
-        return hits
+        return deduplicate_search_hits(hits)[:limit]
 
 
 # ---- Crawl4AI: extraction (URL -> clean content + passages) -----------------

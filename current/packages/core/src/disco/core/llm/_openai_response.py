@@ -54,6 +54,25 @@ def safe_provider_error(provider_name: str, status: int, err_type: str) -> str:
     return f"provider {provider_name} returned HTTP {status}{suffix}"
 
 
+# Statuses whose provider message is ACCOUNT/CONFIG state the operator must
+# act on — "requires a subscription", "weekly usage limit reached", "requires
+# explicit opt in: <url>". A bare status code makes these undiagnosable, so
+# the sanitized provider text is appended for exactly these classes. Model
+# output and user content never reach this path: the text comes from the
+# provider's own structured error envelope.
+_ACTIONABLE_STATUSES = frozenset({401, 402, 403, 429})
+_MAX_PROVIDER_DETAIL = 240
+
+
+def sanitize_provider_detail(message: str) -> str:
+    """One-line, length-capped, control-character-free provider detail."""
+    collapsed = " ".join((message or "").split())
+    printable = "".join(ch for ch in collapsed if ch.isprintable())
+    if len(printable) > _MAX_PROVIDER_DETAIL:
+        printable = printable[: _MAX_PROVIDER_DETAIL - 1].rstrip() + "…"
+    return printable
+
+
 def _classify_and_raise(
     provider_name: str,
     status: int,
@@ -90,9 +109,12 @@ def raise_typed(
 ) -> None:
     """Classify a non-2xx response body and raise the typed LLM error.
 
-    Preserves the provider's real message so it surfaces cleanly (the
-    reactive-error rule). The context-window error is classified to
-    ``LLMContextWindowExceeded``.
+    ``str(exc)`` stays content-free. For account/config statuses
+    (401/402/403/429) the provider's OWN sanitized message is attached as
+    ``exc.provider_detail`` — those messages name the fix ("requires a
+    subscription", "requires explicit opt in: <url>", "weekly usage limit")
+    and a bare status code leaves the operator guessing. The context-window
+    error is classified to ``LLMContextWindowExceeded``.
     """
     message, err_type = body_text, ""
     try:
@@ -105,14 +127,21 @@ def raise_typed(
         pass
     message = message.strip() or f"HTTP {status}"
     safe_message = safe_error_fn(status, err_type)
-    _classify_and_raise(
-        provider_name,
-        status,
-        err_type,
-        message,
-        safe_message,
-        context_overflow_fn,
+    detail = (
+        sanitize_provider_detail(message) if status in _ACTIONABLE_STATUSES else ""
     )
+    try:
+        _classify_and_raise(
+            provider_name,
+            status,
+            err_type,
+            message,
+            safe_message,
+            context_overflow_fn,
+        )
+    except LLMError as exc:
+        exc.provider_detail = detail
+        raise
 
 
 def cached_tokens(usage: dict) -> int:

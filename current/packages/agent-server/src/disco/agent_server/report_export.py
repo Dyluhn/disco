@@ -30,7 +30,7 @@ import html as _html
 import json
 import logging
 import re
-from typing import Any, Literal, cast
+from typing import Literal, cast
 
 import markdown as _md
 from disco.core import ReportEvent, ReportSection
@@ -99,7 +99,7 @@ def serialize_markdown(
     numbers = _citation_numbers(report.passages)
     display_title = (title or "").strip() or report.query
     lines: list[str] = []
-    lines.append(f"# Deep Research: {display_title}")
+    lines.append(f"# {display_title}")
     lines.append("")
     lines.append("## Executive Summary")
     lines.append("")
@@ -200,13 +200,27 @@ def _sub_citation_markers(text: str, numbers: dict[str, int]) -> str:
 
     Unknown ids degrade to ``[?]`` (never leak the raw hash). Shared by the
     markdown serializer for the summary, section bodies, disputed notes and
-    follow-up answers; the mirror lives in deepResearch.ts."""
-
-    def _one(m: re.Match[str]) -> str:
-        n = numbers.get(m.group(1).strip())
-        return f"[{n}]" if n is not None else "[?]"
-
-    return _CITE_RE.sub(_one, text)
+    follow-up answers; adjacent markers sharing a source number collapse to one
+    display marker; the mirror lives in deepResearch.ts."""
+    parts: list[str] = []
+    last = 0
+    previous_number: int | None = None
+    for match in _CITE_RE.finditer(text):
+        between = text[last : match.start()]
+        number = numbers.get(match.group(1).strip())
+        duplicate = (
+            previous_number is not None
+            and number is not None
+            and number == previous_number
+            and not between.strip()
+        )
+        if not duplicate:
+            parts.append(between)
+            parts.append(f"[{number}]" if number is not None else "[?]")
+        previous_number = number
+        last = match.end()
+    parts.append(text[last:])
+    return "".join(parts)
 
 
 def _cite_chip(raw_id: str, cite_map: dict[str, int] | None) -> str:

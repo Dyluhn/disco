@@ -54,6 +54,49 @@ class QueryRewriter(Protocol):
 # ---- RRF (§3 step 2) --------------------------------------------------------
 
 
+def merge_search_hits(primary: SearchHit, duplicate: SearchHit) -> SearchHit:
+    """Merge provenance for two hits with the same canonical URL.
+
+    The first hit remains the representative URL/title/snippet.  Later hits can
+    add engine attribution, an exact publication date, or a stronger extraction
+    status; they never create a second source row.
+    """
+
+    engines: list[str] = []
+    for raw in (primary.source_engine, duplicate.source_engine):
+        for label in raw.split("+"):
+            label = label.strip()
+            if label and label not in engines:
+                engines.append(label)
+    status = primary.status
+    if status != "ok" and (duplicate.status == "ok" or status is None):
+        status = duplicate.status
+    return primary.model_copy(
+        update={
+            "source_engine": "+".join(engines),
+            "rank": min(primary.rank, duplicate.rank),
+            "published_at": primary.published_at or duplicate.published_at,
+            "status": status,
+        }
+    )
+
+
+def deduplicate_search_hits(hits: list[SearchHit]) -> list[SearchHit]:
+    """Stable URL-level deduplication used before fetching candidate pages."""
+
+    positions: dict[str, int] = {}
+    out: list[SearchHit] = []
+    for hit in hits:
+        key = source_url_key(hit.url)
+        position = positions.get(key)
+        if position is None:
+            positions[key] = len(out)
+            out.append(hit)
+        else:
+            out[position] = merge_search_hits(out[position], hit)
+    return out
+
+
 def reciprocal_rank_fusion(hit_lists: list[list[SearchHit]], *, k: int = 60) -> list[SearchHit]:
     """[CONTRACT semantics] Fuse multiple ranked SearchHit lists by URL: a hit's
     score is sum over lists of 1/(k + rank). A URL ranked across multiple
@@ -61,10 +104,15 @@ def reciprocal_rank_fusion(hit_lists: list[list[SearchHit]], *, k: int = 60) -> 
     scores: dict[str, float] = {}
     first_seen: dict[str, SearchHit] = {}
     for hits in hit_lists:
+        seen_in_list: set[str] = set()
         for rank, hit in enumerate(hits):
             key = source_url_key(hit.url)
+            existing = first_seen.get(key)
+            first_seen[key] = hit if existing is None else merge_search_hits(existing, hit)
+            if key in seen_in_list:
+                continue
+            seen_in_list.add(key)
             scores[key] = scores.get(key, 0.0) + 1.0 / (k + rank)
-            first_seen.setdefault(key, hit)
     ordered = sorted(first_seen.items(), key=lambda item: scores[item[0]], reverse=True)
     return [hit for _key, hit in ordered]
 

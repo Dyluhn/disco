@@ -9,6 +9,7 @@ from __future__ import annotations
 import datetime
 import json
 
+import pytest
 from disco.retrieval.models import ExtractedDoc, Passage, SearchHit
 from disco.retrieval.streaming import (
     _build_final_answer,
@@ -83,6 +84,136 @@ def test_verifier_rejects_uncited_prose_and_unknown_source_ids():
         "unsupported",
         "unsupported",
     ]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Hubinger et al. (2024) demonstrated sleeper-agent behavior [[p0]].",
+        (
+            'A probe used the contrast "Are you doing something dangerous? '
+            'Yes/No" to detect defection [[p0]].'
+        ),
+    ],
+)
+def test_verifier_does_not_split_abbreviations_or_quoted_questions(text: str) -> None:
+    passage = Passage(
+        id="p0",
+        source_url="https://example.com/paper",
+        source_title="Paper",
+        text=text,
+    )
+
+    claims = _verify_claims(text, {"p0": passage}, _Entails())
+
+    assert len(claims) == 1
+    assert claims[0]["verdict"] == "supported"
+    assert claims[0]["claim"]["cited_passage_ids"] == ["p0"]
+
+
+def test_verifier_does_not_split_numeric_abbreviations_in_report_prose() -> None:
+    """The acceptance report's ``c. 1250 - c. 1150`` must remain one claim."""
+    text = (
+        "One research starter places the catastrophic events between approximately "
+        "1225 and 1150 BCE [[p0]], while another overview places the decline quite "
+        "suddenly between around 1200–1150 BCE [[p1]], and a third describes that "
+        "between c. 1250 - c. 1150 BCE, major cities were destroyed, whole "
+        "civilizations fell, diplomatic and trade relations were severed, writing "
+        "systems vanished, and there was widespread devastation and death on a scale "
+        "never experienced before [[p2]]."
+    )
+    passages = {
+        passage_id: Passage(
+            id=passage_id,
+            source_url=f"https://example.com/{passage_id}",
+            source_title="Historical source",
+            text="Supporting evidence.",
+        )
+        for passage_id in ("p0", "p1", "p2")
+    }
+
+    claims = _verify_claims(text, passages, _Entails())
+
+    assert len(claims) == 3
+    assert all(claim["verdict"] == "supported" for claim in claims)
+    assert any(
+        "a third describes that between c. 1250" in claim["claim"]["text"]
+        for claim in claims
+    )
+
+
+def test_verifier_does_not_split_initialism_before_compound_or_noun() -> None:
+    text = (
+        "The U.S.-China performance gap is described as effectively closed, with "
+        "models trading the lead since early 2025; DeepSeek-R1 briefly matched the "
+        "top U.S. model in February 2025, and as of March 2026 Anthropic's top model "
+        "leads by just 2.7% [[p0]] [[p1]]."
+    )
+    passages = {
+        passage_id: Passage(
+            id=passage_id,
+            source_url=f"https://example.com/{passage_id}",
+            source_title="AI benchmark source",
+            text="Supporting evidence.",
+        )
+        for passage_id in ("p0", "p1")
+    }
+
+    claims = _verify_claims(text, passages, _Entails())
+
+    assert len(claims) == 1
+    assert claims[0]["verdict"] == "supported"
+    assert claims[0]["claim"]["cited_passage_ids"] == ["p0", "p1"]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Hubinger et al. demonstrated sleeper-agent behavior [[p0]].",
+        "The study dates the event to c. 1250 BCE [[p0]].",
+        "The U.S. model led the benchmark [[p0]].",
+        "Government and industry investment reflects that manufacturing focus, with "
+        "the U.S. Department of Commerce reporting growth [[p0]].",
+        "The finding was synthesized by Eric H. Cline [[p0]].",
+    ],
+)
+def test_verifier_keeps_common_nonterminal_forms_in_one_claim(text: str) -> None:
+    passage = Passage(
+        id="p0",
+        source_url="https://example.com/source",
+        source_title="Source",
+        text="Supporting evidence.",
+    )
+
+    claims = _verify_claims(text, {"p0": passage}, _Entails())
+
+    assert len(claims) == 1
+    assert claims[0]["verdict"] == "supported"
+
+
+def test_verifier_does_not_split_person_initial_before_proper_surname() -> None:
+    text = (
+        "The dominant explanatory framework, synthesized by Eric H. Cline in "
+        "*1177 B.C.: The Year Civilization Collapsed* (2014, revised 2021), argues "
+        "that no single factor was sufficient alone but their simultaneous "
+        "convergence overwhelmed the highly interconnected international system "
+        "[[p0]] [[p1]]."
+    )
+    passages = {
+        passage_id: Passage(
+            id=passage_id,
+            source_url=f"https://example.com/{passage_id}",
+            source_title="Historical source",
+            text="Supporting evidence.",
+        )
+        for passage_id in ("p0", "p1")
+    }
+
+    claims = _verify_claims(text, passages, _Entails())
+
+    assert len(claims) == 1
+    assert claims[0]["verdict"] == "supported"
+    assert claims[0]["claim"]["cited_passage_ids"] == ["p0", "p1"]
 
 
 async def test_streaming_extraction_uses_canonical_source_identity() -> None:

@@ -182,12 +182,8 @@ export interface ReportSection {
   unsupported_count: number;
 }
 
-/** The finished Deep Research report — multi-section, grounded synthesis. The
- * `bounded_by` field is the load-bearing honesty surface: when set, it names
- * which depth cap stopped the run (sources / rounds / wall_clock / subquestions).
- * `passages` and `all_hits` carry the cited subset + full discovery set for the
- * source panel; existing Passage/SearchHit shapes are the row contract, kept
- * `unknown` here to avoid the import cycle (the UI casts at render time). */
+/** The finished Deep Research report — multi-section, grounded synthesis. A
+ * report is never a placeholder: the backend requires a summary and sections. */
 export interface ReportEvent extends EventBase {
   kind: "report";
   query: string;
@@ -204,6 +200,20 @@ export interface ReportEvent extends EventBase {
    *  present when a verification overlay / the demo fixture supplies them, and
    *  rendered by the report's claim-verdicts surface when set. */
   claims?: VerifiedClaim[];
+}
+
+/** Resumable evidence state emitted when research pauses before writing a
+ * report. This is deliberately a separate event kind so the UI cannot render
+ * an empty report as if it were a finished artifact. */
+export interface ResearchCheckpointEvent extends EventBase {
+  kind: "research_checkpoint";
+  query: string;
+  passages: Array<Record<string, unknown>>;
+  all_hits: Array<Record<string, unknown>>;
+  trail: Array<Record<string, unknown>>;
+  completed_queries: string[];
+  depth_tier: string | null;
+  recency_window: "week" | "month" | null;
 }
 
 /** One concrete next-step option proposed by the agent after repeated failures.
@@ -399,6 +409,7 @@ export type AgentEvent =
   | AppKitEjectionEvent
   | PlanEvent
   | ReportEvent
+  | ResearchCheckpointEvent
   | AlternativesEvent
   | ClarifyEvent
   | QuestionsV2Event

@@ -5,10 +5,8 @@ import type { DeepStats } from "@/lib/deepResearchTrace";
 import { DeepProgressStrip } from "./DeepProgressStrip";
 
 const stats: DeepStats = {
-  subquestionsTotal: 4,
-  subquestionsDone: 4,
-  activeSubquestion: null,
-  activeRound: null,
+  searches: 4,
+  sectionsDone: 4,
   sourcesDiscovered: 12,
   elapsedSeconds: 20,
   phase: null,
@@ -21,8 +19,7 @@ describe("DeepProgressStrip", () => {
     const user = userEvent.setup();
     render(
       <DeepProgressStrip
-        plan={null}
-        progress={new Map()}
+        brief={null}
         trace={[]}
         stats={stats}
         status="FINISHED"

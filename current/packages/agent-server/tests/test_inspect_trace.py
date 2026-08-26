@@ -22,6 +22,8 @@ from disco.core import (
 from disco.core.inspect import (
     InspectRoutingSink,
     inspect_enabled,
+    model_io_enabled,
+    record_model_io,
     record_tool_scope,
     registry,
     routing_sink_for,
@@ -152,6 +154,50 @@ def test_routing_sink_for_disabled(monkeypatch):
     assert routing_sink_for(CID) is None
     # ...and even with a cid, a disabled flag never builds a sink
     assert routing_sink_for("anything") is None
+
+
+def test_model_io_capture_is_opt_in_bounded_and_redacted(monkeypatch):
+    monkeypatch.setenv("DISCO_INSPECT", "1")
+    registry().clear()
+    assert model_io_enabled()
+    record_model_io(
+        CID,
+        role="agent_driver",
+        model="m",
+        provider="fake",
+        request={
+            "messages": [{"role": "user", "content": "visible"}],
+            "api_key": "sk-secret-123456789012345",
+        },
+        response={"text": "returned", "tool_calls": []},
+        declared_decision={"action": "search"},
+    )
+    snap = registry().snapshot(CID)
+    assert snap is not None
+    assert len(snap["model_io"]) == 1
+    row = snap["model_io"][0]
+    assert row["request"]["api_key"] == "[REDACTED]"
+    assert row["response"]["text"] == "returned"
+    assert row["declared_decision"] == {"action": "search"}
+
+
+def test_model_io_redaction_preserves_ordinary_citation_urls(monkeypatch):
+    monkeypatch.setenv("DISCO_INSPECT", "1")
+    registry().clear()
+    url = "https://example.com/2026-ai-laws-update-key-regulations-and-guidance/"
+    record_model_io(CID, response={"source_url": url})
+
+    snap = registry().snapshot(CID)
+    assert snap is not None
+    assert snap["model_io"][0]["response"]["source_url"] == url
+
+
+def test_model_io_capture_is_disabled_when_inspect_is_off(monkeypatch):
+    monkeypatch.delenv("DISCO_INSPECT", raising=False)
+    monkeypatch.delenv("DISCO_INSPECT_MODEL_IO", raising=False)
+    registry().clear()
+    record_model_io(CID, request={"content": "should not capture"})
+    assert registry().snapshot(CID) is None
 
 
 def test_tool_scope_capture_overflow_is_explicit_and_bounded(monkeypatch):

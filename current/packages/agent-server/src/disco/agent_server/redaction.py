@@ -85,7 +85,8 @@ _PATTERNS: list[tuple[str, re.Pattern[str]]] = [
         _SECRET_LABEL,
         re.compile(
             r"(?i)"  # case-insensitive
-            r"(?:sk|pk|sk_live|sk_test|sk-proj|rk_live|"
+            r"(?<![A-Za-z0-9])"  # never start inside ordinary words/URL slugs
+            r"(?:(?:sk|pk|rk)[_-]|"
             r"ghp_|gho_|ghu_|ghs_|ghr_|"
             r"AKIA[0-9A-Z]{8,}|ASIA[0-9A-Z]{8,}|"
             r"xox[bpars]-[0-9A-Za-z-]{8,}|"

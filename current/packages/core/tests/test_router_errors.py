@@ -6,9 +6,13 @@ is_context_window_exceeded() on whatever the router raises.
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 from disco.core import LLMMessage
+from disco.core.inspect import registry
 from disco.core.llm import (
+    CallContext,
     CapabilityProfile,
     CompletionRequest,
     LLMAuthError,
@@ -84,3 +88,79 @@ async def test_transient_then_success_when_provider_recovers():
     resp = await router.complete(_req(role=ModelRole.RAG_ANSWERER))
     assert resp.text == "recovered"
     assert resp.routing.attempt == 2
+
+
+async def test_inspect_records_each_transient_provider_attempt_without_model_content(monkeypatch):
+    monkeypatch.setenv("DISCO_INSPECT", "1")
+    registry().clear()
+    local = FakeModelProvider(
+        "ollama", raises=LLMTransientError("provider detail must not be recorded"), raises_times=2
+    )
+    router, _sink, _ = build_router(local=local)
+
+    response = await router.complete(
+        _req(role=ModelRole.RAG_ANSWERER),
+        context=CallContext(conversation_id="attempt-success"),
+    )
+
+    assert response.text == "ok"
+    snapshot = registry().snapshot("attempt-success")
+    assert snapshot is not None
+    rows = snapshot["model_attempts"]
+    assert [row["outcome"] for row in rows] == [
+        "started",
+        "error",
+        "started",
+        "error",
+        "started",
+        "success",
+    ]
+    assert [row["attempt"] for row in rows] == [1, 1, 2, 2, 3, 3]
+    assert [row["call_ordinal"] for row in rows] == [1, 1, 2, 2, 3, 3]
+    assert [row["retry_scheduled"] for row in rows] == [None, True, None, True, None, False]
+    assert all(row["stage"] == "router" for row in rows)
+    assert all(row["latency_ms"] is None or row["latency_ms"] >= 0 for row in rows)
+    assert all("provider detail" not in str(row) for row in rows)
+    assert all("messages" not in row and "request" not in row for row in rows)
+    assert snapshot["model_io"] == []
+
+
+async def test_inspect_records_terminal_provider_attempt_error(monkeypatch):
+    monkeypatch.setenv("DISCO_INSPECT", "1")
+    registry().clear()
+    local = FakeModelProvider("ollama", raises=LLMTransientError("do not retain"))
+    router, _sink, _ = build_router(local=local)
+
+    with pytest.raises(LLMTransientError):
+        await router.complete(
+            _req(role=ModelRole.RAG_ANSWERER),
+            context=CallContext(conversation_id="attempt-terminal"),
+        )
+
+    snapshot = registry().snapshot("attempt-terminal")
+    assert snapshot is not None
+    rows = snapshot["model_attempts"]
+    assert len(rows) == 10  # five actual provider calls, start + terminal each
+    assert rows[-1]["outcome"] == "error"
+    assert rows[-1]["error_class"] == "LLMTransientError"
+    assert rows[-1]["retry_scheduled"] is False
+    assert [row["call_ordinal"] for row in rows] == [1, 1, 2, 2, 3, 3, 4, 4, 5, 5]
+    assert snapshot["model_io"] == []
+
+
+async def test_inspect_records_cancellation_without_retry(monkeypatch):
+    monkeypatch.setenv("DISCO_INSPECT", "1")
+    registry().clear()
+    local = FakeModelProvider("ollama", raises=asyncio.CancelledError())
+    router, _sink, _ = build_router(local=local)
+
+    with pytest.raises(asyncio.CancelledError):
+        await router.complete(
+            _req(role=ModelRole.RAG_ANSWERER),
+            context=CallContext(conversation_id="attempt-cancelled"),
+        )
+
+    rows = registry().snapshot("attempt-cancelled")["model_attempts"]
+    assert [row["outcome"] for row in rows] == ["started", "cancelled"]
+    assert rows[-1]["error_class"] == "CancelledError"
+    assert rows[-1]["retry_scheduled"] is False

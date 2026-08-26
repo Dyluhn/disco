@@ -364,6 +364,24 @@ describe("serializeReportToMarkdown — disputed_notes citation numbering", () =
   });
 });
 
+describe("serializeReportToMarkdown — adjacent shared-source citations", () => {
+  it("collapses only adjacent duplicate display markers", () => {
+    const report = makeMinimalReport({
+      summary: "Literal [3] [3]; [[p1]] [[p2]] [[p3]]; [[p1]] text [[p2]].",
+      passages: [
+        { id: "p1", source_title: "One", source_url: "https://one.example.com" },
+        { id: "p2", source_title: "One duplicate", source_url: "https://one.example.com/" },
+        { id: "p3", source_title: "Two", source_url: "https://two.example.com" },
+      ],
+      sections: [],
+    });
+
+    const md = serializeReportToMarkdown(report);
+
+    expect(md).toContain("Literal [3] [3]; [1] [2]; [1] text [1].");
+  });
+});
+
 // ---- Passage-text normalization (mirrors report_export.py's shared seam) ----
 
 describe("serializeReportToMarkdown — passage-text normalization", () => {
@@ -492,7 +510,7 @@ function makeSampleReport(): ReportEvent {
 }
 
 const CAPTURED_MARKDOWN =
-  `# Deep Research: What is the airspeed velocity of an unladen swallow?
+  `# What is the airspeed velocity of an unladen swallow?
 
 ## Executive Summary
 

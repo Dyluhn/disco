@@ -56,11 +56,76 @@ async def test_searxng_maps_results_and_filters_domains():
     assert hits[0].snippet == "snip" and hits[0].source_engine == "google" and hits[0].rank == 0
 
 
+async def test_searxng_dedupes_tracking_variants_and_keeps_engine_provenance():
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "results": [
+                    {
+                        "url": "https://www.toyota.com/all-vehicles/",
+                        "title": "Toyota vehicles",
+                        "content": "clean",
+                        "engine": "yahoo",
+                    },
+                    {
+                        "url": (
+                            "https://www.toyota.com/all-vehicles/"
+                            "?msockid=051546ee9cc06539396c512e9dea6439"
+                        ),
+                        "title": "Toyota vehicles",
+                        "content": "tracked",
+                        "engine": "bing",
+                    },
+                    {
+                        "url": "https://example.com/merged",
+                        "title": "Merged upstream",
+                        "engines": ["bing", "yahoo"],
+                    },
+                ]
+            },
+        )
+
+    provider = SearxngSearchProvider("http://x", transport=_async(handler))
+    hits, diagnostic = await provider.search_detailed("q", limit=10)
+
+    assert diagnostic["result_count"] == 3  # raw provider count remains observable
+    assert [hit.url for hit in hits] == [
+        "https://www.toyota.com/all-vehicles/",
+        "https://example.com/merged",
+    ]
+    assert [hit.source_engine for hit in hits] == ["yahoo+bing", "bing+yahoo"]
+
+
+async def test_searxng_exposes_unresponsive_engines_as_diagnostic():
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"results": [], "unresponsive_engines": ["slow-engine", "broken-engine"]},
+        )
+
+    provider = SearxngSearchProvider("http://x", transport=_async(handler))
+    assert await provider.search("q") == []
+    hits, diagnostic = await provider.search_detailed("q")
+    assert hits == []
+    assert diagnostic["status_code"] == 200
+    assert diagnostic["result_count"] == 0
+    assert isinstance(diagnostic["latency_ms"], int)
+    assert diagnostic["unresponsive_engines"] == ["slow-engine", "broken-engine"]
+
+
 async def test_searxng_failure_degrades_to_no_hits():
     def handler(req: httpx.Request) -> httpx.Response:
         return httpx.Response(502, text="bad gateway")
 
-    assert await SearxngSearchProvider("http://x", transport=_async(handler)).search("q") == []
+    provider = SearxngSearchProvider("http://x", transport=_async(handler))
+    assert await provider.search("q") == []
+    hits, diagnostic = await provider.search_detailed("q")
+    assert hits == []
+    assert diagnostic["provider_error"] == "HTTPStatusError"
+    assert diagnostic["status_code"] == 502
+    assert diagnostic["result_count"] == 0
+    assert isinstance(diagnostic["latency_ms"], int)
 
 
 def test_build_multi_search_maps_ids_and_falls_back_to_ddgs():

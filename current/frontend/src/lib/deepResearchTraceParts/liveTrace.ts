@@ -18,20 +18,17 @@ import type {
 /** Same verb-map pattern as buildTrace, specialized for the engine's tools. */
 const VERB: Record<string, (a: Record<string, unknown>) => string> = {
   phase: (a) => {
-    const p = String(a.phase ?? "");
-    if (p === "gather") return `Gathering sources`;
-    if (p === "synthesize") return `Writing the report`;
-    if (p === "coherence") return `Drafting the executive summary`;
-    return `Phase: ${p}`;
+    const p = String(a.phase ?? "").toLowerCase();
+    if (p === "gather" || p === "search" || p === "reading") return `Searching sources`;
+    if (p === "synthesize" || p === "synthesizing" || p === "write" || p === "writing") return `Writing the report`;
+    if (p === "coherence" || p === "review" || p === "reviewing" || p === "verification") return `Reviewing the report`;
+    return p ? `Research phase: ${p}` : `Researching`;
   },
   // v2 (gateless): the model's opening read of the question — the FIRST row of
   // every run's trace. Without this arm it fell through to the unknown-kind
   // fallback and rendered as the raw internal name "brief".
   brief: () => `Framed the question`,
-  search: (a) =>
-    a.label != null
-      ? `Iterating on section "${a.label}"`
-      : `Searching: "${a.query ?? ""}"`,
+  search: (a) => `Searching: "${a.query ?? a.label ?? ""}"`,
   synthesize_section: (a) =>
     a.label != null
       ? `Rewriting section: ${a.label}`
@@ -58,9 +55,11 @@ function plainObservation(toolName: string, structured: Record<string, unknown>)
   if (toolName === "observation") {
     const added = structured.added;
     const total = structured.total_for_subq;
-    const round = structured.round;
     if (typeof added === "number" && typeof total === "number") {
-      return `Round ${round}: +${added} sources (${total} total for this sub-question)`;
+      return `Added ${added} sources (${total} admitted so far)`;
+    }
+    if (typeof added === "number") {
+      return `Added ${added} sources`;
     }
   }
   if (toolName === "gap_reason") {

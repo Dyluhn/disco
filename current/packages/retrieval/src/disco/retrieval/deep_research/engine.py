@@ -7,10 +7,9 @@ whole-report pass with a fixed-rubric review (`writer.write_report`). There
 is no plan gate: research starts immediately and the model's brief is the
 first streamed output.
 
-The run has exactly three outcomes: a complete report (the dead-end account
-is itself a complete, honest report), an exception (provider failure,
-surfaced by the agent-server as an ErrorEvent + ERROR status), or a Stop
-checkpoint (`bounded_by="stopped"`, no report prose) the user can resume.
+The run has exactly three outcomes: a complete report, an exception surfaced
+by the agent-server as an ErrorEvent + ERROR status, or a Stop checkpoint
+(`bounded_by="stopped"`, no report prose) the user can resume.
 Hard research bounds are surfaced honestly via `bounded_by`; the writing
 phase is bounded by its own bounded retries, never a shrinking deadline.
 Progress events flow through the injected `emit` callback so the agent-server
@@ -23,7 +22,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from typing import Any, Literal
 
-from disco.core import ReportEvent, ReportSection
+from disco.core import ReportEvent, ReportSection, ResearchCheckpointEvent
 from disco.core.llm import LLMRouter
 
 from ..engine import RetrievalEngine
@@ -72,6 +71,8 @@ class ReportFromRun:
         completed_probes: list[str] | None = None,
         pending_probes: list[str] | None = None,
         review_notes: list[str] | None = None,
+        research_trail: list[dict[str, Any]] | None = None,
+        recency_window: Literal["month", "week"] | None = None,
     ) -> None:
         self.query = query
         self.summary = summary
@@ -88,17 +89,34 @@ class ReportFromRun:
         # Residual fixed-rubric misses from the writer's review loop —
         # metadata only, never prose edits (decision #4).
         self.review_notes = list(review_notes or [])
+        self.research_trail = list(research_trail or [])
+        self.recency_window: Literal["month", "week"] | None = recency_window
         # Synthesis owns how much of this envelope the evidence can support;
         # retrieval never borrows it.  The concrete tier values are available
         # from ``DeepResearchRun.bound.report_spec`` and this transport carries
         # the same shape for downstream report assembly.
         self.report_spec: dict[str, int] | None = None
 
-    def to_event(self) -> ReportEvent:
+    def to_event(self) -> ReportEvent | ResearchCheckpointEvent:
         """Convert into the Core ReportEvent for persistence on the log.
         Retrieval-typed Passage/SearchHit are dumped to plain dicts so `core`
         stays free of any `retrieval` import."""
-        from ._report_event import fit_report_event
+        from ._report_event import fit_report_event, fit_research_checkpoint_event
+
+        if self.bounded_by == "stopped":
+            checkpoint = ResearchCheckpointEvent(
+                query=self.query,
+                passages=[
+                    p.model_dump()
+                    for p in [*self.cited_passages, *self.reviewed_passages]
+                ],
+                all_hits=[h.model_dump() for h in self.all_hits],
+                trail=self.research_trail,
+                completed_queries=self.completed_probes,
+                depth_tier=self.depth_tier,
+                recency_window=self.recency_window,
+            )
+            return fit_research_checkpoint_event(checkpoint)
 
         event = ReportEvent(
             query=self.query,
@@ -188,6 +206,7 @@ class DeepResearchRun:
         resume_all_hits: list[Any] | None = None,
         resume_completed_probes: list[str] | None = None,
         resume_pending_probes: list[str] | None = None,
+        resume_research_trail: list[dict[str, Any]] | None = None,
         pop_steers: PopSteersFn = None,
         pop_injected_sources: PopInjectedSourcesFn = None,
     ) -> ReportFromRun:
@@ -216,8 +235,8 @@ class DeepResearchRun:
             _LOG.debug("ignoring %d legacy plan steps (agentic v2 loop)", len(plan_steps))
         if resume_sections or resume_pending_probes:
             _LOG.debug("resume carries evidence forward; prior sections are recompiled")
-        resume_trail: list[dict[str, Any]] | None = None
-        if resume_completed_probes:
+        resume_trail = list(resume_research_trail or [])
+        if not resume_trail and resume_completed_probes:
             resume_trail = [
                 {"kind": "search", "query": query, "resumed": True}
                 for query in resume_completed_probes
@@ -236,7 +255,7 @@ class DeepResearchRun:
             corpus_ids=self._corpus_ids,
             upload_passages=list(self._upload_passages) or None,
             resume_passages=resume_passages,
-            resume_trail=resume_trail,
+            resume_trail=resume_trail or None,
         )
         carried_hits: list[Any] = list(resume_all_hits or [])
         if outcome.bounded_by == "stopped":
@@ -249,6 +268,7 @@ class DeepResearchRun:
             bound=self._bound,
             emit=emit,
             recency_window=self._recency_window,
+            conversation_id=self._namespace,
         )
         return self._assemble_report(outcome, written, carried_hits)
 
@@ -274,6 +294,8 @@ class DeepResearchRun:
             claims=[],
             completed_probes=_trail_queries(outcome.trail),
             pending_probes=[],
+            research_trail=outcome.trail,
+            recency_window=self._recency_window,
         )
         report.report_spec = self._bound.report_spec
         return report
@@ -286,7 +308,11 @@ class DeepResearchRun:
         run's citations resolve), and carry the writer's ledger + residual
         review notes."""
         cited, reviewed, all_hits = collect_report_data(
-            written.sections, outcome.passages, carried_hits, outcome.all_hits
+            written.sections,
+            outcome.passages,
+            carried_hits,
+            outcome.all_hits,
+            additional_cited_ids=written.summary_cited_passage_ids,
         )
         report = ReportFromRun(
             query=self._query,

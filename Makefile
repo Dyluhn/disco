@@ -27,8 +27,8 @@ help:
 	@echo "  make capture     record the real research cassette (HEAVY: cold fastembed + LLM)"
 	@echo "  make canary      live probe of $(BASE): /health + a real grounded research query"
 	@echo "  make canary-health  live /health probe only (no model call)"
-	@echo "  make replay      event-log deterministic replay (needs loop_demo fixture — 'make capture-loop')"
-	@echo "  make capture-loop  record a real deep-research conversation (event-log + cassette) — HEAVY"
+	@echo "  make replay      current gateless event-log replay (needs loop_demo fixture — 'make capture-loop')"
+	@echo "  make capture-loop  record a current gateless Deep Research report (event-log + cassette) — HEAVY"
 	@echo "  make e2e         frontend Playwright E2E + visual regression (fixture mode)"
 
 # ---- hermetic (fast, offline) ----------------------------------------------

@@ -45,6 +45,19 @@ from .driver_context_state import DriverContextState
 
 logger = logging.getLogger(__name__)
 
+
+def _with_detail(exc: LLMError) -> str:
+    """Preflight text plus the provider's own account/config reason.
+
+    `str(exc)` is deliberately content-free ("provider X returned HTTP 403"),
+    which is undiagnosable for the failures an operator can actually fix — an
+    unpaid plan, an unaccepted data policy, an exhausted quota. The provider
+    states the fix in its error envelope; `provider_detail` carries the
+    sanitized form (empty for every non-account status)."""
+    detail = getattr(exc, "provider_detail", "")
+    return f"{exc} — {detail}" if detail else str(exc)
+
+
 _GENERATIVE_ROLES = (
     ModelRole.AGENT_DRIVER,
     ModelRole.RAG_ANSWERER,
@@ -674,13 +687,13 @@ class DriverPreflight:
             except NoEligibleModel as exc:
                 return f"Driver '{key}' is misconfigured: {exc}", False
             except LLMAuthError as exc:
-                return f"Driver '{key}' rejected the API key: {exc}", False
+                return f"Driver '{key}' rejected the API key: {_with_detail(exc)}", False
             except LLMProviderUnavailable as exc:
-                return f"Driver '{key}' is unavailable: {exc}", False
+                return f"Driver '{key}' is unavailable: {_with_detail(exc)}", False
             except LLMTransientError as exc:
-                transient_reason = f"Driver '{key}' unreachable: {exc}"
+                transient_reason = f"Driver '{key}' unreachable: {_with_detail(exc)}"
             except LLMError as exc:
-                return f"Driver '{key}' error: {exc}", False
+                return f"Driver '{key}' error: {_with_detail(exc)}", False
             except Exception as exc:  # noqa: BLE001 — never expose transport details
                 return f"Driver '{key}' pre-flight failed ({type(exc).__name__})", False
             if attempt + 1 < self._ATTEMPTS:

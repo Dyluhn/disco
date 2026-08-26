@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import datetime
 
 from disco.retrieval import (
@@ -11,6 +12,7 @@ from disco.retrieval import (
     reciprocal_rank_fusion,
 )
 from disco.retrieval.models import ExtractedDoc, Passage
+from disco.retrieval.source_adapters import MultiSearchProvider
 from research_fakes import FakeExtractionProvider, FakeRewriter, FakeSearchProvider, hit
 
 
@@ -152,6 +154,34 @@ def test_rrf_dedupes_tracking_variants_of_the_same_source():
     assert len(fused) == 1
 
 
+def test_rrf_counts_a_source_once_per_input_list():
+    duplicate = hit("https://example.com/a?msockid=abc").model_copy(
+        update={"source_engine": "bing"}
+    )
+    clean = hit("https://example.com/a").model_copy(update={"source_engine": "yahoo"})
+    corroborated = hit("https://example.com/b")
+
+    fused = reciprocal_rank_fusion(
+        [[clean, duplicate, corroborated], [corroborated]]
+    )
+
+    assert fused[0].url == corroborated.url
+    source_a = next(item for item in fused if item.url == clean.url)
+    assert source_a.source_engine == "yahoo+bing"
+
+
+async def test_single_query_dedupes_before_extraction():
+    clean = "https://www.toyota.com/all-vehicles/"
+    tracked = f"{clean}?msockid=051546ee9cc06539396c512e9dea6439"
+    result = await _engine(
+        FakeSearchProvider([hit(clean), hit(tracked)]),
+        docs={clean: "one extracted page"},
+    ).retrieve(RetrievalRequest(query="Toyota vehicles", depth="shallow"))
+
+    assert [item.url for item in result.all_hits] == [clean]
+    assert [item.url for item in result.extracted] == [clean]
+
+
 async def test_depth_controls_issued_queries():
     search = FakeSearchProvider([hit("http://x/a")])
     rewriter = FakeRewriter(["q paraphrase 1", "q paraphrase 2", "q paraphrase 3"])
@@ -169,3 +199,176 @@ async def test_rerank_reduces_to_top_k_and_all_hits_distinct():
     res = await eng.retrieve(RetrievalRequest(query="pipelines document", top_k=3, depth="shallow"))
     assert len(res.passages) == 3  # reduced to top_k
     assert len(res.all_hits) == 5  # full discovery set, distinct from reranked passages
+
+
+async def test_retrieval_trace_keeps_rewritten_queries_and_bounded_provider_facts():
+    search_hit = hit(
+        "https://example.test/story?token=secret-value&utm_source=newsletter",
+        title="A " * 300,
+        snippet="provider text is bounded and marked untrusted in the trace",
+    ).model_copy(update={"source_engine": "search-engine"})
+    search = FakeSearchProvider([search_hit], name="fake-provider")
+    eng = _engine(
+        search,
+        docs={search_hit.url: "A substantive extracted passage about the subject."},
+        rewriter=FakeRewriter(["rewritten query"]),
+    )
+
+    result = await eng.retrieve(RetrievalRequest(query="A full planned question", depth="standard"))
+    trace = result.notes["retrieval_trace"]
+
+    assert trace["planned_query"] == "A full planned question"
+    assert trace["issued_queries"] == ["rewritten query"]
+    assert trace["raw_discovered_hit_count"] == 1
+    assert trace["reranked_passage_count"] == 1
+    assert trace["extraction"] == {
+        "attempted": 1,
+        "success": 1,
+        "failure": 0,
+        "statuses": [
+            {
+                "url": "https://example.test/story?token=%5BREDACTED%5D&utm_source=newsletter",
+                "title": search_hit.url,
+                "status": "ok",
+                "fetched_ok": True,
+            }
+        ],
+    }
+    query_trace = trace["queries"][0]
+    assert query_trace["issued_query"] == "rewritten query"
+    assert query_trace["raw_discovered_hit_count"] == 1
+    assert len(query_trace["hits"]) == 1
+    traced_hit = query_trace["hits"][0]
+    assert traced_hit["title"].startswith("A A A") and len(traced_hit["title"]) <= 240
+    assert traced_hit["url"] == (
+        "https://example.test/story?token=%5BREDACTED%5D&utm_source=newsletter"
+    )
+    assert traced_hit["engine"] == "search-engine" and traced_hit["status"] == "ok"
+    assert traced_hit["snippet"] == {
+        "text": "provider text is bounded and marked untrusted in the trace",
+        "untrusted": True,
+    }
+    assert len(traced_hit["snippet"]["text"]) <= 300
+
+
+async def test_retrieval_trace_classifies_extraction_failures_without_error_text():
+    class _ClassifiedExtraction:
+        async def extract_many(self, urls: list[str]) -> list[ExtractedDoc]:
+            errors = {
+                "https://example.test/blocked": ("blocked", "captcha challenge"),
+                "https://example.test/redirect": ("error", "http 307"),
+                "https://example.test/upstream": ("error", "HTTP 500 Internal Server Error"),
+                "https://example.test/timeout": ("error", "ReadTimeout while fetching"),
+                "https://example.test/empty": ("error", "no readable content"),
+                "https://example.test/other": ("error", "resolved address 127.0.0.1 is denied"),
+            }
+            return [
+                ExtractedDoc(
+                    url=url,
+                    title=url,
+                    content="",
+                    fetched_ok=False,
+                    error=errors[url][1],
+                    status=errors[url][0],  # type: ignore[arg-type]
+                )
+                for url in urls
+            ]
+
+    urls = [
+        "https://example.test/blocked",
+        "https://example.test/redirect",
+        "https://example.test/upstream",
+        "https://example.test/timeout",
+        "https://example.test/empty",
+        "https://example.test/other",
+    ]
+    result = await DefaultRetrievalEngine(
+        FakeSearchProvider([hit(url) for url in urls]),
+        _ClassifiedExtraction(),  # type: ignore[arg-type]
+        LexicalReranker(),
+    ).retrieve(RetrievalRequest(query="failure classes", depth="shallow"))
+
+    statuses = result.notes["retrieval_trace"]["extraction"]["statuses"]
+    assert [row["error_class"] for row in statuses] == [
+        "anti_bot",
+        "redirect/http_307",
+        "upstream_http_500",
+        "timeout",
+        "empty_content",
+        "other",
+    ]
+    serialized = str(result.notes["retrieval_trace"])
+    assert "captcha challenge" not in serialized
+    assert "127.0.0.1" not in serialized
+
+
+async def test_retrieval_trace_preserves_provider_degradation_diagnostic():
+    class _DegradedSearch(FakeSearchProvider):
+        async def search_detailed(
+            self,
+            query,
+            *,
+            limit=10,
+            domains_allow=None,
+            domains_deny=None,
+            time_filter=None,
+        ):
+            del domains_allow, domains_deny, time_filter
+            diagnostic = {
+                "providers": {"searxng": {"unresponsive_engines": ["slow-engine"]}}
+            }
+            return await super().search(
+                query,
+                limit=limit,
+                domains_allow=None,
+                domains_deny=None,
+                time_filter=None,
+            ), diagnostic
+
+    search = _DegradedSearch([])
+    result = await _engine(search, docs={}).retrieve(
+        RetrievalRequest(query="empty result", depth="shallow")
+    )
+    trace = result.notes["retrieval_trace"]
+    assert trace["raw_discovered_hit_count"] == 0
+    assert trace["provider_diagnostics"] == [
+        {"providers": {"searxng": {"unresponsive_engines": ["slow-engine"]}}}
+    ]
+    assert trace["queries"][0]["provider_diagnostic"] == trace["provider_diagnostics"][0]
+
+
+async def test_request_local_provider_diagnostics_do_not_cross_concurrent_queries():
+    class _InterleavedSearch:
+        name = "interleaved"
+
+        async def search_detailed(self, query, **kwargs):
+            del kwargs
+            # Force B to finish first. A shared provider snapshot would then
+            # attribute B's diagnostic to A when A resumes.
+            await asyncio.sleep(0.01 if query == "query A" else 0)
+            return [hit(f"http://example.test/{query[-1]}")], {"query": query}
+
+        async def search(self, query, **kwargs):
+            hits, _diagnostic = await self.search_detailed(query, **kwargs)
+            return hits
+
+    search = MultiSearchProvider((_InterleavedSearch(),))
+    engine = _engine(
+        search,
+        docs={
+            "http://example.test/A": "Substantive evidence for query A.",
+            "http://example.test/B": "Substantive evidence for query B.",
+        },
+    )
+    results = await asyncio.gather(
+        engine.retrieve(RetrievalRequest(query="query A", depth="shallow")),
+        engine.retrieve(RetrievalRequest(query="query B", depth="shallow")),
+    )
+    diagnostics = [
+        result.notes["retrieval_trace"]["queries"][0]["provider_diagnostic"]
+        for result in results
+    ]
+    assert diagnostics == [
+        {"providers": {"interleaved": {"query": "query A"}}},
+        {"providers": {"interleaved": {"query": "query B"}}},
+    ]

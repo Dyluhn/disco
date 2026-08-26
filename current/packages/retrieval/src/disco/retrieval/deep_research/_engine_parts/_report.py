@@ -21,12 +21,14 @@ def collect_report_data(
     pool: list[RetrievalPassage],
     carried_hits: list[Any],
     new_hits: list[Any],
+    *,
+    additional_cited_ids: list[str] | None = None,
 ) -> tuple[list[RetrievalPassage], list[RetrievalPassage], list[Any]]:
     """Return `(cited_passages, reviewed_passages, all_hits)`.
 
     Keeping the two passage sets distinct preserves the public cited-source
     contract without discarding evidence needed by later follow-ups."""
-    cited_ids: set[str] = set()
+    cited_ids: set[str] = set(additional_cited_ids or [])
     for section in sections:
         cited_ids.update(section.cited_passage_ids)
     seen: set[str] = set()

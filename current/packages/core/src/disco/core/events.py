@@ -105,6 +105,7 @@ from ._event_outputs import (
     KnowledgeEvent,
     PlanEvent,
     ReportEvent,
+    ResearchCheckpointEvent,
     RuntimeConstraintEvent,
 )
 
@@ -212,7 +213,8 @@ Event = Annotated[
     | ClarifyEvent
     | QuestionsV2Event
     | ContextResolvedEvent
-    | ContextSummaryEvent,
+    | ContextSummaryEvent
+    | ResearchCheckpointEvent,
     Field(discriminator="kind"),
 ]
 

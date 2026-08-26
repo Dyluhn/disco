@@ -27,6 +27,7 @@ from disco.core import (
     EventSource,
     ReportEvent,
     ReportSection,
+    ResearchCheckpointEvent,
     SqliteEventStore,
 )
 from fastapi.testclient import TestClient
@@ -91,7 +92,7 @@ def _make_sample_report() -> ReportEvent:
 # serializeReportToMarkdown; together they hold the py↔ts byte-parity contract.
 CAPTURED_MARKDOWN = (
     """\
-# Deep Research: What is the airspeed velocity of an unladen swallow?
+# What is the airspeed velocity of an unladen swallow?
 
 ## Executive Summary
 
@@ -134,22 +135,17 @@ def test_markdown_byte_parity() -> None:
     )
 
 
-def test_markdown_empty_sections() -> None:
-    """No sections → no section output (just header + summary + empty passages)."""
-    report = ReportEvent(
-        source=EventSource.AGENT,
-        query="Empty report",
-        summary="Nothing to see.",
-        sections=[],
-        passages=[],
-        all_hits=[],
-    )
-    result = serialize_markdown(report)
-    assert "## Executive Summary" in result
-    assert "Nothing to see." in result
-    assert "Sources cited (0):" in result
-    # No section headings
-    assert list(result.split("\n")).count("") >= 2
+def test_finished_report_rejects_empty_sections() -> None:
+    """A checkpoint cannot masquerade as a finished blank report."""
+    with pytest.raises(ValueError, match="at least one section"):
+        ReportEvent(
+            source=EventSource.AGENT,
+            query="Empty report",
+            summary="Nothing to see.",
+            sections=[],
+            passages=[],
+            all_hits=[],
+        )
 
 
 def test_markdown_no_bounded_by() -> None:
@@ -169,18 +165,17 @@ def test_markdown_no_bounded_by() -> None:
     assert "bounded by **" not in result
 
 
-def test_markdown_missing_summary() -> None:
-    """None/null summary → placeholder."""
-    report = ReportEvent(
-        source=EventSource.AGENT,
-        query="Q?",
-        summary="",
-        sections=[],
-        passages=[],
-        all_hits=[],
-    )
-    result = serialize_markdown(report)
-    assert "*(no summary)*" in result
+def test_finished_report_rejects_missing_summary() -> None:
+    """A finished report must have a non-empty executive summary."""
+    with pytest.raises(ValueError, match="executive summary"):
+        ReportEvent(
+            source=EventSource.AGENT,
+            query="Q?",
+            summary="",
+            sections=[ReportSection(id="s0", title="Findings", markdown="Evidence.")],
+            passages=[],
+            all_hits=[],
+        )
 
 
 def test_markdown_empty_summary_is_placeholder() -> None:
@@ -198,7 +193,7 @@ def test_markdown_passage_missing_fields() -> None:
         source=EventSource.AGENT,
         query="Test",
         summary="Summary",
-        sections=[],
+        sections=[ReportSection(id="s0", title="Findings", markdown="Summary.")],
         passages=[{}],  # no id, source_title, source_url
         all_hits=[],
     )
@@ -285,6 +280,35 @@ def test_endpoint_404_no_report(client_with_runtime: TestClient) -> None:
     detail = r.json()["detail"]
     assert detail["ok"] is False
     assert "reason" in detail
+
+
+def test_endpoint_404_checkpoint_is_not_exportable(
+    store: SqliteEventStore, client_with_runtime: TestClient
+) -> None:
+    """A stopped checkpoint must never produce a blank report export."""
+    cid = _create_conversation(client_with_runtime)
+    _seed_event(
+        store,
+        cid,
+        ResearchCheckpointEvent(
+            query="A stopped question",
+            passages=[
+                {
+                    "id": "p0",
+                    "source_url": "https://example.test/p0",
+                    "source_title": "Checkpoint source",
+                    "text": "Partial evidence.",
+                }
+            ],
+            all_hits=[],
+            trail=[{"kind": "search", "query": "A stopped question"}],
+            completed_queries=["A stopped question"],
+            depth_tier="quick",
+        ),
+    )
+    response = client_with_runtime.post(f"/api/conversations/{cid}/report/export?fmt=md")
+    assert response.status_code == 404
+    assert response.json()["detail"]["ok"] is False
 
 
 def test_endpoint_400_bad_fmt(client_with_runtime: TestClient) -> None:
@@ -705,7 +729,7 @@ def test_markdown_title_uses_generated_title() -> None:
     question."""
     report = _make_sample_report()
     out = serialize_markdown(report, None, "Swallow Airspeed Field Study")
-    assert out.splitlines()[0] == "# Deep Research: Swallow Airspeed Field Study"
+    assert out.splitlines()[0] == "# Swallow Airspeed Field Study"
     # The raw question must not be echoed on the title line.
     assert "unladen swallow" not in out.splitlines()[0]
 
@@ -761,7 +785,7 @@ def test_endpoint_md_export_uses_stored_title(
     r = client_with_runtime.post(f"/api/conversations/{cid}/report/export?fmt=md")
     assert r.status_code == 200, r.text
     first_line = r.content.decode("utf-8").splitlines()[0]
-    assert first_line == "# Deep Research: Swallow Airspeed Field Study"
+    assert first_line == "# Swallow Airspeed Field Study"
 
 
 def test_endpoint_md_export_no_title_falls_back_to_query(
@@ -815,7 +839,7 @@ async def test_export_waits_for_canonical_generated_title(store: SqliteEventStor
     )
 
     assert payload.decode("utf-8").splitlines()[0] == (
-        "# Deep Research: Weekly Open Source Releases"
+        "# Weekly Open Source Releases"
     )
 
 
@@ -888,6 +912,9 @@ def test_source_url_key_mirrors_sources_ts() -> None:
     assert _source_url_key("https://a.example.com/x?utm_source=f&fbclid=z") == (
         _source_url_key("https://a.example.com/x")
     )
+    assert _source_url_key("https://a.example.com/x?msclkid=a&msockid=b") == (
+        _source_url_key("https://a.example.com/x")
+    )
     assert _source_url_key("https://a.example.com:443/x/") == (
         _source_url_key("https://A.example.com./x")
     )
@@ -899,6 +926,32 @@ def test_source_url_key_mirrors_sources_ts() -> None:
     )
     # Unparseable / relative urls fall back to the trimmed raw string.
     assert _source_url_key("  not a url  ") == "not a url"
+
+
+def test_citation_numbers_group_strong_work_identifiers() -> None:
+    """Resolver, version, and host variants of one work share one row."""
+    from disco.agent_server.report_export import _citation_numbers
+
+    passages = [
+        {"id": "doi-a", "source_url": "https://doi.org/10.1000/ABC."},
+        {"id": "doi-b", "source_url": "https://publisher.example/paper/10.1000/abc"},
+        {"id": "arxiv-a", "source_url": "https://arxiv.org/abs/2401.12345v2"},
+        {"id": "arxiv-b", "source_url": "https://arxiv.org/pdf/2401.12345.pdf"},
+        {"id": "arxiv-c", "source_url": "https://arxiv.org/html/2401.12345"},
+        {"id": "pmid-a", "source_url": "https://pubmed.ncbi.nlm.nih.gov/12345/"},
+        {"id": "pmid-c", "source_url": "https://www.ncbi.nlm.nih.gov/pubmed/12345"},
+        {"id": "pmid-b", "source_url": "pmid:12345"},
+    ]
+    assert _citation_numbers(passages) == {
+        "doi-a": 1,
+        "doi-b": 1,
+        "arxiv-a": 2,
+        "arxiv-b": 2,
+        "arxiv-c": 2,
+        "pmid-a": 3,
+        "pmid-c": 3,
+        "pmid-b": 3,
+    }
 
 
 def test_pdf_appendix_one_row_per_source_shared_number() -> None:

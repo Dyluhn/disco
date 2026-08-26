@@ -33,7 +33,7 @@
     }
   ],
   "section_markdown": "Cites [[a1]] [[a2]] [[b1]] [[b2]] [[c1]] [[d1]] [[missing_id]].",
-  "expected_inline": "Cites [1] [1] [2] [2] [3] [4] [?].",
+  "expected_inline": "Cites [1] [2] [3] [4] [?].",
   "expected_footer": [
     "- [1] Alpha Story — https://alpha.example.com/story?utm_source=feed&fbclid=zz",
     "- [2] Beta Paper — https://beta.example.com:443/paper?b=2&a=1",

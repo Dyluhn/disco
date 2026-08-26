@@ -28,7 +28,7 @@ from disco.core import (
     LLMMessage,
     MessageEvent,
     ObservationEvent,
-    ReportEvent,
+    ResearchCheckpointEvent,
     ToolCall,
     ToolResult,
 )
@@ -165,13 +165,11 @@ def build_emit_callback(service: DeepResearchService, conversation_id: str):
     """Emit callback: every engine event becomes an Action/Observation pair
     on the conversation log so the UI's activity feed reflects progress.
 
-    CORRELATION: gather runs sub-questions CONCURRENTLY, so "the last
-    ActionEvent appended" is usually some OTHER sub-question's search by the
-    time an observation arrives — which left 5 of 6 searches permanently
-    "running" in the UI (the observation pointed at the wrong action). The
-    engine's payloads already carry `subquestion` (+ `round` for search/
-    observation), so we correlate per sub-question here, in this run-scoped
-    map — no engine/protocol change."""
+    CORRELATION: a turn can issue several searches concurrently, so "the last
+    ActionEvent appended" may belong to a different query when an observation
+    arrives. The payload's stable query label (`subquestion`) plus turn number
+    (`round`) correlate each observation to its own action in this run-scoped
+    map."""
     action_by_key: dict[str, str] = {}
 
     def _corr_key(payload: dict[str, Any]) -> str | None:
@@ -179,7 +177,7 @@ def build_emit_callback(service: DeepResearchService, conversation_id: str):
         if subq is None:
             return None
         rnd = payload.get("round")
-        # gap_reason has no round → correlate to the sub-question's latest search.
+        # Legacy gap_reason has no round → correlate to that label's latest search.
         return f"{subq}|{rnd}" if rnd is not None else f"{subq}|latest"
 
     async def emit(kind: str, payload: dict[str, Any]) -> None:
@@ -191,7 +189,7 @@ def build_emit_callback(service: DeepResearchService, conversation_id: str):
                 f"{payload.get('subquestion')}|latest", ""
             )
             if not action_id:
-                # No subquestion in the payload (or pre-correlation emit) —
+                # No query label in the payload (or pre-correlation emit) —
                 # fall back to the previous best-effort "last action".
                 last_action = next(
                     (
@@ -246,34 +244,30 @@ def build_emit_callback(service: DeepResearchService, conversation_id: str):
 
 
 def rebuild_resume_state(
-    resume_from: ReportEvent | None,
+    resume_from: ResearchCheckpointEvent | None,
 ) -> tuple[
     list[Any] | None,
     list[Passage] | None,
     list[SearchHit] | None,
     list[str] | None,
     list[str] | None,
+    list[dict[str, Any]] | None,
 ]:
     """Checkpointed resume: rebuild the retrieval-typed passages/hits from
-    the prior stopped run's checkpoint ReportEvent. The v2 engine seeds its
-    evidence pool from the passages and its audit trail from
-    ``completed_probes`` (the queries the agent already issued), then writes
-    the report fresh from the combined pool; sections/pending_probes are
-    accepted for signature compatibility only."""
+    the prior stopped run's ResearchCheckpointEvent. The engine seeds its
+    evidence pool and complete research trail, then writes the report fresh
+    from the combined pool."""
     if resume_from is None:
-        return None, None, None, None, None
-    resume_sections = list(resume_from.sections)
-    resume_passages = [
-        Passage.model_validate(p)
-        for p in [*resume_from.passages, *resume_from.reviewed_passages]
-    ]
+        return None, None, None, None, None, None
+    resume_passages = [Passage.model_validate(p) for p in resume_from.passages]
     resume_all_hits = [SearchHit.model_validate(h) for h in resume_from.all_hits]
     return (
-        resume_sections,
+        None,
         resume_passages,
         resume_all_hits,
-        list(resume_from.completed_probes),
-        list(resume_from.pending_probes),
+        list(resume_from.completed_queries),
+        None,
+        list(resume_from.trail),
     )
 
 
@@ -302,6 +296,7 @@ async def run_engine(
     resume_all_hits: list[SearchHit] | None,
     resume_completed_probes: list[str] | None,
     resume_pending_probes: list[str] | None,
+    resume_research_trail: list[dict[str, Any]] | None,
     emit: Any,
 ) -> ReportFromRun:
     """Run the engine and always clean up its per-run LIVE state, regardless
@@ -328,6 +323,7 @@ async def run_engine(
             resume_all_hits=resume_all_hits,
             resume_completed_probes=resume_completed_probes,
             resume_pending_probes=resume_pending_probes,
+            resume_research_trail=resume_research_trail,
             pop_steers=pop_steers,
             pop_injected_sources=pop_injected_sources,
         )
@@ -347,7 +343,7 @@ async def run_engine(
 def _tier_for_run(
     service: DeepResearchService,
     conversation_id: str,
-    resume_from: ReportEvent | None,
+    resume_from: ResearchCheckpointEvent | None,
 ) -> DepthTier:
     """Resolve the run's depth tier — from the checkpoint on resume.
 
@@ -367,12 +363,10 @@ async def run_execute(
     service: DeepResearchService,
     conversation_id: str,
     *,
-    resume_from: ReportEvent | None = None,
+    resume_from: ResearchCheckpointEvent | None = None,
 ) -> None:
     """The run driver with exactly three outcomes: a ReportEvent + FINISHED,
-    a Stop checkpoint ReportEvent + PAUSED, or an ErrorEvent + ERROR. A
-    dead-end run is NOT an error (decision #6) — the engine returns its
-    honest-account report and it finishes like any other. Every failure —
+    a ResearchCheckpointEvent + PAUSED, or an ErrorEvent + ERROR. Every failure —
     provider config, preflight, the engine, or persisting the final event —
     lands in the single failure handler here, so a run can never end without
     a terminal status."""
@@ -400,11 +394,11 @@ async def _run_to_report(
     service: DeepResearchService,
     conversation_id: str,
     *,
-    resume_from: ReportEvent | None = None,
+    resume_from: ResearchCheckpointEvent | None = None,
 ) -> None:
     """Build deps, preflight, run the engine, persist the terminal events.
 
-    ``resume_from`` is a prior stopped run's checkpoint ReportEvent: its
+    ``resume_from`` is a prior stopped run's ResearchCheckpointEvent: its
     gathered evidence + issued queries (and depth tier) are carried into the
     engine so resume continues from the checkpoint instead of redoing the
     searches that already ran."""
@@ -417,7 +411,11 @@ async def _run_to_report(
     if not query:
         raise ValueError("deep research needs a user question before it can run")
     tier = _tier_for_run(service, conversation_id, resume_from)
-    recency_window = service._recency_for(conversation_id)
+    recency_window = (
+        resume_from.recency_window
+        if resume_from is not None and resume_from.recency_window is not None
+        else service._recency_for(conversation_id)
+    )
 
     # Providers come from the existing research-stream plumbing (search,
     # extract, reranker, embedder, nli); the vectorstore is per-run
@@ -473,6 +471,7 @@ async def _run_to_report(
         resume_all_hits,
         resume_completed_probes,
         resume_pending_probes,
+        resume_research_trail,
     ) = rebuild_resume_state(resume_from)
 
     result = await run_engine(
@@ -484,15 +483,17 @@ async def _run_to_report(
         resume_all_hits=resume_all_hits,
         resume_completed_probes=resume_completed_probes,
         resume_pending_probes=resume_pending_probes,
+        resume_research_trail=resume_research_trail,
         emit=emit,
     )
 
-    # Emit the report-or-checkpoint ReportEvent. If the user pressed Stop, the
-    # run halted at a checkpoint (bounded_by="stopped", no report prose) →
+    # Emit exactly one terminal product or checkpoint event. If the user pressed
+    # Stop, the run halted before writing and emits a ResearchCheckpointEvent →
     # emit PAUSED (resumable) and KEEP the depth/recency/upload selections so
     # resume runs with the same settings. A finished run clears them.
-    await service._store.append(conversation_id, result.to_event())
-    stopped = getattr(result, "bounded_by", None) == "stopped"
+    terminal_event = result.to_event()
+    await service._store.append(conversation_id, terminal_event)
+    stopped = isinstance(terminal_event, ResearchCheckpointEvent)
     await service._lifecycle_commands.append_status(
         conversation_id,
         ConversationStatus.PAUSED if stopped else ConversationStatus.FINISHED,

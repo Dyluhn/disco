@@ -7,7 +7,14 @@ import pytest
 from disco.agent_server.deep_research_provider import DeepResearchProvider
 from disco.agent_server.deep_research_service import DeepResearchService
 from disco.agent_server.lifecycle_command_service import LifecycleCommandService
-from disco.core import ConversationStatus, EventSource, LLMMessage, MessageEvent, ReportEvent
+from disco.core import (
+    ConversationStatus,
+    EventSource,
+    LLMMessage,
+    MessageEvent,
+    ReportEvent,
+    ReportSection,
+)
 
 
 class _Resp:
@@ -80,7 +87,13 @@ def _prior_report() -> ReportEvent:
         source=EventSource.AGENT,
         query="What is the current state of local LLMs?",
         summary="Qwen models are competitive at different hardware tiers.",
-        sections=[],
+        sections=[
+            ReportSection(
+                id="s0",
+                title="Hardware tiers",
+                markdown="Qwen models are competitive at different hardware tiers.",
+            )
+        ],
         passages=[
             {
                 "id": "p1",
@@ -194,7 +207,11 @@ async def test_follow_up_uses_reviewed_passage_and_preserves_provenance() -> Non
         source=EventSource.AGENT,
         query="What open-source models shipped?",
         summary="A release was found.",
-        sections=[],
+        sections=[
+            ReportSection(
+                id="s0", title="Findings", markdown="The saved report has findings."
+            )
+        ],
         passages=[],
         reviewed_passages=[
             {

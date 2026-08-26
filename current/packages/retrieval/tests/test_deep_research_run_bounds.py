@@ -38,13 +38,24 @@ from disco.retrieval.vectorstore import InMemoryVectorStore
 # ---- doubles ----------------------------------------------------------------
 
 _THREE_QUERIES = (
-    '{"brief": "Three angles are worth opening at once.", "action": "search", '
-    '"queries": ["angle one", "angle two", "angle three"]}'
+    '{"brief": "Three angles are worth opening at once.", "decision_summary": '
+    '"Open the angles in parallel.", "coverage": {"covered": [], "open": '
+    '["angle one", "angle two", "angle three"], "contradictions_checked": '
+    '[]}, "queries": ["angle one", "angle two", "angle three"], '
+    '"ready_to_write": false}'
 )
 _ONE_QUERY = (
-    '{"brief": "One angle to open.", "action": "search", "queries": ["angle one"]}'
+    '{"brief": "One angle to open.", "decision_summary": "Open the angle.", '
+    '"coverage": {"covered": [], "open": ["angle one"], '
+    '"contradictions_checked": []}, "queries": ["angle one"], '
+    '"ready_to_write": false}'
 )
-_DONE = '{"action": "done", "reason": "the evidence covers every angle"}'
+_DONE = (
+    '{"brief": "The evidence is sufficient.", "decision_summary": '
+    '"The gathered evidence covers the requested angles.", "coverage": '
+    '{"covered": [], "open": [], "contradictions_checked": []}, '
+    '"queries": [], "ready_to_write": true}'
+)
 _CLEAN_REVIEW = '{"passes": true, "failures": []}'
 _EVIDENCE_ID = re.compile(r"(?m)^\[([\w-]+)\] ")
 

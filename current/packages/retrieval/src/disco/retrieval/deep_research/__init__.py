@@ -5,10 +5,10 @@ lead model directs research itself (`agent.py`) — it sees the evidence map
 every turn, decides searches, pivots, and sufficiency, and works under hard
 budgets only (live countdown surfaced every turn). Writing is one
 whole-report pass reviewed against a fixed rubric with precise deficiency
-feedback (`writer.py`); the best candidate always ships, with residual
-misses as metadata. A run either produces that report, raises (surfaced as a
-run error), or checkpoints on user Stop — there is no alternate report
-constructor and no plan-approval gate.
+feedback (`writer.py`); hard structure and grounding defects must be repaired
+before the report can ship. A run either produces that report, raises
+(surfaced as a run error), or checkpoints on user Stop — there is no alternate
+report constructor and no plan-approval gate.
 
 Public API:
 - `DepthTier`, `DepthBound`, `bounds_for(tier)` — the cost/time bound config.

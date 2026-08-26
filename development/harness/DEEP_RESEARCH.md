@@ -41,7 +41,10 @@ PYTHONPATH=development .venv/bin/python3 -m harness.deep_research \
   --output-dir /tmp/disco-deep-research-acceptance
 ```
 
-The batch command runs sequentially and writes `run-01/` through `run-05/`.
+The batch command runs with bounded concurrency (default `2`) and writes
+isolated `run-01/` through `run-05/` directories. Use `--concurrency N` to
+control provider pressure and `--repeat N` to sample the same corpus more than
+once.
 Each directory keeps an independent `report.md`, `report.json`,
 `events.jsonl`, redacted `cassette.jsonl`, `summary.json`, and `summary.md`.
 The root contains `batch_summary.json` and `batch_summary.md`; the manifest
@@ -70,6 +73,21 @@ Each run writes:
 
 - `report.md` and `report.json`: the normalized final artifact.
 - `events.jsonl`: ordered wire events with elapsed time and classified phase.
+- `model_io.jsonl`: optional redacted visible model request/response records.
+- `provider_attempts.jsonl`: optional bounded provider lifecycle records from
+  `DISCO_INSPECT` (`started`/`success`/`error`, retry scheduling, latency, and
+  safe provider/model labels). These rows are separate from `model_io.jsonl`
+  and are not counted as search-thrash work.
+- `search_io.jsonl`: bounded per-query search I/O records reconstructed from
+  the stream. When the backend supplies a structured `search_io`/`retrieval`
+  diagnostic, each row includes planned and issued queries, provider outcome or
+  error, bounded hit metadata, extraction statuses, passage/admission counts,
+  yield reason, round/turn, and latency. Older cassettes still produce an
+  action-only row with `provider_outcome: "not_observed"`; the harness does
+  not infer that missing responses were empty.
+- `search_timeline.md`: compact operator table for the same rows.
+- `inspect.json`: optional bounded `DISCO_INSPECT` trace snapshot.
+- `thrash.json`: deterministic repeated-query, malformed-turn, and no-progress signals.
 - `cassette.jsonl`: the redacted wire-frame seam, ready for deterministic replay.
 - `summary.json`: request, telemetry, probes, bounds, errors, report, and checks.
 - `summary.md`: a readable pass/fail digest followed by the rendered report.
@@ -78,15 +96,13 @@ The command exits nonzero when the provider fails or the artifact violates a
 report invariant.  A Deep Research run has exactly three legitimate outcomes:
 
 1. **A complete report** — the summary is non-empty and cited, and every
-   section is present and substantive. (A budget-exhausted run with an empty
-   evidence pool finishes with the system-gated honest dead-end account —
-   still a FINISHED report, never an error.)
+   section is present and substantive.
 2. **A run ERROR** — an `ErrorEvent` plus a terminal `ERROR` status; reserved
    for genuine provider failure.
-3. **A user-Stop PAUSED checkpoint** — `bounded_by == "stopped"` with
-   `sections == []` and `summary == ""`.  The harness judges this shape as a
-   checkpoint: the empty summary and sections are allowed **only** when
-   `bounded_by == "stopped"` (the `stopped_checkpoint_valid` invariant).
+3. **A user-Stop PAUSED checkpoint** — a typed `kind == "research_checkpoint"`
+   event with `sections == []` and `summary == ""`. The checkpoint event kind
+   carries the resumable-state contract; it is not a finished report and is
+   judged by the `stopped_checkpoint_valid` invariant.
 
 The harness judges the report artifact **as-is** and never normalizes or
 manufactures structure before judging: a missing summary stays empty, missing
@@ -102,8 +118,11 @@ invariants exist to detect.  The deterministic quality gates require:
 - a valid Markdown heading hierarchy, with no skipped levels;
 - citations on every substantive section that resolve to passages with HTTP(S)
   source URLs;
-- a report word count inside the requested depth tier (`quick` 1,500–2,500,
-  `standard_deep` 4,000–7,000, `exhaustive` 8,000–12,000); and
+- a report word count near the requested depth tier (`quick` nominally
+  1,500–2,500, `standard_deep` 4,000–7,000, `exhaustive` 8,000–12,000).
+  The harness accepts a documented ±5% diagnostic tolerance around those
+  nominal bounds (1,425–2,625; 3,800–7,350; 7,600–12,600 respectively);
+  the product writer targets remain unchanged; and
 - no high-rate repeated sentences or duplicate paragraphs.
 
 The checks are intentionally observable and deterministic; they do not rely on
@@ -111,8 +130,29 @@ an LLM judge.  A failed report remains available in the artifacts for
 diagnosis, but the process exits nonzero. Secrets in requests and event payloads
 are redacted before artifacts are written.
 
+`summary.json` also records advisory `telemetry.quality` metrics: distinct
+works, high-specificity claims backed by one work, claim concentration by
+work, repeated hedge phrases, and near-duplicate body paragraphs. Batch
+summaries aggregate these metrics alongside pass rate, output variance, and
+the thrash-clean rate; the advisory signals do not create a second report
+outcome or suppress an otherwise valid artifact.
+
 The event stream includes the public state and event frames as well as the
-harness's outbound `send_message` control. This makes the brief, search,
-extraction, verification, writing, terminal state, bounds, and provider
-errors inspectable without importing or patching product internals.
+harness's outbound `send_message` control. With `--inspect-model-io` and a
+server started with `DISCO_INSPECT=1`, the harness also
+fetches the bounded per-conversation inspect trace. This exposes visible
+requests, returned text/tool calls, declared decisions, routing, and token
+spans for thrash analysis; hidden reasoning is never captured.
 `--watch` prints a concise redacted version of that stream while the run is live.
+
+Search diagnostics are intentionally additive. A provider may emit a
+structured `search_io` (or `retrieval`) event in the inspect trace or public
+stream; it also consumes the current public envelope
+`event.tool_result.structured.retrieval_trace.queries[]`. The projection
+accepts aliases such as `planned_query`, `issued_query`/`post_transform_query`,
+`raw_hits`/`raw_discovered_hit_count`, `extracted`,
+`extraction.{attempted,success,statuses}`, `passages`/
+`reranked_passage_count`, `admission_count`/`added`, `yield_reason`,
+`provider_error`, and `latency_ms`. The adapter ignores free-form thoughts and
+model prompts, bounds titles/URLs and hit lists, and strips credentials/secret
+query parameters from URLs.

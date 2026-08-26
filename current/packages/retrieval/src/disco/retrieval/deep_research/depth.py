@@ -25,16 +25,18 @@ class DepthTier(str, Enum):
 
 @dataclass(frozen=True)
 class DepthBound:
-    """The cost/time envelope a Deep Research run runs under. All caps are
-    enforced at the engine layer; the first cap hit terminates the run and
-    populates `bounded_by` on the ReportEvent so the user sees what stopped it
-    (not silent truncation). max_subquestions also bounds the plan width — a
-    too-wide decompose returns truncated steps with the same `bounded_by` mark."""
+    """The cost/time envelope a Deep Research run runs under.
+
+    The research agent owns coverage and chooses its pivots.  The effort
+    minimums are host-side guards; they do not create fixed subquestions.
+    """
 
     max_sources: int  # one-execution cap: unique web passages; uploads are excluded
-    max_rounds_per_subq: int  # retrieve-reason-refine round budget per sub-q
+    # Compatibility-only fields retained while callers migrate off the retired
+    # planner vocabulary.  The agent never reads these values.
+    max_rounds_per_subq: int
     max_wall_clock_s: int  # whole-run wall clock cap
-    max_subquestions: int  # plan width cap
+    max_subquestions: int
     discover_limit: int  # search results requested per query (per round)
     extract_cap: int  # max extractions per round (controls page fetching)
     rerank_top_k: int  # passages kept per round after rerank
@@ -45,13 +47,12 @@ class DepthBound:
     report_min_words: int = 0
     report_max_words: int = 0
     writing_budget_tokens: int = 0
-    # Evidence-capacity thresholds are deliberately separate from source and
-    # sub-question caps.  They tell the controller when it has enough *shape*
-    # to sustain the requested report, not when a fixed number of probes ran.
     min_evidence_passages: int = 0
     min_evidence_themes: int = 0
     min_evidence_sources: int = 0
-    initial_probe_count: int = 3
+    initial_probe_count: int = 0
+    minimum_research_turns: int = 1
+    minimum_useful_sources: int = 1
 
     @property
     def report_spec(self) -> dict[str, int]:
@@ -64,13 +65,12 @@ class DepthBound:
 
     @property
     def evidence_capacity_spec(self) -> dict[str, int]:
-        """Thresholds used by adaptive gathering, separate from writing."""
+        """Compatibility view for callers migrating off the retired planner."""
         return {
             "min_evidence_passages": self.min_evidence_passages,
             "min_evidence_themes": self.min_evidence_themes,
             "min_evidence_sources": self.min_evidence_sources,
         }
-
 
 _TIERS: dict[DepthTier, DepthBound] = {
     # Quick: fast verification runs. 4 starting probes (up to 6 total), 2
@@ -94,6 +94,8 @@ _TIERS: dict[DepthTier, DepthBound] = {
         min_evidence_themes=3,
         min_evidence_sources=5,
         initial_probe_count=4,
+        minimum_research_turns=2,
+        minimum_useful_sources=6,
     ),
     # Standard-deep: the everyday Deep Research run. 7 starting probes (up to
     # 16 total after adaptive expansion) × up to 4 rounds; up to 90 admitted
@@ -114,6 +116,8 @@ _TIERS: dict[DepthTier, DepthBound] = {
         min_evidence_themes=5,
         min_evidence_sources=12,
         initial_probe_count=7,
+        minimum_research_turns=4,
+        minimum_useful_sources=12,
     ),
     # Exhaustive: long-form survey. 10 starting probes (up to 32 total after
     # adaptive expansion) × up to 6 rounds; up to 240 admitted passages.
@@ -133,6 +137,8 @@ _TIERS: dict[DepthTier, DepthBound] = {
         min_evidence_themes=8,
         min_evidence_sources=24,
         initial_probe_count=10,
+        minimum_research_turns=6,
+        minimum_useful_sources=20,
     ),
 }
 

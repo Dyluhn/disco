@@ -7,7 +7,7 @@ step (autonomous or human). These tests pin the new dispatch table:
   kickoff   — first user message → execute, exactly once, no plan events;
   in-flight — RUNNING with no report → no-op (mid-run input steers via WS);
   error     — ERROR retries fresh ONLY on new user input (no re-kick loop);
-  resume    — PAUSED → execute with the checkpoint ReportEvent carried;
+  resume    — PAUSED → execute with the ResearchCheckpointEvent carried;
   query     — pre-run user additions fold into the question.
 
 Hermetic — the engine itself is faked via ``_execute_deep_research``.
@@ -26,6 +26,7 @@ from disco.core import (
     PlanEvent,
     ReportEvent,
     ReportSection,
+    ResearchCheckpointEvent,
     SqliteEventStore,
     StatusEvent,
 )
@@ -127,19 +128,33 @@ async def test_error_retries_only_on_fresh_user_message(monkeypatch):
 
 
 async def test_paused_resumes_with_checkpoint(monkeypatch):
-    """PAUSED → the dispatcher re-executes with the checkpoint ReportEvent as
-    ``resume_from`` so gathered evidence + issued queries are carried."""
+    """PAUSED → resume carries the full checkpoint trail and evidence."""
     store = SqliteEventStore(":memory:")
     rt = _rt(store)
     await store.append("c1", _user("state of local LLMs in 2026"))
-    checkpoint = ReportEvent(
+    checkpoint = ResearchCheckpointEvent(
         query="state of local LLMs in 2026",
-        summary="",
-        sections=[],
-        passages=[],
-        all_hits=[],
-        bounded_by="stopped",
-        completed_probes=["local llm inference 2026"],
+        passages=[
+            {
+                "id": "p0",
+                "source_url": "https://example.test/local-llm",
+                "source_title": "Local LLM report",
+                "text": "A source passage retained by the checkpoint.",
+            }
+        ],
+        all_hits=[
+            {
+                "url": "https://example.test/local-llm",
+                "title": "Local LLM report",
+                "snippet": "A retained discovery hit.",
+                "source_engine": "test",
+                "rank": 1,
+            }
+        ],
+        trail=[{"kind": "search", "query": "local llm inference 2026"}],
+        completed_queries=["local llm inference 2026"],
+        depth_tier="standard_deep",
+        recency_window="month",
     )
     await store.append("c1", checkpoint)
     await store.append("c1", StatusEvent(status=ConversationStatus.PAUSED, detail="stopped"))
@@ -151,7 +166,46 @@ async def test_paused_resumes_with_checkpoint(monkeypatch):
     exec_mock.assert_awaited_once()
     resume_from = exec_mock.await_args.kwargs["resume_from"]
     assert resume_from is not None
-    assert resume_from.completed_probes == ["local llm inference 2026"]
+    assert resume_from.completed_queries == ["local llm inference 2026"]
+    assert resume_from.trail == [{"kind": "search", "query": "local llm inference 2026"}]
+    assert resume_from.passages[0]["id"] == "p0"
+
+
+def test_checkpoint_resume_rebuilds_typed_evidence_and_trail():
+    """The execution seam preserves typed passages, hits, queries, and trail."""
+    from disco.agent_server._deep_research_service_parts.execute import rebuild_resume_state
+
+    checkpoint = ResearchCheckpointEvent(
+        query="state of local LLMs in 2026",
+        passages=[
+            {
+                "id": "p0",
+                "source_url": "https://example.test/local-llm",
+                "source_title": "Local LLM report",
+                "text": "A source passage retained by the checkpoint.",
+            }
+        ],
+        all_hits=[
+            {
+                "url": "https://example.test/local-llm",
+                "title": "Local LLM report",
+                "snippet": "A retained discovery hit.",
+                "source_engine": "test",
+                "rank": 1,
+            }
+        ],
+        trail=[{"kind": "search", "query": "local llm inference 2026"}],
+        completed_queries=["local llm inference 2026"],
+    )
+
+    sections, passages, hits, queries, pending, trail = rebuild_resume_state(checkpoint)
+
+    assert sections is None
+    assert passages is not None and passages[0].id == "p0"
+    assert hits is not None and hits[0].url == "https://example.test/local-llm"
+    assert queries == ["local llm inference 2026"]
+    assert pending is None
+    assert trail == [{"kind": "search", "query": "local llm inference 2026"}]
 
 
 async def test_finished_report_without_new_message_is_noop(monkeypatch):

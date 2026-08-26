@@ -28,8 +28,10 @@ can't grow the buffer without limit.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+import re
 import threading
 from collections import OrderedDict, deque
 from dataclasses import dataclass
@@ -47,15 +49,152 @@ _MAX_CONVERSATIONS = 64
 _MAX_EVENTS = 1024
 _MAX_TOOL_SCOPE_NAMES = 512
 _MAX_TOOL_NAME_CHARS = 256
+_MAX_MODEL_IO_CHARS = 16_000
+_MAX_MODEL_IO_MESSAGES = 8
+_MAX_ATTEMPT_TEXT_CHARS = 128
+_MAX_ATTEMPT_LATENCY_MS = 86_400_000
 
 _TRUTHY = {"1", "true", "yes", "on"}
 
 _LOG = logging.getLogger(__name__)
+_MODEL_SECRET_KEY = re.compile(
+    r"(?:secret|password|passwd|token|api[_-]?key|authorization|cookie|credential)", re.I
+)
+_MODEL_SECRET_VALUE = re.compile(
+    r"(?i)(?<![A-Za-z0-9])(?:"
+    r"(?:sk|pk)[_-][A-Za-z0-9][A-Za-z0-9._-]{15,}|"
+    r"LLM_[A-Za-z0-9][A-Za-z0-9._-]{20,}|"
+    r"bearer\s+[A-Za-z0-9][A-Za-z0-9._-]{15,}"
+    r")"
+)
 
 
 def inspect_enabled() -> bool:
     """True iff ``DISCO_INSPECT`` (or legacy ``PMX_INSPECT``) is set truthy."""
     return (disco_env("INSPECT") or "").strip().lower() in _TRUTHY
+
+
+def model_io_enabled() -> bool:
+    """True when bounded visible model I/O capture is enabled.
+
+    ``DISCO_INSPECT`` is the single debug switch. Older deployments may still
+    set ``DISCO_INSPECT_MODEL_IO``; accepting it as an explicit alias keeps
+    those configurations working while avoiding a split mode where routing is
+    visible but deep-research model calls silently vanish. The payload remains
+    bounded/redacted and contains only visible prompts, returned content, and
+    declared decisions; hidden reasoning is never stored.
+    """
+    return inspect_enabled()
+
+
+def _bounded_model_value(value: Any, *, key: str = "") -> Any:
+    """Redact and bound model trace payloads before they enter the ring."""
+    if key and _MODEL_SECRET_KEY.search(key):
+        return "[REDACTED]"
+    if isinstance(value, dict):
+        return {str(k): _bounded_model_value(v, key=str(k)) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        rows = list(value)[:_MAX_MODEL_IO_MESSAGES]
+        return [_bounded_model_value(v) for v in rows]
+    if isinstance(value, str):
+        value = _MODEL_SECRET_VALUE.sub("[REDACTED]", value)
+        if len(value) > _MAX_MODEL_IO_CHARS:
+            return value[:_MAX_MODEL_IO_CHARS] + "…[TRUNCATED]"
+        return value
+    return value
+
+
+def record_model_io(
+    conversation_id: str | None,
+    *,
+    request: dict[str, Any] | None = None,
+    response: dict[str, Any] | None = None,
+    role: str | None = None,
+    model: str | None = None,
+    provider: str | None = None,
+    request_id: str | None = None,
+    declared_decision: dict[str, Any] | None = None,
+    stage: str | None = None,
+    attempt: int = 1,
+    latency_ms: int | None = None,
+    usage: dict[str, Any] | None = None,
+    finish_reason: str | None = None,
+    parse_error: str | None = None,
+) -> None:
+    """Record visible model request/response metadata in the generic inspect ring.
+
+    This seam intentionally accepts caller-declared visible content only. It is
+    not a hidden-reasoning capture API. Payloads are redacted and bounded before
+    storage, and capture is inert unless inspect mode is enabled.
+    """
+    if not conversation_id or not model_io_enabled():
+        return
+    request_hash = hashlib.sha256(
+        json.dumps(request or {}, ensure_ascii=False, sort_keys=True, default=str).encode()
+    ).hexdigest()
+    response_hash = hashlib.sha256(
+        json.dumps(response or {}, ensure_ascii=False, sort_keys=True, default=str).encode()
+    ).hexdigest()
+    payload: dict[str, Any] = {
+        "stage": stage,
+        "attempt": attempt,
+        "role": role,
+        "model": model,
+        "provider": provider,
+        "request_id": request_id,
+        "request": request,
+        "response": response,
+        "request_hash": request_hash,
+        "response_hash": response_hash,
+        "declared_decision": declared_decision,
+        "latency_ms": latency_ms,
+        "usage": usage,
+        "finish_reason": finish_reason,
+        "parse_error": parse_error,
+    }
+    registry().add(conversation_id, "model_io", _bounded_model_value(payload))
+
+
+def record_model_attempt(
+    conversation_id: str | None,
+    *,
+    stage: str,
+    attempt: int,
+    provider: str,
+    model: str,
+    outcome: str,
+    call_ordinal: int = 1,
+    latency_ms: int | None = None,
+    error_class: str | None = None,
+    retry_scheduled: bool | None = None,
+) -> None:
+    """Record provider-attempt lifecycle metadata without model content.
+
+    This is a separate inspect event kind so retry attempts do not inflate the
+    existing ``model_io`` call metrics.  Callers provide only bounded labels,
+    outcome state, error class, and timing; prompts, responses, and exception
+    messages are intentionally not accepted by this seam.
+    """
+    if not conversation_id or not inspect_enabled():
+        return
+    payload: dict[str, Any] = {
+        "stage": str(stage)[:_MAX_ATTEMPT_TEXT_CHARS],
+        "attempt": max(1, int(attempt)),
+        "call_ordinal": max(1, int(call_ordinal)),
+        "provider": str(provider)[:_MAX_ATTEMPT_TEXT_CHARS],
+        "model": str(model)[:_MAX_ATTEMPT_TEXT_CHARS],
+        "outcome": str(outcome)[:_MAX_ATTEMPT_TEXT_CHARS],
+        "latency_ms": (
+            None
+            if latency_ms is None
+            else min(_MAX_ATTEMPT_LATENCY_MS, max(0, int(latency_ms)))
+        ),
+        "error_class": (
+            str(error_class)[:_MAX_ATTEMPT_TEXT_CHARS] if error_class is not None else None
+        ),
+        "retry_scheduled": retry_scheduled,
+    }
+    registry().add(conversation_id, "model_attempt", payload)
 
 
 # ---- trace data --------------------------------------------------------------
@@ -99,6 +238,8 @@ class ConversationTrace:
             "spans": [e.data for e in evs if e.kind == "span"],
             "tool_scopes": [e.data for e in evs if e.kind == "tool_scope"],
             "progress_shadows": [e.data for e in evs if e.kind == "progress_shadow"],
+            "model_io": [e.data for e in evs if e.kind == "model_io"],
+            "model_attempts": [e.data for e in evs if e.kind == "model_attempt"],
             "events": [{"seq": e.seq, "kind": e.kind, **e.data} for e in evs],
         }
 

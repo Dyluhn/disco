@@ -11,7 +11,9 @@ import datetime
 from email.utils import parsedate_to_datetime
 from urllib.parse import parse_qsl, urlencode, urlparse
 
-_TRACKING_QUERY_KEYS = frozenset({"fbclid", "gclid", "mc_cid", "mc_eid"})
+_TRACKING_QUERY_KEYS = frozenset(
+    {"fbclid", "gclid", "mc_cid", "mc_eid", "msclkid", "msockid"}
+)
 
 
 def parse_source_date(value: object) -> datetime.date | None:

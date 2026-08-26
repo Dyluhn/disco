@@ -195,10 +195,10 @@ _MINIMAL_REPORT_DICT: dict[str, Any] = {
     "depth_tier": "standard_deep",
 }
 
-# Medium: 6 sections including two with EMPTY markdown — a real-world edge case.
-# Sourced from conv_8fd0d55 in production disco.db.  The empty sections come from
-# the DR engine stopping early on some sub-questions.  This is the adversarial
-# case for the TTS pipeline: the LLM must not generate turns about missing content.
+# Medium: 6 substantive sections from a real-world encoder-model report.
+# Sourced from conv_8fd0d55 in production disco.db.  The old fixture represented
+# a stopped partial run as a ReportEvent with empty sections; stopped runs now
+# use ResearchCheckpointEvent and cannot be sent to the report-audio pipeline.
 _MEDIUM_REPORT_DICT: dict[str, Any] = {
     "id": "evt_live_medium",
     "kind": "report",
@@ -239,13 +239,18 @@ _MEDIUM_REPORT_DICT: dict[str, Any] = {
             "confidence": "high",
             "disputed_notes": [],
         },
-        # These two sections have empty markdown — captured verbatim from real DR output.
+        # These sections were empty in the old stopped-run fixture. Keep them
+        # substantive here because report audio accepts finished reports only.
         {
             "id": "s_enc_3",
             "title": "Primary technical limitations and failure modes of encoder models",
-            "markdown": "",  # empty — DR stopped before synthesizing this section
-            "cited_passage_ids": [],
-            "confidence": "low",
+            "markdown": (
+                "Encoder-only models remain limited by their fixed bidirectional context and "
+                "the cost of retraining for new domains. Their benchmark gains also depend on "
+                "task-specific tuning, so headline scores do not guarantee production gains."
+            ),
+            "cited_passage_ids": ["p0"],
+            "confidence": "mixed",
             "disputed_notes": [],
         },
         {
@@ -264,9 +269,13 @@ _MEDIUM_REPORT_DICT: dict[str, Any] = {
         {
             "id": "s_enc_5",
             "title": "Computational costs and hardware requirements for encoder models",
-            "markdown": "",  # empty — DR stopped before synthesizing this section
-            "cited_passage_ids": [],
-            "confidence": "low",
+            "markdown": (
+                "Encoder inference is generally cheaper than decoder generation, but large "
+                "embedding models still require substantial memory and throughput. Hardware "
+                "requirements vary with batch size, sequence length, and quantization choices."
+            ),
+            "cited_passage_ids": ["p1"],
+            "confidence": "mixed",
             "disputed_notes": [],
         },
         {
@@ -292,7 +301,7 @@ _MEDIUM_REPORT_DICT: dict[str, Any] = {
     ],
     "all_hits": [],
     "unsupported_count": 2,
-    "bounded_by": "stopped",
+    "bounded_by": "sources",
     "depth_tier": "standard_deep",
 }
 

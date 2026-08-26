@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import json
 import re
+import time
+from collections.abc import Callable
 from typing import Any, Literal
 
 import jsonschema
@@ -242,6 +244,12 @@ async def continue_truncated_report(
     response: CompletionResponse,
     *,
     max_tokens: int,
+    conversation_id: str | None = None,
+    inspect_stage: str = "report_continuation",
+    on_completion: Callable[
+        [CompletionRequest, CompletionResponse, str, int, int], None
+    ]
+    | None = None,
 ) -> str:
     """Continue a `finish_reason == "length"` report from its exact cut point,
     bounded to 2 continuations (the v1 truncation guard, whole-report shape)."""
@@ -249,29 +257,40 @@ async def continue_truncated_report(
     while response.finish_reason == "length" and continuations < 2:
         continuations += 1
         try:
-            response = await router.complete(
-                CompletionRequest(
-                    profile=CapabilityProfile(role=ModelRole.RAG_ANSWERER),
-                    messages=[
-                        *base_messages,
-                        LLMMessage(role="assistant", content=markdown.rstrip()),
-                        LLMMessage(
-                            role="user",
-                            content=(
-                                "Your previous reply was cut off. Continue EXACTLY "
-                                "where you stopped — do not repeat any earlier text "
-                                "and do not add a preamble. If you were mid-table, "
-                                "finish the table."
-                            ),
+            request = CompletionRequest(
+                profile=CapabilityProfile(role=ModelRole.RAG_ANSWERER),
+                messages=[
+                    *base_messages,
+                    LLMMessage(role="assistant", content=markdown.rstrip()),
+                    LLMMessage(
+                        role="user",
+                        content=(
+                            "Your previous reply was cut off. Continue EXACTLY "
+                            "where you stopped — do not repeat any earlier text "
+                            "and do not add a preamble. If you were mid-table, "
+                            "finish the table."
                         ),
-                    ],
-                    temperature=0.0,
-                    max_tokens=max_tokens,
-                )
+                    ),
+                ],
+                temperature=0.0,
+                max_tokens=max_tokens,
+                metadata=(
+                    {
+                        "conversation_id": conversation_id[:256],
+                        "inspect_stage": inspect_stage[:128],
+                    }
+                    if conversation_id
+                    else None
+                ),
             )
+            started = time.perf_counter()
+            response = await router.complete(request)
+            latency_ms = max(0, int((time.perf_counter() - started) * 1_000))
         except Exception:  # noqa: BLE001 — keep the partial report
             break
         extra = strip_think_spans(response.text, keep_edge_whitespace=True)
+        if on_completion is not None:
+            on_completion(request, response, extra, continuations, latency_ms)
         if not extra.strip():
             break
         markdown = _join_continuation_text(markdown, extra.lstrip())

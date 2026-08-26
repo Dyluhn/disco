@@ -62,7 +62,16 @@ vi.mock("@/api/agent", () => ({
           seq: 4,
           query: REAL_QUERY,
           summary: "A brief summary of quantum computing prospects.",
-          sections: [],
+          sections: [
+            {
+              id: "r0",
+              title: "Outlook",
+              markdown: "Quantum computing remains an active engineering field.",
+              cited_passage_ids: [],
+              confidence: "low",
+              unsupported_count: 0,
+            },
+          ],
           passages: [],
           all_hits: [],
           unsupported_count: 0,

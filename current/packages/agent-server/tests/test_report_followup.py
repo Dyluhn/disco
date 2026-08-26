@@ -155,7 +155,7 @@ def test_followup_context_preserves_head_and_tail_of_long_evidence():
         source=EventSource.AGENT,
         query="What changed?",
         summary="A change occurred.",
-        sections=[],
+        sections=[ReportSection(id="s0", title="Findings", markdown="A change occurred.")],
         passages=[passage],
         all_hits=[],
     )
@@ -183,7 +183,11 @@ def test_followup_context_names_the_full_saved_source_corpus():
         source=EventSource.AGENT,
         query="Which models shipped?",
         summary="Several releases were found.",
-        sections=[],
+        sections=[
+            ReportSection(
+                id="s0", title="Findings", markdown="Several releases were found."
+            )
+        ],
         passages=passages,
         all_hits=[],
     )

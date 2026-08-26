@@ -247,7 +247,7 @@ def test_build_pdf_html_dark_has_dark_bg() -> None:
 
 CAPTURED_MARKDOWN = (
     """\
-# Deep Research: What is the airspeed velocity of an unladen swallow?
+# What is the airspeed velocity of an unladen swallow?
 
 ## Executive Summary
 
@@ -492,7 +492,7 @@ def test_build_pdf_html_bounded_note() -> None:
         source=EventSource.AGENT,
         query="Q",
         summary="S",
-        sections=[],
+        sections=[ReportSection(id="s0", title="Findings", markdown="Evidence.")],
         passages=[],
         all_hits=[],
         bounded_by="sources",

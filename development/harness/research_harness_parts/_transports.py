@@ -96,7 +96,32 @@ class ReplayTransport:
                     )
         for frame in frames:
             observer.record(frame, kind="replay")
+        # Restore diagnostic seams verbatim so replay preserves model I/O and
+        # inspect evidence instead of recomputing only from public frames.
+        model_io = self._seam_output(rows, "research.model_io")
+        if model_io is not None:
+            observer.model_io.clear()
+            values = model_io if isinstance(model_io, list) else [model_io]
+            for item in values:
+                if isinstance(item, Mapping):
+                    observer.record_model_io(item)
+        provider_attempts = self._seam_output(rows, "research.provider_attempts")
+        if isinstance(provider_attempts, list):
+            observer.provider_attempts.clear()
+            for item in provider_attempts:
+                if isinstance(item, Mapping):
+                    observer.record_provider_attempt(item)
+        inspect_trace = self._seam_output(rows, "research.inspect")
+        if isinstance(inspect_trace, Mapping):
+            observer.record_inspect_trace(inspect_trace)
         return frames
+
+    @staticmethod
+    def _seam_output(rows: Sequence[Mapping[str, Any]], seam: str) -> Any:
+        for row in rows:
+            if row.get("seam") == seam:
+                return row.get("output")
+        return None
 
     @staticmethod
     def _frame_output(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]] | None:
@@ -170,6 +195,7 @@ class LiveWebSocketTransport:
     def __init__(self, base_url: str | None = None, *, watch: bool = False) -> None:
         self.base_url = (base_url or "http://localhost:8000").rstrip("/")
         self.watch = watch
+        self.conversation_id: str | None = None
 
     def _record(
         self,
@@ -278,7 +304,7 @@ class LiveWebSocketTransport:
                     self._record(frames, observer, frame)
                     if frame.get("type") == "error":
                         break
-                    if frame.get("type") == "state" and frame.get("status") == "finished":
+                    if _is_terminal_research_frame(frame):
                         break
         return frames
 
@@ -308,48 +334,97 @@ class LiveWebSocketTransport:
             response = await client.post("/conversations", json=body)
             response.raise_for_status()
             conversation_id = str(response.json()["conversation_id"])
+        self.conversation_id = conversation_id
         url = self.base_url.replace("https://", "wss://").replace("http://", "ws://")
         frames: list[dict[str, Any]] = []
-        async with _connect(
-            websockets,
-            f"{url}/ws/conversations/{conversation_id}",
-            session_headers,
-            request.timeout_s,
-            origin=origin,
-        ) as ws:
-            initial_raw = await asyncio.wait_for(
-                ws.recv(), timeout=min(request.timeout_s or 10.0, 10.0)
-            )
-            initial = json.loads(initial_raw)
-            if not isinstance(initial, dict) or initial.get("type") != "state":
-                raise RuntimeError("conversation WebSocket did not begin with a state frame")
-            self._record(frames, observer, initial)
-            await ws.send(json.dumps({"type": "send_message", "content": request.query}))
-            self._record(
-                frames,
-                observer,
-                {"type": "harness_control", "command": "send_message"},
-            )
-            # v2 (PKG-35): deep research is gateless — the question launches the
-            # run and the model's brief streams as its first output; there is no
-            # AWAITING_PLAN_APPROVAL state to acknowledge.
-            async with asyncio.timeout(request.timeout_s):
-                async for raw in ws:
-                    frame = json.loads(raw)
-                    self._record(frames, observer, frame)
-                    event = frame.get("event") if isinstance(frame.get("event"), Mapping) else frame
-                    if event.get("kind") == "report":
-                        # The report is terminal for a deep-research run; keep
-                        # reading one status event when the server supplies it.
-                        continue
-                    if event.get("kind") == "status" and str(event.get("status", "")).upper() in {
-                        "FINISHED",
-                        "ERROR",
-                    }:
-                        break
-                    if frame.get("type") == "error":
-                        break
+        try:
+            async with _connect(
+                websockets,
+                f"{url}/ws/conversations/{conversation_id}",
+                session_headers,
+                request.timeout_s,
+                origin=origin,
+            ) as ws:
+                initial_raw = await asyncio.wait_for(
+                    ws.recv(), timeout=min(request.timeout_s or 10.0, 10.0)
+                )
+                initial = json.loads(initial_raw)
+                if not isinstance(initial, dict) or initial.get("type") != "state":
+                    raise RuntimeError("conversation WebSocket did not begin with a state frame")
+                self._record(frames, observer, initial)
+                await ws.send(json.dumps({"type": "send_message", "content": request.query}))
+                self._record(
+                    frames,
+                    observer,
+                    {"type": "harness_control", "command": "send_message"},
+                )
+                # v2 (PKG-35): deep research is gateless — the question launches the
+                # run and the model's brief streams as its first output; there is no
+                # AWAITING_PLAN_APPROVAL state to acknowledge.
+                async with asyncio.timeout(request.timeout_s):
+                    async for raw in ws:
+                        frame = json.loads(raw)
+                        self._record(frames, observer, frame)
+                        nested_event = frame.get("event")
+                        event = nested_event if isinstance(nested_event, Mapping) else frame
+                        if event.get("kind") == "report":
+                            # The report is terminal for a deep-research run; keep
+                            # reading one status event when the server supplies it.
+                            continue
+                        if event.get("kind") == "research_checkpoint":
+                            break
+                        if _conversation_status(frame).upper() in {"FINISHED", "ERROR", "PAUSED"}:
+                            break
+                        if frame.get("type") == "error":
+                            break
+        finally:
+            # Inspect is diagnostic-only. Fetch it after normal completion,
+            # timeout, or provider failure so an in-flight ``started`` attempt
+            # survives a harness timeout. The helper swallows only its own
+            # diagnostics; the original collection exception remains active.
+            if request.capture_inspect:
+                await self._collect_inspect(
+                    request,
+                    observer,
+                    session_headers=session_headers,
+                    origin=origin,
+                    conversation_id=conversation_id,
+                )
         return frames
+
+    async def _collect_inspect(
+        self,
+        request: ResearchRequest,
+        observer: Observation,
+        *,
+        session_headers: Mapping[str, str],
+        origin: str,
+        conversation_id: str,
+    ) -> None:
+        """Best-effort inspect fetch that cannot replace a transport failure."""
+        try:
+            import httpx
+
+            async with httpx.AsyncClient(
+                base_url=self.base_url,
+                headers={**session_headers, "Origin": origin},
+                timeout=request.timeout_s,
+            ) as client:
+                evidence = await client.get(f"/api/debug/evidence/{conversation_id}")
+                if evidence.is_success:
+                    snapshot = evidence.json()
+                    if isinstance(snapshot, Mapping):
+                        observer.record_inspect_trace(snapshot)
+                        trace = snapshot.get("inspect_trace")
+                        if isinstance(trace, Mapping):
+                            for item in trace.get("model_io", []):
+                                if isinstance(item, Mapping):
+                                    observer.record_model_io(item)
+        except BaseException as exc:  # noqa: BLE001 — diagnostics must not mask collection
+            try:
+                observer.record({"type": "harness_diagnostic", "inspect_error": str(exc)})
+            except Exception:
+                pass
 
 
 def _transport_for(request: ResearchRequest) -> ResearchTransport:
@@ -366,6 +441,20 @@ def _conversation_status(frame: Mapping[str, Any]) -> str:
         if event.get("kind") == "status":
             return str(event.get("status") or "")
     return ""
+
+
+def _is_terminal_research_frame(frame: Mapping[str, Any]) -> bool:
+    """Recognize terminal report, checkpoint, and lifecycle frames."""
+    nested_event = frame.get("event")
+    event: Mapping[str, Any] = nested_event if isinstance(nested_event, Mapping) else frame
+    if str(event.get("kind") or "").lower() in {"report", "research_checkpoint"}:
+        return True
+    status = str(event.get("status") or "").upper()
+    if frame.get("type") == "state":
+        state = frame.get("state")
+        state_status = state.get("execution_status") if isinstance(state, Mapping) else None
+        status = str(frame.get("status") or state_status or status).upper()
+    return status in {"FINISHED", "ERROR", "PAUSED"}
 
 
 def _connect(

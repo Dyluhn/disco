@@ -1,7 +1,7 @@
 /**
  * Live header-strip stats, split out of `deepResearchTrace.ts`
  * (PKG-12-C/TS-0052). v2 (gateless deep research): there is no plan and no
- * per-sub-question checklist — progress derives from the search / observation /
+ * checklist — progress derives from the search / observation /
  * phase / section_done events the engine actually emits. Elapsed time is REAL:
  * the span between the first and the latest event timestamps
  * (BaseEvent.timestamp), no longer a hardcoded null. Pre-v2 vocabularies
@@ -17,8 +17,6 @@ import type { DeepStats } from "@/lib/deepResearchTrace";
 interface StatsAccumulator {
   searches: number;
   sectionsDone: number;
-  activeSubq: { title: string } | null;
-  activeRound: { current: number; max: number } | null;
   sourcesDiscovered: number;
   phase: string | null;
   activeSection: { title: string } | null;
@@ -27,18 +25,8 @@ interface StatsAccumulator {
   lastTs: number;
 }
 
-function applySearchAction(
-  acc: StatsAccumulator,
-  args: Record<string, unknown>,
-): void {
+function applySearchAction(acc: StatsAccumulator): void {
   acc.searches += 1;
-  const subq = String(args.subquestion ?? "");
-  if (subq) acc.activeSubq = { title: subq };
-  const cur = Number(args.round);
-  const max = Number(args.rounds_max);
-  if (Number.isFinite(cur) && Number.isFinite(max)) {
-    acc.activeRound = { current: cur, max };
-  }
 }
 
 function applySynthesizeAction(
@@ -48,8 +36,6 @@ function applySynthesizeAction(
   // Pre-v2 replays: a per-section write heartbeat (v2 writes the report in
   // one pass and emits only section_done checkpoints at the end).
   acc.activeSection = { title: String(args.section ?? "") };
-  acc.activeSubq = null;
-  acc.activeRound = null; // rounds are a gather concept
 }
 
 function applySectionDoneAction(
@@ -67,11 +53,6 @@ function applyPhaseAction(
   args: Record<string, unknown>,
 ): void {
   acc.phase = String(args.phase ?? "") || null;
-  if (acc.phase && acc.phase !== "gather") {
-    // Gather is over — a "Searching …" indicator would now be stale.
-    acc.activeSubq = null;
-    acc.activeRound = null;
-  }
 }
 
 function applyObservation(acc: StatsAccumulator, r: ToolResult): void {
@@ -92,7 +73,7 @@ function applyEvent(acc: StatsAccumulator, e: AgentEvent): void {
   if (e.kind === "action" && e.tool_call) {
     const name = e.tool_call.tool_name;
     const args = e.tool_call.arguments;
-    if (name === "search") applySearchAction(acc, args);
+    if (name === "search") applySearchAction(acc);
     else if (name === "synthesize_section") applySynthesizeAction(acc, args);
     else if (name === "section_done") applySectionDoneAction(acc, args);
     else if (name === "phase") applyPhaseAction(acc, args);
@@ -107,8 +88,6 @@ export function computeStats(events: AgentEvent[]): DeepStats {
   const acc: StatsAccumulator = {
     searches: 0,
     sectionsDone: 0,
-    activeSubq: null,
-    activeRound: null,
     sourcesDiscovered: 0,
     phase: null,
     activeSection: null,
@@ -137,8 +116,6 @@ export function computeStats(events: AgentEvent[]): DeepStats {
   return {
     searches: acc.searches,
     sectionsDone: acc.sectionsDone,
-    activeSubquestion: acc.activeSubq,
-    activeRound: acc.activeRound,
     sourcesDiscovered: acc.sourcesDiscovered,
     elapsedSeconds,
     phase: acc.phase,

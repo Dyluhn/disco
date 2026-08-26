@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import pytest
 from disco.core import LLMMessage
+from disco.core.inspect import registry
 from disco.core.llm import (
+    CallContext,
     CapabilityProfile,
     CompletionRequest,
     LLMTransientError,
@@ -55,6 +57,25 @@ async def test_aux_role_transient_exhaustion_uses_role_fallback():
     assert sink.decisions[0].path == "role_fallback"
     assert sink.decisions[0].reason == "role_fallback after local-driver-q4"
     assert sink.decisions[0].overflow_triggers == ["original_model:local-driver-q4"]
+
+
+async def test_inspect_call_ordinal_stays_monotonic_across_role_fallback(monkeypatch):
+    monkeypatch.setenv("DISCO_INSPECT", "1")
+    registry().clear()
+    local = FakeModelProvider("ollama", raises=LLMTransientError("hidden"))
+    router, sink, primary, fallback = _router_with_fallback(local=local)
+
+    response = await router.complete(
+        _req(ModelRole.SUMMARIZER),
+        context=CallContext(conversation_id="fallback-ordinal"),
+    )
+
+    assert response.routing is not None and response.routing.attempt == 1
+    assert sink.decisions[0].attempt == 1
+    assert primary.calls == 5 and fallback.calls == 1
+    rows = registry().snapshot("fallback-ordinal")["model_attempts"]
+    assert [row["call_ordinal"] for row in rows] == [1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6]
+    assert [row["attempt"] for row in rows][-2:] == [1, 1]
 
 
 async def test_driver_role_never_uses_role_fallback():

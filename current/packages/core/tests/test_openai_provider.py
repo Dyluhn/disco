@@ -734,3 +734,87 @@ def test_tool_calls_survive_array_shaped_arguments():
     args = calls[0].arguments
     assert isinstance(args, dict)
     assert "_raw" in args
+
+
+# ---------------------------------------------------------------------------
+# Operator-actionable provider failures must stay diagnosable.
+#
+# `str(exc)` is content-free by design — the host-claim and model-verifier
+# gates match that bounded form exactly, so provider text must never enter it.
+# But an operator staring at "returned HTTP 403" cannot tell an unpaid plan
+# from an unaccepted data policy from a dead key. The provider says which, in
+# its own error envelope; `provider_detail` carries it to the operator surface
+# only. These are REAL bodies captured from the live providers 2026-08-23.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("status", "body", "expected_fragment"),
+    [
+        (
+            403,
+            '{"error":{"message":"this model requires a subscription, upgrade for '
+            'access: https://ollama.com/upgrade","type":"api_error"}}',
+            "requires a subscription",
+        ),
+        (
+            429,
+            '{"error":{"message":"you (someone) have reached your weekly usage '
+            'limit, upgrade for higher limits","type":"api_error"}}',
+            "weekly usage limit",
+        ),
+        (
+            403,
+            '{"type":"error","error":{"type":"DataPolicyError","message":"This model '
+            'collects data used to improve its quality and requires explicit opt in: '
+            'https://opencode.ai/workspace/wrk_1/go"}}',
+            "requires explicit opt in",
+        ),
+    ],
+)
+def test_account_failures_carry_the_provider_reason_for_the_operator(
+    status: int, body: str, expected_fragment: str
+):
+    from disco.core.llm._openai_response import raise_typed, safe_provider_error
+
+    with pytest.raises(LLMError) as caught:
+        raise_typed(
+            "prov",
+            status,
+            body,
+            safe_error_fn=lambda s, t: safe_provider_error("prov", s, t),
+            context_overflow_fn=lambda _t, _m: False,
+        )
+    exc = caught.value
+    # The operator gets the fix...
+    assert expected_fragment in exc.provider_detail
+    # ...and the bounded form the security gates match is unchanged.
+    assert str(exc) == safe_provider_error("prov", status, "api_error") or str(
+        exc
+    ) == safe_provider_error("prov", status, "DataPolicyError")
+    assert expected_fragment not in str(exc)
+
+
+def test_server_errors_carry_no_provider_content():
+    """5xx is not operator-actionable and its body is not an account reason —
+    it stays content-free rather than leaking an upstream stack trace."""
+    from disco.core.llm._openai_response import raise_typed, safe_provider_error
+
+    with pytest.raises(LLMError) as caught:
+        raise_typed(
+            "prov",
+            500,
+            '{"error":{"message":"Internal server error at /srv/app/x.py:41"}}',
+            safe_error_fn=lambda s, t: safe_provider_error("prov", s, t),
+            context_overflow_fn=lambda _t, _m: False,
+        )
+    assert caught.value.provider_detail == ""
+    assert "srv" not in str(caught.value)
+
+
+def test_provider_detail_is_one_line_and_bounded():
+    from disco.core.llm._openai_response import sanitize_provider_detail
+
+    out = sanitize_provider_detail("line one\n\tline two\x00 " + "x" * 500)
+    assert "\n" not in out and "\t" not in out and "\x00" not in out
+    assert len(out) <= 240

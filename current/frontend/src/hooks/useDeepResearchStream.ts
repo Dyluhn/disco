@@ -19,6 +19,7 @@ import {
   deriveBrief,
   deriveLiveTrace,
   deriveReport,
+  deriveResearchCheckpoint,
   deriveSourceTiers,
   deriveStats,
   type AssemblingSection,
@@ -30,6 +31,7 @@ import type {
   AgentEvent,
   ConversationStatus,
   ReportEvent,
+  ResearchCheckpointEvent,
   WSServerFrame,
 } from "@/types/agent";
 
@@ -129,6 +131,8 @@ export interface DeepResearchStream {
   assembling: AssemblingSection[];
   /** The final ReportEvent — null until the engine emits it. */
   report: ReportEvent | null;
+  /** Paused evidence state, kept separate from the finished report. */
+  checkpoint: ResearchCheckpointEvent | null;
   /** Three-tier source split (cited / reviewed / discovered). */
   sources: SourceTiers;
   /** Send WS frames to the conversation. */
@@ -234,6 +238,10 @@ export function useDeepResearchStream(
     [state.events],
   );
   const report = useMemo(() => deriveReport(state.events), [state.events]);
+  const checkpoint = useMemo(
+    () => deriveResearchCheckpoint(state.events),
+    [state.events],
+  );
   const sources = useMemo(() => deriveSourceTiers(report), [report]);
 
   return {
@@ -246,6 +254,7 @@ export function useDeepResearchStream(
     trace,
     assembling,
     report,
+    checkpoint,
     sources,
     cancel,
     resume,

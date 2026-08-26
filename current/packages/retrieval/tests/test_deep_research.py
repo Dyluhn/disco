@@ -2,7 +2,7 @@
 
 Drives `DeepResearchRun` across the whole v2 arc with fake providers (search,
 extract, rerank, NLI) and ONE scripted router dispatched by prompt shape: the
-agentic research loop's turns (brief + searches → done), then the whole-report
+agentic research loop's turns (brief + searches → readiness), then the whole-report
 writer's single pass and its fixed-rubric review.
 
 Asserts the load-bearing run properties:
@@ -162,16 +162,27 @@ class _FakeNLI:
 
 _TURN0 = (
     '{"brief": "The question asks about X. I will map the players, the '
-    'numbers, and independent criticism.", "action": "search", '
-    '"queries": ["what is X", "X criticism"]}'
+    'numbers, and independent criticism.", "decision_summary": "Map the '
+    'question before checking load-bearing claims.", "coverage": '
+    '{"covered": [], "open": ["players", "numbers", "criticism"], '
+    '"contradictions_checked": []}, "queries": ["what is X", '
+    '"X criticism"], "ready_to_write": false}'
 )
 _TURN_RESUME = (
     '{"brief": "Resuming: the carried pool covers the basics, so I chase the '
-    'one open thread.", "action": "search", "queries": ["X follow-up detail"]}'
+    'one open thread.", "decision_summary": "Close the remaining thread.", '
+    '"coverage": {"covered": [], "open": ["follow-up detail"], '
+    '"contradictions_checked": []}, "queries": ["X follow-up detail"], '
+    '"ready_to_write": false}'
 )
-_DONE = '{"action": "done", "reason": "the evidence covers every angle"}'
+_DONE = (
+    '{"brief": "The evidence is sufficient.", "decision_summary": '
+    '"The gathered evidence covers the requested angles.", "coverage": '
+    '{"covered": [{"angle": "overview", "evidence_ids": ["p0"]}], '
+    '"open": [], "contradictions_checked": ["X"]}, '
+    '"queries": [], "ready_to_write": true}'
+)
 _CLEAN_REVIEW = '{"passes": true, "failures": []}'
-_DEAD_END_MARKER = "evidence store is EMPTY"
 
 _EVIDENCE_ID = re.compile(r"(?m)^\[([\w-]+)\] ")
 
@@ -184,38 +195,57 @@ def _auto_report(prompt: str) -> str:
     ids = list(dict.fromkeys(_EVIDENCE_ID.findall(prompt)))[:2]
     if not ids:
         return ""
-    body = " ".join(
-        "The measured evidence documents the research question with collected "
-        f"data and reported figures [[{passage_id}]]."
-        for passage_id in ids
+    first, second = ids[0], ids[-1]
+    summary = " ".join(
+        [
+            "The measured evidence answers the research question with collected "
+            f"data and reported figures [[{first}]].",
+            "Independent evidence adds context about the scope and limitations of "
+            f"the available data [[{second}]].",
+            "Taken together, the evidence supports a qualified answer while leaving "
+            f"important measurement limits visible [[{first}]] [[{second}]].",
+        ]
+    )
+    findings = " ".join(
+        [
+            "The collected data provide a consistent baseline for evaluating the "
+            f"research question [[{first}]].",
+            "Reported figures from another source permit a direct comparison with "
+            f"that baseline [[{second}]].",
+            "The evidence converges on the central finding across the available "
+            f"measurements [[{first}]] [[{second}]].",
+            "This agreement is strongest where both sources document observed data "
+            f"rather than projections [[{first}]] [[{second}]].",
+        ]
+    )
+    limits = " ".join(
+        [
+            "The evidence also leaves limits because the reported data cover only "
+            f"the documented settings [[{second}]].",
+            "Those boundaries constrain how far the measured finding can be "
+            f"generalized beyond the collected sample [[{first}]].",
+            "A stronger conclusion would require additional data collected under "
+            f"different conditions [[{second}]].",
+            "The best supported judgment therefore preserves the measured finding "
+            f"and its remaining uncertainty [[{first}]] [[{second}]].",
+        ]
     )
     return (
-        f"{body} {body}\n\n"
-        f"## Convergent findings\n{body} {body}\n\n"
-        f"## Limits of the data\n{body} {body}"
+        f"{summary}\n\n"
+        f"## Convergent findings\n{findings}\n\n"
+        f"## Limits of the data\n{limits}"
     )
-
-
-_DEAD_END_ACCOUNT = (
-    "No usable source could be admitted for this question within the budget.\n\n"
-    "## Where the searches hit walls\n"
-    "Every search angle attempted came back empty or unusable, so no grounded "
-    "findings are available. Narrowing the question, widening the time window, "
-    "or attaching your own documents would give the next attempt something to "
-    "work from."
-)
 
 
 class _ScriptedRouter(LLMRouter):
     """v2 whole-run double: dispatch by PROMPT SHAPE, one queue per stage.
 
       - research turns (the lead-researcher system prompt) replay `turns`,
-        defaulting to `done` once the script is exhausted;
+        defaulting to a readiness decision once the script is exhausted;
       - the whole-report call gets an auto-generated report citing the real
         pool ids from its own evidence block (genuine grounding, not markup);
       - the self-review returns a clean pass unless `reviews` is scripted;
-      - QUERY_REWRITER calls (`decompose_query`) replay `rewrites`;
-      - the system-gated dead-end account has its own scripted response.
+      - QUERY_REWRITER calls (`decompose_query`) replay `rewrites`.
     """
 
     def __init__(
@@ -236,8 +266,6 @@ class _ScriptedRouter(LLMRouter):
         if role == "query_rewriter":
             return "rewrite"
         joined = "\n".join(message.content for message in request.messages)
-        if _DEAD_END_MARKER in joined:
-            return "dead_end"
         if "Fix EXACTLY these deficiencies" in request.messages[-1].content:
             return "rework"
         if "FIXED rubric" in joined:
@@ -255,8 +283,6 @@ class _ScriptedRouter(LLMRouter):
             return self._reviews.pop(0) if self._reviews else _CLEAN_REVIEW
         if kind in ("report", "rework"):
             return _auto_report(joined)
-        if kind == "dead_end":
-            return _DEAD_END_ACCOUNT
         return "(no scripted response)"
 
     async def complete(
@@ -325,7 +351,14 @@ def _make_run(
         conversation_id=conversation_id,
     )
     run._bound = replace(
-        run._bound, report_min_words=40, report_max_words=4_000, **bound_overrides
+        run._bound,
+        report_min_words=40,
+        report_max_words=4_000,
+        minimum_research_turns=1,
+        minimum_useful_sources=4,
+        min_evidence_sources=4,
+        min_evidence_themes=1,
+        **bound_overrides,
     )
     return run
 
@@ -357,7 +390,7 @@ async def test_decompose_falls_back_when_empty() -> None:
 
 
 async def test_full_run_produces_multi_section_report() -> None:
-    """End-to-end: the agent researches (brief → searches → done), the writer
+    """End-to-end: the agent researches (brief → searches → readiness), the writer
     writes the whole report in one pass, the review passes it, and the
     assembled ReportFromRun converts to a valid ReportEvent. The headline
     contract."""
@@ -400,7 +433,8 @@ async def test_full_run_produces_multi_section_report() -> None:
     # progress callback fired the right shape (phases + searches + synthesize)
     phases = [p for k, p in captured if k == "phase"]
     assert any(p.get("phase") == "gather" and p.get("mode") == "agent" for p in phases)
-    assert any(p.get("phase") == "coherence" for p in phases)
+    assert any(p.get("phase") == "writing" for p in phases)
+    assert any(p.get("phase") == "reviewing" for p in phases)
     assert any(p.get("phase") == "synthesize" for p in phases)
     assert [p["title"] for _, p in [(k, p) for k, p in captured if k == "section_done"]] == [
         "Convergent findings",
@@ -432,7 +466,9 @@ async def test_should_cancel_halts_at_checkpoint_with_partial_report() -> None:
     assert result.summary == ""
     assert result.reviewed_passages  # the gathered evidence is preserved
     assert result.completed_probes == ["what is X", "X criticism"]
-    assert result.to_event().bounded_by == "stopped"  # propagates to the event
+    checkpoint = result.to_event()
+    assert checkpoint.kind.value == "research_checkpoint"
+    assert checkpoint.completed_queries == result.completed_probes
     # The writer was never called on a checkpoint.
     assert [kind for kind, _ in router.calls] == ["turn"]
 
@@ -592,10 +628,35 @@ async def test_each_tier_reaches_retrieval_with_its_real_strategy_and_limits(
     class _CaptureEngine:
         async def retrieve(self, req: RetrievalRequest) -> RetrievalResult:
             requests.append(req)
-            return RetrievalResult(passages=[], all_hits=[], extracted=[], issued_queries=[])
+            passage_id = f"p{len(requests) - 1}"
+            passage = Passage(
+                id=passage_id,
+                source_url=f"https://example.test/{passage_id}",
+                source_title=passage_id,
+                text="Substantive measured evidence documents the research question.",
+            )
+            return RetrievalResult(
+                passages=[passage],
+                all_hits=[
+                    SearchHit(
+                        url=passage.source_url,
+                        title=passage.source_title,
+                        snippet="evidence",
+                        rank=0,
+                    )
+                ],
+                extracted=[],
+                issued_queries=[req.query],
+            )
 
     _, emit = _collect_events()
-    bound = bounds_for(tier)
+    bound = replace(
+        bounds_for(tier),
+        minimum_research_turns=1,
+        minimum_useful_sources=1,
+        min_evidence_sources=1,
+        min_evidence_themes=0,
+    )
     await run_research_agent(
         "the state of X",
         router=_ScriptedRouter(turns=[_TURN0, _DONE]),

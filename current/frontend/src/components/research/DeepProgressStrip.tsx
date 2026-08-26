@@ -3,7 +3,7 @@
  * run. Three components inside the strip:
  *
  *   ┌─────────────────────────────────────────────────────────────┐
- *   │ 12 searches  ·  30 sources  ·  round 2/4  ·  4m       [ ▾ ]  │  ← collapsible header
+ *   │ 12 searches  ·  30 sources  ·  Writing report  ·  4m       [ ▾ ]  │
  *   ├─────────────────────────────────────────────────────────────┤
  *   │ Searching: "SK On pilot production timeline"                │  ← heartbeat
  *   ├─────────────────────────────────────────────────────────────┤
@@ -11,14 +11,13 @@
  *   │ it intends to chase.                                        │
  *   ├─────────────────────────────────────────────────────────────┤
  *   │ Searching: "SK On pilot production timeline"                │
- *   │   Round 2: +6 sources (12 total for this sub-question)      │  ← ActivityFeed
+ *   │   Added 6 sources (12 admitted so far)                       │  ← ActivityFeed
  *   │ Framed the question                                          │     (the live trace)
  *   └─────────────────────────────────────────────────────────────┘
  *
- * v2 (gateless deep research): there is no plan, so the strip no longer
- * renders a sub-question checklist — a checklist of steps the run never
- * promised was the dishonest part of the old treatment. What replaces it is
- * the model's own brief plus the real event counts.
+ * v2 (gateless deep research): the strip shows the model's own brief, actual
+ * event counts, and the engine's current phase. It does not invent a planned
+ * denominator for work the engine never promised.
  *
  * When the run finishes the strip collapses to a single line: "How it
  * researched · 12 searches · 30 sources · [ ▸ Expand ]". Click to re-open the
@@ -77,14 +76,10 @@ function StatsRow({
         <span className="text-text">{stats.sourcesDiscovered}</span>
         <span className="text-text-faint"> sources</span>
       </span>
-      {stats.activeRound && !isFinished && (
+      {stats.phase && !isFinished && (
         <>
           <span className="text-text-faint">·</span>
-          <span>
-            <span className="text-text-faint">round </span>
-            <span className="text-text">{stats.activeRound.current}</span>
-            <span className="text-text-faint">/{stats.activeRound.max}</span>
-          </span>
+          <span className="text-text">{phaseLabel(stats.phase)}</span>
         </>
       )}
       {stats.elapsedSeconds !== null && stats.elapsedSeconds > 0 && (
@@ -123,12 +118,8 @@ function Heartbeat({
   let now: string | null = null;
   if (stats.activeSection) {
     now = `Writing “${stats.activeSection.title}”`;
-  } else if (stats.phase === "coherence") {
-    now = "Cross-checking the report for coherence…";
-  } else if (stats.phase === "synthesize") {
-    now = "Writing the report…";
-  } else if (stats.activeSubquestion) {
-    now = `Searching: “${stats.activeSubquestion.title}”`;
+  } else if (stats.phase) {
+    now = phaseLabel(stats.phase);
   }
   if (!now && !stats.lastThought) return null;
   return (
@@ -146,6 +137,18 @@ function Heartbeat({
       )}
     </div>
   );
+}
+
+function phaseLabel(phase: string): string {
+  const p = phase.toLowerCase();
+  if (p === "gather" || p === "search" || p === "reading") return "Searching sources";
+  if (p === "synthesize" || p === "synthesizing" || p === "write" || p === "writing") {
+    return "Writing report";
+  }
+  if (p === "coherence" || p === "review" || p === "reviewing" || p === "verification") {
+    return "Reviewing report";
+  }
+  return `Research phase: ${phase}`;
 }
 
 export function DeepProgressStrip({ brief, trace, stats, status, followUpStatus }: Props) {

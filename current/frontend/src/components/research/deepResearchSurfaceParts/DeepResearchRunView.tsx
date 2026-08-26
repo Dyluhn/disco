@@ -11,6 +11,7 @@ import { Loader2 } from "lucide-react";
 import { ErrorState } from "@/components/states";
 import type { useDeepResearch } from "@/hooks/useDeepResearch";
 import { DeepBoundedNotice } from "../DeepBoundedNotice";
+import { DeepResearchCheckpoint } from "../DeepResearchCheckpoint";
 import { DeepProgressStrip } from "../DeepProgressStrip";
 import { DeepSteerInput } from "../DeepSteerInput";
 
@@ -22,7 +23,8 @@ export function DeepResearchRunView({ r }: Props) {
   // The strip is worth showing the moment there is ANY run signal — the brief,
   // a trace row, or a finished report. Before that the run has produced
   // nothing, and an empty strip would be chrome around a void.
-  const hasRunSignal = Boolean(r.brief) || r.trace.length > 0 || Boolean(r.report);
+  const hasRunSignal =
+    Boolean(r.brief) || r.trace.length > 0 || Boolean(r.report) || Boolean(r.checkpoint);
   return (
     <>
       {/* Error state */}
@@ -75,6 +77,10 @@ export function DeepResearchRunView({ r }: Props) {
                 }
           }
         />
+      )}
+
+      {r.checkpoint && !r.report && (
+        <DeepResearchCheckpoint checkpoint={r.checkpoint} />
       )}
     </>
   );

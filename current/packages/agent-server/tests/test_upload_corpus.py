@@ -498,6 +498,7 @@ async def test_dr_run_upload_passages_reach_the_engine() -> None:
         LLMMessage,
         MessageEvent,
         ReportEvent,
+        ReportSection,
         StatusEvent,
     )
     from disco.retrieval.models import Passage
@@ -557,7 +558,7 @@ async def test_dr_run_upload_passages_reach_the_engine() -> None:
                 to_event=lambda: ReportEvent(
                     query=str(seen.get("query", "")),
                     summary="Done.",
-                    sections=[],
+                    sections=[ReportSection(id="s0", title="Findings", markdown="Done.")],
                     passages=[],
                     all_hits=[],
                 ),

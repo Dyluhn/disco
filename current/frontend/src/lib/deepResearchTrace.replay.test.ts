@@ -26,6 +26,7 @@ import {
   deriveBrief,
   deriveStats,
   deriveReport,
+  deriveResearchCheckpoint,
   deriveAssemblingSections,
   deriveLiveTrace,
   deriveSourceTiers,
@@ -109,23 +110,22 @@ describe("deriveStats — live header strip stats", () => {
     expect(stats.sectionsDone).toBe(1);
   });
 
-  it("tracks the active sub-question + round from the latest search", () => {
+  it("does not invent a sub-question or round denominator", () => {
     const events = asEvents([
       { kind: "action", id: "a1", thought: "", tool_call: { tool_name: "search", arguments: { subquestion: "Market size", round: 2, rounds_max: 4 } } },
     ]);
     const stats = deriveStats(events);
-    expect(stats.activeSubquestion).toEqual({ title: "Market size" });
-    expect(stats.activeRound).toEqual({ current: 2, max: 4 });
+    expect(stats).not.toHaveProperty("activeSubquestion");
+    expect(stats).not.toHaveProperty("activeRound");
   });
 
-  it("clears the search indicator once gather is over", () => {
+  it("maps actual writing and review phases", () => {
     const events = asEvents([
       { kind: "action", id: "a1", thought: "", tool_call: { tool_name: "search", arguments: { subquestion: "Market size", round: 2, rounds_max: 4 } } },
       { kind: "action", id: "a2", thought: "", tool_call: { tool_name: "phase", arguments: { phase: "synthesize" } } },
     ]);
     const stats = deriveStats(events);
-    expect(stats.activeSubquestion).toBeNull();
-    expect(stats.activeRound).toBeNull();
+    expect(stats.phase).toBe("synthesize");
   });
 
   it("surfaces the engine phase + a gap_reason rationale as lastThought", () => {
@@ -189,6 +189,30 @@ describe("deriveReport — final ReportEvent extraction", () => {
     expect(r?.kind).toBe("report");
     expect(r?.sections[0]?.title).toBe("Market size");
   });
+
+  it("does not turn an empty report-shaped event into a report", () => {
+    expect(
+      deriveReport(
+        asEvents([{ ...REPORT_EVENT, summary: "", sections: [] }]),
+      ),
+    ).toBeNull();
+  });
+
+  it("derives a paused checkpoint separately from a report", () => {
+    const checkpoint = {
+      kind: "research_checkpoint",
+      id: "cp-1",
+      query: "market overview",
+      passages: [{ id: "p1" }],
+      all_hits: [{ url: "https://example.com" }],
+      trail: [{ query: "market" }],
+      completed_queries: ["market"],
+      depth_tier: "standard_deep",
+      recency_window: "month",
+    };
+    expect(deriveResearchCheckpoint(asEvents([checkpoint]))?.id).toBe("cp-1");
+    expect(deriveReport(asEvents([checkpoint]))).toBeNull();
+  });
 });
 
 describe("deriveAssemblingSections — pending → writing → done", () => {
@@ -243,7 +267,7 @@ describe("deriveLiveTrace — user-visible operations only", () => {
     // phase is filtered out; the search row survives with its observation detail.
     expect(items).toHaveLength(1);
     expect(items[0]?.label).toContain("market size 2026");
-    expect(items[0]?.detail).toContain("+4 sources");
+    expect(items[0]?.detail).toContain("Added 4 sources");
     expect(items[0]?.status).toBe("done");
   });
 

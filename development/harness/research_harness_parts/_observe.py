@@ -23,7 +23,13 @@ _DEPTH_TIMEOUTS_S = {
 _SECRET_KEYS = re.compile(
     r"(?:secret|password|passwd|token|api[_-]?key|authorization|cookie|credential)", re.I
 )
-_SECRET_VALUE = re.compile(r"(?i)\b(?:sk|pk|key|token|bearer)[_-]?[A-Za-z0-9][A-Za-z0-9._-]{15,}")
+_SECRET_VALUE = re.compile(
+    r"(?i)(?<![A-Za-z0-9])(?:"
+    r"(?:sk|pk)[_-][A-Za-z0-9][A-Za-z0-9._-]{15,}|"
+    r"LLM_[A-Za-z0-9][A-Za-z0-9._-]{20,}|"
+    r"bearer\s+[A-Za-z0-9][A-Za-z0-9._-]{15,}"
+    r")"
+)
 _CITATION = re.compile(r"\[\[([^\]]+)\]\]")
 _FOOTNOTE_CITATION = re.compile(r"\[\^([^\]]+)\]")
 
@@ -40,6 +46,7 @@ class ResearchRequest:
     timeout_s: float | None = None
     cassette: str | None = None
     auth_token: str | None = None
+    capture_inspect: bool = False
 
     def __post_init__(self) -> None:
         # The default timeout is derived from the requested depth so a run is
@@ -81,6 +88,14 @@ class ObservationEvent:
 class Observation:
     started: float = field(default_factory=time.monotonic)
     events: list[ObservationEvent] = field(default_factory=list)
+    # Model-call records are optional because the public WebSocket does not
+    # expose provider prompts by default. When DISCO_INSPECT is enabled, the
+    # live transport can attach the bounded inspect snapshot here.
+    model_io: list[dict[str, Any]] = field(default_factory=list)
+    # Provider-attempt lifecycle metadata is kept separate from model I/O so
+    # retries never inflate prompt/response counts or expose model content.
+    provider_attempts: list[dict[str, Any]] = field(default_factory=list)
+    inspect_trace: dict[str, Any] | None = None
     probes: list[dict[str, Any]] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     bounds: list[str] = field(default_factory=list)
@@ -98,7 +113,44 @@ class Observation:
             payload=item,
         )
         self.events.append(event)
+        self._collect_model_io(item)
         self._collect(item, phase)
+
+    def record_model_io(self, payload: Mapping[str, Any]) -> None:
+        """Attach one already-redacted model-call record to this run.
+
+        The harness deliberately does not infer hidden reasoning from provider
+        internals.  Callers provide visible request/response content and
+        declared decision metadata through the inspect seam.
+        """
+        self.model_io.append(redact(dict(payload)))
+
+    def record_provider_attempt(self, payload: Mapping[str, Any]) -> None:
+        """Attach bounded provider-attempt metadata from the inspect seam."""
+        self.provider_attempts.append(redact(dict(payload)))
+
+    def record_inspect_trace(self, payload: Mapping[str, Any]) -> None:
+        """Attach the bounded per-conversation inspect snapshot."""
+        snapshot = redact(dict(payload))
+        self.inspect_trace = snapshot
+        trace: Mapping[str, Any] = snapshot
+        nested = trace.get("inspect_trace")
+        if isinstance(nested, Mapping):
+            trace = nested
+        values = trace.get("model_attempts")
+        has_attempt_projection = isinstance(values, list)
+        if not has_attempt_projection:
+            values = [
+                event
+                for event in trace.get("events", [])
+                if isinstance(event, Mapping) and event.get("kind") == "model_attempt"
+            ]
+        if not has_attempt_projection and not values and "model_attempts" not in trace:
+            return
+        self.provider_attempts.clear()
+        for item in values:
+            if isinstance(item, Mapping):
+                self.record_provider_attempt(item)
 
     def _collect(self, item: Mapping[str, Any], phase: str) -> None:
         self._collect_probes(item, phase)
@@ -106,6 +158,18 @@ class Observation:
             if key == "bounded_by" and value:
                 self.bounds.append(str(value))
         self._collect_error(item)
+
+    def _collect_model_io(self, item: Mapping[str, Any]) -> None:
+        # Some transports/projectors surface model calls as a nested model_io
+        # field.  Preserve one record per field and avoid recursively treating
+        # inspect metadata as a second call.
+        value = item.get("model_io")
+        if isinstance(value, Mapping):
+            self.record_model_io(value)
+        elif isinstance(value, list):
+            for row in value:
+                if isinstance(row, Mapping):
+                    self.record_model_io(row)
 
     def _collect_probes(self, item: Mapping[str, Any], phase: str) -> None:
         for key, value in _walk_fields(item):
@@ -119,11 +183,24 @@ class Observation:
                         self.probes.append(row)
 
     def _collect_error(self, item: Mapping[str, Any]) -> None:
-        text = json.dumps(item, ensure_ascii=False).lower()
-        status_error = any(
-            key == "status" and str(value).upper() == "ERROR" for key, value in _walk_fields(item)
+        nested = item.get("event")
+        event = nested if isinstance(nested, Mapping) else item
+        frame_type = str(item.get("type") or "").casefold()
+        event_kind = str(event.get("kind") or "").casefold()
+        state = item.get("state")
+        state_status = state.get("execution_status") if isinstance(state, Mapping) else None
+        status_error = (
+            event_kind == "status" and str(event.get("status") or "").upper() == "ERROR"
+        ) or (
+            frame_type == "state"
+            and str(item.get("status") or state_status or "").upper() == "ERROR"
         )
-        if item.get("type") == "error" or item.get("error") or "exception" in text or status_error:
+        terminal_error = (
+            frame_type == "error"
+            or event_kind in {"error", "agent_error"}
+            or status_error
+        )
+        if terminal_error:
             message = self._error_message(item)
             if message:
                 self.errors.append(str(message))
@@ -136,9 +213,7 @@ class Observation:
                 (
                     value
                     for key, value in _walk_fields(item)
-                    if key in {"message", "error", "detail"}
-                    and isinstance(value, str)
-                    and value
+                    if key in {"message", "error", "detail"} and isinstance(value, str) and value
                 ),
                 None,
             )
@@ -154,6 +229,39 @@ class Observation:
             self.citation_count = len(citations)
         else:
             self.citation_count = len(_citation_ids(report))
+
+    @property
+    def actual_models(self) -> list[str]:
+        values: list[str] = []
+        for event in self.events:
+            for key, value in _walk_fields(event.payload):
+                if key in {"model", "model_used", "chosen_model", "actual_model"} and value:
+                    text = str(value)
+                    if text not in values:
+                        values.append(text)
+        for item in [*self.model_io, *self.provider_attempts]:
+            for key, value in _walk_fields(item):
+                if key in {"model", "model_used", "chosen_model", "actual_model"} and value:
+                    text = str(value)
+                    if text not in values:
+                        values.append(text)
+        return values
+
+    @property
+    def actual_providers(self) -> list[str]:
+        values: list[str] = []
+        sources = [
+            *(event.payload for event in self.events),
+            *self.model_io,
+            *self.provider_attempts,
+        ]
+        for source in sources:
+            for key, value in _walk_fields(source):
+                if key in {"provider", "provider_used", "actual_provider"} and value:
+                    text = str(value)
+                    if text not in values:
+                        values.append(text)
+        return values
 
 
 def redact(value: Any, *, _key: str = "") -> Any:

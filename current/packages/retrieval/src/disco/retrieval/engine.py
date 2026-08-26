@@ -8,7 +8,9 @@ SearchHit snippet (principle 4 "never trust the snippet").
 
 from __future__ import annotations
 
-from typing import Protocol, runtime_checkable
+import re
+from typing import Any, Protocol, cast, runtime_checkable
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from ._query_compression import compress_search_query
 from .models import ExtractedDoc, Passage, RetrievalRequest, RetrievalResult, SearchHit
@@ -18,6 +20,149 @@ from .url_policy import source_url_key
 
 # Default cap on URLs sent to extraction per retrieve() (cost bound; [INTERIOR]).
 _CANDIDATE_CAP = 20
+
+# Retrieval diagnostics are persisted in Deep Research checkpoints and may be
+# sent to the UI. Keep them useful for reproductions without turning them into
+# a second copy of provider responses (or leaking credentials in URLs).
+_TRACE_QUERY_CHARS = 500
+_TRACE_TITLE_CHARS = 240
+_TRACE_URL_CHARS = 500
+_TRACE_ENGINE_CHARS = 80
+_TRACE_MAX_HITS_PER_QUERY = 20
+_TRACE_MAX_DIAGNOSTIC_ITEMS = 20
+_TRACE_ERROR_CLASS_CHARS = 32
+_TRACE_SECRET_KEYS = frozenset(
+    {
+        "access_token",
+        "api_key",
+        "apikey",
+        "auth",
+        "code",
+        "key",
+        "password",
+        "secret",
+        "sig",
+        "signature",
+        "token",
+    }
+)
+_TRACE_SECRET_VALUE = re.compile(
+    r"(?i)(\b(?:access[_-]?token|api[_-]?key|auth|password|secret|signature|token)\b\s*[:=]\s*)[^\s&,;]+"
+)
+
+
+def _trace_text(value: object, limit: int) -> str:
+    """Return bounded single-line diagnostic text."""
+
+    text = " ".join(str(value or "").split())
+    return text[:limit]
+
+
+def _trace_url(value: object) -> str:
+    """Redact credential-shaped query parameters and bound a diagnostic URL."""
+
+    raw = _trace_text(value, _TRACE_URL_CHARS * 2)
+    try:
+        parts = urlsplit(raw)
+        query = [
+            (key, "[REDACTED]" if key.casefold() in _TRACE_SECRET_KEYS else val[:120])
+            for key, val in parse_qsl(parts.query, keep_blank_values=True)
+        ]
+        return _trace_text(
+            urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), "")),
+            _TRACE_URL_CHARS,
+        )
+    except ValueError:
+        return _trace_text(raw, _TRACE_URL_CHARS)
+
+
+def _trace_snippet(value: object) -> dict[str, object] | None:
+    """Bound an untrusted provider snippet and redact obvious credentials."""
+
+    text = _trace_text(value, 300)
+    if not text:
+        return None
+    return {
+        "text": _TRACE_SECRET_VALUE.sub(r"\1[REDACTED]", text),
+        "untrusted": True,
+    }
+
+
+def _extraction_error_class(doc: ExtractedDoc) -> str | None:
+    """Classify an extraction failure without retaining provider error text."""
+
+    status = _trace_text(doc.status, _TRACE_ERROR_CLASS_CHARS).casefold()
+    error = _trace_text(doc.error, 240).casefold()
+    if doc.fetched_ok and status == "ok":
+        return None
+
+    if status == "blocked" or any(
+        marker in error
+        for marker in (
+            "captcha",
+            "cloudflare",
+            "anti-bot",
+            "antibot",
+            "robot check",
+            "access denied",
+            "forbidden",
+        )
+    ):
+        return "anti_bot"
+    if status == "paywalled":
+        return "paywalled"
+    if status == "not_found":
+        return "not_found"
+    if any(marker in error for marker in ("timeout", "timed out", "readtimeout", "connecttimeout")):
+        return "timeout"
+    if any(
+        marker in error
+        for marker in ("empty content", "no readable content", "no result returned")
+    ):
+        return "empty_content"
+
+    # Only accept a numeric status when it appears in an HTTP/status/error
+    # context; this avoids mistaking an IP octet (for example 127.0.0.1) for a
+    # response code.  The resulting class is still bounded to a three-digit
+    # status code and contains no arbitrary provider text.
+    for match in re.finditer(r"\b([3-5][0-9]{2})\b", error):
+        context = error[max(0, match.start() - 20) : min(len(error), match.end() + 20)]
+        if any(marker in context for marker in ("http", "status", "response", "error", "redirect")):
+            code = match.group(1)
+            if code.startswith("3"):
+                return f"redirect/http_{code}"
+            return f"upstream_http_{code}"
+    return "other"
+
+
+def _trace_hit(hit: SearchHit, *, status: str | None = None, provider: str = "") -> dict[str, Any]:
+    """Bounded hit metadata; snippets remain explicitly untrusted."""
+
+    metadata: dict[str, Any] = {
+        "title": _trace_text(hit.title, _TRACE_TITLE_CHARS),
+        "url": _trace_url(hit.url),
+        "engine": _trace_text(hit.source_engine or provider, _TRACE_ENGINE_CHARS),
+        "status": status if status is not None else hit.status,
+    }
+    snippet = _trace_snippet(hit.snippet)
+    if snippet is not None:
+        metadata["snippet"] = snippet
+    return metadata
+
+
+def _trace_diagnostic(value: object) -> object:
+    """Keep provider diagnostics structured, small, and string-bounded."""
+
+    if isinstance(value, dict):
+        return {
+            _trace_text(key, _TRACE_ENGINE_CHARS): _trace_diagnostic(item)
+            for key, item in list(value.items())[:_TRACE_MAX_DIAGNOSTIC_ITEMS]
+        }
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return [_trace_diagnostic(item) for item in list(value)[:_TRACE_MAX_DIAGNOSTIC_ITEMS]]
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return _trace_text(value, _TRACE_ENGINE_CHARS) if isinstance(value, str) else value
+    return _trace_text(value, _TRACE_ENGINE_CHARS)
 
 
 @runtime_checkable
@@ -126,24 +271,41 @@ class DefaultRetrievalEngine:
             rewritten = [req.query]
         return [compress_search_query(q) for q in rewritten]
 
-    async def _discover(self, req: RetrievalRequest, queries: list[str]) -> list[SearchHit]:
-        """Stage 2: broad retrieval across queries, RRF-fused for multi-query."""
+    async def _discover(
+        self, req: RetrievalRequest, queries: list[str]
+    ) -> tuple[list[SearchHit], list[list[SearchHit]], list[object]]:
+        """Stage 2: broad retrieval across queries, RRF-fused for multi-query.
+
+        Keep the individual provider responses long enough to make the
+        per-query diagnostics truthful; the public result still exposes the
+        same fused ``all_hits`` collection.
+        """
         if not req.use_web:
-            return []
+            return [], [], []
         hit_lists: list[list[SearchHit]] = []
+        diagnostics: list[object] = []
         for q in queries:
-            hit_lists.append(
-                await self._search.search(
+            detailed = getattr(self._search, "search_detailed", None)
+            if callable(detailed):
+                hits, diagnostic = await cast(Any, detailed)(
                     q,
                     limit=req.discover_limit or max(req.top_k * 3, 10),
                     domains_allow=req.domains_allow,
                     domains_deny=req.domains_deny,
                     time_filter=req.recency_window,
                 )
-            )
-        if len(hit_lists) > 1:
-            return reciprocal_rank_fusion(hit_lists)
-        return hit_lists[0] if hit_lists else []
+            else:
+                hits = await self._search.search(
+                    q,
+                    limit=req.discover_limit or max(req.top_k * 3, 10),
+                    domains_allow=req.domains_allow,
+                    domains_deny=req.domains_deny,
+                    time_filter=req.recency_window,
+                )
+                diagnostic = {}
+            hit_lists.append(hits)
+            diagnostics.append(_trace_diagnostic(diagnostic))
+        return reciprocal_rank_fusion(hit_lists), hit_lists, diagnostics
 
     async def _corpus_passages(self, req: RetrievalRequest) -> list[Passage]:
         """Space-corpus retrieval, scoped to the requested namespaces (§4)."""
@@ -158,7 +320,7 @@ class DefaultRetrievalEngine:
     async def retrieve(self, req: RetrievalRequest) -> RetrievalResult:
         queries = await self._transform(req)
 
-        all_hits = await self._discover(req, queries)
+        all_hits, raw_hit_lists, provider_diagnostics = await self._discover(req, queries)
         candidate_cap = min(self._candidate_cap, req.extract_cap or self._candidate_cap)
         candidate_hits = all_hits[:candidate_cap]
         if candidate_hits:
@@ -180,6 +342,59 @@ class DefaultRetrievalEngine:
         candidates += await self._corpus_passages(req)
 
         ranked = await self._reranker.rerank(req.query, candidates, top_k=req.top_k)
+        provider_name = _trace_text(getattr(self._search, "name", ""), _TRACE_ENGINE_CHARS)
+        extraction_statuses = [
+            {
+                "url": _trace_url(doc.url),
+                "title": _trace_text(doc.title, _TRACE_TITLE_CHARS),
+                "status": doc.status,
+                "fetched_ok": bool(doc.fetched_ok),
+            }
+            for doc in extracted[:_TRACE_MAX_HITS_PER_QUERY]
+        ]
+        for doc, status in zip(
+            extracted[:_TRACE_MAX_HITS_PER_QUERY], extraction_statuses, strict=True
+        ):
+            error_class = _extraction_error_class(doc)
+            if error_class is not None:
+                status["error_class"] = error_class
+        query_traces = [
+            {
+                "planned_query": _trace_text(req.query, _TRACE_QUERY_CHARS),
+                "issued_query": _trace_text(query, _TRACE_QUERY_CHARS),
+                "raw_discovered_hit_count": len(raw_hits),
+                "hits": [
+                    _trace_hit(
+                        hit,
+                        status=status_by_url.get(source_url_key(hit.url)),
+                        provider=provider_name,
+                    )
+                    for hit in raw_hits[:_TRACE_MAX_HITS_PER_QUERY]
+                ],
+                "extraction": {
+                    "attempted": sum(
+                        status_by_url.get(source_url_key(hit.url)) is not None
+                        for hit in raw_hits
+                    ),
+                    "success": sum(
+                        status_by_url.get(source_url_key(hit.url)) == "ok" for hit in raw_hits
+                    ),
+                    "failure": sum(
+                        status_by_url.get(source_url_key(hit.url)) is not None
+                        and status_by_url.get(source_url_key(hit.url)) != "ok"
+                        for hit in raw_hits
+                    ),
+                },
+                **(
+                    {"provider_diagnostic": _trace_diagnostic(provider_diagnostic)}
+                    if provider_diagnostic
+                    else {}
+                ),
+            }
+            for query, raw_hits, provider_diagnostic in zip(
+                queries, raw_hit_lists, provider_diagnostics, strict=True
+            )
+        ]
         return RetrievalResult(
             passages=ranked,
             all_hits=all_hits,  # full discovery set incl. failed/blocked (§2.2)
@@ -190,5 +405,22 @@ class DefaultRetrievalEngine:
                 "depth": req.depth,
                 "discovered": len(all_hits),
                 "extracted": len(extracted),
+                "retrieval_trace": {
+                    "planned_query": _trace_text(req.query, _TRACE_QUERY_CHARS),
+                    "issued_queries": [_trace_text(query, _TRACE_QUERY_CHARS) for query in queries],
+                    "provider": provider_name,
+                    "provider_diagnostics": [
+                        _trace_diagnostic(item) for item in provider_diagnostics if item
+                    ],
+                    "raw_discovered_hit_count": sum(len(hits) for hits in raw_hit_lists),
+                    "queries": query_traces,
+                    "extraction": {
+                        "attempted": len(candidate_hits),
+                        "success": sum(1 for doc in extracted if doc.fetched_ok),
+                        "failure": sum(1 for doc in extracted if not doc.fetched_ok),
+                        "statuses": extraction_statuses,
+                    },
+                    "reranked_passage_count": len(ranked),
+                },
             },
         )

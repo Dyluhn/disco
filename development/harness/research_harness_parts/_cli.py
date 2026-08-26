@@ -38,7 +38,7 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--batch",
         action="store_true",
-        help="run the five-query default acceptance corpus and preserve each trace",
+        help="run the acceptance corpus and preserve each isolated trace",
     )
     parser.add_argument(
         "--queries-file",
@@ -81,7 +81,24 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="stream concise, redacted public event progress to stderr",
     )
+    parser.add_argument(
+        "--inspect-model-io",
+        action="store_true",
+        help="fetch the opt-in DISCO_INSPECT trace after each live conversation",
+    )
     parser.add_argument("--output-dir", default="/tmp/disco-deep-research-harness")
+    parser.add_argument(
+        "--concurrency",
+        type=int,
+        default=2,
+        help="maximum number of simultaneous research requests in a batch",
+    )
+    parser.add_argument(
+        "--repeat",
+        type=int,
+        default=1,
+        help="repeat each batch query this many times for reliability sampling",
+    )
     return parser.parse_args(argv)
 
 
@@ -119,11 +136,15 @@ async def _run_batch_cli(
     queries: Sequence[str],
     make_request: Callable[[str], ResearchRequest],
     make_transport: Callable[[ResearchRequest], ResearchTransport],
+    *,
+    concurrency: int,
 ) -> int:
+    repeated = [query for query in queries for _ in range(args.repeat)]
     results = await run_batch(
-        [make_request(query) for query in queries],
+        [make_request(query) for query in repeated],
         transport_factory=make_transport,
         output_dir=args.output_dir,
+        max_concurrency=concurrency,
     )
     ok = all(result.ok for result in results)
     print(
@@ -145,6 +166,10 @@ async def _main_async(args: argparse.Namespace) -> int:
         return _cli_error("--query is required unless --batch is supplied")
     if args.batch and args.query:
         return _cli_error("--query cannot be combined with --batch")
+    if args.concurrency < 1:
+        return _cli_error("--concurrency must be at least 1")
+    if args.repeat < 1:
+        return _cli_error("--repeat must be at least 1")
     cassette = args.cassette
     if args.transport == "replay" and not cassette:
         # The demo cassette lives beside the harness modules, one level above
@@ -170,6 +195,7 @@ async def _main_async(args: argparse.Namespace) -> int:
             timeout_s=args.timeout,
             cassette=cassette,
             auth_token=args.auth_token,
+            capture_inspect=args.inspect_model_io,
         )
 
     def make_transport(request: ResearchRequest) -> ResearchTransport:
@@ -183,7 +209,9 @@ async def _main_async(args: argparse.Namespace) -> int:
         queries = _batch_queries(args)
         if not queries:
             return _cli_error("--queries-file did not contain any queries")
-        return await _run_batch_cli(args, queries, make_request, make_transport)
+        return await _run_batch_cli(
+            args, queries, make_request, make_transport, concurrency=args.concurrency
+        )
 
     request = make_request(args.query or "")
     transport = make_transport(request)

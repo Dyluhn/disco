@@ -9,6 +9,7 @@ report event / verification UI consumes.
 from __future__ import annotations
 
 from disco.core import ReportSection
+from disco.retrieval.deep_research._engine_parts._report import collect_report_data
 from disco.retrieval.deep_research.report_compiler import collect_claim_ledger
 from disco.retrieval.models import Passage
 
@@ -73,3 +74,57 @@ def test_unsupported_claims_are_retained_for_audit_not_deleted() -> None:
 
     assert [entry.verdict for entry in ledger] == ["unsupported"]
     assert ledger[0].cited_passage_ids == ("ghost9",)
+
+
+def test_executive_summary_claims_share_the_durable_ledger() -> None:
+    passage = _passage(
+        "p1",
+        "The product entered limited commercial availability in August 2026.",
+    )
+    section = ReportSection(
+        id="r0",
+        title="Availability",
+        markdown="The product entered limited commercial availability in August 2026 [[p1]].",
+    )
+
+    class _NLI:
+        def entail(self, premise: str, hypothesis: str) -> str:
+            return "entail" if premise and hypothesis else "neutral"
+
+        def score(self, premise: str, hypothesis: str) -> float:
+            del premise, hypothesis
+            return 1.0
+
+    ledger = collect_claim_ledger(
+        [section],
+        [passage],
+        _NLI(),
+        summary="The product entered limited commercial availability in August 2026 [[p1]].",
+    )
+
+    assert [entry.section_id for entry in ledger] == ["summary", "r0"]
+    assert all(entry.verdict == "supported" for entry in ledger)
+
+
+def test_summary_only_citation_is_included_in_cited_passages() -> None:
+    """A summary citation must resolve in the persisted report corpus even
+    when no body section cites the same passage."""
+    summary_passage = _passage("summary-only", "The summary finding is documented.")
+    body_passage = _passage("body-only", "The body finding is documented.")
+    section = ReportSection(
+        id="r0",
+        title="Body",
+        markdown="The body finding is documented [[body-only]].",
+        cited_passage_ids=["body-only"],
+    )
+
+    cited, reviewed, _ = collect_report_data(
+        [section],
+        [summary_passage, body_passage],
+        [],
+        [],
+        additional_cited_ids=["summary-only"],
+    )
+
+    assert [passage.id for passage in cited] == ["summary-only", "body-only"]
+    assert reviewed == []

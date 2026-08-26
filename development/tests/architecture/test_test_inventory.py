@@ -663,10 +663,10 @@ class TestMappingStatic:
             # PKG-33-MCP-CONNECTIVITY: one new agent-server file for the
             # approved-origin egress bypass (6 ids) plus one id extending the
             # compose-environment file for the server image's JS runtime.
-            "python_test_file_count": 855,
-            "python_static_test_id_count": 10579,
-            "typescript_test_file_count": 253,
-            "typescript_static_test_id_count": 1263,
+            "python_test_file_count": 853,
+            "python_static_test_id_count": 10554,
+            "typescript_test_file_count": 254,
+            "typescript_static_test_id_count": 1274,
         }
         assert mapping["identity"] == baseline["source_identity"]
         assert {key: mapping[key] for key in expected_counts} == expected_counts
@@ -799,12 +799,12 @@ class TestFrontendCollection:
                 len(frontend["vitest_files_list"]),
             )
             == (frontend["vitest_ids"], frontend["vitest_files"])
-            == (1212, 189)
+            == (1223, 190)
         )
         assert frontend["vitest_ids_list"] == sorted(frontend["vitest_ids_list"])
         assert frontend["vitest_files_list"] == sorted(frontend["vitest_files_list"])
-        assert len(set(frontend["vitest_ids_list"])) == 1212
-        assert len(set(frontend["vitest_files_list"])) == 189
+        assert len(set(frontend["vitest_ids_list"])) == 1223
+        assert len(set(frontend["vitest_files_list"])) == 190
         assert set(frontend["playwright_configs"]) == set(test_inventory.PLAYWRIGHT_CONFIGS)
         for config, authority in frontend["playwright_configs"].items():
             assert len(authority["ids"]) == authority["id_count"]
@@ -1077,7 +1077,7 @@ class TestCollectedCounts:
             # the host fallbacks the close-host-exec pass removed.
             # The MCP-connectivity fix adds 7 non-parametrized package ids:
             # six in one new agent-server file, one in the compose file.
-            "packages": 10998,
+            "packages": 10973,
             # 1288 from PKG-03-EDIT-EVIDENCE: +24 in the `harness` root, the
             # edit-evidence producer acceptance. The new ids land here and not
             # under `packages` because the producer is harness code; the
@@ -1207,7 +1207,7 @@ class TestCollectedCounts:
         }
         assert set(collected["roots"]) == set(test_inventory.PYTHON_ROOTS)
         assert collected["counts"] == expected
-        assert collected["total"] == 12853 == sum(expected.values())
+        assert collected["total"] == 12828 == sum(expected.values())
         for root in test_inventory.PYTHON_ROOTS:
             ids = collected["roots"][root]
             assert len(ids) == expected[root]
@@ -1223,7 +1223,7 @@ class TestCollectedCounts:
         problems: list[str] = []
         result = test_inventory._check_collected_ids(baseline, REPO_ROOT, problems)
         assert problems == []
-        assert result == {"collected_total": 12853}
+        assert result == {"collected_total": 12828}
 
         drifted = copy.deepcopy(baseline)
         drifted["collected"]["roots"]["tests"] = list(
@@ -1242,9 +1242,9 @@ class TestBaselineValidation:
         assert result == {
             "ok": True,
             "problems": [],
-            "python_static_ids": 10579,
-            "typescript_static_ids": 1263,
-            "collected_total": 12853,
+            "python_static_ids": 10554,
+            "typescript_static_ids": 1274,
+            "collected_total": 12828,
         }
 
         latest_identity = test_inventory.subprocess.check_output(
