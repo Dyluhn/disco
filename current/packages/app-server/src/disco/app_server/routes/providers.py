@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import Iterable
+from typing import Literal
 
 import httpx
 from fastapi import APIRouter, HTTPException, Response
@@ -179,6 +180,26 @@ def _dict_or_empty(value: object) -> dict:
     return value if isinstance(value, dict) else {}
 
 
+def _catalogue_vision_status(
+    *,
+    input_modalities: object = None,
+    explicit: object = None,
+) -> Literal["vision", "text-only", "unknown"]:
+    """Read only explicit provider modality evidence.
+
+    A missing/empty modality field is unknown, not text-only. Providers that
+    return an explicit non-empty text-only modality list are definitive.
+    """
+    if isinstance(explicit, (list, tuple, set)) and "vision" in {
+        str(item).lower() for item in explicit
+    }:
+        return "vision"
+    if isinstance(input_modalities, (list, tuple, set)) and input_modalities:
+        values = {str(item).lower() for item in input_modalities}
+        return "vision" if "image" in values else "text-only"
+    return "unknown"
+
+
 def _first_present(source: dict, *keys: str) -> object:
     """Return the first truthy value found under ``keys`` in ``source``, else None.
 
@@ -206,6 +227,7 @@ def _openai_compat_model(raw: object) -> ProviderCatalogueModelDTO | None:
         )
     )
     model_id = str(raw["id"])
+    modalities = arch.get("input_modalities")
     return ProviderCatalogueModelDTO(
         model_id=model_id,
         label=str(_first_present(raw, "name", "display_name") or model_id),
@@ -227,6 +249,10 @@ def _openai_compat_model(raw: object) -> ProviderCatalogueModelDTO | None:
             input_modalities=arch.get("input_modalities") or (),
             supported_parameters=raw.get("supported_parameters") or (),
             explicit=raw.get("capabilities") or (),
+        ),
+        vision_status=_catalogue_vision_status(
+            input_modalities=modalities,
+            explicit=raw.get("capabilities"),
         ),
     )
 
@@ -260,6 +286,7 @@ def _normalize_anthropic(payload: dict) -> list[ProviderCatalogueModelDTO]:
                 max_output_tokens=_output_limit(
                     raw.get("max_output_tokens"), raw.get("output_token_limit")
                 ),
+                vision_status="unknown",
             )
         )
     return out
@@ -282,6 +309,7 @@ def _normalize_gemini(payload: dict) -> list[ProviderCatalogueModelDTO]:
                 context_window=context_window,
                 max_output_tokens=_output_limit(raw.get("outputTokenLimit")),
                 capabilities=_caps(context_window=context_window),
+                vision_status="unknown",
             )
         )
     return out

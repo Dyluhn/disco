@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from typing import Any, Literal, Protocol, runtime_checkable
 
 from disco.core import (
+    Event,
     SecurityRisk,
     StatusEvent,
     ToolCall,
@@ -101,13 +102,19 @@ class McpApprovalNotice:
 
 @dataclass(frozen=True, slots=True)
 class McpLoopSnapshot:
-    """Immutable MCP inputs captured once for one loop composition."""
+    """Immutable MCP inputs captured once for one loop composition.
+
+    ``connector_ids`` is the live connected-server ID fact from McpManager. It
+    is carried alongside tools so workflow readiness can validate a declared
+    connector binding even when a server currently exposes no tools.
+    """
 
     tools: tuple[ToolDef, ...]
     max_active_schemas: int
     call_target: McpCallTarget
     egress_hosts: frozenset[str]
     approvals: tuple[McpApprovalNotice, ...]
+    connector_ids: frozenset[str] = frozenset()
 
 
 # ── environment-flag readers ──────────────────────────────────────────────
@@ -586,6 +593,14 @@ class LoopWorkspacePort(Protocol):
     def terminal_commit_hook(
         self, conversation_id: str
     ) -> Callable[[StatusEvent], Awaitable[StatusEvent]]: ...
+
+    async def append_transition_batch_locked(
+        self,
+        conversation_id: str,
+        events: list[Event],
+        *,
+        bind_current: bool = False,
+    ) -> list[Event]: ...
 
     def finish_sealability_probe(
         self, conversation_id: str

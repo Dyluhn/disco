@@ -402,20 +402,24 @@ async def test_seed_passages_in_stream_research_answer() -> None:
     )
 
     # Fake search returns one hit; extraction returns nothing useful.
-    fake_search = AsyncMock()
-    fake_search.search = AsyncMock(
-        return_value=[
-            MagicMock(
-                url="https://example.com",
-                title="Example",
-                snippet="",
-                source_engine="test",
-                rank=0,
-            ),
-        ]
+    # Keep the fake's surface bounded to the production ``search`` method.
+    # An un-specced AsyncMock manufactures ``search_detailed`` on getattr,
+    # which sends this fixture down a diagnostic path that real providers do
+    # not take here.
+    fake_search = SimpleNamespace(
+        search=AsyncMock(
+            return_value=[
+                MagicMock(
+                    url="https://example.com",
+                    title="Example",
+                    snippet="",
+                    source_engine="test",
+                    rank=0,
+                ),
+            ]
+        )
     )
-    fake_extraction = AsyncMock()
-    fake_extraction.extract_many = AsyncMock(return_value=[])
+    fake_extraction = SimpleNamespace(extract_many=AsyncMock(return_value=[]))
     fake_reranker = AsyncMock()
 
     # Reranker sees both web passages (none, since extraction failed) AND the

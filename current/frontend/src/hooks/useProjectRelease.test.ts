@@ -19,6 +19,7 @@ import { getProjectRelease } from "@/api/projects";
 import { useProjectRelease } from "@/hooks/useProjects";
 import type { getProjectRelease as getProjectReleaseFn } from "@/api/projects";
 import type { ReleaseAssessmentState, ReleaseEnv, ReleaseResponse } from "@/types/release";
+import type { CommittedFinish } from "@/lib/committedFinish";
 
 type GetProjectRelease = typeof getProjectReleaseFn;
 
@@ -49,6 +50,43 @@ function makeFetchStub(body: object, status = 200) {
     }
     return jsonResponse(body, status);
   });
+}
+
+function committedFinish(versionSeq = 3, treeDigest = "tree-3"): CommittedFinish {
+  return {
+    terminalSeq: 10,
+    versionSeq,
+    treeDigest,
+    status: { id: "status-10", seq: 10, kind: "status", status: "FINISHED" },
+    version: {
+      id: `version-${versionSeq}`,
+      seq: 12,
+      kind: "workspace_version",
+      trigger: "finish",
+      version_seq: versionSeq,
+      tree_digest: treeDigest,
+      final_seal: {
+        schema_version: 1,
+        scope: { namespace: "workspace.tree", identifier: "cid-sealed" },
+        terminal_seq: 10,
+        latest_effect_seq: null,
+        version_seq: versionSeq,
+        tree_digest: treeDigest,
+        file_count: 1,
+        total_bytes: 1,
+      },
+    },
+    seal: {
+      schema_version: 1,
+      scope: { namespace: "workspace.tree", identifier: "cid-sealed" },
+      terminal_seq: 10,
+      latest_effect_seq: null,
+      version_seq: versionSeq,
+      tree_digest: treeDigest,
+      file_count: 1,
+      total_bytes: 1,
+    },
+  };
 }
 
 async function importLiveProjects(): Promise<{ getProjectRelease: GetProjectRelease }> {
@@ -178,7 +216,54 @@ describe("useProjectRelease — offline fixture mode (criterion 2)", () => {
     expect(notWeb.current.data?.self_host).toBe(false);
     expect(notWeb.current.data?.ingress).toBeNull();
   });
+
+  it("does not request a release before the matching final seal", async () => {
+    const get = vi.spyOn(await import("@/api/projects"), "getProjectRelease");
+    const { result } = renderHook(() => useProjectRelease("cid-sealed", null), {
+      wrapper: makeWrapper(),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(result.current.data).toBeUndefined();
+    expect(get).not.toHaveBeenCalled();
+    get.mockRestore();
+  });
+
+  it("requests once per seal identity and rejects a mismatched response", async () => {
+    const get = vi.spyOn(await import("@/api/projects"), "getProjectRelease");
+    const first = committedFinish();
+    const second = committedFinish(4, "tree-4");
+    const response = fixtureReleaseForTest(3, "tree-3");
+    get.mockResolvedValue(response);
+    const { result, rerender } = renderHook(
+      ({ finish }: { finish: CommittedFinish }) => useProjectRelease("cid-sealed", finish),
+      { initialProps: { finish: first }, wrapper: makeWrapper() },
+    );
+    await waitFor(() => expect(result.current.data).toBeDefined());
+    expect(get).toHaveBeenCalledTimes(1);
+    rerender({ finish: second });
+    await waitFor(() => expect(get).toHaveBeenCalledTimes(2));
+    get.mockResolvedValue({ ...response, version_seq: 999 });
+    rerender({ finish: committedFinish(5, "tree-5") });
+    await waitFor(() => expect(result.current.error).toBeInstanceOf(Error));
+    expect(get).toHaveBeenCalledTimes(3);
+    get.mockRestore();
+  });
 });
+
+function fixtureReleaseForTest(versionSeq: number, treeDigest: string): ReleaseResponse {
+  return {
+    assessment: "candidate",
+    reasons: [],
+    blockers: [],
+    required_env: [],
+    command: "docker compose up -d --build",
+    ingress: null,
+    self_host: true,
+    spec_digest: "sha256:test",
+    version_seq: versionSeq,
+    tree_digest: treeDigest,
+  };
+}
 
 describe("getProjectRelease — live targets the AGENT base (criterion 3)", () => {
   it("issues GET /api/projects/{cid}/release on the agent origin, never the app server", async () => {

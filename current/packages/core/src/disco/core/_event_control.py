@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from ._event_types import (
     APPKIT_EJECTION_LOST_GUARANTEES,
@@ -24,6 +24,7 @@ from ._event_types import (
     PlanVerifierPass,
     RecoveryLeaseTransition,
 )
+from .workflow.runtime import InvocationStatus, PinnedWorkflowInvocationState
 
 
 class StatusEvent(BaseEvent):
@@ -68,6 +69,82 @@ class StatusEvent(BaseEvent):
         if self.detail == "plan_verification_passed" and self.plan_verifier_pass is None:
             raise ValueError("RUNNING/plan_verification_passed requires a typed plan_verifier_pass")
         return self
+
+
+class WorkflowInvocationEvent(BaseEvent):
+    """Durable authority for a workflow handoff and its current status.
+
+    The complete pinned definition, validated parameters, surface digest, and
+    status travel together in ``state``.  A separate status field makes event
+    reducers cheap and is checked against the pinned state so a partial or
+    hand-edited event cannot resume a different run.
+    """
+
+    kind: Literal[EventKind.WORKFLOW_INVOCATION] = EventKind.WORKFLOW_INVOCATION
+    source: EventSource = EventSource.SYSTEM
+    state: PinnedWorkflowInvocationState
+    status: InvocationStatus
+
+    @model_validator(mode="after")
+    def _state_identity_matches(self) -> WorkflowInvocationEvent:
+        if self.status != self.state.status:
+            raise ValueError("workflow invocation event status must match pinned state status")
+        if self.agent_view_id is not None:
+            raise ValueError(
+                "workflow invocation events are host-owned and cannot use agent_view_id"
+            )
+        return self
+
+
+class ReferencePackBindingSelection(BaseModel):
+    """The observed immutable identity of one selected Reference Pack."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    pack_id: str = Field(min_length=1, max_length=160)
+    version_id: str = Field(min_length=1, max_length=160)
+    content_sha256: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
+
+
+class ReferencePackBindingEvent(BaseEvent):
+    """Host-owned durable record of the immutable Reference Pack snapshot."""
+
+    kind: Literal[EventKind.REFERENCE_PACK_BINDING] = EventKind.REFERENCE_PACK_BINDING
+    source: EventSource = EventSource.SYSTEM
+    binding_id: str = Field(min_length=1, max_length=160)
+    selections: tuple[ReferencePackBindingSelection, ...] = Field(min_length=1)
+    materialized_paths: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def _selection_identity_is_unique(self) -> ReferencePackBindingEvent:
+        pack_ids = tuple(selection.pack_id for selection in self.selections)
+        if len(set(pack_ids)) != len(pack_ids):
+            raise ValueError("Reference Pack binding selections must have unique pack ids")
+        if len(self.materialized_paths) > 256 or any(
+            not path or len(path) > 512 or path.startswith("/") or ".." in path.split("/")
+            for path in self.materialized_paths
+        ):
+            raise ValueError("Reference Pack materialized paths are invalid or unbounded")
+        return self
+
+
+class ReportDeckInvocationEvent(BaseEvent):
+    """Durable pending fact for one direct report → authored-deck run.
+
+    The target conversation is the source of truth for the copied ``ReportEvent``
+    and this small typed record is the restart/replay marker.  It is deliberately
+    not a second scheduler: the agent-server re-admits queued/running records
+    through the existing ``RunSupervisor`` operation path.
+    """
+
+    kind: Literal[EventKind.REPORT_DECK_INVOCATION] = EventKind.REPORT_DECK_INVOCATION
+    source: EventSource = EventSource.SYSTEM
+    source_conversation_id: str = Field(min_length=1, max_length=160)
+    goal: str = Field(min_length=1, max_length=4_000)
+    filename: str = Field(min_length=1, max_length=240)
+    format: Literal["pptx"] = "pptx"
+    status: Literal["queued", "running", "completed", "error"] = "queued"
+    detail: str | None = Field(default=None, max_length=1_000)
 
 
 class WorkspaceVersionEvent(BaseEvent):

@@ -18,6 +18,7 @@ import {
   isMetered,
   type ModelInfo,
   type ModelUpsert,
+  staticVisionStatus,
 } from "@/types/models";
 import { StoredCredentialField } from "./StoredCredentialField";
 
@@ -83,6 +84,57 @@ function visionFromSelect(value: string): boolean | null {
   return value === "true";
 }
 
+export function VisionConfirmation({
+  open,
+  onOpenChange,
+  onChoose,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onChoose: (vision: boolean) => void;
+}) {
+  return (
+    <Dialog.Root open={open} onOpenChange={onOpenChange}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="fixed inset-0 z-[60] bg-black/45" />
+        <Dialog.Content className="fixed left-1/2 top-1/2 z-[70] w-[min(26rem,92vw)] -translate-x-1/2 -translate-y-1/2 rounded-card border border-hairline bg-bg p-body pmx-rise">
+          <Dialog.Title className="font-ui text-[0.95rem] font-semibold text-text">
+            Does this model support images?
+          </Dialog.Title>
+          <Dialog.Description className="mt-hair font-ui text-[0.8rem] leading-snug text-text-muted">
+            The provider did not report a capability and the model name is not
+            conclusive. Choose the endpoint's actual input modality before saving.
+          </Dialog.Description>
+          <div className="mt-body grid grid-cols-2 gap-inline">
+            <button
+              type="button"
+              className="min-h-11 rounded-control bg-accent px-inline py-hair font-ui text-[0.8rem] font-medium text-bg"
+              onClick={() => onChoose(true)}
+            >
+              Supports images
+            </button>
+            <button
+              type="button"
+              className="min-h-11 rounded-control border border-hairline px-inline py-hair font-ui text-[0.8rem] text-text-muted hover:text-text"
+              onClick={() => onChoose(false)}
+            >
+              Text only
+            </button>
+          </div>
+          <Dialog.Close asChild>
+            <button
+              type="button"
+              className="mt-inline w-full font-ui text-[0.78rem] text-text-faint hover:text-text"
+            >
+              Cancel — do not add
+            </button>
+          </Dialog.Close>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
+}
+
 function ModelForm({
   mode,
   initial,
@@ -93,12 +145,24 @@ function ModelForm({
   onDone: () => void;
 }) {
   const [form, setForm] = useState<ModelUpsert>(initial);
+  const [visionPromptOpen, setVisionPromptOpen] = useState(false);
+  const [pendingPayload, setPendingPayload] = useState<ModelUpsert | null>(null);
   const create = useCreateModel();
   const update = useUpdateModel();
   const busy = create.isPending || update.isPending;
   const err = (create.error ?? update.error) as Error | null;
   const set = <K extends keyof ModelUpsert>(k: K, v: ModelUpsert[K]) =>
     setForm((f) => ({ ...f, [k]: v }));
+
+  const save = async (payload: ModelUpsert) => {
+    try {
+      if (mode === "add") await create.mutateAsync(payload);
+      else await update.mutateAsync({ id: form.id, upsert: payload });
+      onDone();
+    } catch {
+      /* error shown inline below */
+    }
+  };
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -109,17 +173,17 @@ function ModelForm({
       max_output_tokens: form.max_output_tokens || null,
       quantization: form.quantization?.trim() || null,
     };
-    try {
-      if (mode === "add") await create.mutateAsync(payload);
-      else await update.mutateAsync({ id: form.id, upsert: payload });
-      onDone();
-    } catch {
-      /* error shown inline below */
+    if (mode === "add" && payload.vision == null && staticVisionStatus(payload.model_id) === "unknown") {
+      setPendingPayload(payload);
+      setVisionPromptOpen(true);
+      return;
     }
+    await save(payload);
   };
 
   return (
-    <form onSubmit={submit} className="flex flex-col gap-body">
+    <>
+      <form onSubmit={submit} className="flex flex-col gap-body">
       <div className="grid grid-cols-2 gap-body">
         <label className="flex flex-col gap-hair">
           <span className={labelCls}>Catalogue id</span>
@@ -160,6 +224,23 @@ function ModelForm({
           inputClassName={field}
         />
       </div>
+
+      <label className="flex flex-col gap-hair">
+        <span className={labelCls}>Image understanding</span>
+        <select
+          className={field}
+          value={visionSelectValue(form.vision)}
+          onChange={(e) => set("vision", visionFromSelect(e.target.value))}
+        >
+          <option value="auto">Auto-detect from the provider</option>
+          <option value="true">Supports images</option>
+          <option value="false">Text only</option>
+        </select>
+        <span className="font-ui text-[0.76rem] leading-snug text-text-faint">
+          Confirm the endpoint's actual input modality. Unknown models require this
+          choice when first added.
+        </span>
+      </label>
 
       <details className="rounded-control border border-hairline bg-surface-1/30 px-body py-inline">
         <summary className="cursor-pointer py-3 font-ui text-[0.84rem] font-medium text-text lg:py-0">
@@ -232,23 +313,6 @@ function ModelForm({
               ))}
             </div>
           </fieldset>
-
-          <label className="flex flex-col gap-hair">
-            <span className={labelCls}>Image understanding</span>
-            <select
-              className={field}
-              value={visionSelectValue(form.vision)}
-              onChange={(e) => set("vision", visionFromSelect(e.target.value))}
-            >
-              <option value="auto">Auto-detect from the provider</option>
-              <option value="true">Supports images</option>
-              <option value="false">Text only</option>
-            </select>
-            <span className="font-ui text-[0.76rem] leading-snug text-text-faint">
-              Override detection only when you know the endpoint's actual image
-              capability. This controls whether pixels may be sent to the model.
-            </span>
-          </label>
 
           <div className="grid grid-cols-2 gap-body">
             {form.pricing_mode === "subscription" ? (
@@ -338,7 +402,23 @@ function ModelForm({
           {busy ? "Saving…" : mode === "add" ? "Add model" : "Save changes"}
         </button>
       </div>
-    </form>
+      </form>
+      <VisionConfirmation
+        open={visionPromptOpen}
+        onOpenChange={(open) => {
+          setVisionPromptOpen(open);
+          if (!open) setPendingPayload(null);
+        }}
+        onChoose={(vision) => {
+          const payload = pendingPayload;
+          if (!payload) return;
+          setForm((current) => ({ ...current, vision }));
+          setPendingPayload(null);
+          setVisionPromptOpen(false);
+          void save({ ...payload, vision });
+        }}
+      />
+    </>
   );
 }
 

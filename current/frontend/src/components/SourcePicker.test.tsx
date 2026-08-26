@@ -4,11 +4,8 @@ import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SourcePicker } from "./SourcePicker";
 
-// The picker is now settings-only for the web PROVIDER: it exposes ONLY the
-// keyless federation sources (Web / News / arXiv / Semantic Scholar). The
-// tavily/brave/searxng provider chips and the "Add in Settings ->" affordance
-// were removed — the provider is chosen once in Settings and an empty selection
-// means "use the one they set". No data-sources fetch happens here anymore.
+// The configured provider stays in Settings. This control exposes only
+// additive News/arXiv/Semantic Scholar sources for the current run.
 
 function Harness({ initial = [] as string[] }: { initial?: string[] }) {
   const [selected, setSelected] = useState<string[]>(initial);
@@ -25,11 +22,11 @@ afterEach(() => {
 });
 
 describe("SourcePicker", () => {
-  it("shows only the keyless federation sources — no provider chips, no 'Add in Settings'", () => {
+  it("shows only additional sources — no configured-provider or Web chip", () => {
     render(<Harness />);
 
+    expect(screen.getByText("Additional sources")).toBeVisible();
     // Keyless sources present + enabled.
-    expect(screen.getByRole("button", { name: /web/i })).toBeEnabled();
     expect(screen.getByRole("button", { name: /news/i })).toBeEnabled();
     expect(screen.getByRole("button", { name: /arxiv/i })).toBeEnabled();
     expect(screen.getByRole("button", { name: /semantic scholar/i })).toBeEnabled();
@@ -38,6 +35,7 @@ describe("SourcePicker", () => {
     expect(screen.queryByRole("button", { name: /tavily/i })).toBeNull();
     expect(screen.queryByRole("button", { name: /brave/i })).toBeNull();
     expect(screen.queryByRole("button", { name: /searxng/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^web$/i })).toBeNull();
 
     // The bush-league "Add in Settings ->" link is gone (no links at all).
     expect(screen.queryByRole("link")).toBeNull();
@@ -47,8 +45,7 @@ describe("SourcePicker", () => {
   it("defaults to an empty selection so search runs the configured provider", () => {
     render(<Harness />);
     expect(screen.getByTestId("selected-sources")).toHaveTextContent("");
-    // aria-pressed=false on every chip when nothing is selected
-    expect(screen.getByRole("button", { name: /web/i })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: /news/i })).toHaveAttribute(
       "aria-pressed",
       "false",
     );

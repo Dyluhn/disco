@@ -5,7 +5,7 @@ import { ProviderKeysSection } from "./ProviderKeysSection";
 export function ProvidersSection() {
   return (
     <section
-      id="providers"
+      id="provider-connections"
       aria-labelledby="providers-heading"
       className="flex flex-col gap-inline"
     >
@@ -36,7 +36,10 @@ export function ProvidersSection() {
         </div>
       </details>
 
-      <details className="rounded-card border border-hairline bg-surface-1/30 px-body py-inline">
+      <details
+        id="advanced-provider-keys"
+        className="rounded-card border border-hairline bg-surface-1/30 px-body py-inline"
+      >
         <summary className="cursor-pointer py-3 font-ui text-[0.84rem] font-medium text-text lg:py-0">
           Advanced provider keys
         </summary>

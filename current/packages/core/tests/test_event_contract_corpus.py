@@ -39,6 +39,9 @@ from disco.core.events import (
     PlanStep,
     QuestionsV2Event,
     QuestionsV2Item,
+    ReferencePackBindingEvent,
+    ReferencePackBindingSelection,
+    ReportDeckInvocationEvent,
     ReportEvent,
     ReportSection,
     ResearchCheckpointEvent,
@@ -51,6 +54,7 @@ from disco.core.events import (
     VerifierShadowEvent,
     VerifierStartedEvent,
     VerifierVerdictEvent,
+    WorkflowInvocationEvent,
     WorkspaceMutationEvent,
     WorkspaceRestoredEvent,
     WorkspaceVersionEvent,
@@ -60,6 +64,7 @@ from disco.core.events import (
 from disco.core.migration import migrate_event
 from disco.core.state import ConversationState
 from disco.core.store.sqlite import SqliteEventStore
+from disco.core.workflow import PinnedWorkflowInvocationState
 from pydantic import ValidationError
 
 _TIMESTAMP = datetime(2026, 7, 29, 12, 34, 56, tzinfo=UTC)
@@ -241,6 +246,17 @@ _PAYLOAD_KEYS = {
         "completed_queries",
         "depth_tier",
         "recency_window",
+        "additional_sources",
+    ),
+    "workflow_invocation": ("state", "status"),
+    "reference_pack_binding": ("binding_id", "selections", "materialized_paths"),
+    "report_deck_invocation": (
+        "source_conversation_id",
+        "goal",
+        "filename",
+        "format",
+        "status",
+        "detail",
     ),
 }
 
@@ -274,7 +290,10 @@ _EXPECTED_DIGESTS = {
     "questions_v2": "aa1f2bf5e9820268d6cbbfe17b775eaed6a8f86f19bbeab0becb17c8da076ead",
     "context_resolved": "cf583c5d51c2676e1942b010712251705f35db0ef904c07daad88b37796f575c",
     "context_summary": "405fe8a026cb1a610b5ebd8d332a1b5455b414b8f797c4469a1d747c45e8decc",
-    "research_checkpoint": "352e949885c9efb3a54742f059422ec8d4a136442d7aa2d018c3a106a671753e",
+    "research_checkpoint": "a30bead1e91c88825a5fd829b1a60fcff7df01f355dc211c45bb75ea0d2f94f2",
+    "workflow_invocation": "a8db6fe4a357ca8e4f66c06b5c1e078e43dfad763a6e6723f57b129f9e31cb68",
+    "reference_pack_binding": "37cf9aed496e313af1039b611c16b8f074ad618ccf41c3eaa4c96efbe5b81f56",
+    "report_deck_invocation": "8cb225daf7084f1a3eb649d9fb7a9c16ae3181735559ca9bdf1bacee60cb6998",
 }
 
 
@@ -518,6 +537,54 @@ def make_event_corpus() -> tuple[BaseEvent, ...]:
             completed_queries=["pinned event contract"],
             depth_tier="standard_deep",
         ),
+        WorkflowInvocationEvent(
+            **{**_envelope(30), "agent_view_id": None},
+            state=PinnedWorkflowInvocationState(
+                run_id="wfrun_corpus",
+                instance_id="workflow_corpus",
+                owner_id="owner-corpus",
+                definition_snapshot={
+                    "name": "Corpus workflow",
+                    "card": "Perform the corpus fixture task.",
+                    "params_model_schema": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "properties": {"query": {"type": "string"}},
+                        "required": ["query"],
+                    },
+                    "tools": ["file_read"],
+                    "output_contract": {
+                        "path_template": "reports/{query}.md",
+                        "format": "markdown",
+                    },
+                    "verify": {"checks": ["file_exists"]},
+                },
+                definition_digest="sha256:corpus-definition",
+                surface_digest="sha256:corpus-surface",
+                validated_params={"query": "fixture"},
+                status="running",
+            ),
+            status="running",
+        ),
+        ReferencePackBindingEvent(
+            **{**_envelope(31), "agent_view_id": None},
+            binding_id="binding_corpus",
+            selections=(
+                ReferencePackBindingSelection(
+                    pack_id="pack_corpus",
+                    version_id="version_1",
+                    content_sha256="a" * 64,
+                ),
+            ),
+            materialized_paths=("references/pack_corpus/PACK.md",),
+        ),
+        ReportDeckInvocationEvent(
+            **{**_envelope(32), "agent_view_id": None},
+            source_conversation_id="research-corpus",
+            goal="Turn the accepted report into a first-class deck.",
+            filename="corpus-deck",
+            status="running",
+        ),
     )
 
 
@@ -541,7 +608,7 @@ def test_corpus_exactly_matches_ordered_event_union_and_kind_enum() -> None:
     union_members = get_args(get_args(Event)[0])
     assert tuple(type(event) for event in CORPUS) == union_members
     assert {event.kind for event in CORPUS} == set(EventKind)
-    assert len(CORPUS) == len(EventKind) == 29
+    assert len(CORPUS) == len(EventKind) == 32
 
 
 @pytest.mark.parametrize("event", CORPUS, ids=lambda event: event.kind.value)
@@ -633,7 +700,7 @@ def test_frozen_corpus_produces_the_accepted_canonical_fold() -> None:
         "execution_status": "ERROR",
         "iteration": 1,
         "max_iterations": 42,
-        "last_seq": 29,
+        "last_seq": 32,
         "active_agent_view_id": None,
         "active_agent_view_seq": None,
         "agent_view_pending": False,

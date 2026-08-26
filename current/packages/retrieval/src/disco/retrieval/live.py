@@ -138,12 +138,35 @@ class SearxngSearchProvider:
             ) as client:
                 resp = await client.get(f"{self._base}/search", params=params)
                 resp.raise_for_status()
-                payload = resp.json()
-                results = payload.get("results", [])
+                try:
+                    payload = resp.json()
+                except ValueError as exc:
+                    raise _InvalidSearxngResponse(
+                        "body was not valid JSON", status_code=resp.status_code
+                    ) from exc
+                if not isinstance(payload, dict):
+                    raise _InvalidSearxngResponse(
+                        "payload must be an object", status_code=resp.status_code
+                    )
+                results = payload.get("results")
+                if not isinstance(results, list):
+                    raise _InvalidSearxngResponse(
+                        "results must be a list", status_code=resp.status_code
+                    )
+                if any(
+                    not isinstance(result, dict)
+                    or ("url" in result and not isinstance(result.get("url"), str))
+                    for result in results
+                ):
+                    raise _InvalidSearxngResponse(
+                        "result entries have an invalid shape", status_code=resp.status_code
+                    )
                 unresponsive = payload.get("unresponsive_engines", [])
                 diagnostic: dict[str, object] = {
+                    "provider": self.name,
+                    "outcome": "ok" if results else "empty",
                     "status_code": resp.status_code,
-                    "result_count": len(results) if isinstance(results, list) else 0,
+                    "result_count": len(results),
                     "latency_ms": max(0, int((time.perf_counter() - started) * 1_000)),
                 }
                 if isinstance(unresponsive, list) and unresponsive:
@@ -151,6 +174,15 @@ class SearxngSearchProvider:
                         str(item)[:80] for item in unresponsive[:20]
                     ]
                 return results if isinstance(results, list) else [], diagnostic
+        except _InvalidSearxngResponse as exc:
+            return [], {
+                "provider": self.name,
+                "outcome": "invalid_response",
+                "provider_error": type(exc).__name__,
+                "status_code": exc.status_code,
+                "result_count": 0,
+                "latency_ms": max(0, int((time.perf_counter() - started) * 1_000)),
+            }
         except (httpx.HTTPError, ValueError) as exc:
             # Discovery failure degrades to no hits for THIS round (the run's
             # zero-evidence gate raises later if nothing was ever admitted),
@@ -160,6 +192,8 @@ class SearxngSearchProvider:
                 exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
             )
             return [], {
+                "provider": self.name,
+                "outcome": "upstream",
                 "provider_error": type(exc).__name__,
                 "status_code": status_code,
                 "result_count": 0,
@@ -201,6 +235,14 @@ class SearxngSearchProvider:
                 )
             )
         return deduplicate_search_hits(hits)[:limit]
+
+
+class _InvalidSearxngResponse(ValueError):
+    """The SearXNG endpoint answered, but not with its JSON result shape."""
+
+    def __init__(self, message: str, *, status_code: int | None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
 
 
 # ---- Crawl4AI: extraction (URL -> clean content + passages) -----------------

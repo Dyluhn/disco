@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 
 import httpx
 from disco.retrieval.bundled_providers import (
@@ -74,12 +75,77 @@ def test_local_extractor_emits_markdown_and_drops_noise():
     assert "evil()" not in md and "a{}" not in md  # script + style dropped
 
 
-def test_ddgs_degrades_to_empty_on_failure(monkeypatch):
-    """A rate-limit / network error returns [] — it never crashes the run."""
+def test_ddgs_empty_is_a_truthful_valid_empty_result(monkeypatch):
+    """A completed DDGS response with no rows is not reported as a provider failure."""
     prov = DdgsSearchProvider()
-    # _blocking_search(query, limit, timelimit) — timelimit added for DR-3.
     monkeypatch.setattr(prov, "_blocking_search", lambda q, n, tl=None: [])
-    assert asyncio.run(prov.search("anything", limit=3)) == []
+    hits, diagnostic = asyncio.run(prov.search_detailed("anything", limit=3))
+    assert hits == []
+    assert diagnostic["provider"] == "ddgs"
+    assert diagnostic["outcome"] == "empty"
+
+
+def test_ddgs_failure_is_diagnostic_and_single_shot(monkeypatch):
+    """A DDGS exception is visible to the ordinary Search boundary, without retries."""
+    prov = DdgsSearchProvider()
+    calls = 0
+
+    def fail_once(q, n, tl=None):
+        nonlocal calls
+        calls += 1
+        raise RuntimeError("provider secret must not enter diagnostics")
+
+    monkeypatch.setattr(prov, "_blocking_search", fail_once)
+    hits, diagnostic = asyncio.run(prov.search_detailed("anything", limit=3))
+    assert hits == []
+    assert calls == 1
+    assert diagnostic["outcome"] == "upstream"
+    assert diagnostic["provider_error"] == "RuntimeError"
+    assert "secret" not in str(diagnostic)
+
+
+def test_ddgs_timeout_is_bounded_and_truthful(monkeypatch):
+    """A blocked synchronous provider call cannot stall the async search loop."""
+
+    prov = DdgsSearchProvider(timeout_s=0.01)
+    calls = 0
+
+    def blocked_once(q, n, tl=None):
+        nonlocal calls
+        calls += 1
+        time.sleep(0.05)
+        return [{"href": "https://example.com/too-late"}]
+
+    monkeypatch.setattr(prov, "_blocking_search", blocked_once)
+    started = time.monotonic()
+    hits, diagnostic = asyncio.run(prov.search_detailed("anything", limit=3))
+
+    assert hits == []
+    assert calls == 1
+    assert time.monotonic() - started < 0.2
+    assert diagnostic["provider"] == "ddgs"
+    assert diagnostic["outcome"] == "timeout"
+    assert diagnostic["provider_error"] == "TimeoutError"
+
+
+def test_ddgs_malformed_rows_are_invalid_response_not_exceptions(monkeypatch):
+    prov = DdgsSearchProvider()
+    monkeypatch.setattr(
+        prov,
+        "_blocking_search",
+        lambda q, n, tl=None: [
+            None,
+            {"href": 42},
+            {"href": "https://[malformed"},
+            {"href": "https://example.com/ok", "title": "Good"},
+        ],
+    )
+
+    hits, diagnostic = asyncio.run(prov.search_detailed("anything", limit=3))
+
+    assert [hit.url for hit in hits] == ["https://example.com/ok"]
+    assert diagnostic["outcome"] == "invalid_response"
+    assert diagnostic["invalid_row_count"] == 3
 
 
 def test_domain_policy_matches_only_exact_hosts_and_subdomains(monkeypatch):

@@ -216,6 +216,9 @@ describe("ProvidersSection — generic provider objects", () => {
     ).not.toBeInTheDocument();
     const openRouter = screen.getByText("OpenRouter", { selector: "summary" });
     expect(openRouter.closest("details")).not.toHaveAttribute("open");
+    const advanced = screen.getByText("Advanced provider keys", { selector: "summary" });
+    expect(advanced.closest("details")).toHaveAttribute("id", "advanced-provider-keys");
+    expect(advanced.closest("details")).not.toHaveAttribute("open");
   });
 
   it("adds Ollama without inventing a key and exposes the Compose-safe URL", async () => {
@@ -308,12 +311,17 @@ describe("ProvidersSection — generic provider objects", () => {
     );
     expect(add).toBeEnabled();
     fireEvent.click(add);
+    // An opaque manually-added model must answer the one required modality
+    // question before the enable request is sent.
+    fireEvent.click(await screen.findByRole("button", { name: "Supports images" }));
 
     await waitFor(() =>
       expect(lastEnableBody).toEqual({
         model_id: "relay/model-1",
         label: "relay/model-1",
         context_window: 131072,
+        max_output_tokens: null,
+        vision: true,
       }),
     );
     expect(screen.queryByText("sk-bad-relay")).not.toBeInTheDocument();

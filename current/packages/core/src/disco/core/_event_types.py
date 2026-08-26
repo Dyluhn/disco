@@ -82,6 +82,9 @@ class EventKind(str, Enum):
     PLAN = "plan"  # a proposed, structured plan awaiting approval (Build plan-mode)
     REPORT = "report"  # a finished Deep Research multi-section grounded report
     RESEARCH_CHECKPOINT = "research_checkpoint"  # user-stopped resumable research state
+    WORKFLOW_INVOCATION = "workflow_invocation"  # durable pinned workflow run state
+    REFERENCE_PACK_BINDING = "reference_pack_binding"  # immutable Build reference snapshot
+    REPORT_DECK_INVOCATION = "report_deck_invocation"  # durable report → deck handoff
     ALTERNATIVES = "alternatives"  # 2–3 user-choosable options after repeated tool failure
     KNOWLEDGE = "knowledge"  # a scoped best-practice snippet (Cluster 7)
     RUNTIME_CONSTRAINT = "runtime_constraint"  # host-authored typed constraint + recovery

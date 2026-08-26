@@ -16,6 +16,8 @@ import asyncio
 import hashlib
 import logging
 import re
+from collections.abc import Mapping
+from concurrent.futures import ThreadPoolExecutor
 from html.parser import HTMLParser
 
 import httpx
@@ -23,6 +25,7 @@ from disco.core.host_egress import EgressDenied, guarded_get, validate_untrusted
 
 from .models import ExtractedDoc, Passage, SearchHit
 from .provider_http import BoundedHttpExecutor, HttpAttemptPolicy, with_outcome
+from .source_adapters import _search_diagnostic
 from .url_policy import parse_source_date, url_allowed
 
 _LOG = logging.getLogger("disco.retrieval.providers")
@@ -74,6 +77,10 @@ _EXTRACTION_POLICY = HttpAttemptPolicy(deadline_s=30.0)
 
 _TAVILY_ORIGIN = "https://api.tavily.com"
 _FIRECRAWL_EXECUTORS: dict[str, BoundedHttpExecutor] = {}
+# DDGS is synchronous. A small process-wide pool both keeps it off the event
+# loop and prevents timed-out calls from creating an unbounded tail of stuck
+# worker threads. There is deliberately no retry or fallback at this boundary.
+_DDGS_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="disco-ddgs")
 
 
 def _diagnostic_int(diagnostic: dict[str, object], key: str) -> int:
@@ -96,21 +103,19 @@ def _firecrawl_executor(
         _FIRECRAWL_EXECUTORS[base_url] = executor
     return executor
 
-# ddgs rate-limit resilience: retry an empty/failed DuckDuckGo search a few times
-# with linear backoff before degrading to no-results (see DdgsSearchProvider).
-_DDGS_MAX_ATTEMPTS = 3
-_DDGS_BACKOFF_S = 1.5
-
-
 # ===== SEARCH ================================================================
 
 
 class DdgsSearchProvider:
     """(c) BUNDLED search — DuckDuckGo via the maintained `ddgs` lib, in-process, no
-    key. Moderate rate limits (fine for personal use); on a rate-limit it returns an
-    empty list rather than crashing the run. The first-run default."""
+    key. The first-run default. A single call is made per ordinary Search request;
+    failures are returned as bounded diagnostics instead of being misreported as a
+    valid empty result or retried by a second planner."""
 
     name = "ddgs"
+
+    def __init__(self, *, timeout_s: float = _SEARCH_POLICY.deadline_s) -> None:
+        self._timeout = max(0.001, float(timeout_s))
 
     async def search(
         self,
@@ -121,65 +126,122 @@ class DdgsSearchProvider:
         domains_deny: frozenset[str] | None = None,
         time_filter: str | None = None,
     ) -> list[SearchHit]:
-        # DR-3 E1: convert recency_window → ddgs timelimit ("m"=month, "w"=week).
-        # "day" is avoided (near-zero results per spec).
+        hits, _diagnostic = await self.search_detailed(
+            query,
+            limit=limit,
+            domains_allow=domains_allow,
+            domains_deny=domains_deny,
+            time_filter=time_filter,
+        )
+        return hits
+
+    async def search_detailed(
+        self,
+        query: str,
+        *,
+        limit: int = 10,
+        domains_allow: frozenset[str] | None = None,
+        domains_deny: frozenset[str] | None = None,
+        time_filter: str | None = None,
+    ) -> tuple[list[SearchHit], dict[str, object]]:
+        started = asyncio.get_running_loop().time()
         _timelimit: str | None = None
         if time_filter == "month":
             _timelimit = "m"
         elif time_filter == "week":
             _timelimit = "w"
-        rows = await asyncio.to_thread(self._blocking_search, query, limit, _timelimit)
+        try:
+            loop = asyncio.get_running_loop()
+            rows = await asyncio.wait_for(
+                loop.run_in_executor(
+                    _DDGS_EXECUTOR,
+                    self._blocking_search,
+                    query,
+                    limit,
+                    _timelimit,
+                ),
+                timeout=self._timeout,
+            )
+        except TimeoutError as exc:
+            _LOG.warning("ddgs search timed out")
+            return [], _search_diagnostic(
+                self.name,
+                "timeout",
+                started=started,
+                error=exc,
+            )
+        except Exception as exc:  # noqa: BLE001 — classify provider failure, don't hide it
+            _LOG.warning("ddgs search failed (%s)", type(exc).__name__)
+            return [], _search_diagnostic(
+                self.name,
+                "upstream",
+                started=started,
+                error=exc,
+            )
+        if not isinstance(rows, list):
+            return [], _search_diagnostic(
+                self.name,
+                "invalid_response",
+                started=started,
+            )
         _LOG.info("ddgs search %r → %d raw rows", query[:80], len(rows))
         hits: list[SearchHit] = []
+        invalid_rows = 0
         for i, r in enumerate(rows):
-            url = r.get("href") or r.get("url") or ""
+            if not isinstance(r, Mapping):
+                invalid_rows += 1
+                continue
+            raw_url = r.get("href") or r.get("url")
+            if raw_url is not None and not isinstance(raw_url, str):
+                invalid_rows += 1
+                continue
+            url = raw_url or ""
             if not url:
                 continue
-            if not url_allowed(url, domains_allow, domains_deny):
+            try:
+                allowed = url_allowed(url, domains_allow, domains_deny)
+            except (TypeError, ValueError):
+                invalid_rows += 1
+                continue
+            if not allowed:
+                continue
+            title = r.get("title", "")
+            body = r.get("body", "")
+            snippet = r.get("snippet", "")
+            if any(
+                value is not None and not isinstance(value, str)
+                for value in (title, body, snippet)
+            ):
+                invalid_rows += 1
                 continue
             hits.append(
                 SearchHit(
                     url=url,
-                    title=r.get("title", "") or url,
-                    snippet=r.get("body", "") or r.get("snippet", ""),
+                    title=title or url,
+                    snippet=body or snippet or "",
                     source_engine="ddgs",
                     rank=i,
                     published_at=parse_source_date(r.get("date")),
                 )
             )
-        return hits
+        diagnostic = _search_diagnostic(
+            self.name,
+            "invalid_response" if invalid_rows else ("ok" if hits else "empty"),
+            started=started,
+            result_count=len(hits),
+        )
+        if invalid_rows:
+            diagnostic["invalid_row_count"] = invalid_rows
+        return hits, diagnostic
 
     def _blocking_search(self, query: str, limit: int, timelimit: str | None = None) -> list[dict]:
-        # DuckDuckGo rate-limits aggressively; a rate-limited call raises OR returns
-        # an empty list — INDISTINGUISHABLE from a genuine no-results one to the
-        # caller (both surface as "No sources"). Retry a few times with backoff so a
-        # transient 0-results blip (the common case under back-to-back queries)
-        # becomes a real result set instead of a silently-empty answer.
-        import time
+        from ddgs import DDGS  # lazy: keeps import cost off the hot path
 
-        last_err: Exception | None = None
-        for attempt in range(_DDGS_MAX_ATTEMPTS):
-            try:
-                from ddgs import DDGS  # lazy: keeps import cost off the hot path
-
-                with DDGS() as d:
-                    kw: dict = {"max_results": limit}
-                    if timelimit is not None:
-                        kw["timelimit"] = timelimit
-                    rows = list(d.text(query, **kw))
-                if rows:
-                    return rows
-            except Exception as e:  # noqa: BLE001 — rate-limit / network: retry then degrade
-                last_err = e
-            if attempt < _DDGS_MAX_ATTEMPTS - 1:
-                time.sleep(_DDGS_BACKOFF_S * (attempt + 1))
-        _LOG.warning(
-            "ddgs search yielded nothing after %d attempts (%s)%s",
-            _DDGS_MAX_ATTEMPTS,
-            query[:60],
-            f": {last_err}" if last_err else " — likely rate-limited",
-        )
-        return []
+        with DDGS() as d:
+            kw: dict = {"max_results": limit}
+            if timelimit is not None:
+                kw["timelimit"] = timelimit
+            return list(d.text(query, **kw))
 
 
 class TavilySearchProvider:

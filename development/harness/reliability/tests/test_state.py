@@ -275,3 +275,20 @@ def test_product_subject_identity_ignores_evaluator_bytes_only(tmp_path: Path) -
     product.write_text("VALUE = 2\n", encoding="utf-8")
     assert product_subject_identity(tmp_path, bindings={"model": "deepseek"}) != first
     assert product_subject_identity(tmp_path, bindings={"model": "other"}) != first
+
+
+def test_product_subject_identity_uses_current_tree_when_present(tmp_path: Path) -> None:
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    current = tmp_path / "current" / "packages" / "core" / "src" / "disco" / "runtime.py"
+    shadow = tmp_path / "packages" / "core" / "src" / "disco" / "runtime.py"
+    current.parent.mkdir(parents=True)
+    shadow.parent.mkdir(parents=True)
+    current.write_text("VALUE = 'candidate'\n", encoding="utf-8")
+    shadow.write_text("VALUE = 'shadow'\n", encoding="utf-8")
+    first = product_subject_identity(tmp_path)
+
+    shadow.write_text("VALUE = 'not-the-candidate'\n", encoding="utf-8")
+    assert product_subject_identity(tmp_path) == first
+
+    current.write_text("VALUE = 'candidate-v2'\n", encoding="utf-8")
+    assert product_subject_identity(tmp_path) != first

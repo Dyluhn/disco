@@ -25,8 +25,9 @@ from disco.core import (
     SkillStore,
     StatusEvent,
 )
-from disco.core.appkit import BuildBrief
+from disco.core.appkit import BuildBrief, appkit_applicable, classify_build_brief
 from disco.core.env import disco_env
+from disco.core.flags import appkit_enabled
 from disco.core.llm import (
     ConfigStore,
     DefaultLLMRouter,
@@ -39,7 +40,7 @@ from disco.core.llm.secret_refs import resolve_provider_secret
 from disco.core.loop import AgentLoop, RouterAgent
 from disco.core.store.sqlite import SqliteEventStore
 from disco.core.verification import VerificationRequirementsDirective
-from disco.core.workflow import WorkflowRun
+from disco.core.workflow import WorkflowReadiness, WorkflowRun
 from disco.tools import SandboxService, SandboxSpec
 from disco.tools.builtin.verify_appkit_app import (
     APPKIT_LIVE_PREVIEW_NAME as APPKIT_LIVE_PREVIEW_NAME,
@@ -198,6 +199,17 @@ def _default_in_catalog(
     return default if any(model["id"] == default for model in models) else None
 
 
+_WORKFLOW_CLICK_TARGET_STATUSES = frozenset(
+    {
+        ConversationStatus.IDLE,
+        ConversationStatus.PAUSED,
+        ConversationStatus.FINISHED,
+        ConversationStatus.ERROR,
+        ConversationStatus.STUCK,
+    }
+)
+
+
 class ConversationRuntime:
     """Wiring-only root plus the transport-stable conversation ingress facade."""
 
@@ -232,6 +244,7 @@ class ConversationRuntime:
         workspace: WorkspaceCoordinator
 
         _config_store: ConfigStore
+        _store: SqliteEventStore
         _cancellations: CancellationRegistry
         _build_platform: BuildPlatformRuntime
         _driver_preflight: DriverPreflight
@@ -320,6 +333,47 @@ class ConversationRuntime:
     def _surface_of(self, conversation_id: str) -> str:
         return self.settings._surface_of(conversation_id)
 
+    def surface_of(self, conversation_id: str) -> str:
+        """Public route-facing conversation surface lookup."""
+
+        return self.settings._surface_of(conversation_id)
+
+    def workflow_surface_digest(self, instance: Any) -> str:
+        """Return the host-owned compiled-surface digest for a workflow instance."""
+
+        return self._loop_factory.workflow_surface_digest(instance)
+
+    async def _promote_appkit_for_build(
+        self, conversation_id: str, brief: BuildBrief
+    ) -> bool:
+        """Host-owned first-send AppKit selection for ordinary Build.
+
+        This runs before kernel/loop composition, so the durable mode truth is
+        available to the executor and prompt builder. The store CAS is the final
+        authority; setup-only upload/reference-pack events remain eligible for
+        lazy/pre-created conversations. Agent, artifact, and deck paths never
+        enter this method.
+        """
+        if (
+            not appkit_enabled()
+            or self.surface_of(conversation_id) != "build"
+            or self.settings._effective_artifact_mode(conversation_id)
+        ):
+            return False
+        if self.settings._effective_appkit_mode(conversation_id):
+            return True
+        if not appkit_applicable(brief):
+            return False
+        async with self.workspace.lock(conversation_id):
+            # Re-check under the same conversation boundary used by user-turn
+            # ingress. The CAS also protects restart/multi-worker callers.
+            if not await self.settings._conversation_is_pristine(conversation_id):
+                return False
+            promoted = self._store.promote_appkit_mode_sync(conversation_id)
+            if promoted:
+                self.settings.set_appkit_mode(conversation_id, True)
+            return promoted or self.settings._effective_appkit_mode(conversation_id)
+
     def _effective_autonomous(self, conversation_id: str) -> bool:
         return self.settings._effective_autonomous(conversation_id)
 
@@ -342,6 +396,111 @@ class ConversationRuntime:
         conversation_id: str,
     ) -> ResolvedDriverContext:
         return await self.drivers.resolve_context(conversation_id)
+
+    async def invoke_workflow(
+        self,
+        conversation_id: str,
+        instance_id: str,
+        params: dict[str, Any],
+        *,
+        owner_id: str,
+    ) -> Any:
+        """Invoke a ready workflow through the ordinary Agent handoff seam.
+
+        The Workflows UI and the dynamic Agent workflow tool both use the same
+        ``WorkflowInvocationService`` and ``_start_workflow_handoff`` callback.
+        This small runtime seam keeps the route from composing a second
+        schedule-specific execution path.
+        """
+        from .workflow_invocation import WorkflowInvocationResult
+
+        service = self._loop_factory.workflow_invocation_service(conversation_id)
+        if service is None:
+            return WorkflowInvocationResult(
+                started=False,
+                instance_id=instance_id,
+                readiness=WorkflowReadiness(
+                    ready=False, reasons=("workflow_runtime_unavailable",)
+                ),
+                reason="workflow_runtime_unavailable",
+            )
+        state = await self._store.get_state(conversation_id)
+        if state.execution_status not in _WORKFLOW_CLICK_TARGET_STATUSES:
+            return WorkflowInvocationResult(
+                started=False,
+                instance_id=instance_id,
+                readiness=WorkflowReadiness(
+                    ready=False,
+                    reasons=("conversation_not_quiet",),
+                ),
+                reason="conversation_not_quiet",
+            )
+        if await self._loop_factory.workflow_resolution_required(conversation_id):
+            return WorkflowInvocationResult(
+                started=False,
+                instance_id=instance_id,
+                readiness=WorkflowReadiness(
+                    ready=False,
+                    reasons=("conversation_workflow_active",),
+                ),
+                reason="conversation_workflow_active",
+            )
+
+        async def start(handoff: Any) -> str | None:
+            # A Workflows-tab invocation may target a quiet conversation with
+            # no loop bound in memory. Persist the same durable boundary as the
+            # dynamic Agent tool, then let RunController compose the sealed
+            # loop directly. Do not create a broad sandbox only to discard it.
+            return await self._loop_factory.start_workflow_handoff(
+                conversation_id,
+                handoff,
+                require_active_loop=False,
+            )
+
+        result = await service.invoke(
+            instance_id,
+            params=params,
+            owner_id=owner_id,
+            start=start,
+        )
+        if result.started:
+            self.run_controller.kick(conversation_id)
+        return result
+
+    def prepare_workflow(
+        self,
+        instance_id: str,
+        params: dict[str, Any],
+        *,
+        owner_id: str,
+    ) -> Any:
+        """Validate a clicked run before allocating a new conversation."""
+
+        from .workflow_invocation import WorkflowInvocationPreparation
+
+        service = self._loop_factory.workflow_invocation_service_for_owner(owner_id)
+        if service is None:
+            return WorkflowInvocationPreparation(
+                accepted=False,
+                instance_id=instance_id,
+                readiness=WorkflowReadiness(
+                    ready=False,
+                    reasons=("workflow_runtime_unavailable",),
+                ),
+                reason="workflow_runtime_unavailable",
+            )
+        return service.prepare(instance_id, params=params, owner_id=owner_id)
+
+    def workflow_readiness(self, instance_id: str, *, owner_id: str) -> Any:
+        """Expose the canonical workflow readiness verdict to catalog routes."""
+
+        service = self._loop_factory.workflow_invocation_service_for_owner(owner_id)
+        if service is None:
+            return WorkflowReadiness(
+                ready=False,
+                reasons=("workflow_runtime_unavailable",),
+            )
+        return service.readiness_for(instance_id, owner_id=owner_id)
 
     async def _preflight_driver(
         self,
@@ -433,6 +592,19 @@ class ConversationRuntime:
         verification_requirements: VerificationRequirementsDirective | None = None,
         steer: bool = False,
     ) -> MessageEvent:
+        # The normal Build client sends only the advisory brief marker. Resolve
+        # governed AppKit mode here, at the host boundary, before contract
+        # activation or loop composition. This keeps direct sends and lazy
+        # pre-created attachment/reference-pack conversations on one path.
+        if (
+            build_brief is None
+            and self._surface_of(conversation_id) == "build"
+            and await self.settings._conversation_is_pristine(conversation_id)
+        ):
+            build_brief = classify_build_brief(text)
+        if build_brief is not None and self._surface_of(conversation_id) == "build":
+            await self._promote_appkit_for_build(conversation_id, build_brief)
+
         # Build briefs are an explicit Build-contract activation signal, not a
         # generic task hint. Older clients sent the marker for Agent because the
         # two surfaces share a stream hook; fail neutral at the server boundary

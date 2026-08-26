@@ -427,6 +427,26 @@ def test_normalizers_use_recorded_provider_shapes():
     assert "long_context" in gemini[0].capabilities
 
 
+def test_provider_catalogue_preserves_tri_state_vision_status():
+    known = providers_mod._normalize_catalogue(
+        "openai-compat",
+        {
+            "data": [
+                {
+                    "id": "vendor/vision-model",
+                    "architecture": {"input_modalities": ["text", "image"]},
+                },
+                {
+                    "id": "vendor/text-model",
+                    "architecture": {"input_modalities": ["text"]},
+                },
+                {"id": "vendor/opaque-model"},
+            ]
+        },
+    )
+    assert [m.vision_status for m in known] == ["vision", "text-only", "unknown"]
+
+
 @pytest.mark.asyncio
 async def test_provider_catalogue_ttl_cache_singleflight(state, monkeypatch):
     state.providers.create_provider(

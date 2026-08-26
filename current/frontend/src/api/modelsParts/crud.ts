@@ -28,8 +28,11 @@ let fixtureAssignments: ModelAssignments = {
 let fixtureCatalogue: ModelInfo[] = MODEL_CATALOGUE.map((m) => ({ ...m }));
 
 function visionStatus(u: ModelUpsert): ModelInfo["vision_status"] {
-  if (u.vision === true || u.capabilities.includes("vision")) return "vision";
+  if (u.vision === true) return "vision";
   if (u.vision === false) return "text-only";
+  if (u.vision_declared === true) return "vision";
+  if (u.vision_declared === false) return "text-only";
+  if (u.capabilities.includes("vision")) return "vision";
   return "unknown";
 }
 

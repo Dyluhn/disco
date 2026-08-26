@@ -58,7 +58,15 @@ APPKIT_EJECTION_TARGET_LABEL = "Freeform - AppKit ejected (not AppKit-verified)"
 # Read / probe tools available in EVERY strict AppKit phase. Pure observation —
 # never a durable change to the workspace or the outside world.
 APPKIT_READ_TOOLS: frozenset[str] = frozenset(
-    {"file_read", "file_list", "search", "extract", "server_status", "think"}
+    {
+        "file_read",
+        "file_list",
+        "search",
+        "extract",
+        "server_status",
+        "think",
+        "reference_inspect",
+    }
 )
 
 # The validated-patch AppKit mutators (spec mutate → regenerate, lint-gated). The

@@ -68,14 +68,18 @@ def workflow_effective_scope(
     compiled_run_scope: CompiledWorkflowScope | None,
     base_scope: ToolScope,
     output_path_template: str | None = None,
+    allow_abort: bool = True,
 ) -> ToolScope:
     """The enforced ToolScope for the workflow router right now."""
 
     if phase == WorkflowPhase.RUN:
         if compiled_run_scope is None:
             return ToolScope(allowed_tools=frozenset(), preset="workflow_run_uncompiled")
-        allowed_tools = compiled_run_scope.allowed_tools | WORKFLOW_RUN_CONTROL_TOOLS
-        advertised = compiled_run_scope.advertised | WORKFLOW_RUN_CONTROL_TOOLS
+        run_controls = (
+            WORKFLOW_RUN_CONTROL_TOOLS if allow_abort else frozenset({"finish"})
+        )
+        allowed_tools = compiled_run_scope.allowed_tools | run_controls
+        advertised = compiled_run_scope.advertised | run_controls
         return ToolScope(
             allowed_tools=allowed_tools,
             advertised_tools=advertised,
@@ -126,10 +130,15 @@ def workflow_run_denial_message(
             "finish refused: this workflow completes by writing "
             f"{output_path}. Write it (file_write), then call finish."
         )
+    recovery = (
+        "workflow_abort returns to the router if the goal needs tools outside this seal."
+        if "workflow_abort" in available
+        else "Call needs_input for missing user information, or skip with an honest reason."
+    )
     return (
         f"unknown or out-of-scope tool {tool_name!r}; available: {available}. "
         f"This workflow completes by writing {output_path} and then calling finish; "
-        "workflow_abort returns to the router if the goal needs tools outside this seal."
+        f"{recovery}"
     )
 
 

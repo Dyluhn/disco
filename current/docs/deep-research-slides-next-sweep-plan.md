@@ -1,14 +1,25 @@
 # Disco Quality Sweep — Master Implementation Plan
 
-**Status:** Owner-approved for autonomous execution on 2026-08-25. Work proceeds only in the isolated quality-sweep worktree until integration is explicitly promoted.
+**Status:** Implemented and under final candidate verification in the isolated quality-sweep worktree. Promotion to the live Disco checkout remains deliberately deferred while the owner's Build is active.
 
-**Last updated:** 2026-08-25
+**Last updated:** 2026-08-26
 
 This is the master plan for the next Disco quality sweep. It consolidates the completed read-only root-cause work and is organized for dependency-safe execution by parallel Luna subagents. Each numbered section is a bounded implementation slice; execute one gated wave at a time and stop if its integration gate fails. Approval of this document does not authorize work outside these slices.
 
 ## Outcome
 
 Deep Research should keep producing the high-quality, evidence-backed reports now expected, while its controls, providers, and feedback remain honest and predictable. Slides, Workflows, Reference Packs, AppKit, model onboarding, and Build delivery should each have one reliable golden path whose UI is driven by durable runtime facts.
+
+## Implementation checkpoint
+
+All fifteen planned slices are implemented in the isolated candidate. The final adversarial pass also closed four late findings without adding alternate engines or failure products:
+
+- direct report-to-deck jobs now persist a restart marker and validate the canonical PPTX, authored JSON, branded preview, and render facts before `FINISHED`;
+- deck recovery restores its deck-mode contract, reconciles terminal crash windows, and scans every persisted owner partition;
+- declared workflow connector bindings now participate in the one canonical readiness predicate using the concrete connection ID;
+- synchronous DDGS search now has one truthful 15-second deadline and a process-wide two-worker bound, with no retry or fallback.
+
+Current gates are green for the complete frontend suite (1,266 tests), full Retrieval and App Server suites, focused workflow/deck/reference-pack/provider suites, the research and reliability harnesses, TypeScript, ESLint, Ruff, basedpyright, secret scans, and `git diff --check`. The full Core suite has no functional failures; its sole remaining pre-commit failure is the intentional clean-worktree AppKit boundary guard, which must be rerun after the candidate commit. Browser/live-provider E2E and five-report visual acceptance remain deferred until the active live Build can be left undisturbed.
 
 ## Design rules
 

@@ -32,6 +32,7 @@ import { isolationForBackend } from "@/lib/isolation";
 import { publishRunStatus } from "@/lib/runStatusBridge";
 import { useVerboseAgentChat } from "@/lib/useVerboseAgentChat";
 import { useDownloadProject, useExportManifest, useProjectRelease } from "@/hooks/useProjects";
+import { selectCommittedFinish } from "@/lib/committedFinish";
 import { ResizableSplit } from "@/components/build/ResizableSplit";
 import { ExecutionCanvas } from "@/components/build/ExecutionCanvas";
 import { AgentCanvas } from "@/components/build/AgentCanvas";
@@ -98,7 +99,15 @@ export function BuildSurface({
   // finished-handoff region. Gated on FINISHED (like the DeliverablePanel) so the
   // fetch only fires once a persisted snapshot exists to assess; the panel renders
   // purely from this data, so Build and Agent get the IDENTICAL UI by construction.
-  const release = useProjectRelease(b.status === "FINISHED" ? (b.cid ?? null) : null);
+  const committedFinish = useMemo(
+    () => selectCommittedFinish(b.events, b.status),
+    [b.events, b.status],
+  );
+  // FINISHED is emitted before project storage is committed. Passing the
+  // explicit null here keeps the release query disabled until its matching
+  // final seal is replayed; the hook's one-argument legacy form remains for the
+  // Projects list, which has no event log.
+  const release = useProjectRelease(b.cid ?? null, committedFinish);
 
   const { verbose: verboseChat } = useVerboseAgentChat();
   const { isReplaying, steerable, settled, collapseFeed, draftingPlan, terminalIncomplete } =
@@ -168,6 +177,7 @@ export function BuildSurface({
         download={download}
         onDownloadClick={() => b.cid && download.mutate({ id: b.cid, binding: null })}
         framing={framing}
+        committedFinish={committedFinish}
       />
       <BuildActivityFeed
         isReplaying={isReplaying}
@@ -197,6 +207,7 @@ export function BuildSurface({
           download={download}
           exportManifest={exportManifest}
           release={release}
+          committedFinish={committedFinish}
         />
         <BuildDecisionGates b={b} />
         <BuildAskGate b={b} finalMessage={finalMessage} />

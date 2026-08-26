@@ -7,7 +7,8 @@ import {
   useEnableProviderModel,
   useProviderModels,
 } from "@/hooks/useModels";
-import type { ModelInfo, ProviderCatalogueModel, ProviderInfo } from "@/types/models";
+import { staticVisionStatus, type ModelInfo, type ProviderCatalogueModel, type ProviderInfo } from "@/types/models";
+import { VisionConfirmation } from "../ModelCatalogue";
 import { CatalogueErrorBanner } from "./CatalogueErrorBanner";
 import { errorText } from "./helpers";
 import { ModelRow } from "./ModelRow";
@@ -28,6 +29,8 @@ export function BrowseProvider({
   const [manualCtx, setManualCtx] = useState("");
   const [optimistic, setOptimistic] = useState<Record<string, boolean>>({});
   const [toggleError, setToggleError] = useState<string | null>(null);
+  const [visionAsk, setVisionAsk] = useState<ProviderCatalogueModel | null>(null);
+  const [manualVisionAsk, setManualVisionAsk] = useState<ProviderCatalogueModel | null>(null);
 
   const enabledByModel = useMemo(
     () => new Map(enabledModels.map((m) => [m.model_id, m])),
@@ -54,9 +57,18 @@ export function BrowseProvider({
   // when the catalogue doesn't report one we ASK instead of silently defaulting
   // (the pre-fix 8192 default poisoned every enabled model's context budget).
   const [ctxAsk, setCtxAsk] = useState<{ modelId: string; value: string } | null>(null);
+  const [ctxVision, setCtxVision] = useState<boolean | null>(null);
   const toggle = (m: ProviderCatalogueModel) => {
     const catalogueEntry = enabledByModel.get(m.model_id);
     const nextEnabled = !catalogueEntry;
+    const visionStatus =
+      m.vision_status ??
+      (m.capabilities.includes("vision") ? "vision" : staticVisionStatus(m.model_id));
+    if (nextEnabled && visionStatus === "unknown") {
+      setVisionAsk(m);
+      setToggleError(null);
+      return;
+    }
     if (nextEnabled && m.context_window == null) {
       setCtxAsk({ modelId: m.model_id, value: "" });
       setToggleError(null);
@@ -82,17 +94,24 @@ export function BrowseProvider({
           label: m.label,
           context_window: m.context_window,
           max_output_tokens: m.max_output_tokens,
+          vision: undefined,
         },
         { onError: (err) => setToggleError(errorText(err)), onSettled: cleanup },
       );
     }
   };
 
-  const confirmCtxEnable = (m: ProviderCatalogueModel, ctx: number) => {
+  const confirmCtxEnable = (m: ProviderCatalogueModel, ctx: number, vision?: boolean) => {
     setOptimistic((current) => ({ ...current, [m.model_id]: true }));
     setCtxAsk(null);
+    setCtxVision(null);
     enable.mutate(
-      { model_id: m.model_id, label: m.label, context_window: ctx },
+      {
+        model_id: m.model_id,
+        label: m.label,
+        context_window: ctx,
+        ...(vision === undefined ? {} : { vision }),
+      },
       {
         onError: (err) => setToggleError(errorText(err)),
         onSettled: () =>
@@ -110,6 +129,17 @@ export function BrowseProvider({
     const modelId = manualId.trim();
     const ctx = Number(manualCtx);
     if (!modelId || !(Number.isFinite(ctx) && ctx >= 1024)) return;
+    if (staticVisionStatus(modelId) === "unknown") {
+      setManualVisionAsk({
+        model_id: modelId,
+        label: modelId,
+        context_window: ctx,
+        max_output_tokens: null,
+        capabilities: [],
+        vision_status: "unknown",
+      });
+      return;
+    }
     enable.mutate(
       { model_id: modelId, label: modelId, context_window: ctx },
       {
@@ -175,7 +205,7 @@ export function BrowseProvider({
                   e.preventDefault();
                   if (!asking) return;
                   const ctx = Number(ctxAsk.value);
-                  if (Number.isFinite(ctx) && ctx >= 1024) confirmCtxEnable(m, ctx);
+                  if (Number.isFinite(ctx) && ctx >= 1024) confirmCtxEnable(m, ctx, ctxVision ?? undefined);
                 }}
               />
             );
@@ -192,6 +222,68 @@ export function BrowseProvider({
           {toggleError}
         </p>
       )}
+      <VisionConfirmation
+        open={visionAsk !== null}
+        onOpenChange={(open) => {
+          if (!open) setVisionAsk(null);
+        }}
+        onChoose={(vision) => {
+          const model = visionAsk;
+          if (!model) return;
+          setVisionAsk(null);
+          if (model.context_window == null) {
+            setCtxVision(vision);
+            setCtxAsk({ modelId: model.model_id, value: "" });
+            return;
+          }
+          setOptimistic((current) => ({ ...current, [model.model_id]: true }));
+          enable.mutate(
+            {
+              model_id: model.model_id,
+              label: model.label,
+              context_window: model.context_window,
+              max_output_tokens: model.max_output_tokens,
+              vision,
+            },
+            {
+              onError: (err) => setToggleError(errorText(err)),
+              onSettled: () =>
+                setOptimistic((current) => {
+                  const next = { ...current };
+                  delete next[model.model_id];
+                  return next;
+                }),
+            },
+          );
+        }}
+      />
+      <VisionConfirmation
+        open={manualVisionAsk !== null}
+        onOpenChange={(open) => {
+          if (!open) setManualVisionAsk(null);
+        }}
+        onChoose={(vision) => {
+          const model = manualVisionAsk;
+          if (!model) return;
+          setManualVisionAsk(null);
+          enable.mutate(
+            {
+              model_id: model.model_id,
+              label: model.label,
+              context_window: model.context_window,
+              max_output_tokens: model.max_output_tokens,
+              vision,
+            },
+            {
+              onSuccess: () => {
+                setManualId("");
+                setManualCtx("");
+              },
+              onError: (err) => setToggleError(errorText(err)),
+            },
+          );
+        }}
+      />
     </div>
   );
 }

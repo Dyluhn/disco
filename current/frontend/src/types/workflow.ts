@@ -41,6 +41,7 @@ export interface WorkflowReview {
   instance_id: string;
   name: string;
   card: string;
+  origin: "built_in" | "user";
   definition_digest: string;
   enabled: boolean;
   approved: boolean;
@@ -50,6 +51,12 @@ export interface WorkflowReview {
   validation_findings: WorkflowValidationFinding[];
   compiled_surface: WorkflowCompiledSurface;
   surface_shown_digest: string;
+  readiness: {
+    ready: boolean;
+    status: "ready" | "needs_setup" | "off";
+    reasons: string[];
+    blocking_findings: string[];
+  };
 }
 
 export interface WorkflowListResponse {

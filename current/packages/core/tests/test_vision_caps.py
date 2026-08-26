@@ -23,7 +23,7 @@ from disco.core.llm.config import (
 )
 from disco.core.llm.prompts import DriverPrompts
 from disco.core.llm.types import ModelRole, OperatingMode, Requirement
-from disco.core.llm.vision_table import table_vision
+from disco.core.llm.vision_table import resolve_vision_status, table_vision
 
 # ===========================================================================
 # V3 — table_vision static rules
@@ -132,6 +132,10 @@ class TestTableVision:
     def test_unknown_with_unknown_family_is_not_vision(self):
         assert table_vision("some-model-4b", family="llama") is False
 
+    def test_unknown_is_distinct_from_text_only(self):
+        assert resolve_vision_status(model_id="mystery-7b") == "unknown"
+        assert resolve_vision_status(model_id="text-embedding-3-large") == "text-only"
+
 
 # ===========================================================================
 # V1 — ModelEntry.vision pin
@@ -213,6 +217,40 @@ class TestApplyRuntimeCapabilities:
         config = _make_config(vision_pin=None, has_vision_cap=True, model_id="mystery-7b")
         result = apply_runtime_capabilities(config, probe_results={"test-model": False})
         assert Requirement.VISION not in result.models["test-model"].capabilities
+
+    def test_resolution_precedence_is_pin_probe_provider_static_unknown(self):
+        assert resolve_vision_status(
+            model_id="mystery-7b",
+            explicit=False,
+            live_probe=True,
+            provider_declared=True,
+        ) == "text-only"
+        assert resolve_vision_status(
+            model_id="mystery-7b", live_probe=False, provider_declared=True
+        ) == "text-only"
+        assert resolve_vision_status(
+            model_id="mystery-7b", provider_declared=True
+        ) == "vision"
+        assert resolve_vision_status(model_id="gpt-4o") == "vision"
+        assert resolve_vision_status(model_id="mystery-7b") == "unknown"
+
+    def test_provider_declared_vision_survives_unknown_static_table(self):
+        config = _make_config(model_id="mystery-7b")
+        entry = config.models["test-model"].model_copy(update={"vision_declared": True})
+        result = apply_runtime_capabilities(
+            config.model_copy(update={"models": {"test-model": entry}})
+        )
+        assert Requirement.VISION in result.models["test-model"].capabilities
+
+    def test_live_negative_probe_wins_over_provider_and_reports_text_only(self):
+        config = _make_config(model_id="gpt-4o")
+        entry = config.models["test-model"].model_copy(update={"vision_declared": True})
+        result = apply_runtime_capabilities(
+            config.model_copy(update={"models": {"test-model": entry}}),
+            probe_results={"test-model": False},
+        )
+        assert Requirement.VISION not in result.models["test-model"].capabilities
+        assert result.models["test-model"].vision_probe is False
 
     def test_probe_none_falls_back_to_table(self):
         """Probe result of None falls through to the static table."""

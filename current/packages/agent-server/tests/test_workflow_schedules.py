@@ -26,6 +26,7 @@ from disco.core import (
     MessageEvent,
     SqliteEventStore,
     StatusEvent,
+    WorkflowInvocationEvent,
     WorkspaceMutationEvent,
     latest_workspace_run_intent,
 )
@@ -312,11 +313,13 @@ def _workflow_definition(
     *,
     tools: tuple[str, ...],
     policies: WorkflowPolicies | None = None,
+    params_schema: dict[str, object] | None = None,
 ) -> WorkflowDefinition:
     return WorkflowDefinition(
         name="scheduled_workflow",
         card="Produce the scheduled workflow output in the workspace.",
-        params_model_schema={
+        params_model_schema=params_schema
+        or {
             "type": "object",
             "additionalProperties": False,
             "properties": {},
@@ -340,9 +343,23 @@ def _save_instance(
     instance_id: str,
     tools: tuple[str, ...],
     policies: WorkflowPolicies | None = None,
+    params_schema: dict[str, object] | None = None,
 ) -> WorkflowInstance:
-    defn = _workflow_definition(tools=tools, policies=policies)
+    defn = _workflow_definition(
+        tools=tools,
+        policies=policies,
+        params_schema=params_schema,
+    )
     digest = defn.digest()
+    # The schedule runner now uses the same current-surface readiness gate as
+    # clicked Run. Build this fixture's approval against that surface rather
+    # than the definition digest (the latter is only the embedded definition
+    # pin).
+    probe = runtime._loop_factory.workflow_invocation_service_for_owner("local")
+    assert probe is not None
+    surface_digest = probe._surface_digest_getter(
+        WorkflowInstance(definition_digest=digest, definition=defn, params={})
+    )
     instance = WorkflowInstance(
         definition_digest=digest,
         definition=defn,
@@ -351,7 +368,7 @@ def _save_instance(
         approval=WorkflowApproval(
             approved_at="2026-07-04T12:00:00Z",
             approved_by="user_1",
-            surface_shown_digest=digest,
+            surface_shown_digest=surface_digest,
         ),
     )
     root = runtime.projects.current_project_store().root
@@ -423,6 +440,25 @@ def _needs_input() -> ProposedToolCall:
     )
 
 
+def test_saving_workflow_schedule_updates_one_identifiable_row() -> None:
+    runtime, _store = _runtime([])
+    try:
+        instance = _save_instance(runtime, instance_id="wf_schedule_upsert", tools=())
+        manager = _workflow_manager(runtime)
+        first = manager.create_schedule(_spec("wf_schedule_upsert", instance))
+        replacement_spec = _spec("wf_schedule_upsert", instance).model_copy(
+            update={"cron": "0 9 * * 1-5", "params": {}}
+        )
+        replacement = manager.create_schedule(replacement_spec)
+
+        assert replacement.schedule_id == first.schedule_id
+        rows = manager.list_schedules()
+        assert len(rows) == 1
+        assert rows[0].spec.cron == "0 9 * * 1-5"
+    finally:
+        asyncio.run(runtime.aclose())
+
+
 @pytest.mark.asyncio
 async def test_sealed_workflow_schedule_fire_finishes_records_history_and_snapshots() -> None:
     runtime, store = _runtime(
@@ -454,9 +490,156 @@ async def test_sealed_workflow_schedule_fire_finishes_records_history_and_snapsh
         callable_names = executor.callable_tool_names()
         assert {"file_write", "skip", "needs_input"} <= callable_names
         assert callable_names.isdisjoint(
-            {"list_workflows", "read_workflow_card", "enter_workflow", "draft_workflow"}
+            {
+                "list_workflows",
+                "read_workflow_card",
+                "enter_workflow",
+                "draft_workflow",
+                "workflow_abort",
+            }
         )
         assert callable_names.isdisjoint({"ask_user", "clarify", "questions_v2"})
+    finally:
+        await runtime.aclose()
+
+
+@pytest.mark.asyncio
+async def test_sealed_schedule_ingress_persists_exact_pinned_invocation_fact() -> None:
+    runtime, _store = _runtime([("done", [_finish()])])
+    schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {"query": {"type": "string"}},
+        "required": ["query"],
+    }
+    try:
+        instance = _save_instance(
+            runtime,
+            instance_id="wf_pinned_ingress",
+            tools=(),
+            params_schema=schema,
+        )
+        spec = _spec("wf_pinned_ingress", instance).model_copy(
+            update={"params": {"query": "exact schedule input"}}
+        )
+        row = _workflow_manager(runtime).create_schedule(spec)
+        record = await _workflow_manager(runtime).fire_now(row.schedule_id)
+        assert record is not None
+
+        events = await runtime._store.get_events(record.run_cid)
+        invocations = [event for event in events if isinstance(event, WorkflowInvocationEvent)]
+        assert [event.status for event in invocations] == ["running", "completed"]
+        initial = invocations[0].state
+        assert initial.run_id.startswith("wfrun_")
+        assert initial.instance_id == spec.instance_id
+        assert initial.definition_digest == spec.instance_digest
+        assert initial.definition_snapshot.card == instance.definition.card
+        assert initial.validated_params == spec.params
+        assert initial.surface_digest
+
+        message = next(
+            event.message.content
+            for event in events
+            if isinstance(event, MessageEvent) and event.source is EventSource.USER
+        )
+        assert instance.definition.card in message
+        assert '"query": "exact schedule input"' in message
+        assert initial.definition_digest in message
+        assert initial.surface_digest in message
+        intent = latest_workspace_run_intent(events)
+        assert intent is not None
+        assert intent.operation == "agent.run-intent.workflow-schedule"
+    finally:
+        await runtime.aclose()
+
+
+@pytest.mark.asyncio
+async def test_sealed_schedule_invocation_recomposes_from_pinned_state_after_restart() -> None:
+    runtime, store = _runtime([])
+    try:
+        instance = _save_instance(
+            runtime,
+            instance_id="wf_restart_recompose",
+            tools=("file_write",),
+        )
+        service = _workflow_runs(runtime)
+        setup = await service._conversation_setup(
+            schedule_id="sched_restart_recompose",
+            spec=_spec("wf_restart_recompose", instance),
+            coalesced=False,
+            owner_id="local",
+        )
+        assert setup.invocation_state is not None and setup.message is not None
+        await store.append_many(
+            setup.conversation_id,
+            [
+                WorkflowInvocationEvent(
+                    state=setup.invocation_state,
+                    status=setup.invocation_state.status,
+                ),
+                setup.message,
+            ],
+        )
+
+        # A fresh loop resolution sees only durable state, as it would after a
+        # process restart, and must reconstruct this exact sealed run.
+        snapshot = await service._execution._model_access._resolve_driver_context(
+            setup.conversation_id
+        )
+        loop = await runtime._loop_factory.loop_for_workflow_resolved(
+            setup.conversation_id,
+            snapshot,
+        )
+        restored = loop._workflow_run
+        assert restored.run_id == setup.invocation_state.run_id
+        assert restored.params == setup.invocation_state.validated_params
+        assert restored.definition.digest() == setup.invocation_state.definition_digest
+        executor = runtime._run_resources.executor(setup.conversation_id)
+        assert executor is not None
+        assert {"file_write", "skip", "needs_input"} <= executor.callable_tool_names()
+        assert "list_workflows" not in executor.callable_tool_names()
+    finally:
+        await runtime.aclose()
+
+
+@pytest.mark.asyncio
+async def test_schedule_fire_uses_pinned_params_and_legacy_empty_params_fail_honestly() -> None:
+    runtime, _store = _runtime([])
+    schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {"query": {"type": "string"}},
+        "required": ["query"],
+    }
+    try:
+        instance = _save_instance(
+            runtime,
+            instance_id="wf_scheduled_params",
+            tools=(),
+            params_schema=schema,
+        )
+        service = _workflow_runs(runtime)
+        valid = _spec("wf_scheduled_params", instance).model_copy(
+            update={"params": {"query": "pinned query"}}
+        )
+        setup = await service._conversation_setup(
+            schedule_id="sched_params",
+            spec=valid,
+            coalesced=False,
+            owner_id="local",
+        )
+        assert setup.workflow_run is not None
+        assert setup.workflow_run.params == {"query": "pinned query"}
+
+        legacy = await service._conversation_setup(
+            schedule_id="sched_legacy_params",
+            spec=_spec("wf_scheduled_params", instance),
+            coalesced=False,
+            owner_id="local",
+        )
+        assert legacy.workflow_run is None
+        assert legacy.failure is not None
+        assert "required" in (legacy.failure.error or "")
     finally:
         await runtime.aclose()
 
@@ -829,6 +1012,8 @@ async def test_post_ingress_schedule_failure_is_owned_by_exact_authority(
             for event in reversed(events)
             if isinstance(event, StatusEvent) and event.detail == "workflow_schedule_run_failed"
         )
+        invocations = [event for event in events if isinstance(event, WorkflowInvocationEvent)]
+        assert invocations[-1].status == "error"
         assert intent is not None
         if authority == "view":
             assert status.agent_view_id == admitted_view[0]
@@ -1042,8 +1227,10 @@ async def test_sealed_workflow_schedule_needs_input_lands_terminal_explanation()
 
         events = await runtime._store.get_events(record.run_cid)
         statuses = [event for event in events if isinstance(event, StatusEvent)]
+        invocations = [event for event in events if isinstance(event, WorkflowInvocationEvent)]
         assert statuses[-1].status == ConversationStatus.PAUSED
         assert statuses[-1].detail == "workflow_needs_input"
+        assert invocations[-1].status == "needs_input"
         assert all(
             status.status != ConversationStatus.AWAITING_USER_QUESTION for status in statuses
         )

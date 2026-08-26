@@ -158,32 +158,64 @@ class ConfigFeatures:
         return _data_sources_from(cfg, configured_sources=self._configured_research_sources(cfg))
 
     def _configured_research_sources(self, cfg: RouterConfig) -> list[str]:
-        from disco.core.llm.secret_refs import resolve_provider_secret
+        from disco.core.llm.secret_refs import (
+            allowed_legacy_refs,
+            resolve_provider_secret,
+            secret_ref_allowed_for_origin,
+        )
 
         configured: set[str] = set()
         search = cfg.search
-        if search.base_url.strip():
-            configured.add(search.provider)
-        if search.api_key_env.strip() and resolve_provider_secret(
-            search.api_key_env.strip(), self._secrets
-        ):
-            configured.add(search.provider)
-        provider_envs = {
-            "tavily": ("TAVILY_API_KEY", "DISCO_TAVILY_API_KEY"),
-            "brave": (
-                "BRAVE_SEARCH_API_KEY",
-                "DISCO_BRAVE_SEARCH_API_KEY",
-                "BRAVE_API_KEY",
-            ),
+        active_origins = {
+            "searxng": search.base_url.strip(),
+            "tavily": "https://api.tavily.com",
+            "brave": search.base_url.strip() or "https://api.search.brave.com",
             "semantic_scholar": (
-                "SEMANTIC_SCHOLAR_API_KEY",
-                "DISCO_SEMANTIC_SCHOLAR_API_KEY",
-                "S2_API_KEY",
+                search.base_url.strip() or "https://api.semanticscholar.org"
             ),
         }
-        for provider, names in provider_envs.items():
-            if any(resolve_provider_secret(name, self._secrets) for name in names):
-                configured.add(provider)
+        active_origin = active_origins.get(search.provider, "")
+        active_ref = search.api_key_env.strip()
+        active_secret_ready = (
+            bool(active_ref and resolve_provider_secret(active_ref, self._secrets))
+            if search.provider in {"tavily", "brave"}
+            else not active_ref or bool(resolve_provider_secret(active_ref, self._secrets))
+        )
+        if (
+            active_origin
+            and active_secret_ready
+            and self._store.approvals.origin_approved(
+                active_origin,
+                f"search:{search.provider}",
+                active_ref,
+                secret_store=self._secrets,
+            )
+            and secret_ref_allowed_for_origin(active_ref, active_origin)
+        ):
+            configured.add(search.provider)
+        elif search.provider in {"ddgs", "arxiv", "news"} or (
+            search.provider == "site_scoped" and bool(search.base_url.strip())
+        ):
+            configured.add(search.provider)
+        provider_origins = {
+            "tavily": "https://api.tavily.com",
+            "brave": "https://api.search.brave.com",
+            "semantic_scholar": "https://api.semanticscholar.org",
+        }
+        for provider, origin in provider_origins.items():
+            for name in (provider, *allowed_legacy_refs(provider)):
+                if (
+                    resolve_provider_secret(name, self._secrets)
+                    and self._store.approvals.origin_approved(
+                        origin,
+                        f"search:{provider}",
+                        name,
+                        secret_store=self._secrets,
+                    )
+                    and secret_ref_allowed_for_origin(name, origin)
+                ):
+                    configured.add(provider)
+                    break
         return sorted(configured)
 
     def _approve_data_source_origins(self, dto: DataSourcesConfigDTO) -> None:

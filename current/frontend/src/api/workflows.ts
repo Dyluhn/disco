@@ -79,24 +79,31 @@ const validSurface = {
 const fixtureWorkflows: WorkflowReview[] = [
   {
     instance_id: "wf_fixture_valid",
+    origin: "built_in",
     name: "Fixture Valid Workflow",
     card: "Valid workflow review fixture with a bounded file-read surface.",
     definition_digest: "sha256:fixture-valid-definition",
-    enabled: false,
-    approved: false,
-    approval: null,
+    enabled: true,
+    approved: true,
+    approval: {
+      approved_at: new Date(0).toISOString(),
+      approved_by: "fixture",
+      surface_shown_digest: "sha256:fixture-valid-surface",
+    },
     params: { query: "fixture" },
     definition: { name: "Fixture Valid Workflow" },
     validation_findings: [],
     compiled_surface: validSurface,
     surface_shown_digest: "sha256:fixture-valid-surface",
+    readiness: { ready: true, status: "ready", reasons: [], blocking_findings: [] },
   },
   {
     instance_id: "wf_fixture_blocked",
+    origin: "built_in",
     name: "Fixture Blocked Workflow",
     card: "Draft workflow with validation findings that block approval.",
     definition_digest: "sha256:fixture-blocked-definition",
-    enabled: false,
+    enabled: true,
     approved: false,
     approval: null,
     params: { query: "fixture" },
@@ -118,6 +125,32 @@ const fixtureWorkflows: WorkflowReview[] = [
       tool_definitions: [],
     },
     surface_shown_digest: "sha256:fixture-blocked-surface",
+    readiness: {
+      ready: false,
+      status: "needs_setup",
+      reasons: ["not_approved", "blocking_findings", "scope_compile_failed"],
+      blocking_findings: ["unknown_builtin_tool"],
+    },
+  },
+  {
+    instance_id: "wf_fixture_off",
+    origin: "built_in",
+    name: "Fixture Off Workflow",
+    card: "Approved workflow that is currently turned off.",
+    definition_digest: "sha256:fixture-off-definition",
+    enabled: false,
+    approved: true,
+    approval: {
+      approved_at: new Date(0).toISOString(),
+      approved_by: "fixture",
+      surface_shown_digest: "sha256:fixture-off-surface",
+    },
+    params: { query: "fixture" },
+    definition: { name: "Fixture Off Workflow" },
+    validation_findings: [],
+    compiled_surface: validSurface,
+    surface_shown_digest: "sha256:fixture-off-surface",
+    readiness: { ready: false, status: "off", reasons: ["disabled"], blocking_findings: [] },
   },
 ];
 
@@ -196,6 +229,46 @@ export async function approveWorkflow(input: {
   return clone(workflow);
 }
 
+export async function setWorkflowEnabled(input: {
+  instanceId: string;
+  enabled: boolean;
+}): Promise<WorkflowReview> {
+  if (agentLive()) {
+    const res = await agentSend<{ workflow: WorkflowReview }>(
+      "PATCH",
+      `/api/workflows/${encodeURIComponent(input.instanceId)}/enabled`,
+      { enabled: input.enabled },
+    );
+    return res.workflow;
+  }
+
+  await fixtureDelay();
+  const workflow = fixtureWorkflows.find((wf) => wf.instance_id === input.instanceId);
+  if (!workflow) throw new ApiError("workflow_not_found", 404);
+  workflow.enabled = input.enabled;
+  const blocking = workflow.validation_findings
+    .filter((finding) => finding.severity === "error")
+    .map((finding) => finding.code);
+  if (!input.enabled) {
+    workflow.readiness = {
+      ready: false,
+      status: "off",
+      reasons: ["disabled"],
+      blocking_findings: blocking,
+    };
+  } else if (workflow.approved && blocking.length === 0) {
+    workflow.readiness = { ready: true, status: "ready", reasons: [], blocking_findings: [] };
+  } else {
+    workflow.readiness = {
+      ready: false,
+      status: "needs_setup",
+      reasons: ["not_ready"],
+      blocking_findings: blocking,
+    };
+  }
+  return clone(workflow);
+}
+
 export async function getAuthoringContext(): Promise<WorkflowAuthoringContext> {
   if (agentLive()) return agentGet<WorkflowAuthoringContext>("/api/workflows/authoring-context");
   await fixtureDelay();
@@ -229,6 +302,7 @@ export async function authorWorkflow(input: WorkflowAuthorInput): Promise<Workfl
       : [];
   const review: WorkflowReview = {
     instance_id: instanceId,
+    origin: "user",
     name: input.name,
     card: input.card,
     definition_digest: `sha256:${instanceId}-definition`,
@@ -258,6 +332,12 @@ export async function authorWorkflow(input: WorkflowAuthorInput): Promise<Workfl
       verify: { checks: input.verify_checks, finalizer: input.finalizer },
     },
     surface_shown_digest: `sha256:${instanceId}-surface`,
+    readiness: {
+      ready: false,
+      status: "needs_setup",
+      reasons: ["disabled", "not_approved"],
+      blocking_findings: [],
+    },
   };
   fixtureWorkflows.unshift(review);
   return {
@@ -317,16 +397,28 @@ export async function draftWorkflowFromDescription(
 }
 
 export async function runWorkflow(
-  instanceId: string,
-): Promise<{ conversation_id: string; status: string }> {
+  input: {
+    instanceId: string;
+    params: Record<string, unknown>;
+    conversationId?: string | null;
+  },
+): Promise<{ conversation_id: string; run_id?: string | null; status: string }> {
   if (agentLive()) {
-    return agentSend<{ conversation_id: string; status: string }>(
+    return agentSend<{ conversation_id: string; run_id?: string | null; status: string }>(
       "POST",
-      `/api/workflows/${encodeURIComponent(instanceId)}/run`,
+      `/api/workflows/${encodeURIComponent(input.instanceId)}/run`,
+      {
+        params: input.params,
+        conversation_id: input.conversationId ?? null,
+      },
     );
   }
   await fixtureDelay();
-  return { conversation_id: `conv_${instanceId.slice(0, 16)}`, status: "started" };
+  return {
+    conversation_id: input.conversationId ?? `conv_${input.instanceId.slice(0, 16)}`,
+    run_id: `wfrun_${input.instanceId.slice(0, 16)}`,
+    status: "started",
+  };
 }
 
 export async function scheduleWorkflow(input: {
@@ -334,6 +426,7 @@ export async function scheduleWorkflow(input: {
   instanceDigest: string;
   cron: string;
   timezone: string;
+  params?: Record<string, unknown>;
 }): Promise<Record<string, unknown>> {
   if (agentLive()) {
     return agentSend<Record<string, unknown>>("POST", "/api/workflows/schedules", {
@@ -342,6 +435,7 @@ export async function scheduleWorkflow(input: {
       cron: input.cron,
       timezone: input.timezone,
       enabled: true,
+      params: input.params ?? {},
     });
   }
   await fixtureDelay();
@@ -353,6 +447,7 @@ export async function scheduleWorkflow(input: {
       cron: input.cron,
       timezone: input.timezone,
       enabled: true,
+      params: input.params ?? {},
     },
   };
 }

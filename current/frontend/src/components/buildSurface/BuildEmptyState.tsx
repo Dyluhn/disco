@@ -25,10 +25,12 @@ import { BuildModelPicker } from "@/components/build/BuildModelPicker";
 // file this directory decomposes. It is not ours to edit; only its
 // `UploadComposer` export is consumed here, unchanged from the original.
 import { UploadComposer } from "@/components/build/BuildSurface";
+import { ReferencePackPicker } from "@/components/build/ReferencePackPicker";
 import { ImportProjectDialog } from "@/components/build/ImportProjectDialog";
 import { ConnectionsStrip } from "@/components/build/ConnectionsStrip";
 import { SuggestionChips } from "@/components/SuggestionChips";
 import { useDriverModels, useLastSelectedModel } from "@/hooks/useDriverModels";
+import { bindReferencePacksBeforeSubmit, type ReferencePack } from "@/api/referencePacks";
 import type { BuildFraming } from "@/components/BuildSurface";
 import type { BuildController, FramingCopy } from "./types";
 
@@ -46,6 +48,8 @@ export function BuildEmptyState({
   setDraft: (value: string) => void;
 }) {
   const [optionsOpen, setOptionsOpen] = useState(false);
+  const [selectedPacks, setSelectedPacks] = useState<ReferencePack[]>([]);
+  const [referenceError, setReferenceError] = useState<string | null>(null);
   // The driver-model notice reads the same sources BuildModelPicker resolves
   // its face from: explicit pick → last-selected → agent-server default.
   const { data: driverData } = useDriverModels();
@@ -54,13 +58,22 @@ export function BuildEmptyState({
   const noticeLabel =
     driverData?.models.find((m) => m.id === effectiveModelId)?.label ?? null;
 
+  async function submitWithReferences(task: string) {
+    setReferenceError(null);
+    try {
+      await bindReferencePacksBeforeSubmit(selectedPacks, b.ensurePreCid, () => b.submit(task));
+    } catch (error) {
+      setReferenceError(error instanceof Error ? error.message : "Reference Pack binding failed.");
+    }
+  }
+
   return (
     <div className="flex min-h-full flex-col pt-section">
       <main className="flex flex-1 flex-col items-center justify-center gap-major px-body pb-[12vh]">
         <EmptyState title={copy.heroTitle} subtitle={copy.heroSubtitle} />
         <div className="w-full max-w-measure">
           <QueryInput
-            onSubmit={b.submit}
+            onSubmit={(task) => void submitWithReferences(task)}
             busy={b.submitting}
             autoFocus
             placeholder={copy.placeholder}
@@ -77,6 +90,11 @@ export function BuildEmptyState({
               >
                 <SlidersHorizontal className="size-3.5 shrink-0 text-text-faint" aria-hidden />
                 <span className="shrink-0">Options</span>
+                {selectedPacks.length > 0 && (
+                  <span className="rounded-full bg-accent/15 px-hair text-[0.68rem] text-accent">
+                    {selectedPacks.length}
+                  </span>
+                )}
                 <ChevronDown
                   className={cn(
                     "size-3 shrink-0 text-text-faint transition-transform",
@@ -94,6 +112,7 @@ export function BuildEmptyState({
                     className="flex flex-wrap items-center gap-inline border-t border-hairline pt-inline"
                   >
                     <BuildModelPicker value={b.modelId} onChange={b.setModelId} surface={framing} />
+                    <ReferencePackPicker selected={selectedPacks} onChange={setSelectedPacks} />
                     {/* Assist tier toggle deliberately hidden at launch (deprecated
                         control) — b.assistChoice/setAssistChoice still exist and
                         still drive the create/patch payload at its default (off);
@@ -145,9 +164,28 @@ export function BuildEmptyState({
               </>
             }
           />
+          {selectedPacks.length > 0 && (
+            <div
+              aria-label="Selected Reference Packs"
+              data-testid="selected-reference-packs"
+              className="mt-inline flex flex-wrap items-center gap-hair font-ui text-[0.74rem] text-text-muted"
+            >
+              <span className="text-text-faint">Using:</span>
+              {selectedPacks.map((pack) => (
+                <span key={pack.id} className="rounded-full border border-accent/35 bg-accent/10 px-inline py-hair text-accent">
+                  {pack.name}
+                </span>
+              ))}
+            </div>
+          )}
           {b.submitError && (
             <p role="alert" className="mt-inline text-center font-ui text-[0.8rem] text-unsupported">
               {b.submitError instanceof Error ? b.submitError.message : copy.startError}
+            </p>
+          )}
+          {referenceError && (
+            <p role="alert" className="mt-inline text-center font-ui text-[0.8rem] text-unsupported">
+              {referenceError}
             </p>
           )}
         </div>

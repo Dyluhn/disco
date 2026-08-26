@@ -77,6 +77,23 @@ def _create_workflow_schedule_response(
     runtime: ConversationRuntime, body: ScheduleSpec, owner_id: str
 ) -> dict:
     try:
+        # Scheduling is another workflow invocation surface.  Reuse the
+        # canonical readiness + exact-parameter preflight before persisting a
+        # schedule; no schedule row should exist for an input that cannot run.
+        prepared = runtime.prepare_workflow(body.instance_id, body.params, owner_id=owner_id)
+        if not prepared.accepted:
+            reason = prepared.reason or "workflow_schedule_not_ready"
+            detail = {
+                "reason": reason,
+                "parameter_issues": [
+                    issue.model_dump(mode="json") for issue in prepared.parameter_issues
+                ],
+                "readiness": prepared.readiness.model_dump(mode="json"),
+            }
+            raise HTTPException(
+                status_code=422 if reason == "invalid_parameters" else 409,
+                detail=detail,
+            )
         return runtime.schedules.create_workflow_schedule(body, owner_id=owner_id)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail={"reason": str(exc)}) from exc

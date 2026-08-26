@@ -97,6 +97,73 @@ export interface StatusEvent extends EventBase {
   host_mutation_id?: string | null;
   run_intent_id?: string | null;
 }
+
+/** Durable host-owned workflow handoff authority. The workflow card and the
+ * ordinary status events are the user-facing projection; this exact event
+ * mirror keeps replay and typed consumers honest about the sealed run state. */
+export type WorkflowInvocationStatus =
+  | "queued"
+  | "running"
+  | "needs_input"
+  | "completed"
+  | "error";
+
+export interface WorkflowInvocationState {
+  state_version: "workflow-invocation.v1";
+  run_id: string;
+  instance_id: string;
+  owner_id: string;
+  definition_snapshot: {
+    name: string;
+    card: string;
+    params_model_schema: Record<string, unknown>;
+    tools: string[];
+    mcp_mounts: Array<Record<string, unknown>>;
+    skills: string[];
+    policies: {
+      untrusted_content: boolean;
+      allows_writes: boolean;
+      egress_allow: string[];
+    };
+    output_contract: { path_template: string; format: string };
+    verify: { checks: string[]; finalizer: string | null };
+  };
+  definition_digest: string;
+  surface_digest: string;
+  validated_params: Record<string, unknown>;
+  status: WorkflowInvocationStatus;
+}
+
+export interface WorkflowInvocationEvent extends EventBase {
+  kind: "workflow_invocation";
+  state: WorkflowInvocationState;
+  status: WorkflowInvocationStatus;
+}
+
+export interface ReferencePackBindingSelection {
+  pack_id: string;
+  version_id: string;
+  content_sha256: string;
+}
+
+/** Host-owned immutable Build context. The selected bytes are pinned before
+ * the model sees them; the UI may use the ordinary Build context projection,
+ * but should not present this authority event as a chat turn. */
+export interface ReferencePackBindingEvent extends EventBase {
+  kind: "reference_pack_binding";
+  binding_id: string;
+  selections: ReferencePackBindingSelection[];
+  materialized_paths: string[];
+}
+export interface ReportDeckInvocationEvent extends EventBase {
+  kind: "report_deck_invocation";
+  source_conversation_id: string;
+  goal: string;
+  filename: string;
+  format: "pptx";
+  status: "queued" | "running" | "completed" | "error";
+  detail?: string | null;
+}
 export interface WorkspaceVersionEvent extends EventBase {
   kind: "workspace_version";
   version_seq: number;
@@ -214,6 +281,9 @@ export interface ResearchCheckpointEvent extends EventBase {
   completed_queries: string[];
   depth_tier: string | null;
   recency_window: "week" | "month" | null;
+  /** null = legacy checkpoint; [] = explicitly baseline-only. Older replay
+   * payloads may omit the field entirely. */
+  additional_sources?: string[] | null;
 }
 
 /** One concrete next-step option proposed by the agent after repeated failures.
@@ -402,6 +472,9 @@ export type AgentEvent =
   | AgentErrorEvent
   | CondensationEvent
   | StatusEvent
+  | WorkflowInvocationEvent
+  | ReferencePackBindingEvent
+  | ReportDeckInvocationEvent
   | WorkspaceVersionEvent
   | WorkspaceRestoredEvent
   | WorkspaceMutationEvent
@@ -567,6 +640,7 @@ export interface DriverModel {
   pricing_mode?: "metered" | "subscription" | "free";
   context_window: number;
   capabilities: Array<"vision" | "long_context" | "tool_calling" | "json_mode">;
+  vision_status?: "vision" | "text-only" | "unknown";
 }
 export interface DriverModels {
   models: DriverModel[];

@@ -93,7 +93,10 @@ describe("Deep Research surface — full lifecycle", () => {
     expect(screen.getByRole("button", { name: /Depth tier: Standard/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Recency filter: Any time/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Attach files/i })).toBeInTheDocument();
-    expect(screen.getAllByRole("button", { name: /^(Web|News|arXiv|Semantic Scholar)$/i })).toHaveLength(4);
+    expect(
+      screen.getAllByRole("button", { name: /^(News|arXiv|Semantic Scholar)$/i }),
+    ).toHaveLength(3);
+    expect(screen.queryByRole("button", { name: /^Web$/i })).not.toBeInTheDocument();
 
     await user.type(screen.getByPlaceholderText(/ask a research question/i), "battery policy");
     expect(document.querySelector('[data-suggestion-surface="deep_research"]')).toBeNull();

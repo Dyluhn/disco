@@ -187,6 +187,9 @@ class ResearchCheckpointEvent(BaseEvent):
     completed_queries: list[str] = Field(default_factory=list)
     depth_tier: str | None = None
     recency_window: Literal["week", "month"] | None = None
+    # ``None`` identifies checkpoints written before additive source
+    # selection was persisted. An empty list is an explicit baseline-only run.
+    additional_sources: list[str] | None = None
 
 
 class KnowledgeEvent(BaseEvent, LLMConvertible):

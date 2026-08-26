@@ -83,7 +83,18 @@ def test_runtime_public_surface_is_frozen_and_bounded() -> None:
         "start",
     }
     active_ingress.add("execute_disco_tool")
-    assert len(active_ingress) == 13
+    # Workflow catalog routes and startup seeding use these five bounded
+    # runtime seams; implementation helpers remain private.
+    active_ingress.update(
+        {
+            "invoke_workflow",
+            "prepare_workflow",
+            "surface_of",
+            "workflow_readiness",
+            "workflow_surface_digest",
+        }
+    )
+    assert len(active_ingress) == 18
     # 13-B1 dissolved seven collaborator families (29 delegates): _share,
     # _spaces, _suggestion_service, _title_service, _schedule, _uploads and
     # _run_sweep are now the declared public seam share/spaces/suggestions/

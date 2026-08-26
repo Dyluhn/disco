@@ -2,31 +2,22 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 import os
 import re
 import tempfile
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, cast, get_args
 
 from disco.core import DEFAULT_OWNER_ID
 from disco.core.store.sqlite import SqliteEventStore
 from disco.core.workflow import (
-    WORKFLOW_CONTROL_TOOLS,
-    ScheduleSpec,
     WorkflowApproval,
     WorkflowDefinition,
     WorkflowInstance,
     WorkflowValidationFinding,
-    compile_workflow_scope,
     simulate_definition,
     validate_definition,
-    workflow_finish_tool_description,
-    workflow_finish_tool_schema,
 )
-from disco.tools import ToolDef, ToolScope, build_default_registry
 from disco.tools.builtin.workflow_tools import (
     DraftParamType,
     DraftWorkflowArgs,
@@ -41,13 +32,19 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ..auth import current_owner_id, current_session
 from ..runtime import ConversationRuntime
-from ..workflow_schedule import JsonWorkflowScheduleStore
-from .workflows_parts.draft_from_description import _draft_workflow_from_description_impl
+from ..workflow_surface import (
+    _compiled_surface_payload,
+    _digest_payload,
+    _surface_environment,
+    _SurfaceEnvironment,
+)
+from .workflows_parts.draft_from_description import (
+    _draft_workflow_from_description_impl,
+)
 
 _SAFE_ID_FRAGMENT = re.compile(r"[^A-Za-z0-9_.-]+")
 _MCP_NAME_RE = re.compile(r"^mcp__([^_][A-Za-z0-9_]*)__([^_].+)$")
 _AUTHORING_OUTPUT_FORMATS = ("markdown", "html", "json", "csv", "pptx", "pdf", "text")
-_ONE_SHOT_CRON = "* * * * *"
 
 
 class DraftWorkflowBody(BaseModel):
@@ -65,6 +62,14 @@ class ApproveWorkflowBody(BaseModel):
     surface_shown_digest: str | None = Field(default=None, min_length=1, max_length=80)
 
 
+class SetWorkflowEnabledBody(BaseModel):
+    """Explicit owner-scoped switch for an approved workflow instance."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool
+
+
 class DraftWorkflowFromDescriptionBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -79,14 +84,33 @@ class DraftWorkflowFromDescriptionBody(BaseModel):
         return description
 
 
-@dataclass(frozen=True)
-class _SurfaceEnvironment:
-    builtin_defs: dict[str, ToolDef]
-    builtin_names: frozenset[str]
-    mcp_defs: dict[str, ToolDef]
-    mcp_names: frozenset[str]
-    skill_names: frozenset[str]
-    skill_payloads: dict[str, dict[str, object]]
+class RunWorkflowBody(BaseModel):
+    """Explicit inputs for a clicked workflow run.
+
+    ``conversation_id`` is optional only because the UI can explicitly choose
+    “new Agent conversation”. It is never a schedule target: when supplied it
+    must belong to the caller and be an ordinary Agent conversation.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    params: dict[str, Any] = Field(default_factory=dict)
+    conversation_id: str | None = Field(default=None, max_length=120)
+
+
+def _raise_workflow_invocation_error(outcome: Any) -> None:
+    reason = outcome.reason or "workflow_run_failed"
+    status_code = 422 if reason == "invalid_parameters" else 409
+    raise HTTPException(
+        status_code=status_code,
+        detail={
+            "reason": reason,
+            "parameter_issues": [
+                issue.model_dump(mode="json") for issue in outcome.parameter_issues
+            ],
+            "readiness": outcome.readiness.model_dump(mode="json"),
+        },
+    )
 
 
 def make_workflows_router(
@@ -125,13 +149,22 @@ def make_workflows_router(
             owner_id=current_owner_id(request),
         )
 
-    async def _run_workflow(instance_id: str, request: Request) -> dict:
-        return await _run_workflow_response(runtime, instance_id, request)
+    async def _run_workflow(
+        instance_id: str,
+        request: Request,
+        body: RunWorkflowBody | None = None,
+    ) -> dict:
+        return await _run_workflow_response(runtime, store, instance_id, body, request)
 
     async def _approve_workflow(
         instance_id: str, body: ApproveWorkflowBody, request: Request
     ) -> dict:
         return await _approve_workflow_response(runtime, instance_id, body, request)
+
+    async def _set_workflow_enabled(
+        instance_id: str, body: SetWorkflowEnabledBody, request: Request
+    ) -> dict:
+        return await _set_workflow_enabled_response(runtime, instance_id, body, request)
 
     _add_workflow_route_pair(router, "", _list_workflows, methods=["GET"])
     _add_workflow_route_pair(router, "/authoring-context", _authoring_context, methods=["GET"])
@@ -144,6 +177,14 @@ def make_workflows_router(
         methods=["POST"],
     )
     _add_workflow_route_pair(router, "/{instance_id}/approve", _approve_workflow, methods=["POST"])
+    # PATCH is the canonical resource mutation. Keep the POST alias for the
+    # small action-style clients that already use /approve and /run.
+    _add_workflow_route_pair(
+        router, "/{instance_id}/enabled", _set_workflow_enabled, methods=["PATCH"]
+    )
+    _add_workflow_route_pair(
+        router, "/{instance_id}/enable", _set_workflow_enabled, methods=["POST"]
+    )
     _add_workflow_route_pair(router, "/{instance_id}/run", _run_workflow, methods=["POST"])
     return router
 
@@ -154,7 +195,13 @@ async def _list_workflows_response(runtime: ConversationRuntime | None, request:
     workflow_store = _workflow_store_for_request(runtime, request)
     env = _surface_environment(runtime)
     workflows = [
-        _workflow_review_payload(row.instance_id, row.instance, env)
+        _workflow_review_payload(
+            row.instance_id,
+            row.instance,
+            env,
+            runtime=runtime,
+            owner_id=current_owner_id(request),
+        )
         for row in workflow_store.list_instances()
     ]
     return {"workflows": workflows, "status": "ok"}
@@ -188,6 +235,8 @@ async def _draft_workflow_response(
         definition=body.definition,
         params=body.params,
         instance_id=instance_id,
+        runtime=runtime,
+        owner_id=current_owner_id(request),
     )
 
 
@@ -212,11 +261,17 @@ async def _author_workflow_response(
         definition=definition,
         params=_fixture_params(body.params),
         instance_id=_generated_instance_id(definition),
+        runtime=runtime,
+        owner_id=current_owner_id(request),
     )
 
 
 async def _run_workflow_response(
-    runtime: ConversationRuntime | None, instance_id: str, request: Request
+    runtime: ConversationRuntime | None,
+    store: SqliteEventStore,
+    instance_id: str,
+    body: RunWorkflowBody | None,
+    request: Request,
 ) -> dict:
     if runtime is None:
         raise HTTPException(status_code=503, detail={"reason": "no_runtime"})
@@ -233,25 +288,52 @@ async def _run_workflow_response(
             status_code=404,
             detail={"reason": "workflow_not_found"},
         )
-    if not instance.enabled or instance.approval is None:
-        raise HTTPException(
-            status_code=409,
-            detail={"reason": "workflow_not_approved"},
-        )
+    params = body.params if body is not None else {}
+    target_id = body.conversation_id if body is not None else None
+    owner_id = current_owner_id(request)
+    # Validate readiness and exact inputs before a New Agent conversation is
+    # allocated. invoke_workflow repeats this immediately before persistence
+    # as the TOCTOU gate.
+    preflight = runtime.prepare_workflow(instance_id, params, owner_id=owner_id)
+    if not preflight.accepted:
+        _raise_workflow_invocation_error(preflight)
+    if target_id is None:
+        # A clicked Run may explicitly choose a new Agent conversation. Reuse
+        # the normal conversation creation path so settings, ownership, and
+        # model selection remain identical to the Agent surface.
+        from ._common import CreateConversationBody
+        from .conversations import _create_conversation_response
 
-    try:
-        conversation_id = await _fire_approved_workflow_once(
+        created = await _create_conversation_response(
+            store,
             runtime,
-            instance_id=instance_id,
-            instance=instance,
-            owner_id=current_owner_id(request),
+            CreateConversationBody(surface="agent", title=instance.definition.name),
+            request,
         )
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=422,
-            detail={"reason": "workflow_run_failed", "message": str(exc)},
-        ) from exc
-    return {"conversation_id": conversation_id, "status": "started"}
+        target_id = str(created["conversation_id"])
+    else:
+        from ._common import require_owned_conversation
+
+        target_id = await require_owned_conversation(request, store, target_id)
+        if runtime.surface_of(target_id) != "agent":
+            raise HTTPException(
+                status_code=409,
+                detail={"reason": "workflow_target_not_agent"},
+            )
+
+    result = await runtime.invoke_workflow(
+        target_id,
+        instance_id,
+        params,
+        owner_id=owner_id,
+    )
+    if not result.started:
+        _raise_workflow_invocation_error(result)
+    return {
+        "conversation_id": target_id,
+        "run_id": result.run_id,
+        "status": "started",
+    }
 
 
 async def _approve_workflow_response(
@@ -277,7 +359,14 @@ async def _approve_workflow_response(
         )
 
     env = _surface_environment(runtime)
-    review = _workflow_review_payload(instance_id, instance, env)
+    owner_id = current_owner_id(request)
+    review = _workflow_review_payload(
+        instance_id,
+        instance,
+        env,
+        runtime=runtime,
+        owner_id=owner_id,
+    )
     surface_digest = str(review["surface_shown_digest"])
     if body.surface_shown_digest is not None and body.surface_shown_digest != surface_digest:
         raise HTTPException(
@@ -319,7 +408,57 @@ async def _approve_workflow_response(
         }
     )
     workflow_store.save_instance(instance_id, approved)
-    return {"workflow": _workflow_review_payload(instance_id, approved, env)}
+    return {
+        "workflow": _workflow_review_payload(
+            instance_id,
+            approved,
+            env,
+            runtime=runtime,
+            owner_id=owner_id,
+        )
+    }
+
+
+async def _set_workflow_enabled_response(
+    runtime: ConversationRuntime | None,
+    instance_id: str,
+    body: SetWorkflowEnabledBody,
+    request: Request,
+) -> dict:
+    """Set only the durable enabled bit and return the canonical review.
+
+    The workflow store is owner-scoped before the mutation, so an instance
+    owned by another session is indistinguishable from a missing instance.
+    Approval, definition, parameters, and findings are deliberately preserved;
+    readiness remains the single admission authority for both UI Run and Agent
+    invocation.
+    """
+
+    if runtime is None:
+        raise HTTPException(status_code=503, detail={"reason": "no_runtime"})
+    workflow_store = _workflow_store_for_request(runtime, request)
+    try:
+        instance = workflow_store.get_instance(instance_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"reason": "workflow_invalid_id", "message": str(exc)},
+        ) from exc
+    if instance is None:
+        raise HTTPException(status_code=404, detail={"reason": "workflow_not_found"})
+
+    updated = instance.model_copy(update={"enabled": body.enabled})
+    workflow_store.save_instance(instance_id, updated)
+    env = _surface_environment(runtime)
+    return {
+        "workflow": _workflow_review_payload(
+            instance_id,
+            updated,
+            env,
+            runtime=runtime,
+            owner_id=current_owner_id(request),
+        )
+    }
 
 
 def _add_workflow_route_pair(
@@ -340,6 +479,8 @@ def _draft_definition(
     definition: WorkflowDefinition,
     params: dict[str, Any],
     instance_id: str,
+    runtime: ConversationRuntime | None = None,
+    owner_id: str | None = None,
     extra_findings: list[WorkflowValidationFinding] | None = None,
 ) -> dict:
     findings = validate_definition(
@@ -360,14 +501,23 @@ def _draft_definition(
     instance = WorkflowInstance(
         definition_digest=definition.digest(),
         definition=definition,
-        params=params,
+        # Authoring values are simulation inputs only.  A saved capability
+        # must not accidentally turn a generated fixture into the value used
+        # by a later Agent run or recurring schedule.
+        params={},
         enabled=False,
         approval=None,
         validation_findings=tuple(all_findings),
     )
     workflow_store.save_instance(instance_id, instance)
     return {
-        "workflow": _workflow_review_payload(instance_id, instance, env),
+        "workflow": _workflow_review_payload(
+            instance_id,
+            instance,
+            env,
+            runtime=runtime,
+            owner_id=owner_id,
+        ),
         "simulation": simulation.model_dump(mode="json"),
     }
 
@@ -412,44 +562,13 @@ def _workflow_store_for_request(
     )
 
 
-def _surface_environment(runtime: ConversationRuntime) -> _SurfaceEnvironment:
-    registry = build_default_registry()
-    builtin_tools = registry.in_scope(ToolScope(allowed_tools=registry.names()))
-    builtin_defs = {tool.definition.name: tool.definition for tool in builtin_tools}
-    builtin_names = frozenset(builtin_defs) | WORKFLOW_CONTROL_TOOLS
-
-    mcp_defs: dict[str, ToolDef] = {}
-    for tool_def in runtime._workflow_tool_definitions():
-        if isinstance(tool_def, ToolDef):
-            mcp_defs[tool_def.name] = tool_def
-
-    skills = runtime._workflow_skills()
-    skill_payloads: dict[str, dict[str, object]] = {}
-    for skill in skills:
-        payload: dict[str, object] = {
-            "id": skill.id,
-            "name": skill.name,
-            "description": skill.description,
-            "enabled": skill.enabled,
-            "surfaces": list(skill.surfaces),
-        }
-        skill_payloads[skill.id] = payload
-        skill_payloads[skill.name] = payload
-
-    return _SurfaceEnvironment(
-        builtin_defs=builtin_defs,
-        builtin_names=builtin_names,
-        mcp_defs=mcp_defs,
-        mcp_names=frozenset(mcp_defs),
-        skill_names=frozenset(skill_payloads),
-        skill_payloads=skill_payloads,
-    )
-
-
 def _workflow_review_payload(
     instance_id: str,
     instance: WorkflowInstance,
     env: _SurfaceEnvironment,
+    *,
+    runtime: ConversationRuntime | None = None,
+    owner_id: str | None = None,
 ) -> dict[str, object]:
     findings = validate_definition(
         instance.definition,
@@ -462,9 +581,18 @@ def _workflow_review_payload(
 
     compiled_surface = _compiled_surface_payload(instance, env)
     surface_digest = _digest_payload(compiled_surface)
+    readiness = (
+        runtime.workflow_readiness(
+            instance_id,
+            owner_id=owner_id or instance.owner_id,
+        )
+        if runtime is not None
+        else None
+    )
     return {
         "instance_id": instance_id,
         "owner_id": instance.owner_id,
+        "origin": instance.origin,
         "name": instance.definition.name,
         "card": instance.definition.card,
         "definition_digest": instance.definition_digest,
@@ -478,92 +606,16 @@ def _workflow_review_payload(
         "validation_findings": [f.model_dump(mode="json") for f in findings],
         "compiled_surface": compiled_surface,
         "surface_shown_digest": surface_digest,
-    }
-
-
-def _compiled_surface_payload(
-    instance: WorkflowInstance,
-    env: _SurfaceEnvironment,
-) -> dict[str, object]:
-    compiled_ok = True
-    compile_error: str | None = None
-    try:
-        compiled = compile_workflow_scope(instance.definition, env.mcp_names)
-        allowed = sorted(compiled.allowed_tools)
-        advertised = sorted(compiled.advertised)
-    except ValueError as exc:
-        compiled_ok = False
-        compile_error = str(exc)
-        allowed = []
-        advertised = []
-
-    return {
-        "compiled": compiled_ok,
-        "compile_error": compile_error,
-        "allowed_tools": allowed,
-        "advertised_tools": advertised,
-        "tool_definitions": [
-            _surface_tool_payload(name, env, instance.definition) for name in allowed
-        ],
-        "mcp_mounts": [
-            {
-                **mount.model_dump(mode="json"),
-                "qualified_tool_names": [
-                    f"mcp__{mount.server}__{tool}" for tool in mount.tool_names
-                ],
+        "readiness": (
+            readiness.model_dump(mode="json")
+            if readiness is not None
+            else {
+                "ready": False,
+                "status": "needs_setup",
+                "reasons": ["runtime_unavailable"],
+                "blocking_findings": [],
             }
-            for mount in instance.definition.mcp_mounts
-        ],
-        "skills": [
-            {
-                "requested": name,
-                "available": name in env.skill_payloads,
-                "skill": env.skill_payloads.get(name),
-            }
-            for name in instance.definition.skills
-        ],
-        "policies": instance.definition.policies.model_dump(mode="json"),
-        "params_model_schema": instance.definition.params_model_schema,
-        "output_contract": instance.definition.output_contract.model_dump(mode="json"),
-        "verify": instance.definition.verify.model_dump(mode="json"),
-    }
-
-
-def _surface_tool_payload(
-    name: str,
-    env: _SurfaceEnvironment,
-    definition: WorkflowDefinition,
-) -> dict[str, object]:
-    if name == "finish":
-        return {
-            "name": "finish",
-            "description": workflow_finish_tool_description(definition),
-            "parameters_schema": workflow_finish_tool_schema(definition),
-            "read_only": True,
-            "runs_in": "in_process",
-            "base_risk": "LOW",
-            "needs": [],
-            "source": "workflow_control",
-        }
-
-    tool_def = env.builtin_defs.get(name)
-    source = "builtin"
-    if tool_def is None:
-        tool_def = env.mcp_defs.get(name)
-        source = "mcp"
-    if tool_def is None:
-        return {"name": name, "available": False, "source": "missing"}
-
-    spec = tool_def.to_spec()
-    return {
-        "name": tool_def.name,
-        "description": tool_def.description,
-        "parameters_schema": spec.parameters_schema,
-        "read_only": tool_def.read_only,
-        "runs_in": tool_def.runs_in,
-        "base_risk": tool_def.base_risk.value if tool_def.base_risk is not None else None,
-        "needs": sorted(capability.value for capability in tool_def.needs),
-        "source": source,
+        ),
     }
 
 
@@ -627,63 +679,11 @@ def _fixture_param_value(param_type: DraftParamType) -> object:
     return [1.0]
 
 
-async def _fire_approved_workflow_once(
-    runtime: ConversationRuntime,
-    *,
-    instance_id: str,
-    instance: WorkflowInstance,
-    owner_id: str,
-) -> str:
-    spec = ScheduleSpec(
-        instance_id=instance_id,
-        instance_digest=instance.definition_digest,
-        cron=_ONE_SHOT_CRON,
-        enabled=False,
-    )
-    row = runtime.schedules.create_workflow_schedule(spec, owner_id=owner_id)
-    schedule_id = str(row.get("schedule_id") or "")
-    if not schedule_id:
-        raise ValueError("workflow schedule creation did not return a schedule_id")
-    try:
-        record = await runtime.schedules.fire_workflow_schedule_now(
-            schedule_id,
-            owner_id=owner_id,
-        )
-    finally:
-        _delete_ephemeral_workflow_schedule(runtime, schedule_id)
-    if record is None:
-        raise ValueError("workflow schedule fire-now did not return a run record")
-    conversation_id = str(record.get("run_cid") or "")
-    if not conversation_id:
-        raise ValueError(str(record.get("error") or "workflow run did not start"))
-    return conversation_id
-
-
-def _delete_ephemeral_workflow_schedule(
-    runtime: ConversationRuntime,
-    schedule_id: str,
-) -> None:
-    project_store = runtime.projects.current_project_store()
-    root = project_store.root
-    if root is None:
-        return
-    path = JsonWorkflowScheduleStore(root).schedules_dir / f"{schedule_id}.json"
-    try:
-        path.unlink(missing_ok=True)
-    except OSError:
-        return
-
-
 def _generated_instance_id(defn: WorkflowDefinition) -> str:
     slug = _SAFE_ID_FRAGMENT.sub("-", defn.name.strip()).strip("-._").lower()
     slug = slug or "workflow"
     digest = defn.digest().split(":", 1)[-1][:12]
     return f"wf_{slug[:60]}_{digest}"
-
-
-def _digest_payload(payload: object) -> str:
-    canonical = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
-    return "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def _dedupe_findings(

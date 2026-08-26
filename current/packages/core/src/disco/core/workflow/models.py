@@ -318,6 +318,7 @@ class WorkflowInstance(BaseModel):
     model_config = _STRICT
 
     owner_id: str = Field(default_factory=install_owner_id)
+    origin: Literal["built_in", "user"] = "user"
     definition_digest: _DigestStr
     definition: WorkflowDefinition
     params: dict[str, Any]
@@ -378,6 +379,17 @@ class ScheduleSpec(BaseModel):
     cron: _SmallStr
     timezone: _SmallStr = "UTC"
     enabled: bool = True
+    # Inputs are pinned with the schedule, rather than inherited from the
+    # authoring/simulation fixture stored on the workflow instance.  The
+    # default keeps legacy schedules loadable; the fire-time invocation seam
+    # will reject an empty value when the definition requires inputs.
+    params: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("params")
+    @classmethod
+    def _params_are_json(cls, value: dict[str, Any]) -> dict[str, Any]:
+        _validate_json_value(value, path="schedule.params")
+        return value
 
     @field_validator("cron")
     @classmethod

@@ -15,7 +15,7 @@ orchestrator registers; this keeps `retrieval` a sibling that depends only on
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from typing import Any, Literal
 
 from .engine import RetrievalEngine
@@ -24,6 +24,50 @@ from .models import GroundedAnswer, RetrievalRequest
 from .providers import ExtractionProvider, SearchProvider
 
 CapabilityHandler = Callable[..., Awaitable[Any]]
+
+
+def compose_search_providers(
+    configured: SearchProvider,
+    additions: Sequence[SearchProvider],
+) -> SearchProvider:
+    """Compose a configured provider with stable, additive source providers.
+
+    The configured provider is always first.  Provider names are the stable
+    source identities at this boundary, so repeated source selections (or a
+    source that is already configured) cannot create a duplicate search leg.
+    An empty addition list is deliberately an identity operation: callers keep
+    the exact configured provider object and therefore all of its wiring state.
+    """
+    if not additions:
+        return configured
+
+    from .source_adapters import MultiSearchProvider
+
+    def flatten(provider: SearchProvider) -> list[SearchProvider]:
+        # A per-run override is itself commonly a MultiSearchProvider.  Keep
+        # the composition one level deep so a configured source selected again
+        # is deduplicated by its real provider name and queried only once.
+        if isinstance(provider, MultiSearchProvider):
+            flattened: list[SearchProvider] = []
+            for child in provider._providers:
+                flattened.extend(flatten(child))
+            return flattened
+        return [provider]
+
+    providers: list[SearchProvider] = []
+    seen: set[str] = set()
+    flattened_additions = [
+        child for addition in additions for child in flatten(addition)
+    ]
+    for provider in [*flatten(configured), *flattened_additions]:
+        identity = str(getattr(provider, "name", type(provider).__name__)).strip().lower()
+        if identity and identity not in seen:
+            seen.add(identity)
+            providers.append(provider)
+
+    if len(providers) == 1:
+        return configured
+    return MultiSearchProvider(tuple(providers))
 
 
 def retrieval_capability_handlers(

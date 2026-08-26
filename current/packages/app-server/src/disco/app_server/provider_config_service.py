@@ -57,6 +57,18 @@ def _resolved_max_output_tokens(
     return catalogue_model.max_output_tokens if catalogue_model else None
 
 
+def _resolved_vision_declared(
+    catalogue_model: ProviderCatalogueModelDTO | None,
+) -> bool | None:
+    if catalogue_model is None:
+        return None
+    if catalogue_model.vision_status == "vision":
+        return True
+    if catalogue_model.vision_status == "text-only":
+        return False
+    return None
+
+
 def _resolved_capabilities(
     catalogue_model: ProviderCatalogueModelDTO | None, context_window: int
 ) -> list[str]:
@@ -308,7 +320,8 @@ class ProviderConfigService:
             # Provider catalogue metadata seeds the advisory capability set, not
             # the operator's manual override. Keep the pin unset so a live probe
             # can correct stale provider metadata; only Settings may force it.
-            vision=None,
+            vision=body.vision,
+            vision_declared=_resolved_vision_declared(catalogue_model),
             requires_api_key=provider.requires_api_key,
             price_in_per_m=price_in,
             price_out_per_m=price_out,

@@ -232,6 +232,7 @@ _EXPECTED_AGENT_TOOLS = [
     "browser",
     "code_exec",
     "context_memory",  # CXT-2: durable .disco/context working memory
+    "create_reference_pack",  # Host-owned Reference Pack library creation (Agent only)
     "deck_patch",  # C-EDIT-4: RFC-6902 deck edits
     "delegate_explore",
     "design_lint",  # B3 appkit port — read-only design-slop probe (nightly EPIC D3 parity)
@@ -254,6 +255,7 @@ _EXPECTED_AGENT_TOOLS = [
     "preview_start",
     "preview_status",
     "preview_stop",
+    "reference_inspect",  # pinned Reference Pack inspection (registered only for bound Builds)
     "release_declare",  # WO-5: record the typed, NAMES-ONLY host-owned release intent
     "run_project_script",  # CD-TOOLS-7 — buffered, prevalidated batch of file transforms
     "scaffold_starter",  # P7: materialize the contract's host-owned starter frame

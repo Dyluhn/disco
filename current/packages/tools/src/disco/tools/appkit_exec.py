@@ -166,6 +166,7 @@ class AppKitToolExecutor(ScopedPhaseExecutor):
         an already-proven BUILD executor but never upgrades a fresh one.
         """
 
+        await super().prepare_for_events(events)
         if fold_appkit_phase_evidence(events) is AppKitPhase.CUSTOM_BUILD:
             self._appkit_custom_authorized = True
             self._activate_custom_widening()

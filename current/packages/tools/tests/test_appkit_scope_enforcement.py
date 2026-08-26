@@ -107,6 +107,13 @@ def _appkit_registry() -> ToolRegistry:
     return registry
 
 
+# `reference_inspect` is intentionally in the strict AppKit allowlist, but the
+# production registry registers it only after a Build has a pinned Reference
+# Pack binding. A standalone scope fixture has no binding, so its callable set
+# is the registered intersection rather than the raw allowlist.
+_REGISTERED_APPKIT_READ_TOOLS = APPKIT_READ_TOOLS & _appkit_registry().names()
+
+
 def _appkit_exec(
     *,
     phase: AppKitPhase = AppKitPhase.PLANNING,
@@ -242,7 +249,7 @@ def _custom_build_events(
 def test_planning_phase_callable_names_are_reads_plus_plan_without_hatch():
     ex, _ = _appkit_exec(loop_mode=OperatingMode.PLANNING)
     callable_names = ex.callable_tool_names()
-    assert callable_names == APPKIT_READ_TOOLS | {"submit_plan"}
+    assert callable_names == _REGISTERED_APPKIT_READ_TOOLS | {"submit_plan"}
     # No mutators, no raw tools advertised as callable in planning.
     assert not (callable_names & APPKIT_MUTATORS)
     for raw in _RAW_TOOLS:
@@ -483,7 +490,7 @@ async def test_request_custom_build_unavailable_in_autonomous():
 def test_planning_autonomous_drops_hatch():
     ex, _ = _appkit_exec(loop_mode=OperatingMode.PLANNING, autonomous=True)
     assert "request_custom_build" not in ex.callable_tool_names()
-    assert ex.callable_tool_names() == APPKIT_READ_TOOLS | {"submit_plan"}
+    assert ex.callable_tool_names() == _REGISTERED_APPKIT_READ_TOOLS | {"submit_plan"}
 
 
 # ---- (g) P0: MCP names are NOT in the allowlist in strict mode ---------------

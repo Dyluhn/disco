@@ -34,6 +34,9 @@ export const KNOWN_EVENT_KINDS = [
   "agent_error",
   "condensation",
   "status",
+  "workflow_invocation",
+  "reference_pack_binding",
+  "report_deck_invocation",
   "workspace_version",
   "workspace_restored",
   "workspace_mutation",
@@ -76,6 +79,21 @@ export const EVENT_DISPOSITION: Record<
   observation: { disposition: "rendered", where: "Build/Agent ActivityFeed (tool results, screenshots)." },
   agent_error: { disposition: "rendered", where: "Build/Agent ActivityFeed error rows + status." },
   status: { disposition: "rendered", where: "AgentStatusBar / lifecycle state machine across all surfaces." },
+  workflow_invocation: {
+    disposition: "suppressed",
+    where:
+      "Host-owned workflow lifecycle authority is projected through StatusEvent and the workflow run card; the raw pinned definition and digests are not a chat/activity row.",
+  },
+  reference_pack_binding: {
+    disposition: "suppressed",
+    where:
+      "Host-owned immutable Build context authority consumed by Reference Pack materialization and grounding; it is not a user chat/activity turn.",
+  },
+  report_deck_invocation: {
+    disposition: "suppressed",
+    where:
+      "Host-owned report-to-deck pending/replay marker; the Agent deck conversation and ordinary status events are the user-facing projection.",
+  },
   workspace_version: {
     disposition: "suppressed",
     where: "Durable version-commit signal consumed by the workspace version-history hook; not a chat turn.",

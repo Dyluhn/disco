@@ -293,6 +293,21 @@ class _WorkspaceLifecycleAuthority:
             expected_statuses=expected_statuses,
         )
 
+    async def append_transition_batch_locked(
+        self,
+        conversation_id: str,
+        events: list[Event],
+        *,
+        bind_current: bool = False,
+    ) -> list[Event]:
+        """Append domain facts with one lifecycle-authorized status event."""
+
+        return await self._lifecycle_commands.append_transition_batch_locked(
+            conversation_id,
+            events,
+            bind_current=bind_current,
+        )
+
     def finish_sealability_probe(
         self,
         conversation_id: str,

@@ -17,7 +17,7 @@ matching slop scanner (`design_lint`) lives in the tools layer.
 
 from __future__ import annotations
 
-from .build_brief import BuildBrief, classify_build_brief
+from .build_brief import BuildBrief, appkit_applicable, classify_build_brief
 from .generator import (
     default_directory_app_spec,
     default_lead_gen_app_spec,
@@ -195,6 +195,7 @@ __all__ = [
     "SiteRecipe",
     "Typography",
     "WorkerAuthModel",
+    "appkit_applicable",
     "appspec_path",
     "check_drizzle_schema",
     "check_schema_sql",

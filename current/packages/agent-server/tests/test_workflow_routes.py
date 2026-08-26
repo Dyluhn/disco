@@ -12,9 +12,10 @@ import httpx
 from disco.agent_server.app import create_app
 from disco.agent_server.routes.workflows import make_workflows_router
 from disco.agent_server.runtime import ConversationRuntime
+from disco.agent_server.workflow_invocation import WorkflowInvocationResult
 from disco.core import SecurityRisk, SkillStore, SqliteEventStore
 from disco.core.llm import ConfigStore, ProjectStorageSettings
-from disco.core.workflow import ScheduleSpec
+from disco.core.workflow import WorkflowReadiness
 from disco.tools import ToolDef
 from disco.tools.builtin.workflow_tools import JsonDirWorkflowStore
 from disco.tools.workflow_seed import SCRIPTED_WORKSPACE_TASK_INSTANCE_ID
@@ -135,6 +136,20 @@ def test_create_app_lifespan_seeds_builtin_workflows(tmp_path: Path) -> None:
     instance_ids = {workflow["instance_id"] for workflow in listed.json()["workflows"]}
     assert SCRIPTED_WORKSPACE_TASK_INSTANCE_ID in instance_ids
     assert workflow_store.get_instance(SCRIPTED_WORKSPACE_TASK_INSTANCE_ID) is not None
+    scripted = next(
+        item
+        for item in listed.json()["workflows"]
+        if item["instance_id"] == SCRIPTED_WORKSPACE_TASK_INSTANCE_ID
+    )
+    assert scripted["origin"] == "built_in"
+    seeded = workflow_store.get_instance(SCRIPTED_WORKSPACE_TASK_INSTANCE_ID)
+    assert seeded is not None
+    assert scripted["surface_shown_digest"] == runtime.workflow_surface_digest(seeded)
+    assert seeded.approval is not None
+    assert seeded.approval.surface_shown_digest == scripted["surface_shown_digest"]
+    assert isinstance(scripted["readiness"]["ready"], bool)
+    assert scripted["readiness"]["status"] in {"ready", "needs_setup", "off"}
+    assert isinstance(scripted["readiness"]["reasons"], list)
 
 
 def test_create_app_lifespan_skips_builtin_seed_when_projects_root_unavailable(
@@ -173,6 +188,10 @@ async def test_workflow_draft_list_and_approve_records_surface_digest(
         workflow = draft.json()["workflow"]
         assert workflow["enabled"] is False
         assert workflow["approved"] is False
+        assert workflow["origin"] == "user"
+        assert workflow["readiness"]["ready"] is False
+        assert workflow["readiness"]["status"] == "needs_setup"
+        assert "disabled" in workflow["readiness"]["reasons"]
         assert workflow["validation_findings"] == []
         assert workflow["compiled_surface"]["compiled"] is True
         assert "file_read" in workflow["compiled_surface"]["allowed_tools"]
@@ -210,6 +229,25 @@ async def test_workflow_draft_list_and_approve_records_surface_digest(
     assert stored.approval.surface_shown_digest == surface_digest
 
 
+async def test_route_review_digest_matches_runtime_surface_digest(tmp_path: Path) -> None:
+    runtime = _runtime_for_project_root(tmp_path, tmp_path / "config.json")
+    app = FastAPI()
+    app.include_router(make_workflows_router(runtime._store, runtime))
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        draft = await client.post(
+            "/api/workflows/draft",
+            json={"instance_id": "wf_digest_equiv", "definition": _definition()},
+        )
+
+    assert draft.status_code == 200
+    stored = JsonDirWorkflowStore(tmp_path).get_instance("wf_digest_equiv")
+    assert stored is not None
+    assert draft.json()["workflow"]["surface_shown_digest"] == runtime.workflow_surface_digest(
+        stored
+    )
+
+
 async def test_workflow_review_advertises_verify_only_with_explicit_shell(
     tmp_path: Path,
 ) -> None:
@@ -232,6 +270,62 @@ async def test_workflow_review_advertises_verify_only_with_explicit_shell(
         if tool["name"] == "finish"
     )
     assert "verify" in finish_surface["parameters_schema"]["properties"]
+
+
+async def test_workflow_enabled_mutation_preserves_review_and_gates_invocation(
+    tmp_path: Path,
+) -> None:
+    app = _app(tmp_path)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        draft = await client.post(
+            "/api/workflows/draft",
+            json={
+                "instance_id": "wf_route_toggle",
+                "definition": _definition(),
+                "params": {"query": "preserve-me"},
+            },
+        )
+        assert draft.status_code == 200
+        before = draft.json()["workflow"]
+        approved = await client.post(
+            "/api/workflows/wf_route_toggle/approve",
+            json={"surface_shown_digest": before["surface_shown_digest"]},
+        )
+        assert approved.status_code == 200
+        enabled = approved.json()["workflow"]
+
+        disabled = await client.patch(
+            "/api/workflows/wf_route_toggle/enabled",
+            json={"enabled": False},
+        )
+        assert disabled.status_code == 200
+        disabled_workflow = disabled.json()["workflow"]
+        assert disabled_workflow["enabled"] is False
+        assert disabled_workflow["readiness"]["status"] == "off"
+        assert "disabled" in disabled_workflow["readiness"]["reasons"]
+        for key in ("definition_digest", "params", "approval", "surface_shown_digest"):
+            assert disabled_workflow[key] == enabled[key]
+
+        rejected = await client.post(
+            "/api/workflows/wf_route_toggle/run",
+            json={"params": {"query": "preserve-me"}},
+        )
+        assert rejected.status_code == 409
+        assert rejected.json()["detail"]["reason"] == "workflow_not_ready"
+        assert "disabled" in rejected.json()["detail"]["readiness"]["reasons"]
+
+        reenabled = await client.post(
+            "/api/workflows/wf_route_toggle/enable",
+            json={"enabled": True},
+        )
+
+    assert reenabled.status_code == 200
+    reenabled_workflow = reenabled.json()["workflow"]
+    assert reenabled_workflow["enabled"] is True
+    assert reenabled_workflow["readiness"]["status"] == "ready"
+    for key in ("definition_digest", "params", "approval", "surface_shown_digest"):
+        assert reenabled_workflow[key] == enabled[key]
 
 
 async def test_workflow_authoring_context_lists_pickable_inventory(tmp_path: Path) -> None:
@@ -321,7 +415,9 @@ async def test_workflow_author_happy_path_persists_unapproved_review(
     assert body["simulation"]["output_path"] == "outputs/sample.md"
     stored = JsonDirWorkflowStore(tmp_path).get_instance(workflow["instance_id"])
     assert stored is not None
-    assert stored.params == {"query": "sample"}
+    # Authoring fixtures are used only by the simulation; persisted workflow
+    # instances start without run inputs so every invocation supplies them.
+    assert stored.params == {}
 
 
 async def test_workflow_draft_from_description_persists_unapproved_review(
@@ -363,7 +459,7 @@ async def test_workflow_draft_from_description_persists_unapproved_review(
     assert request.temperature == 0.3
     stored = JsonDirWorkflowStore(tmp_path).get_instance(workflow["instance_id"])
     assert stored is not None
-    assert stored.params == {"query": "sample"}
+    assert stored.params == {}
 
 
 async def test_workflow_draft_from_description_strips_think_spans(
@@ -527,7 +623,9 @@ async def test_workflow_run_rejects_unapproved_instance(tmp_path: Path) -> None:
         response = await client.post("/api/workflows/wf_route_pending/run")
 
     assert response.status_code == 409
-    assert response.json()["detail"]["reason"] == "workflow_not_approved"
+    detail = response.json()["detail"]
+    assert detail["reason"] == "workflow_not_ready"
+    assert "not_approved" in detail["readiness"]["reasons"]
 
 
 async def test_workflow_run_fires_approved_instance(tmp_path: Path) -> None:
@@ -536,57 +634,26 @@ async def test_workflow_run_fires_approved_instance(tmp_path: Path) -> None:
     cfg_store.sections.save_projects(ProjectStorageSettings(projects_root=str(tmp_path)))
 
     class RecordingRuntime(ConversationRuntime):
-        created_spec: ScheduleSpec | None = None
-        fired_schedule_id: str | None = None
+        invoked: tuple[str, str, dict[str, object]] | None = None
 
-        def create_workflow_schedule(
+        async def invoke_workflow(
             self,
-            spec: ScheduleSpec,
+            conversation_id: str,
+            instance_id: str,
+            params: dict[str, object],
             *,
             owner_id: str,  # noqa: ARG002
-        ) -> dict:
-            self.created_spec = spec
-            root = self.projects.current_project_store().root
-            assert root is not None
-            schedules = root / "workflow_schedules" / "schedules"
-            schedules.mkdir(parents=True, exist_ok=True)
-            (schedules / "wfsched_route.json").write_text("{}", encoding="utf-8")
-            return {"schedule_id": "wfsched_route"}
-
-        async def fire_workflow_schedule_now(
-            self,
-            schedule_id: str,
-            *,
-            owner_id: str,  # noqa: ARG002
-        ) -> dict | None:
-            self.fired_schedule_id = schedule_id
-            return {"run_cid": "conv_started"}
-
-    class _RecordingSchedules:
-        """Doubles the schedule service the workflows route now reaches.
-
-        13-B1 moved the route from ``runtime.create_workflow_schedule(...)`` to
-        ``runtime.schedules.create_workflow_schedule(...)``, so overriding the
-        method on the runtime subclass no longer observes the call. The
-        recordings still land on the runtime, so the assertions below are
-        unchanged.
-        """
-
-        def __init__(self, owner: RecordingRuntime) -> None:
-            self._owner = owner
-
-        def create_workflow_schedule(self, spec: ScheduleSpec, *, owner_id: str) -> dict:
-            return self._owner.create_workflow_schedule(spec, owner_id=owner_id)
-
-        async def fire_workflow_schedule_now(
-            self, schedule_id: str, *, owner_id: str
-        ) -> dict | None:
-            return await self._owner.fire_workflow_schedule_now(
-                schedule_id, owner_id=owner_id
+        ) -> WorkflowInvocationResult:
+            self.invoked = (conversation_id, instance_id, params)
+            return WorkflowInvocationResult(
+                started=True,
+                instance_id=instance_id,
+                run_id="wfrun_route",
+                conversation_id=conversation_id,
+                readiness=WorkflowReadiness(ready=True),
             )
 
     runtime = RecordingRuntime(store, config_store=cfg_store)
-    runtime.schedules = _RecordingSchedules(runtime)
     app = FastAPI()
     app.include_router(make_workflows_router(store, runtime))
     transport = httpx.ASGITransport(app=app)
@@ -611,14 +678,27 @@ async def test_workflow_run_fires_approved_instance(tmp_path: Path) -> None:
             )
             assert approved.status_code == 200
 
-            response = await client.post("/api/workflows/wf_route_run/run")
+            before = await store.list_conversations(owner_id="local")
+            invalid = await client.post(
+                "/api/workflows/wf_route_run/run",
+                json={"params": {}},
+            )
+            after = await store.list_conversations(owner_id="local")
+            assert invalid.status_code == 422
+            assert invalid.json()["detail"]["reason"] == "invalid_parameters"
+            assert after == before
+
+            response = await client.post(
+                "/api/workflows/wf_route_run/run",
+                json={"params": {"query": "smoke"}},
+            )
 
         assert response.status_code == 200
-        assert response.json() == {"conversation_id": "conv_started", "status": "started"}
-        assert runtime.fired_schedule_id == "wfsched_route"
-        assert runtime.created_spec is not None
-        assert runtime.created_spec.instance_id == "wf_route_run"
-        assert runtime.created_spec.enabled is False
-        assert not (tmp_path / "workflow_schedules" / "schedules" / "wfsched_route.json").exists()
+        assert response.json()["conversation_id"].startswith("conv_")
+        assert response.json()["run_id"] == "wfrun_route"
+        assert runtime.invoked is not None
+        _, instance_id, params = runtime.invoked
+        assert instance_id == "wf_route_run"
+        assert params == {"query": "smoke"}
     finally:
         await runtime.aclose()

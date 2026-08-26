@@ -95,6 +95,7 @@ describe("DeepResearchSurface — G1/DR-4 attach (empty state)", () => {
     fireEvent.click(screen.getByRole("button", { name: /^Options/ }));
     expect(screen.getByTestId("upload-composer")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /attach files/i })).toBeEnabled();
+    expect(screen.getByText(/Accepted for research: PDF, TXT, Markdown/i)).toBeInTheDocument();
     const { createDeepResearchConversation } = await import("@/api/deepResearch");
     expect(createDeepResearchConversation).not.toHaveBeenCalled();
   });

@@ -168,7 +168,31 @@ def test_data_sources_config_reports_configured_sources(client, state):
 
     body = client.get("/api/data-sources/config").json()
     assert "searxng" in body["configured_sources"]
+    assert "tavily" not in body["configured_sources"]
+
+    state.approve_origin(
+        "https://api.tavily.com", "search:tavily", "TAVILY_API_KEY"
+    )
+    body = client.get("/api/data-sources/config").json()
     assert "tavily" in body["configured_sources"]
+
+
+def test_active_paid_source_is_not_reported_configured_without_its_key(client, state):
+    from disco.app_server.config.dtos import DataSourcesConfigDTO
+
+    state.features.update_data_sources_config(
+        DataSourcesConfigDTO(
+            search_provider="tavily",
+            search_base_url="",
+            search_api_key_env="tavily",
+            extraction_provider="local",
+            extraction_base_url="",
+            extraction_api_key_env="",
+        )
+    )
+
+    body = client.get("/api/data-sources/config").json()
+    assert "tavily" not in body["configured_sources"]
 
 
 def test_data_sources_save_rejects_non_official_tavily_origin(client):

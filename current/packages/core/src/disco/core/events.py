@@ -60,7 +60,11 @@ from ._event_audit import (
 from ._event_control import (
     AppKitEjectionEvent,
     BuildPlatformAdmissionEvent,
+    ReferencePackBindingEvent,
+    ReferencePackBindingSelection,
+    ReportDeckInvocationEvent,
     StatusEvent,
+    WorkflowInvocationEvent,
     WorkspaceMutationEvent,
     WorkspaceRestoredEvent,
     WorkspaceVersionEvent,
@@ -214,7 +218,10 @@ Event = Annotated[
     | QuestionsV2Event
     | ContextResolvedEvent
     | ContextSummaryEvent
-    | ResearchCheckpointEvent,
+    | ResearchCheckpointEvent
+    | WorkflowInvocationEvent
+    | ReferencePackBindingEvent
+    | ReportDeckInvocationEvent,
     Field(discriminator="kind"),
 ]
 

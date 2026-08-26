@@ -12,7 +12,13 @@ from collections.abc import Awaitable, Callable, Sequence
 from typing import Protocol
 from uuid import uuid4
 
-from disco.core import ConversationState, ConversationStatus, ReportEvent, ToolCall
+from disco.core import (
+    ConversationState,
+    ConversationStatus,
+    ReportDeckInvocationEvent,
+    ReportEvent,
+    ToolCall,
+)
 from disco.core.store.sqlite import SqliteEventStore
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
@@ -78,6 +84,18 @@ class DirectReportDeckStartPort:
         self._runtime.settings.set_artifact_mode(target_id, True)
         self._runtime.contract.set_build_kind(target_id, "deck")
         await self._persist_source(target_id, source_conversation_id, job)
+        # Persist the typed pending fact before admitting any async work.  A
+        # restart can reproject this marker through the normal run supervisor.
+        await self._store.append(
+            target_id,
+            ReportDeckInvocationEvent(
+                source_conversation_id=source_conversation_id,
+                goal=job.goal,
+                filename=job.filename,
+                format=job.format,
+                status="queued",
+            ),
+        )
         await self._schedule_tool(
             target_id,
             job,

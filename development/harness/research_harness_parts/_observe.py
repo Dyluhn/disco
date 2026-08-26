@@ -20,6 +20,7 @@ _DEPTH_TIMEOUTS_S = {
     "standard_deep": 1500.0,
     "exhaustive": 3000.0,
 }
+_DECK_TIMEOUT_S = 1200.0
 _SECRET_KEYS = re.compile(
     r"(?:secret|password|passwd|token|api[_-]?key|authorization|cookie|credential)", re.I
 )
@@ -47,6 +48,11 @@ class ResearchRequest:
     cassette: str | None = None
     auth_token: str | None = None
     capture_inspect: bool = False
+    # Report → deck is an explicitly opt-in follow-up.  It is deliberately a
+    # request field instead of a transport-global switch so batch workers keep
+    # their own bounded, isolated correlation state.
+    deck: bool = False
+    deck_timeout_s: float | None = None
 
     def __post_init__(self) -> None:
         # The default timeout is derived from the requested depth so a run is
@@ -54,6 +60,8 @@ class ResearchRequest:
         # (CLI --timeout) still overrides it.
         if self.timeout_s is None:
             object.__setattr__(self, "timeout_s", _DEPTH_TIMEOUTS_S.get(self.depth, 1500.0))
+        if self.deck_timeout_s is None:
+            object.__setattr__(self, "deck_timeout_s", _DECK_TIMEOUT_S)
 
     def wire_body(self) -> dict[str, Any]:
         """Return the superset accepted by the current server routes.

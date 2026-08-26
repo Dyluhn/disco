@@ -76,6 +76,12 @@ export function openRouterUpsert(m: OpenRouterModel): ModelUpsert {
     max_output_tokens: m.max_output_tokens ?? null,
     quantization: null,
     capabilities: [...m.capabilities],
+    vision_declared:
+      m.vision_status === "vision"
+        ? true
+        : m.vision_status === "text-only"
+          ? false
+          : null,
     price_in_per_m: m.price_in_per_m,
     price_out_per_m: m.price_out_per_m,
   };

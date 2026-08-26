@@ -25,6 +25,7 @@ from harness.research_harness import (
     run_batch,
     run_harness,
 )
+from harness.research_harness_parts._deck import summarize_frames, validate_frames
 
 
 def _frames() -> list[dict]:
@@ -97,6 +98,8 @@ def test_fake_transport_injects_request_controls_and_writes_artifacts(tmp_path) 
     assert (tmp_path / "report.md").exists()
     assert (tmp_path / "summary.json").exists()
     assert (tmp_path / "cassette.jsonl").exists()
+    assert not (tmp_path / "deck.json").exists()
+    assert "deck_json" not in result.artifacts
     assert (tmp_path / "events.jsonl").read_text().count("\n") == 4
 
     replay = asyncio.run(
@@ -107,6 +110,103 @@ def test_fake_transport_injects_request_controls_and_writes_artifacts(tmp_path) 
     )
     assert replay.ok
     assert replay.report == result.report
+
+
+def test_report_to_deck_is_opt_in_and_records_fake_correlation(tmp_path) -> None:
+    deck = {
+        "requested": True,
+        "ok": True,
+        "source_conversation_id": "research-cid",
+        "target_conversation_id": "deck-cid",
+        "job_id": "deck-cid",
+        "artifact_validation": {"typed_slides": True, "native_pptx": True},
+    }
+    transport = FakeTransport(_frames(), deck=deck)
+    result = asyncio.run(
+        run_harness(
+            ResearchRequest("q", depth="exhaustive", deck=True),
+            transport=transport,
+            output_dir=tmp_path,
+        )
+    )
+    assert result.ok
+    assert result.deck == deck
+    assert result.telemetry["deck_ok"] is True
+    assert json.loads((tmp_path / "deck.json").read_text()) == deck
+    assert '"research.deck"' in (tmp_path / "cassette.jsonl").read_text()
+
+
+def test_report_to_deck_is_not_started_after_report_provider_error() -> None:
+    called = False
+
+    async def deck(_request, _report):
+        nonlocal called
+        called = True
+        return {"ok": True}
+
+    frames = _frames()
+    frames.insert(1, {"type": "error", "error": "provider rejected the request"})
+    result = asyncio.run(
+        run_harness(
+            ResearchRequest("q", depth="exhaustive", deck=True),
+            transport=FakeTransport(frames, deck=deck),
+        )
+    )
+    assert result.deck == {"requested": True, "ok": False, "skipped": "report_not_successful"}
+    assert called is False
+
+
+def test_replay_can_restore_optional_deck_correlation_seam() -> None:
+    cassette = Cassette()
+    cassette.record("research.frames", {"query": "q"}, _frames())
+    cassette.record(
+        "research.deck",
+        {"query": "q"},
+        {
+            "requested": True,
+            "ok": True,
+            "source_conversation_id": "source",
+            "target_conversation_id": "target",
+            "artifact_validation": {"typed_slides": True},
+        },
+    )
+    result = asyncio.run(
+        run_harness(
+            ResearchRequest("q", depth="exhaustive", deck=True),
+            transport=ReplayTransport(cassette),
+        )
+    )
+    assert result.deck and result.deck["target_conversation_id"] == "target"
+
+
+def test_deck_validation_requires_typed_success_not_free_form_text() -> None:
+    frames = [
+        {
+            "type": "event",
+            "event": {
+                "kind": "tool_result",
+                "tool_name": "slides_generate",
+                "success": True,
+                "structured": {
+                    "format": "pptx",
+                    "slides": [{"title": "A"}],
+                    "artifact": {"path": "decks/report.pptx"},
+                },
+            },
+        },
+        {"type": "event", "event": {"kind": "status", "status": "FINISHED"}},
+    ]
+    validated = validate_frames(frames)
+    assert validated["typed_slides"] is True
+    assert validated["native_pptx"] is True
+    summary = summarize_frames(frames, elapsed_ms=[3, 10])
+    assert summary["stage_count"] == 2
+    assert summary["stages"][1]["elapsed_ms"] == 10
+    free_form = [
+        {"type": "message", "text": "slides_generate created deck.pptx"},
+        {"type": "state", "status": "finished"},
+    ]
+    assert validate_frames(free_form)["typed_slides"] is False
 
 
 def test_replay_uses_existing_cassette_frame_seam_and_is_stable() -> None:
@@ -433,6 +533,8 @@ def test_timeout_defaults_derive_from_depth() -> None:
     assert ResearchRequest("q").timeout_s == 1500.0
     assert ResearchRequest("q", depth="exhaustive").timeout_s == 3000.0
     assert ResearchRequest("q", depth="exhaustive", timeout_s=42.0).timeout_s == 42.0
+    assert ResearchRequest("q", deck=True).deck_timeout_s == 1200.0
+    assert ResearchRequest("q", deck=True, deck_timeout_s=7.0).deck_timeout_s == 7.0
 
 
 def test_failed_or_empty_report_fails_closed() -> None:

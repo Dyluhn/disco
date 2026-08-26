@@ -127,7 +127,15 @@ class ConfigStore:
         normalized = _normalize_build_kernel(config.build_kernel)
         if normalized != config.build_kernel:
             config = config.model_copy(update={"build_kernel": normalized})
-        self._write(config.model_dump(mode="json"))
+        # ``vision_probe`` is a process-local observation, not operator config.
+        # Keep it available to the caller/DTO while preventing a stale live fact
+        # from surviving a restart as if it were a manual capability pin.
+        persisted_models = {
+            key: entry.model_copy(update={"vision_probe": None})
+            for key, entry in config.models.items()
+        }
+        persisted = config.model_copy(update={"models": persisted_models})
+        self._write(persisted.model_dump(mode="json"))
         return config
 
     # -- catalogue CRUD -------------------------------------------------------

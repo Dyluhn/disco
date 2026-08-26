@@ -14,6 +14,7 @@ from disco.core.appkit import RECORDS_PRIMITIVE_ID, generate, get_recipe, record
 from disco.core.appkit.form_primitive import FormSpec, apply_form_spec
 from disco.core.appkit.spec import (
     AppSpec,
+    DesignSpec,
     Entity,
     EntityField,
     Page,
@@ -123,6 +124,58 @@ def _tree_with_form() -> dict[str, str]:
         ),
     )
     return generate(app, recipe.to_design_spec())
+
+
+def _styled_forum_app(recipe_name: str) -> tuple[AppSpec, DesignSpec, dict[str, str]]:
+    """Apply a recipe's visual/layout choices while keeping forum behavior fixed."""
+    recipe = get_recipe(recipe_name)
+    assert recipe is not None
+    data = _forum_app().model_dump(mode="json")
+    preferences = {item.kind: item.variant_id for item in recipe.preferred_section_variants}
+    for page in data["pages"]:
+        for section in page["sections"]:
+            if section["kind"] in preferences:
+                section["variant_id"] = preferences[section["kind"]]
+    app = AppSpec.model_validate(data)
+    design = recipe.to_design_spec()
+    return app, design, generate(app, design)
+
+
+def test_rbac_functional_core_survives_materially_different_designs() -> None:
+    """Design/layout/theme may vary without rewriting trusted auth/data seams."""
+    styled = [
+        _styled_forum_app(name)
+        for name in ("editorial-ledger", "field-notes", "civic-service")
+    ]
+    apps = [app for app, _, _ in styled]
+    trees = [tree for _, _, tree in styled]
+
+    # Same functional identity and role policy in every build.
+    assert {app.roles for app in apps} == {("member", "moderator", "administrator")}
+    assert [{entity.id for entity in app.entities} for app in apps] == [
+        {entity.id for entity in apps[0].entities}
+    ] * len(apps)
+    for app, design, tree in styled:
+        verdict = records_verify(app, design, tree)
+        assert verdict.ok, verdict
+
+    # Security/data files are the stable functional seam; only visual/layout
+    # output and the variant-specific component may differ.
+    for path in (
+        "schema.sql",
+        "worker/index.ts",
+        "src/db/schema.ts",
+        "OWNER_GUIDE.md",
+        "src/components/RecordsWorkspace.tsx",
+    ):
+        assert len({tree[path] for tree in trees}) == 1, path
+    for path in ("src/styles.css", "index.html", "src/components/HomeHeroSection.tsx"):
+        assert len({tree[path] for tree in trees}) == 3, path
+    assert {app.pages[0].sections[0].variant_id for app in apps} == {
+        "hero.asymmetric-editorial",
+        "hero.centered-stacked",
+        "hero.split-media-right",
+    }
 
 
 def test_policy_records_generate_server_owned_schema_worker_and_real_ui() -> None:

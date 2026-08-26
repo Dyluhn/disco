@@ -221,14 +221,13 @@ class _RuntimeModeSettings:
 
     _VALID_RESEARCH_SOURCES = frozenset(
         {
-            "ddgs",
+            # These are additive per-run sources.  The configured Settings
+            # provider (including DDGS, SearXNG, Tavily, or Brave) is composed
+            # by the research provider itself and must not be selected again
+            # as an "additional" leg.
             "arxiv",
             "news",
             "semantic_scholar",
-            "searxng",
-            "tavily",
-            "brave",
-            "site_scoped",
         }
     )
 

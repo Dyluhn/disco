@@ -25,6 +25,8 @@ interface Props {
   disabled?: boolean;
   /** Optional null choice used by capabilities that can follow the main model. */
   noneLabel?: string;
+  /** Dedicated visual observers may only use a confirmed vision answer. */
+  visionOnly?: boolean;
 }
 
 const GROUP_LABEL: Record<ModelProvider, string> = {
@@ -39,6 +41,7 @@ export function RoleModelPicker({
   busy,
   disabled,
   noneLabel,
+  visionOnly,
 }: Props) {
   const [open, setOpen] = useState(false);
   const { data: models } = useModels();
@@ -48,9 +51,17 @@ export function RoleModelPicker({
     const by: Record<ModelProvider, ModelInfo[]> = { local: [], openrouter: [] };
     // Defensive: an entry with an unexpected/missing provider must not crash the
     // whole Settings page — bucket it under the remote group so it stays visible.
-    for (const m of models ?? []) (by[m.provider] ?? by.openrouter).push(m);
+    for (const m of models ?? []) {
+      if (
+        visionOnly &&
+        (m.vision_status ?? (m.capabilities.includes("vision") ? "vision" : "unknown")) !==
+          "vision"
+      )
+        continue;
+      (by[m.provider] ?? by.openrouter).push(m);
+    }
     return by;
-  }, [models]);
+  }, [models, visionOnly]);
 
   const pick = (id: string | null) => {
     onSelect(id);

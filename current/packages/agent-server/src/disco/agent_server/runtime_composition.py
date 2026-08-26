@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import base64
 import logging
-from typing import Any
+from collections.abc import Mapping
+from typing import Any, cast
 
 from disco.core import SkillStore
 from disco.core.inspect import inspect_enabled
@@ -16,6 +18,7 @@ from disco.core.llm import (
 )
 from disco.core.llm.config import RouterConfig
 from disco.core.store.sqlite import SqliteEventStore
+from disco.core.workflow import WorkflowReadiness
 from disco.tools import SandboxService, SandboxSpec
 
 from . import lifecycle as lifecycle_module
@@ -76,6 +79,7 @@ from .persistence_notifier import PersistenceNotifier
 from .preview_capture_ownership import PreviewCaptureOwnership
 from .preview_service import PreviewService
 from .project_runtime_service import ProjectRuntimeService
+from .reference_pack_runtime import ReferencePackRuntime
 from .resume_ports import (
     PinnedRunStart,
     ResumeEnvironmentProbe,
@@ -126,6 +130,8 @@ from .space_service import ConfiguredProjectRoot, SpaceService
 from .suggestion_service import SuggestionService
 from .title_service import TitleService
 from .upload_store import UploadStore
+from .vision_inspection import VisionInspectionCapability
+from .workflow_invocation import WorkflowInvocationPreparation
 from .workflow_run_service import WorkflowRunService
 from .workflow_runtime_ports import (
     RecurringScheduleControlAdapter,
@@ -135,6 +141,7 @@ from .workflow_runtime_ports import (
     WorkflowProjectAccessAdapter,
     WorkflowRunControlAdapter,
 )
+from .workflow_surface import _compiled_surface_payload, _digest_payload, _surface_environment
 from .workspace_fence import WorkspaceFenceService
 from .workspace_ownership import (
     ConversationContextDisposal,
@@ -187,6 +194,30 @@ def _wire_foundation(
     rt.uploads = UploadStore(f"{db_path}.uploads" if db_path else "")
     rt._secret_store = secret_store or SecretStore()
     rt._config_store = _config_store(config, config_store)
+    # One host-owned Reference Pack runtime is shared by CRUD routes and every
+    # later Agent/Build composition.  The tool package receives only the
+    # narrow per-executor seam; it never discovers this service itself.
+    def reference_visual_observer(conversation_id: str):
+        """Adapt the existing bounded visual capability to pack image bytes."""
+
+        capability = VisionInspectionCapability(
+            rt._router_now(conversation_id=conversation_id),
+            conversation_id=conversation_id,
+        )
+
+        async def inspect_image(data: bytes, file_name: str, question: str) -> object:
+            return await capability.inspect(
+                question=question,
+                screenshot_b64=base64.b64encode(data).decode("ascii"),
+                screenshot_path=file_name,
+            )
+
+        return inspect_image
+
+    rt.reference_packs = ReferencePackRuntime(
+        event_store=store,
+        visual_observer_factory=reference_visual_observer,
+    )
     rt.sandbox = SandboxRuntimeService(
         rt._config_store,
         sandbox_service,
@@ -437,6 +468,8 @@ def _wire_loops(rt: _RuntimeWiringSchema, *, mode: OperatingMode) -> None:
         rt.contract,
         rt._loop_registry,
         rt._store,
+        reference_packs=rt.reference_packs,
+        workflow_surface_digest=lambda instance: _workflow_surface_digest(rt, instance),
     )
     assembler = BuildLoopAssembler(
         rt.settings,
@@ -496,6 +529,16 @@ def _wire_loops(rt: _RuntimeWiringSchema, *, mode: OperatingMode) -> None:
             rt._loop_factory,
         )
     )
+
+
+def _workflow_surface_digest(rt: _RuntimeWiringSchema, instance: Any) -> str:
+    """Use the same compiled surface authority as workflow review/approval.
+
+    Kept as a runtime-composition callback so the loop factory remains unaware
+    of HTTP routes while Agent readiness still detects MCP/skill/tool drift.
+    """
+    env = _surface_environment(cast(Any, rt))
+    return _digest_payload(_compiled_surface_payload(instance, env))
 
 
 def _wire_run_control(rt: _RuntimeWiringSchema) -> DeferredRunCompletion:
@@ -605,6 +648,7 @@ def _wire_run_completion(
         RunReentry(rt.run_controller, rt._resume),
         run_policy,
         observability,
+        workflow_handoff=_workflow_handoff(rt),
     )
     completion.bind(rt._run_finalizer)
     rt.run_sweep = RunStrandedSweep(
@@ -631,7 +675,34 @@ def _wire_run_completion(
     )
 
 
+def _workflow_handoff(rt: _RuntimeWiringSchema):
+    async def handoff(conversation_id: str) -> None:
+        # The broad Agent sandbox is no longer trusted for a sealed workflow.
+        # LifecycleManager detaches and destroys it before kick composes the
+        # workflow-scoped executor in the same conversation.
+        await rt.lifecycle._teardown_sandbox(conversation_id)
+        rt.run_controller.kick(conversation_id)
+
+    return handoff
+
+
 def _wire_workflows(rt: _RuntimeWiringSchema) -> None:
+    def prepare_workflow(
+        instance_id: str, params: Mapping[str, Any], owner_id: str
+    ) -> object:
+        service = rt._loop_factory.workflow_invocation_service_for_owner(owner_id)
+        if service is None:
+            return WorkflowInvocationPreparation(
+                accepted=False,
+                instance_id=instance_id,
+                readiness=WorkflowReadiness(
+                    ready=False,
+                    reasons=("workflow_runtime_unavailable",),
+                ),
+                reason="workflow_runtime_unavailable",
+            )
+        return service.prepare(instance_id, params=params, owner_id=owner_id)
+
     workflow_runs = WorkflowRunService(
         rt._store,
         lifecycle_commands=rt._lifecycle_commands,
@@ -651,6 +722,7 @@ def _wire_workflows(rt: _RuntimeWiringSchema) -> None:
             rt._run_supervisor,
             rt._run_finalizer,
         ),
+        prepare_workflow=prepare_workflow,
     )
     rt.schedules = ScheduleService(
         rt._store,

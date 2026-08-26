@@ -79,6 +79,7 @@ from .types import (
     RoutingDecision,
     StreamChunk,
 )
+from .vision_table import resolve_vision_status
 
 _LOG = logging.getLogger(__name__)
 
@@ -288,8 +289,11 @@ class DefaultLLMRouter:
                     )
                 )
                 raise NoEligibleModel(
-                    f"Request contains images but model '{key}' does not support VISION. "
-                    f"Check DISCO_DRIVER_VISION env and driver-local config."
+                    f"Request contains images but model '{entry.model_id}' ({key}) does not "
+                    "support VISION for this request because it is not confirmed image-capable. "
+                    "Open Settings → Models → Model library → "
+                    "Image understanding and confirm Supports images, or choose a "
+                    "confirmed visual model."
                 )
 
         return key, entry, path, "config", []
@@ -311,8 +315,19 @@ class DefaultLLMRouter:
             target = self._config.models.get(target_key)
             if target is None:
                 return "unavailable", None, "vision_model_unknown"
-            if Requirement.VISION not in target.capabilities:
-                return "unavailable", target_key, "vision_model_text_only"
+            status = resolve_vision_status(
+                model_id=target.model_id,
+                family=target.family,
+                explicit=target.vision,
+                live_probe=target.vision_probe,
+                provider_declared=(
+                    target.vision_declared
+                    if target.vision_declared is not None
+                    else (Requirement.VISION in target.capabilities or None)
+                ),
+            )
+            if status != "vision":
+                return "unavailable", target_key, f"vision_model_{status.replace('-', '_')}"
             return "dedicated", target_key, "configured_vision_model"
 
         main_key = self._config.model_for(ModelRole.AGENT_DRIVER)

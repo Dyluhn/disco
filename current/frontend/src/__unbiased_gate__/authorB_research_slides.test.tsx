@@ -12,7 +12,7 @@ import type { ReportEvent } from "@/types/agent";
 
 const apiMocks = vi.hoisted(() => ({
   uploadFiles: vi.fn(),
-  createBuildConversation: vi.fn(),
+  startReportDeck: vi.fn(),
 }));
 
 vi.mock("@/api/agent", async () => {
@@ -20,9 +20,12 @@ vi.mock("@/api/agent", async () => {
   return {
     ...actual,
     uploadFiles: apiMocks.uploadFiles,
-    createBuildConversation: apiMocks.createBuildConversation,
   };
 });
+
+vi.mock("@/api/reportDeck", () => ({
+  startReportDeck: apiMocks.startReportDeck,
+}));
 
 vi.mock("@/hooks/useResearch", () => ({
   useResearch: () => ({
@@ -96,8 +99,15 @@ describe("AuthorB unbiased gate — W-06/W-07/W-13/W-24 research UI", () => {
   beforeEach(() => {
     apiMocks.uploadFiles.mockReset();
     apiMocks.uploadFiles.mockResolvedValue({ saved: [{ name: "brief.txt", bytes: 12 }], rejected: [] });
-    apiMocks.createBuildConversation.mockReset();
-    apiMocks.createBuildConversation.mockResolvedValue("conv_slides_authorb");
+    apiMocks.startReportDeck.mockReset();
+    apiMocks.startReportDeck.mockResolvedValue({
+      ok: true,
+      conversation_id: "conv_slides_authorb",
+      job_id: "job_slides_authorb",
+      source_event_id: "report-1",
+      contract: "deck",
+      format: "pptx",
+    });
   });
 
   it("W-06 keeps typed draft text when toggling standard search to Deep Research and back", async () => {
@@ -145,17 +155,7 @@ describe("AuthorB unbiased gate — W-06/W-07/W-13/W-24 research UI", () => {
     expect(screen.getByTestId("mode-probe")).toHaveTextContent("search");
     await user.click(screen.getByRole("button", { name: /build/i }));
 
-    await waitFor(() =>
-      expect(apiMocks.createBuildConversation).toHaveBeenCalledWith(
-        null,
-        "agent",
-        true,
-        null,
-        // quiet rides the chat-verbosity preference, which now defaults to
-        // quiet-on (verbose off).
-        true,
-      ),
-    );
+    await waitFor(() => expect(apiMocks.startReportDeck).toHaveBeenCalledWith("dr_cid"));
     expect(screen.getByTestId("mode-probe")).toHaveTextContent("agent");
   });
 });

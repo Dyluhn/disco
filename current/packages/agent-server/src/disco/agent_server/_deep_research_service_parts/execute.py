@@ -69,15 +69,38 @@ def build_query_with_constraints(events: list[Event]) -> str | None:
     )
 
 
+def resolve_additional_sources(
+    service: DeepResearchService,
+    conversation_id: str,
+    resume_from: ResearchCheckpointEvent | None,
+) -> list[str]:
+    """Resolve source additions before any provider dependency is built.
+
+    ``None`` on a checkpoint is the legacy shape and intentionally means no
+    additions. A persisted empty list remains explicit baseline-only, while a
+    fresh run reads the current compose selection from transient settings.
+    """
+    if resume_from is not None:
+        return list(resume_from.additional_sources or [])
+    return list(service._settings.get_research_sources(conversation_id))
+
+
 async def build_retrieval_deps(
-    service: DeepResearchService, conversation_id: str
+    service: DeepResearchService,
+    conversation_id: str,
+    *,
+    additional_sources: tuple[str, ...] | None = None,
 ) -> tuple[dict[str, Any], frozenset[str], tuple[str, ...]]:
     """Resolve the research-source deps + validated space_ids for this run.
 
     Returns ``(deps, space_ids, forbidden_space_ids)`` — the caller logs and
     drops ``forbidden_space_ids`` itself, so the warning keeps coming from
     ``deep_research_service``'s own logger."""
-    research_sources = service._settings.get_research_sources(conversation_id)
+    research_sources = (
+        additional_sources
+        if additional_sources is not None
+        else service._settings.get_research_sources(conversation_id)
+    )
     search_override = service._search_override_for_sources(research_sources)
     deps = service._research(search_override=search_override)
     space_ids = service._spaces.get_space_ids(conversation_id)
@@ -136,6 +159,7 @@ def build_run(
     deps: dict[str, Any],
     tier: DepthTier,
     recency_window: Literal["month", "week"] | None,
+    additional_sources: list[str],
     space_ids: frozenset[str],
 ) -> DeepResearchRun:
     # G1/DR-4 F2: load any pre-attached upload passages (text files the user
@@ -155,6 +179,7 @@ def build_run(
         depth=tier,
         conversation_id=conversation_id,
         recency_window=recency_window,
+        additional_sources=additional_sources,
         # G1/DR-4 F2: seed the evidence pool with upload passages.
         upload_passages=upload_passages or None,
         corpus_ids=space_ids,
@@ -420,12 +445,21 @@ async def _run_to_report(
         if resume_from is not None and resume_from.recency_window is not None
         else service._recency_for(conversation_id)
     )
+    # Resolve source selection before provider construction. A modern
+    # checkpoint carries [] for explicit baseline-only; None is a legacy
+    # checkpoint and therefore also resumes against only the configured
+    # Settings provider, even if transient settings were cleared or changed.
+    additional_sources = resolve_additional_sources(service, conversation_id, resume_from)
 
     # Providers come from the existing research-stream plumbing (search,
     # extract, reranker, embedder, nli); the vectorstore is per-run
     # (InMemoryVectorStore). The router honors model_override from the
     # leader pill (the existing _router_now path).
-    deps, space_ids, forbidden_space_ids = await build_retrieval_deps(service, conversation_id)
+    deps, space_ids, forbidden_space_ids = await build_retrieval_deps(
+        service,
+        conversation_id,
+        additional_sources=tuple(additional_sources),
+    )
     if forbidden_space_ids:
         _LOG.warning(
             "dropping unowned space_ids for %s: %s",
@@ -465,6 +499,7 @@ async def _run_to_report(
         deps=deps,
         tier=tier,
         recency_window=recency_window,
+        additional_sources=additional_sources,
         space_ids=space_ids,
     )
 

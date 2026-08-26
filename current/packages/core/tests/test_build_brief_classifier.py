@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 
 import pytest
-from disco.core.appkit import BuildBrief, classify_build_brief
+from disco.core.appkit import BuildBrief, appkit_applicable, classify_build_brief
 
 _GOLDEN = (
     Path(__file__).resolve().parents[1]
@@ -80,3 +80,38 @@ def test_key_entities_drop_stopwords_and_dedupe() -> None:
     brief = classify_build_brief("build a a a recipe recipe manager for cooks")
     # 'build'/'a'/'for' are filler/stopwords; 'recipe' de-duped.
     assert brief.key_entities == ["recipe", "manager", "cooks"]
+
+
+def test_authorization_is_functional_and_style_words_do_not_imply_it() -> None:
+    rbac = classify_build_brief("Build a forum with RBAC for members and moderators")
+    assert "authorization" in rbac.must_have_sections
+
+    # A visual direction is orthogonal: it should not silently add an
+    # authorization requirement to an otherwise equivalent request.
+    brutalist = classify_build_brief("Build a brutalist forum")
+    plain = classify_build_brief("Build a forum")
+    assert "authorization" not in brutalist.must_have_sections
+    assert brutalist.must_have_sections == plain.must_have_sections
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Build a forum with RBAC", True),
+        ("Build a forum with authentication and a database", True),
+        ("Build a brutalist forum", False),
+        ("Build a beautiful website", False),
+        ("Build a landing page", False),
+        ("Build a blog", False),
+        ("Build a web app", False),
+        ("Build a web app with authentication", True),
+        ("Build an API with authentication", False),
+        ("Build a CLI that imports CSV files", False),
+        ("Build a snake game", False),
+        ("Build a SaaS dashboard", True),
+    ],
+)
+def test_appkit_applicability_is_web_and_functional_not_visual(
+    text: str, expected: bool
+) -> None:
+    assert appkit_applicable(classify_build_brief(text)) is expected

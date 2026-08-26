@@ -115,12 +115,27 @@ def _snapshot_for_manager(
         )
         for server, info in sorted(manager._approval_pending.items())
     )
+    pool_status = manager._pool.server_status() if manager._pool is not None else {}
+    # MCP connection IDs are the persisted server names today (see
+    # McpConnectionDTO.id). Keep this as an ID fact: workflow bindings are
+    # logical alias -> concrete connection ID, not alias -> server lookup.
+    connector_ids = frozenset(
+        {
+            *(
+                name
+                for name, state in manager._http_status.items()
+                if state.get("status") == "connected"
+            ),
+            *(name for name, status in pool_status.items() if status == "connected"),
+        }
+    )
     return McpLoopSnapshot(
         tools=tuple(tools),
         max_active_schemas=config.mcp.max_active_schemas if config.mcp else 20,
         call_target=call_target,
         egress_hosts=egress_hosts,
         approvals=approvals,
+        connector_ids=connector_ids,
     )
 
 

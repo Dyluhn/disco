@@ -26,6 +26,7 @@ vi.mock("@/api/client", async (importOriginal) => ({
 // network contract focused on image configuration rather than `/api/secrets`.
 vi.mock("@/hooks/useSecrets", () => ({
   useSecrets: () => ({ data: { names: [], locked_names: [] } }),
+  useSetSecret: () => ({ isPending: false, mutateAsync: vi.fn() }),
 }));
 
 function jsonResponse(body: unknown, status = 200): Response {

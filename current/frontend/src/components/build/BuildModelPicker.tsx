@@ -255,7 +255,8 @@ export function BuildModelPicker({
   const current = models.find((m) => m.id === effectiveId);
 
   const visionCandidates = (settingsModels ?? []).filter((m) =>
-    m.capabilities.includes("vision"),
+    m.vision_status === "vision" ||
+    (m.vision_status === undefined && m.capabilities.includes("vision")),
   );
   const selectVision = (id: string) => {
     updateAssignments.mutate(
@@ -285,7 +286,7 @@ export function BuildModelPicker({
     if (
       assignments &&
       !assignments.vision_model &&
-      !m.capabilities.includes("vision")
+      m.vision_status !== "vision" && !m.capabilities.includes("vision")
     ) {
       setVisionPromptOpen(true);
     }

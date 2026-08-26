@@ -6,10 +6,10 @@ import asyncio
 import hashlib
 import json
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from ..cassette import Cassette
 from ._checks import (
@@ -52,6 +52,7 @@ class ResearchRunResult:
     search_io: list[dict[str, Any]] = field(default_factory=list)
     inspect_trace: dict[str, Any] | None = None
     thrash: dict[str, Any] = field(default_factory=dict)
+    deck: dict[str, Any] | None = None
     artifacts: dict[str, str] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, Any]:
@@ -75,6 +76,7 @@ class ResearchRunResult:
                 "search_io": self.search_io,
                 "inspect_trace": self.inspect_trace,
                 "thrash": self.thrash,
+                "deck": self.deck,
                 "artifacts": self.artifacts,
             }
         )
@@ -98,6 +100,39 @@ async def run_harness(
         observer.errors.append(f"{type(exc).__name__}: {exc}")
     report = normalize_report(frames, request)
     observer.finalize(report)
+    deck: dict[str, Any] | None = None
+    if request.deck:
+        if observer.errors or _final_candidate(frames) is None:
+            deck = {
+                "requested": True,
+                "ok": False,
+                "skipped": "report_not_successful",
+            }
+        else:
+            correlate = getattr(transport, "correlate_deck", None)
+            if callable(correlate):
+                try:
+                    deck_correlator = cast(
+                        Callable[[ResearchRequest, Mapping[str, Any]], Awaitable[Any]], correlate
+                    )
+                    value = await deck_correlator(request, report)
+                    deck = dict(value) if isinstance(value, Mapping) else {
+                        "requested": True,
+                        "ok": False,
+                        "skipped": "deck_not_observable_on_transport",
+                    }
+                except Exception as exc:  # correlation is diagnostic and run-local
+                    deck = {
+                        "requested": True,
+                        "ok": False,
+                        "error": f"{type(exc).__name__}: {redact(str(exc))}"[:500],
+                    }
+            else:
+                deck = {
+                    "requested": True,
+                    "ok": False,
+                    "skipped": "deck_not_observable_on_transport",
+                }
     search_io = collect_search_io(observer.events, observer.inspect_trace)
     # A provider/control failure may terminate the transport before it emits a
     # report frame.  There is then no report to serialize or validate: doing so
@@ -161,6 +196,9 @@ async def run_harness(
         else 0,
         "run_id": run_id,
         "batch_id": batch_id,
+        "deck_requested": request.deck,
+        "deck_ok": bool(deck and deck.get("ok")),
+        "deck_target_conversation_id": deck.get("target_conversation_id") if deck else None,
     }
     target = _depth_word_bounds(request.depth)
     # A stopped checkpoint has no report body, so the depth word target does not
@@ -196,6 +234,7 @@ async def run_harness(
         search_io=search_io,
         inspect_trace=observer.inspect_trace,
         thrash=thrash,
+        deck=deck,
     )
     if output_dir is not None:
         write_artifacts(result, output_dir)
@@ -262,6 +301,13 @@ async def run_batch(
                         "signals": {},
                         "findings": [{"code": "WORKER_FAILURE", "severity": "hard"}],
                     },
+                    deck={
+                        "requested": request.deck,
+                        "ok": False,
+                        "error": "worker_failed_before_deck_correlation",
+                    }
+                    if request.deck
+                    else None,
                 )
                 try:
                     write_artifacts(failed, child)
@@ -297,6 +343,7 @@ async def run_batch(
                 "telemetry": result.telemetry,
                 "errors": result.errors,
                 "thrash": result.thrash,
+                "deck": result.deck,
             }
             for index, result in enumerate(results, start=1)
         ],
@@ -359,6 +406,8 @@ def _aggregate_metrics(results: Sequence[ResearchRunResult]) -> dict[str, Any]:
         "provider_attempts": sum(
             int(result.telemetry.get("provider_attempt_count", 0)) for result in results
         ),
+        "deck_requested": sum(bool(result.request.get("deck")) for result in results),
+        "deck_passed": sum(bool(result.deck and result.deck.get("ok")) for result in results),
         "thrash_findings": sum(len(result.thrash.get("findings", [])) for result in results),
         "thrash_clean_rate": round(
             sum(bool(result.thrash.get("passed")) for result in results) / len(results), 3
@@ -485,6 +534,7 @@ def write_artifacts(result: ResearchRunResult, output_dir: str | Path) -> dict[s
     search_io_jsonl = root / "search_io.jsonl"
     inspect_json = root / "inspect.json"
     thrash_json = root / "thrash.json"
+    deck_json = root / "deck.json"
     timeline_markdown = root / "timeline.md"
     search_timeline_markdown = root / "search_timeline.md"
     cassette_jsonl = root / "cassette.jsonl"
@@ -513,6 +563,10 @@ def write_artifacts(result: ResearchRunResult, output_dir: str | Path) -> dict[s
     thrash_json.write_text(
         json.dumps(redact(result.thrash), indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
+    if result.deck is not None:
+        deck_json.write_text(
+            json.dumps(redact(result.deck), indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
     timeline_markdown.write_text(render_timeline_markdown(result), encoding="utf-8")
     search_timeline_markdown.write_text(
         render_search_timeline(result.search_io), encoding="utf-8"
@@ -541,6 +595,12 @@ def write_artifacts(result: ResearchRunResult, output_dir: str | Path) -> dict[s
             {"query": result.request.get("query")},
             redact(result.inspect_trace),
         )
+    if result.deck is not None:
+        cassette.record(
+            "research.deck",
+            {"query": result.request.get("query")},
+            redact(result.deck),
+        )
     cassette.save(cassette_jsonl)
     result.artifacts.update(
         {
@@ -559,6 +619,8 @@ def write_artifacts(result: ResearchRunResult, output_dir: str | Path) -> dict[s
             "summary_markdown": str(markdown_summary),
         }
     )
+    if result.deck is not None:
+        result.artifacts["deck_json"] = str(deck_json)
     summary_json.write_text(
         json.dumps(result.as_dict(), indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
@@ -668,6 +730,20 @@ def render_summary_markdown(result: ResearchRunResult) -> str:
             f"{result.thrash.get('signals', {})}",
         ]
     )
+    if result.deck is not None:
+        validation = result.deck.get("artifact_validation")
+        typed = validation.get("typed_slides", False) if isinstance(validation, Mapping) else False
+        lines.extend(
+            [
+                "",
+                "## Report → deck correlation",
+                "",
+                f"- {'PASS' if result.deck.get('ok') else 'FAIL'}: "
+                f"source={result.deck.get('source_conversation_id', 'n/a')} "
+                f"target={result.deck.get('target_conversation_id', 'n/a')}",
+                f"- Typed slides: {typed}",
+            ]
+        )
     if result.errors:
         lines.extend(["", "## Errors", "", *[f"- {error}" for error in result.errors]])
     lines.extend(["", "## Report", "", result.report_markdown])

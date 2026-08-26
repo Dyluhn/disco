@@ -25,6 +25,39 @@ _LOG = logging.getLogger(__name__)
 _ATOM_NS = {"a": "http://www.w3.org/2005/Atom"}
 
 
+def _search_diagnostic(
+    provider: str,
+    outcome: str,
+    *,
+    started: float,
+    status_code: int | None = None,
+    result_count: int = 0,
+    error: BaseException | None = None,
+) -> dict[str, object]:
+    """Build a small, provider-neutral search fact.
+
+    Diagnostics are control-plane facts, not copied upstream responses.  Keep
+    only bounded machine-readable fields so a malformed response or exception
+    cannot leak response bodies, URLs, or credentials into the event log.
+    """
+
+    diagnostic: dict[str, object] = {
+        "provider": provider[:80],
+        "outcome": outcome,
+        "status_code": status_code if isinstance(status_code, int) else None,
+        "result_count": max(0, int(result_count)),
+        "latency_ms": max(0, int((asyncio.get_running_loop().time() - started) * 1_000)),
+    }
+    if error is not None:
+        diagnostic["provider_error"] = type(error).__name__[:48]
+    return diagnostic
+
+
+def _response_status(response: httpx.Response | GuardedResponse) -> int | None:
+    status = getattr(response, "status_code", None)
+    return status if isinstance(status, int) else None
+
+
 def _with_params(base: str, params: Mapping[str, object]) -> str:
     sep = "&" if "?" in base else "?"
     return f"{base}{sep}{urlencode(params)}"
@@ -119,6 +152,25 @@ class ArxivSearchProvider:
         domains_deny: frozenset[str] | None = None,
         time_filter: str | None = None,
     ) -> list[SearchHit]:
+        hits, _diagnostic = await self.search_detailed(
+            query,
+            limit=limit,
+            domains_allow=domains_allow,
+            domains_deny=domains_deny,
+            time_filter=time_filter,
+        )
+        return hits
+
+    async def search_detailed(
+        self,
+        query: str,
+        *,
+        limit: int = 10,
+        domains_allow: frozenset[str] | None = None,
+        domains_deny: frozenset[str] | None = None,
+        time_filter: str | None = None,
+    ) -> tuple[list[SearchHit], dict[str, object]]:
+        started = asyncio.get_running_loop().time()
         recency_start = _recency_start(time_filter)
         request_limit = min(limit * 4, 100) if recency_start else limit
         params = {"search_query": f"all:{query}", "start": 0, "max_results": request_limit}
@@ -129,10 +181,18 @@ class ArxivSearchProvider:
                 transport=self._transport,
             )
             if resp.status_code >= 400:
-                return []
+                return [], _search_diagnostic(
+                    self.name,
+                    "upstream",
+                    started=started,
+                    status_code=_response_status(resp),
+                    error=RuntimeError("upstream status"),
+                )
             root = ET.fromstring(resp.content)
-        except (EgressDenied, OSError, ET.ParseError, ValueError, httpx.HTTPError):
-            return []
+        except ET.ParseError as exc:
+            return [], _search_diagnostic(self.name, "invalid_response", started=started, error=exc)
+        except (EgressDenied, OSError, ValueError, httpx.HTTPError) as exc:
+            return [], _search_diagnostic(self.name, "upstream", started=started, error=exc)
 
         hits: list[SearchHit] = []
         for i, entry in enumerate(root.findall("a:entry", _ATOM_NS)):
@@ -155,7 +215,13 @@ class ArxivSearchProvider:
             )
             if len(hits) >= limit:
                 break
-        return hits
+        return hits, _search_diagnostic(
+            self.name,
+            "ok" if hits else "empty",
+            started=started,
+            status_code=_response_status(resp),
+            result_count=len(hits),
+        )
 
 
 class NewsSearchProvider:
@@ -189,6 +255,25 @@ class NewsSearchProvider:
         domains_deny: frozenset[str] | None = None,
         time_filter: str | None = None,
     ) -> list[SearchHit]:
+        hits, _diagnostic = await self.search_detailed(
+            query,
+            limit=limit,
+            domains_allow=domains_allow,
+            domains_deny=domains_deny,
+            time_filter=time_filter,
+        )
+        return hits
+
+    async def search_detailed(
+        self,
+        query: str,
+        *,
+        limit: int = 10,
+        domains_allow: frozenset[str] | None = None,
+        domains_deny: frozenset[str] | None = None,
+        time_filter: str | None = None,
+    ) -> tuple[list[SearchHit], dict[str, object]]:
+        started = asyncio.get_running_loop().time()
         effective_query = _news_query(query, time_filter)
         params = {
             "q": effective_query,
@@ -203,10 +288,18 @@ class NewsSearchProvider:
                 transport=self._transport,
             )
             if resp.status_code >= 400:
-                return []
+                return [], _search_diagnostic(
+                    self.name,
+                    "upstream",
+                    started=started,
+                    status_code=_response_status(resp),
+                    error=RuntimeError("upstream status"),
+                )
             root = ET.fromstring(resp.content)
-        except (EgressDenied, OSError, ET.ParseError, ValueError, httpx.HTTPError):
-            return []
+        except ET.ParseError as exc:
+            return [], _search_diagnostic(self.name, "invalid_response", started=started, error=exc)
+        except (EgressDenied, OSError, ValueError, httpx.HTTPError) as exc:
+            return [], _search_diagnostic(self.name, "upstream", started=started, error=exc)
 
         hits: list[SearchHit] = []
         try:
@@ -227,9 +320,15 @@ class NewsSearchProvider:
                 )
                 if len(hits) >= limit:
                     break
-        except ValueError:
-            return []
-        return hits
+        except (TypeError, ValueError) as exc:
+            return [], _search_diagnostic(self.name, "invalid_response", started=started, error=exc)
+        return hits, _search_diagnostic(
+            self.name,
+            "ok" if hits else "empty",
+            started=started,
+            status_code=_response_status(resp),
+            result_count=len(hits),
+        )
 
 
 def _news_query(query: str, time_filter: str | None) -> str:
@@ -269,7 +368,30 @@ class SemanticScholarSearchProvider:
         domains_deny: frozenset[str] | None = None,
         time_filter: str | None = None,
     ) -> list[SearchHit]:
-        papers = await self._fetch_papers(query, limit, time_filter=time_filter)
+        hits, _diagnostic = await self.search_detailed(
+            query,
+            limit=limit,
+            domains_allow=domains_allow,
+            domains_deny=domains_deny,
+            time_filter=time_filter,
+        )
+        return hits
+
+    async def search_detailed(
+        self,
+        query: str,
+        *,
+        limit: int = 10,
+        domains_allow: frozenset[str] | None = None,
+        domains_deny: frozenset[str] | None = None,
+        time_filter: str | None = None,
+    ) -> tuple[list[SearchHit], dict[str, object]]:
+        started = asyncio.get_running_loop().time()
+        papers, diagnostic = await self._fetch_papers_detailed(
+            query, limit, time_filter=time_filter, started=started
+        )
+        if diagnostic["outcome"] not in {"ok", "empty"}:
+            return [], diagnostic
         hits: list[SearchHit] = []
         for i, paper in enumerate(papers):
             hit = self._paper_to_hit(paper, i, domains_allow, domains_deny)
@@ -278,11 +400,20 @@ class SemanticScholarSearchProvider:
             hits.append(hit)
             if len(hits) >= limit:
                 break
-        return hits
+        diagnostic = dict(diagnostic)
+        diagnostic["outcome"] = "ok" if hits else "empty"
+        diagnostic["result_count"] = len(hits)
+        return hits, diagnostic
 
-    async def _fetch_papers(
-        self, query: str, limit: int, *, time_filter: str | None = None
-    ) -> list:
+    async def _fetch_papers_detailed(
+        self,
+        query: str,
+        limit: int,
+        *,
+        time_filter: str | None = None,
+        started: float | None = None,
+    ) -> tuple[list, dict[str, object]]:
+        started = started if started is not None else asyncio.get_running_loop().time()
         params = {
             "query": query,
             "limit": limit,
@@ -300,11 +431,57 @@ class SemanticScholarSearchProvider:
                 transport=self._transport,
             )
             if resp.status_code >= 400:
-                return []
+                return [], _search_diagnostic(
+                    self.name,
+                    "upstream",
+                    started=started,
+                    status_code=_response_status(resp),
+                    error=RuntimeError("upstream status"),
+                )
             payload = json.loads(resp.text)
-            return payload.get("data", []) if isinstance(payload, dict) else []
-        except (EgressDenied, OSError, ValueError, httpx.HTTPError):
-            return []
+            if not isinstance(payload, dict) or not isinstance(payload.get("data"), list):
+                return [], _search_diagnostic(
+                    self.name,
+                    "invalid_response",
+                    started=started,
+                    status_code=_response_status(resp),
+                    error=ValueError("data is not a list"),
+                )
+            papers = payload["data"]
+            if any(not isinstance(paper, dict) for paper in papers):
+                return [], _search_diagnostic(
+                    self.name,
+                    "invalid_response",
+                    started=started,
+                    status_code=_response_status(resp),
+                    error=ValueError("data entries are not objects"),
+                )
+            return papers, _search_diagnostic(
+                self.name,
+                "ok" if papers else "empty",
+                started=started,
+                status_code=_response_status(resp),
+                result_count=len(papers),
+            )
+        except json.JSONDecodeError as exc:
+            return [], _search_diagnostic(
+                self.name,
+                "invalid_response",
+                started=started,
+                error=exc,
+            )
+        except (EgressDenied, OSError, ValueError, httpx.HTTPError) as exc:
+            return [], _search_diagnostic(self.name, "upstream", started=started, error=exc)
+
+    async def _fetch_papers(
+        self, query: str, limit: int, *, time_filter: str | None = None
+    ) -> list:
+        """Compatibility helper for callers that only need paper rows."""
+
+        papers, _diagnostic = await self._fetch_papers_detailed(
+            query, limit, time_filter=time_filter
+        )
+        return papers
 
     @staticmethod
     def _paper_to_hit(
@@ -361,22 +538,60 @@ class SiteScopedSearchProvider:
         domains_deny: frozenset[str] | None = None,
         time_filter: str | None = None,
     ) -> list[SearchHit]:
+        hits, _diagnostic = await self.search_detailed(
+            query,
+            limit=limit,
+            domains_allow=domains_allow,
+            domains_deny=domains_deny,
+            time_filter=time_filter,
+        )
+        return hits
+
+    async def search_detailed(
+        self,
+        query: str,
+        *,
+        limit: int = 10,
+        domains_allow: frozenset[str] | None = None,
+        domains_deny: frozenset[str] | None = None,
+        time_filter: str | None = None,
+    ) -> tuple[list[SearchHit], dict[str, object]]:
         domains = _parse_sites(self._sites)
         augmented = f"{query} ({' OR '.join('site:' + d for d in domains)})" if domains else query
         allow = frozenset(domains) | (domains_allow or frozenset()) if domains else domains_allow
         try:
-            hits = await self._inner.search(
-                augmented,
-                limit=limit,
-                domains_allow=allow,
-                domains_deny=domains_deny,
-                time_filter=time_filter,
+            detailed = getattr(self._inner, "search_detailed", None)
+            if callable(detailed):
+                hits, diagnostic = await cast(Any, detailed)(
+                    augmented,
+                    limit=limit,
+                    domains_allow=allow,
+                    domains_deny=domains_deny,
+                    time_filter=time_filter,
+                )
+            else:
+                hits = await self._inner.search(
+                    augmented,
+                    limit=limit,
+                    domains_allow=allow,
+                    domains_deny=domains_deny,
+                    time_filter=time_filter,
+                )
+                diagnostic = {
+                    "provider": getattr(self._inner, "name", type(self._inner).__name__)[:80],
+                    "outcome": "ok" if hits else "empty",
+                    "result_count": len(hits),
+                }
+        except Exception as exc:  # noqa: BLE001 — preserve named provider failure
+            return [], _search_diagnostic(
+                self.name,
+                "upstream",
+                started=asyncio.get_running_loop().time(),
+                error=exc,
             )
-        except Exception:  # noqa: BLE001 — discovery adapters must never break a run
-            return []
         if not domains:
-            return hits
-        return [
+            return hits, dict(diagnostic)
+        scoped = [
             SearchHit(
                 url=h.url,
                 title=h.title,
@@ -387,6 +602,14 @@ class SiteScopedSearchProvider:
             )
             for h in hits
         ]
+        diagnostic = dict(diagnostic)
+        diagnostic["result_count"] = len(scoped)
+        diagnostic["outcome"] = (
+            str(diagnostic.get("outcome"))
+            if str(diagnostic.get("outcome")) not in {"ok", "empty"}
+            else ("ok" if scoped else "empty")
+        )
+        return scoped, diagnostic
 
 
 class MultiSearchProvider:
@@ -462,7 +685,7 @@ class MultiSearchProvider:
         time_filter: str | None,
     ) -> tuple[list[list[SearchHit]], dict[str, object]]:
         if not self._providers or limit <= 0:
-            return [], {}
+            return [], {"provider_aggregate": "empty", "providers": {}}
         gathered = await asyncio.gather(
             *[
                 self._search_provider(
@@ -485,7 +708,12 @@ class MultiSearchProvider:
             provider_name = str(getattr(provider, "name", type(provider).__name__))[:80]
             if isinstance(result, BaseException):
                 failed_providers += 1
-                diagnostics[provider_name] = {"provider_error": type(result).__name__}
+                diagnostics[provider_name] = {
+                    "provider": provider_name,
+                    "outcome": "upstream",
+                    "provider_error": type(result).__name__[:48],
+                    "result_count": 0,
+                }
                 _LOG.warning(
                     "search provider %s failed: %s: %s",
                     getattr(provider, "name", type(provider).__name__),

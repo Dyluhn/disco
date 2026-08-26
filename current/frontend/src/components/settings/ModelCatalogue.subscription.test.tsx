@@ -18,6 +18,7 @@ vi.mock("@/hooks/useModels", () => ({
 
 vi.mock("@/hooks/useSecrets", () => ({
   useSecrets: () => ({ data: { names: [] } }),
+  useSetSecret: () => ({ mutateAsync: vi.fn(), isPending: false, error: null }),
 }));
 
 describe("ModelCatalogue subscription pricing", () => {

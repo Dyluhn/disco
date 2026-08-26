@@ -216,7 +216,36 @@ describe("AuthorB unbiased gate — W-14/W-26/W-28/W-43 chat and inspect", () =>
       artifact_kind: "files",
       source: "agent",
     };
-    buildState.value = baseBuildState("FINISHED", [plan, deliverable]);
+    buildState.value = baseBuildState("FINISHED", [
+      plan,
+      deliverable,
+      {
+        id: "finish-status",
+        seq: 10,
+        kind: "status",
+        status: "FINISHED",
+        source: "system",
+      },
+      {
+        id: "finish-version",
+        seq: 12,
+        kind: "workspace_version",
+        version_seq: 3,
+        tree_digest: "tree-3",
+        trigger: "finish",
+        source: "system",
+        final_seal: {
+          schema_version: 1,
+          scope: { namespace: "workspace.tree", identifier: "conv_authorb" },
+          terminal_seq: 10,
+          latest_effect_seq: null,
+          version_seq: 3,
+          tree_digest: "tree-3",
+          file_count: 1,
+          total_bytes: 1,
+        },
+      },
+    ]);
 
     render(<BuildSurface />);
 

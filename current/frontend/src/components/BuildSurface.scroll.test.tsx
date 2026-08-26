@@ -219,7 +219,33 @@ describe("W-40: gate scroll target — plan gate pulls to TOP, others to BOTTOM"
 
 describe("WO-9: the workspace-zip action is labelled 'Download source'", () => {
   it("renders a 'Download source' button (not 'Export') in the resumed header", () => {
-    buildState = baseBuild({ cid: "cid-9", resumed: true, status: "FINISHED" });
+    buildState = baseBuild({
+      cid: "cid-9",
+      resumed: true,
+      status: "FINISHED",
+      events: [
+        { id: "finish-status", seq: 10, kind: "status", status: "FINISHED", source: "system" },
+        {
+          id: "finish-version",
+          seq: 12,
+          kind: "workspace_version",
+          version_seq: 3,
+          tree_digest: "tree-3",
+          trigger: "finish",
+          source: "system",
+          final_seal: {
+            schema_version: 1,
+            scope: { namespace: "workspace.tree", identifier: "cid-9" },
+            terminal_seq: 10,
+            latest_effect_seq: null,
+            version_seq: 3,
+            tree_digest: "tree-3",
+            file_count: 1,
+            total_bytes: 1,
+          },
+        },
+      ] as AgentEvent[],
+    });
     renderSurface(<BuildSurface resumeCid="cid-9" />);
     expect(
       screen.getByRole("button", { name: "Download source" }),

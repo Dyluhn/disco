@@ -38,6 +38,11 @@ class _Store:
     def create_conversation(self, conversation_id: str, **kwargs: object) -> None:
         self.created = (conversation_id, kwargs)
 
+    async def append(self, conversation_id: str, event: object) -> object:
+        del conversation_id
+        self.events.append(event)
+        return event
+
 
 class _Runtime:
     class _Settings:

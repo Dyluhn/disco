@@ -24,6 +24,7 @@ from disco.retrieval.live import (
 )
 from disco.retrieval.models import Passage
 from disco.retrieval.source_adapters import MultiSearchProvider
+from disco.retrieval.wiring import compose_search_providers
 
 
 def _async(handler) -> httpx.MockTransport:
@@ -124,9 +125,77 @@ async def test_searxng_failure_degrades_to_no_hits():
     hits, diagnostic = await provider.search_detailed("q")
     assert hits == []
     assert diagnostic["provider_error"] == "HTTPStatusError"
+    assert diagnostic["provider"] == "searxng"
+    assert diagnostic["outcome"] == "upstream"
     assert diagnostic["status_code"] == 502
     assert diagnostic["result_count"] == 0
     assert isinstance(diagnostic["latency_ms"], int)
+
+
+async def test_searxng_valid_empty_is_distinct_from_failure():
+    provider = SearxngSearchProvider(
+        "http://x",
+        transport=_async(lambda req: httpx.Response(200, json={"results": []})),
+    )
+    hits, diagnostic = await provider.search_detailed("q")
+    assert hits == []
+    assert diagnostic["provider"] == "searxng"
+    assert diagnostic["outcome"] == "empty"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"results": {}},
+        {"results": ["not-an-object"]},
+    ],
+)
+async def test_searxng_malformed_results_are_invalid_response(payload):
+    provider = SearxngSearchProvider(
+        "http://x",
+        transport=_async(lambda req: httpx.Response(200, json=payload)),
+    )
+
+    hits, diagnostic = await provider.search_detailed("q")
+    assert hits == []
+    assert diagnostic["provider"] == "searxng"
+    assert diagnostic["outcome"] == "invalid_response"
+    assert diagnostic["status_code"] == 200
+
+
+async def test_searxng_malformed_json_is_invalid_response():
+    provider = SearxngSearchProvider(
+        "http://x",
+        transport=_async(lambda req: httpx.Response(200, text="not-json")),
+    )
+
+    hits, diagnostic = await provider.search_detailed("q")
+    assert hits == []
+    assert diagnostic["outcome"] == "invalid_response"
+
+
+def test_additional_sources_preserve_configured_provider_identity_for_empty():
+    configured = SearxngSearchProvider("http://configured")
+    assert compose_search_providers(configured, []) is configured
+
+
+def test_additional_sources_are_stable_additions_after_configured_provider():
+    configured = SearxngSearchProvider("http://configured")
+    news = _make_search("news", "", "")
+    composed = compose_search_providers(configured, [news, news])
+    assert isinstance(composed, MultiSearchProvider)
+    assert [provider.name for provider in composed._providers] == ["searxng", "news"]
+
+
+def test_additional_multi_provider_is_flattened_and_deduplicated():
+    configured = SearxngSearchProvider("http://configured")
+    news = _make_search("news", "", "")
+    additions = MultiSearchProvider((configured, news))
+
+    composed = compose_search_providers(configured, [additions])
+
+    assert isinstance(composed, MultiSearchProvider)
+    assert composed._providers == (configured, news)
 
 
 def test_build_multi_search_maps_ids_and_falls_back_to_ddgs():

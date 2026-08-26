@@ -7,6 +7,7 @@ import {
   listWorkflowReviews,
   runWorkflow,
   scheduleWorkflow,
+  setWorkflowEnabled,
 } from "@/api/workflows";
 import type { WorkflowListResponse } from "@/types/workflow";
 
@@ -34,6 +35,16 @@ export function useApproveWorkflow() {
           ),
         };
       });
+    },
+  });
+}
+
+export function useSetWorkflowEnabled() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: setWorkflowEnabled,
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: WORKFLOWS_KEY });
     },
   });
 }

@@ -12,10 +12,11 @@ import asyncio
 import json
 import logging
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, cast
 
 from disco.retrieval.bundled_providers import chunk_passages
 from disco.retrieval.models import ExtractedDoc, SearchHit
+from disco.retrieval.source_adapters import _search_diagnostic
 from disco.retrieval.url_policy import source_url_key, url_allowed
 
 _LOG = logging.getLogger(__name__)
@@ -74,20 +75,42 @@ def _mcp_search_arguments(
 
 
 def _mcp_result_items(raw: dict, provider_name: str) -> list[dict[str, Any]]:
+    """Return valid MCP search rows for the legacy plain-search adapter.
+
+    Detailed callers use ``_mcp_result_items_detailed`` so malformed responses
+    remain distinguishable from a valid empty result. Keep this small wrapper
+    for the extraction-neutral legacy call sites and tests.
+    """
+    items, outcome = _mcp_result_items_detailed(raw, provider_name)
+    if outcome != "ok" and outcome != "empty":
+        return []
+    return items
+
+
+def _mcp_result_items_detailed(
+    raw: object, provider_name: str
+) -> tuple[list[dict[str, Any]], str]:
+    if not isinstance(raw, Mapping):
+        return [], "invalid_response"
     if raw.get("isError") or raw.get("is_error"):
         _LOG.warning("MCP search %r returned an error result", provider_name)
-        return []
-    content_text = _extract_text(raw)
+        return [], "upstream"
+    content_text = _extract_text(dict(raw))
     if not content_text:
-        return []
+        return [], "invalid_response"
     try:
         parsed = json.loads(content_text)
     except (json.JSONDecodeError, TypeError):
-        return []
+        return [], "invalid_response"
     items = parsed.get("results") if isinstance(parsed, dict) else parsed
     if not isinstance(items, list):
-        return []
-    return [item for item in items if isinstance(item, dict)]
+        return [], "invalid_response"
+    if any(
+        not isinstance(item, dict) or not isinstance(item.get("url"), str)
+        for item in items
+    ):
+        return [], "invalid_response"
+    return [item for item in items if isinstance(item, dict)], "ok" if items else "empty"
 
 
 def _mcp_search_hits(
@@ -115,6 +138,65 @@ def _mcp_search_hits(
         if len(hits) >= limit:
             break
     return hits
+
+
+_DIAGNOSTIC_FIELDS = frozenset(
+    {
+        "provider",
+        "outcome",
+        "status_code",
+        "attempts",
+        "latency_ms",
+        "retry_wait_ms",
+        "result_count",
+        "provider_error",
+        "max_concurrency",
+    }
+)
+
+
+def _bounded_diagnostic(
+    provider_name: str,
+    raw: Mapping[str, object],
+    *,
+    started: float,
+    result_count: int,
+) -> dict[str, object]:
+    """Keep provider diagnostics finite and free of response bodies/secrets."""
+    raw_outcome = raw.get("outcome")
+    allowed_outcomes = {
+        "ok",
+        "empty",
+        "rate_limited",
+        "auth",
+        "quota",
+        "timeout",
+        "upstream",
+        "invalid_response",
+        "partial_outage",
+    }
+    outcome = str(raw_outcome) if raw_outcome in allowed_outcomes else None
+    if outcome is None:
+        outcome = "ok" if result_count else "empty"
+    status_code = raw.get("status_code")
+    diagnostic = _search_diagnostic(
+        provider_name,
+        outcome,
+        started=started,
+        status_code=status_code if isinstance(status_code, int) else None,
+        result_count=result_count,
+    )
+    for key in _DIAGNOSTIC_FIELDS:
+        value = raw.get(key)
+        if key in diagnostic or value is None:
+            continue
+        if key == "provider_error" and isinstance(value, str):
+            diagnostic[key] = value[:48]
+        elif key in {"provider", "outcome"}:
+            continue
+        elif isinstance(value, int):
+            diagnostic[key] = max(0, value)
+    return diagnostic
 
 
 class _MCPRetrievalSearchProvider:
@@ -151,6 +233,26 @@ class _MCPRetrievalSearchProvider:
         time_filter: str | None = None,
     ) -> list[SearchHit]:
         """Call the MCP search tool and convert results to SearchHits."""
+        hits, _diagnostic = await self.search_detailed(
+            query,
+            limit=limit,
+            domains_allow=domains_allow,
+            domains_deny=domains_deny,
+            time_filter=time_filter,
+        )
+        return hits
+
+    async def search_detailed(
+        self,
+        query: str,
+        *,
+        limit: int = 10,
+        domains_allow: frozenset[str] | None = None,
+        domains_deny: frozenset[str] | None = None,
+        time_filter: str | None = None,
+    ) -> tuple[list[SearchHit], dict[str, object]]:
+        """Call one MCP search tool and preserve empty/failure semantics."""
+        started = asyncio.get_running_loop().time()
         arguments = _mcp_search_arguments(
             self._input_fields,
             query,
@@ -160,18 +262,31 @@ class _MCPRetrievalSearchProvider:
             time_filter,
         )
         if arguments is None:
-            return []
+            return [], _search_diagnostic(
+                self.name, "empty", started=started, result_count=0
+            )
         try:
             raw = await self._call(self._server, self._tool_name, arguments)
         except Exception as exc:
-            _LOG.warning("MCP search %r failed: %s", self.name, exc)
-            return []
-        return _mcp_search_hits(
-            _mcp_result_items(raw, self.name),
+            _LOG.warning("MCP search %r failed (%s)", self.name, type(exc).__name__)
+            return [], _search_diagnostic(
+                self.name, "upstream", started=started, error=exc
+            )
+        items, outcome = _mcp_result_items_detailed(raw, self.name)
+        if outcome not in {"ok", "empty"}:
+            return [], _search_diagnostic(self.name, outcome, started=started)
+        hits = _mcp_search_hits(
+            items,
             provider_name=self.name,
             limit=limit,
             domains_allow=domains_allow,
             domains_deny=domains_deny,
+        )
+        return hits, _search_diagnostic(
+            self.name,
+            "ok" if hits else "empty",
+            started=started,
+            result_count=len(hits),
         )
 
 
@@ -389,7 +504,25 @@ class CompositeSearchProvider:
         domains_deny: frozenset[str] | None = None,
         time_filter: str | None = None,
     ) -> list[SearchHit]:
-        batches = await self._gather_batches(
+        hits, _diagnostic = await self.search_detailed(
+            query,
+            limit=limit,
+            domains_allow=domains_allow,
+            domains_deny=domains_deny,
+            time_filter=time_filter,
+        )
+        return hits
+
+    async def search_detailed(
+        self,
+        query: str,
+        *,
+        limit: int = 10,
+        domains_allow: frozenset[str] | None = None,
+        domains_deny: frozenset[str] | None = None,
+        time_filter: str | None = None,
+    ) -> tuple[list[SearchHit], dict[str, object]]:
+        batches, diagnostic = await self._gather_batches_detailed(
             query,
             limit=limit,
             domains_allow=domains_allow,
@@ -404,8 +537,8 @@ class CompositeSearchProvider:
             # Finish the whole rank bucket before truncating so a duplicate from
             # a later provider can still attach provenance to an included hit.
             if len(merged) >= limit:
-                return merged[:limit]
-        return merged[:limit]
+                return merged[:limit], diagnostic
+        return merged[:limit], diagnostic
 
     async def _gather_batches(
         self,
@@ -416,18 +549,58 @@ class CompositeSearchProvider:
         domains_deny: frozenset[str] | None,
         time_filter: str | None,
     ) -> list[tuple[Any, list[SearchHit]]]:
+        batches, _diagnostic = await self._gather_batches_detailed(
+            query,
+            limit=limit,
+            domains_allow=domains_allow,
+            domains_deny=domains_deny,
+            time_filter=time_filter,
+        )
+        return batches
+
+    async def _gather_batches_detailed(
+        self,
+        query: str,
+        *,
+        limit: int,
+        domains_allow: frozenset[str] | None,
+        domains_deny: frozenset[str] | None,
+        time_filter: str | None,
+    ) -> tuple[list[tuple[Any, list[SearchHit]]], dict[str, object]]:
         providers = list(self._providers)
         results = await asyncio.gather(
             *(
-                self._search_one(provider, query, limit, domains_allow, domains_deny, time_filter)
+                self._search_one_detailed(
+                    provider, query, limit, domains_allow, domains_deny, time_filter
+                )
                 for provider in providers
             )
         )
-        return [
-            (provider, hits)
-            for provider, hits in zip(providers, results, strict=True)
-            if hits is not None
-        ]
+        batches: list[tuple[Any, list[SearchHit]]] = []
+        provider_diagnostics: dict[str, object] = {}
+        failed = 0
+        for provider, (hits, diagnostic) in zip(providers, results, strict=True):
+            name = str(getattr(provider, "name", type(provider).__name__))[:80]
+            provider_diagnostics[name] = diagnostic
+            outcome = str(diagnostic.get("outcome", "empty"))
+            if outcome not in {"ok", "empty"}:
+                failed += 1
+            if hits:
+                batches.append((provider, hits))
+        if not providers:
+            aggregate = "empty"
+        elif failed == len(providers):
+            aggregate = "all_failed"
+        elif failed:
+            aggregate = "partial_outage"
+        elif batches:
+            aggregate = "success"
+        else:
+            aggregate = "empty"
+        return batches, {
+            "provider_aggregate": aggregate,
+            "providers": provider_diagnostics,
+        }
 
     @staticmethod
     async def _search_one(
@@ -438,32 +611,116 @@ class CompositeSearchProvider:
         domains_deny: frozenset[str] | None,
         time_filter: str | None,
     ) -> list[SearchHit] | None:
+        hits, _diagnostic = await CompositeSearchProvider._search_one_detailed(
+            provider, query, limit, domains_allow, domains_deny, time_filter
+        )
+        return hits
+
+    @staticmethod
+    async def _search_one_detailed(
+        provider: Any,
+        query: str,
+        limit: int,
+        domains_allow: frozenset[str] | None,
+        domains_deny: frozenset[str] | None,
+        time_filter: str | None,
+    ) -> tuple[list[SearchHit], dict[str, object]]:
+        started = asyncio.get_running_loop().time()
+        provider_name = str(getattr(provider, "name", type(provider).__name__))[:80]
+
+        async def _call_narrow() -> Any:
+            return await provider.search(query, limit=limit)
+
+        detailed = getattr(provider, "search_detailed", None)
         try:
-            return await provider.search(
+            if callable(detailed):
+                result = await cast(Any, detailed)(
+                    query,
+                    limit=limit,
+                    domains_allow=domains_allow,
+                    domains_deny=domains_deny,
+                    time_filter=time_filter,
+                )
+                if not isinstance(result, tuple) or len(result) != 2:
+                    raise ValueError("search_detailed returned an invalid result")
+                raw_hits, raw_diagnostic = result
+                if not isinstance(raw_hits, list) or not isinstance(raw_diagnostic, Mapping):
+                    raise ValueError("search_detailed returned an invalid result")
+                hits = [hit for hit in raw_hits if isinstance(hit, SearchHit)]
+                diagnostic = _bounded_diagnostic(
+                    provider_name,
+                    raw_diagnostic,
+                    started=started,
+                    result_count=len(hits),
+                )
+                return hits, diagnostic
+            result = await provider.search(
                 query,
                 limit=limit,
                 domains_allow=domains_allow,
                 domains_deny=domains_deny,
                 time_filter=time_filter,
             )
-        except TypeError:
+            if not isinstance(result, list):
+                raise ValueError("search returned an invalid result")
+            hits = [hit for hit in result if isinstance(hit, SearchHit)]
+            return hits, _search_diagnostic(
+                provider_name,
+                "ok" if hits else "empty",
+                started=started,
+                result_count=len(hits),
+            )
+        except TypeError as exc:
+            if callable(detailed):
+                # A detailed provider was called once already. Never turn an
+                # implementation TypeError into a second provider request.
+                _LOG.warning(
+                    "Composite search: provider %r failed (%s)",
+                    provider_name,
+                    type(exc).__name__,
+                )
+                return [], _search_diagnostic(
+                    provider_name,
+                    "upstream",
+                    started=started,
+                    error=exc,
+                )
             # An MCP provider with a narrower signature — call positionally.
             try:
-                return await provider.search(query, limit=limit)
+                result = await _call_narrow()
+                if not isinstance(result, list):
+                    raise ValueError("search returned an invalid result")
+                hits = [hit for hit in result if isinstance(hit, SearchHit)]
+                return hits, _search_diagnostic(
+                    provider_name,
+                    "ok" if hits else "empty",
+                    started=started,
+                    result_count=len(hits),
+                )
             except Exception as exc:  # noqa: BLE001 — isolate the narrow provider too
                 _LOG.warning(
-                    "Composite search: provider %r failed: %s",
-                    getattr(provider, "name", "?"),
-                    exc,
+                    "Composite search: provider %r failed (%s)",
+                    provider_name,
+                    type(exc).__name__,
                 )
-                return None
+                return [], _search_diagnostic(
+                    provider_name,
+                    "invalid_response" if isinstance(exc, ValueError) else "upstream",
+                    started=started,
+                    error=exc,
+                )
         except Exception as exc:  # noqa: BLE001 — one bad provider must not sink discovery
             _LOG.warning(
-                "Composite search: provider %r failed: %s",
-                getattr(provider, "name", "?"),
-                exc,
+                "Composite search: provider %r failed (%s)",
+                provider_name,
+                type(exc).__name__,
             )
-            return None
+            return [], _search_diagnostic(
+                provider_name,
+                "invalid_response" if isinstance(exc, ValueError) else "upstream",
+                started=started,
+                error=exc,
+            )
 
     @staticmethod
     def _merge_rank(

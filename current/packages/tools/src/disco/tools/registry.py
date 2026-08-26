@@ -166,6 +166,12 @@ AGENT_TOOLS = frozenset(
         # planning branch), so the planner never sees it; the capability
         # backstop also excludes it (`read_only=False` on the tool def).
         "delegate_explore",
+        # Host-owned inert library creation; registered only when the
+        # agent-server installs its Reference Pack binder.
+        "create_reference_pack",
+        # Read-only inspection of an immutable pack selected for this Build.
+        # The host registers it only when a conversation binding exists.
+        "reference_inspect",
     }
 )
 

@@ -1,15 +1,7 @@
-"""F1 — keep-searching on no-answer.
+"""One-shot ordinary Search contract for ``stream_research_answer``.
 
-Tests the bounded re-search loop added to `stream_research_answer`:
-1. Round-0 yields ≥1 supported claim → rewriter.rewrite never called; frame
-   sequence is byte-identical to a rewriter=None run  (OFF-path parity guard).
-2. Round-0 yields 0 supported claims, round-1 yields ≥1 → rewrite called once;
-   final answer is round-1's; a `reformulating` phase frame was emitted; round-0
-   tokens were NOT emitted.
-3. Both rounds yield 0 supported → emits an honest grounding error and stops;
-   rewrite called ≤2 times total (bound honoured, no loop).
-4. max_research_rounds=1 (default) → never reformulates regardless of signal;
-   proves the param gates it and protects all existing callers/tests.
+The legacy rewriter and max-round arguments remain accepted for compatibility,
+but are ignored here. Deep Research owns its separate bounded planning loop.
 
 Fakes: headless, no real network, no real model — scripted answers + scripted NLI
 verdicts, consistent with the captured-sample style in research_fakes.py.
@@ -106,6 +98,12 @@ def _make_extraction(urls: list[str]) -> FakeExtractionProvider:
         # passage text is the relevant claim so NLI has a reasonable premise
         docs[url] = f"Source text about {slug}."
     return FakeExtractionProvider(docs)
+
+
+class _DetailedFakeSearch(FakeSearchProvider):
+    async def search_detailed(self, query, **kwargs):
+        hits = await self.search(query, **kwargs)
+        return hits, {"provider": self.name, "outcome": "ok"}
 
 
 def _nli_round0_empty_round1_supported() -> FakeNLI:
@@ -300,140 +298,51 @@ async def test_off_path_byte_identical_when_round0_has_answer():
     assert types[-1] == "state"
 
 
-# ---------------------------------------------------------------------------
-# 2. Round-0 no answer → reformulate → round-1 answer used
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
-async def test_reformulates_once_when_round0_has_no_supported_claims():
-    """When round-0 has 0 supported claims and a rewriter is provided, the
-    pipeline emits a reformulating phase frame, calls rewriter.rewrite exactly
-    once, and uses the round-1 answer as the final result.  Round-0 tokens are
-    NOT emitted."""
-    reranker = LexicalReranker()
-    nli = _nli_round0_empty_round1_supported()
-
-    # Two different search results so round 1 can return a fresh URL
-    multi_search = FakeSearchProvider([hit(_SEARCH_URL_R0), hit(_SEARCH_URL_R1)])
-    extraction = _make_extraction([_SEARCH_URL_R0, _SEARCH_URL_R1])
-
-    # Router returns doomed answer on call 0, good answer on call 1
+async def test_detailed_provider_is_one_shot_and_does_not_invoke_query_rewriter():
     router = AnswerSequenceRouter([_ROUND0_ANSWER, _ROUND1_ANSWER])
-    rewriter = TrackingRewriter(paraphrase="alternative query")
-
+    rewriter = TrackingRewriter("should not run")
     frames = await _collect(
         stream_research_answer(
-            "original query",
+            "test query",
             router=router,
-            search=multi_search,
-            extraction=extraction,
-            reranker=reranker,
-            nli=nli,
+            search=_DetailedFakeSearch([hit(_SEARCH_URL_R0)]),
+            extraction=_make_extraction([_SEARCH_URL_R0]),
+            reranker=LexicalReranker(),
+            nli=_nli_all_unsupported(),
             rewriter=rewriter,
             max_research_rounds=2,
         )
     )
 
-    # rewriter.rewrite called exactly once
-    assert len(rewriter.calls) == 1, f"expected 1 rewrite call, got {rewriter.calls}"
-
-    # A `reformulating` phase frame was emitted
-    phase_frames = [f for f in frames if f.get("type") == "phase"]
-    assert any(f.get("phase") == "reformulating" for f in phase_frames), (
-        f"No reformulating frame in: {phase_frames}"
-    )
-
-    # Round-0 tokens (from _ROUND0_ANSWER) were NOT emitted
-    token_frames = [f for f in frames if f["type"] == "token"]
-    emitted_text = "".join(f["token"] for f in token_frames)
-    assert "unclear" not in emitted_text, (
-        f"Round-0 draft tokens leaked into output: {emitted_text!r}"
-    )
-
-    # Round-1 tokens (from _ROUND1_ANSWER) ARE present
-    assert "blue" in emitted_text, f"Round-1 answer tokens missing from output: {emitted_text!r}"
-
-    # The final answer uses the round-1 result (has the supported claim)
-    final = next(f for f in frames if f["type"] == "final")
-    claims = final["answer"]["claims"]
-    assert any(c["verdict"] == "supported" for c in claims), (
-        f"No supported claim in final answer: {claims}"
-    )
-
-    # Frame order: state:running … reformulating … tokens … final … state:finished
-    types = [f["type"] for f in frames]
-    assert types[0] == "state" and frames[0]["status"] == "running"
-    assert types[-1] == "state" and frames[-1]["status"] == "finished"
-    assert types[-2] == "final"
-    reformulating_idx = next(
-        i
-        for i, f in enumerate(frames)
-        if f.get("type") == "phase" and f.get("phase") == "reformulating"
-    )
-    first_token_idx = next(i for i, f in enumerate(frames) if f["type"] == "token")
-    assert reformulating_idx < first_token_idx, (
-        "reformulating phase must appear before the accepted round's tokens"
-    )
-
-
-# ---------------------------------------------------------------------------
-# 3. Bound honoured — both rounds have 0 supported claims
-# ---------------------------------------------------------------------------
-
+    assert len(router.stream_calls) == 1
+    assert rewriter.calls == []
+    assert not any(frame["type"] == "phase" for frame in frames)
+    assert not any(frame["type"] == "final" for frame in frames)
 
 @pytest.mark.asyncio
-async def test_bound_honoured_emits_best_effort_final_when_always_empty():
-    """When both rounds have 0 supported claims the pipeline refuses to certify
-    either draft and stops after one reformulation.
-
-    The sealed historical id is retained, but unsupported best-effort prose is
-    no longer emitted as a final result.
-    """
-    reranker = LexicalReranker()
-    nli = _nli_all_unsupported()  # nothing is ever "entail" → supported count always 0
-    multi_search = FakeSearchProvider([hit(_SEARCH_URL_R0), hit(_SEARCH_URL_R1)])
-    extraction = _make_extraction([_SEARCH_URL_R0, _SEARCH_URL_R1])
+async def test_legacy_provider_is_one_shot_even_when_research_rounds_requested():
+    """Ordinary Search never invokes the rewriter, regardless of provider API."""
     router = AnswerSequenceRouter([_ROUND0_ANSWER, _ROUND1_ANSWER])
-    rewriter = TrackingRewriter(paraphrase="another angle")
-
+    rewriter = TrackingRewriter(paraphrase="must not run")
     frames = await _collect(
         stream_research_answer(
             "impossible query",
             router=router,
-            search=multi_search,
-            extraction=extraction,
-            reranker=reranker,
-            nli=nli,
+            search=FakeSearchProvider([hit(_SEARCH_URL_R0), hit(_SEARCH_URL_R1)]),
+            extraction=_make_extraction([_SEARCH_URL_R0, _SEARCH_URL_R1]),
+            reranker=LexicalReranker(),
+            nli=_nli_all_unsupported(),
             rewriter=rewriter,
-            max_research_rounds=2,
+            max_research_rounds=9,
         )
     )
 
-    # Exactly one reformulate between round 0 and round 1
-    assert len(rewriter.calls) == 1, f"expected ≤1 rewrite calls, got {rewriter.calls}"
-
-    # A reformulating phase frame was emitted
-    assert any(f.get("type") == "phase" and f.get("phase") == "reformulating" for f in frames), (
-        "expected reformulating phase frame"
-    )
-
-    # Terminates honestly; unsupported prose is never emitted as a final answer.
-    types = [f["type"] for f in frames]
-    assert types[-1] == "error"
-    assert "did not support any factual claim" in frames[-1]["message"]
-    assert "final" not in types
-
-    # Neither rejected round's buffered draft is shown.
-    token_frames = [f for f in frames if f["type"] == "token"]
-    emitted_text = "".join(f["token"] for f in token_frames)
-    assert "blue" not in emitted_text
-    assert "unclear" not in emitted_text, (
-        f"Round-0 draft tokens should not appear, got: {emitted_text!r}"
-    )
-
-    # No infinite loop — only one generator call after running both rounds
-    assert router.stream_calls == [_ROUND0_ANSWER, _ROUND1_ANSWER]
+    assert rewriter.calls == []
+    assert router.stream_calls == [_ROUND0_ANSWER]
+    assert not any(frame["type"] == "phase" for frame in frames)
+    assert not any(frame["type"] == "final" for frame in frames)
+    assert frames[-1]["type"] == "error"
 
 
 # ---------------------------------------------------------------------------

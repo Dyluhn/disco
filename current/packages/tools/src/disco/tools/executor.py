@@ -21,7 +21,7 @@ from contextvars import ContextVar
 from typing import Any
 from uuid import uuid4
 
-from disco.core import ToolCall, ToolResult
+from disco.core import Event, ToolCall, ToolResult
 from disco.core.appkit.primitives import PrimitiveLiveVerifier
 from disco.core.contract import ContractScopeGuard
 from disco.core.effects import ActionProfile, EffectCapability
@@ -87,6 +87,8 @@ class DefaultToolExecutor:
         workspace_fence: Callable[[], AbstractAsyncContextManager[None]] | None = None,
         execution_admission: Callable[[str | None], Awaitable[str | None]] | None = None,
         release_intent_writer: ReleaseIntentWriter | None = None,
+        prepare_for_events: Callable[[list[Event]], Awaitable[None]] | None = None,
+        plan_submission_guard: Callable[[list[Event]], str | None] | None = None,
     ) -> None:
         self._registry = registry
         self._scope = scope
@@ -124,6 +126,8 @@ class DefaultToolExecutor:
         # so release_declare (in_process) persists under the ACTIVE configured store.
         # None ⇒ no host writer wired (standalone executor) ⇒ the tool fails closed.
         self._release_intent_writer = release_intent_writer
+        self._prepare_for_events = prepare_for_events
+        self._plan_submission_guard = plan_submission_guard
         # ROOT-5: the conversation's effective (override-aware) driver endpoint,
         # stamped onto every ToolContext for LLM-using tools (slides_generate).
         self._driver_llm = driver_llm
@@ -161,6 +165,32 @@ class DefaultToolExecutor:
         current on-disk workspace each turn (engine._workspace_snapshot_message).
         Exposing it read-only keeps that seam working without leaking _sandbox."""
         return self._sandbox
+
+    async def prepare_for_events(self, events: list[Event]) -> None:
+        """Run one optional host-owned workspace preparation hook.
+
+        The loop calls this immediately before rendering a model view and again
+        under the execution fence before an effect.  A no-op default keeps the
+        executor contract simple while allowing immutable host inputs to be
+        restored before the model or a tool can observe the workspace.
+        """
+
+        if self._prepare_for_events is not None:
+            await self._prepare_for_events(events)
+
+    def plan_submission_refusal(self, events: list[Event]) -> str | None:
+        """Return one host-owned reason that the current plan must be retried."""
+
+        if self._plan_submission_guard is None:
+            return None
+        try:
+            return self._plan_submission_guard(events)
+        except Exception:  # noqa: BLE001 — a failed host precondition fails closed
+            return (
+                "Plan submission is temporarily blocked because the host could not "
+                "validate its required workspace inputs. Retry after re-reading the "
+                "required inputs."
+            )
 
     # ---- the ToolExecutor protocol ------------------------------------------
 

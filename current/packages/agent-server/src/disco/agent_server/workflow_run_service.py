@@ -3,9 +3,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import contextvars
-import json
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, cast
@@ -19,11 +18,17 @@ from disco.core import (
     LLMMessage,
     MessageEvent,
     StatusEvent,
+    WorkflowInvocationEvent,
     WorkspaceMutationEvent,
 )
 from disco.core.loop import AgentLoop, BuildAgent
 from disco.core.store.sqlite import SqliteEventStore
-from disco.core.workflow import ScheduleSpec, WorkflowRun
+from disco.core.workflow import (
+    PinnedWorkflowInvocationState,
+    ScheduleSpec,
+    WorkflowRun,
+    WorkflowRunBrief,
+)
 from disco.tools import DefaultToolExecutor
 from disco.tools.builtin.workflow_tools import JsonDirWorkflowStore
 
@@ -54,6 +59,7 @@ class _Setup:
     workflow_run: WorkflowRun | None
     output_path: str
     message: MessageEvent | None
+    invocation_state: PinnedWorkflowInvocationState | None = None
     failure: WorkflowScheduleRunRecord | None = None
 
 
@@ -65,6 +71,7 @@ class _ExecutionPlan:
     fired_at: datetime
     output_path: str
     message: MessageEvent
+    invocation_state: PinnedWorkflowInvocationState | None
     coalesced: bool
     loop: AgentLoop
     previous_executor: DefaultToolExecutor | None
@@ -117,9 +124,8 @@ def _failed_record(
 
 def _schedule_message(
     schedule_id: str,
-    spec: ScheduleSpec,
-    output_path: str,
-    params: dict[str, object],
+    state: PinnedWorkflowInvocationState,
+    brief: WorkflowRunBrief,
 ) -> MessageEvent:
     return MessageEvent(
         source=EventSource.USER,
@@ -128,17 +134,10 @@ def _schedule_message(
             content=(
                 "Run this sealed workflow schedule.\n"
                 f"Schedule id: {schedule_id}\n"
-                f"Workflow instance: {spec.instance_id}\n"
-                f"Definition digest: {spec.instance_digest}\n"
-                f"Output path: {output_path}\n"
-                "Parameters:\n"
-                f"{json.dumps(params, sort_keys=True)}\n\n"
-                "Outcome rules:\n"
-                "If the task cannot be completed with the provided tools/params "
-                "(missing information, unreachable target, impossible request): "
-                "call needs_input with the question, or skip with the reason. "
-                "NEVER fabricate results and NEVER finish with a failure narrative "
-                "as if the task succeeded."
+                f"Workflow instance: {state.instance_id}\n"
+                f"Definition digest: {state.definition_digest}\n"
+                f"Surface digest: {state.surface_digest}\n\n"
+                f"{brief.render()}"
             ),
         ),
     )
@@ -169,6 +168,7 @@ class _WorkflowRunExecution:
         output_path: str,
         message: MessageEvent,
         coalesced: bool,
+        invocation_state: PinnedWorkflowInvocationState | None = None,
     ) -> ConversationState | WorkflowScheduleRunRecord:
         failed = self._failure_factory(
             schedule_id, conversation_id, fired_at, output_path, coalesced
@@ -184,6 +184,7 @@ class _WorkflowRunExecution:
             workflow_run=workflow_run,
             output_path=output_path,
             message=message,
+            invocation_state=invocation_state,
             coalesced=coalesced,
         )
         if isinstance(plan, WorkflowScheduleRunRecord):
@@ -221,6 +222,7 @@ class _WorkflowRunExecution:
         workflow_run: WorkflowRun,
         output_path: str,
         message: MessageEvent,
+        invocation_state: PinnedWorkflowInvocationState | None,
         coalesced: bool,
     ) -> _ExecutionPlan | WorkflowScheduleRunRecord:
         failed = self._failure_factory(
@@ -284,6 +286,7 @@ class _WorkflowRunExecution:
             fired_at=fired_at,
             output_path=output_path,
             message=message,
+            invocation_state=invocation_state,
             coalesced=coalesced,
             loop=loop,
             previous_executor=previous_executor,
@@ -356,9 +359,22 @@ class _WorkflowRunExecution:
                     )
                     task_slot[0] = task
                     self._workspace.claim_registered_run_locked(cid)
+                    ingress: list[Event] = [plan.message]
+                    if plan.invocation_state is not None:
+                        ingress = [
+                            WorkflowInvocationEvent(
+                                state=plan.invocation_state,
+                                status=plan.invocation_state.status,
+                            ),
+                            plan.message,
+                            LifecycleCommandService.build_status(
+                                ConversationStatus.RUNNING,
+                                detail="workflow_started",
+                            ),
+                        ]
                     stored = await self._workspace.append_run_ingress_locked(
                         cid,
-                        [plan.message],
+                        ingress,
                         "workflow-schedule",
                         intent=plan.intent,
                     )
@@ -480,6 +496,15 @@ class _WorkflowRunExecution:
             await self._run_control._rekick_unadmitted_superseding_intent(
                 plan.conversation_id
             )
+        else:
+            # Schedule execution owns completion handling externally.  Reuse the
+            # same RunFinalizer path as an ordinary Agent task so the durable
+            # invocation event is terminalized alongside ConversationStatus.ERROR.
+            await self._run_control._finalize_clean_return(
+                plan.conversation_id,
+                agent_view_id=agent_view_id,
+                run_intent_id=run_intent_id,
+            )
         return failed(str(error))
 
 
@@ -495,9 +520,11 @@ class WorkflowRunService:
         model_access: WorkflowModelAccess,
         loop_factory: WorkflowLoopFactory,
         run_control: WorkflowRunControl,
+        prepare_workflow: Callable[[str, Mapping[str, Any], str], Any],
     ) -> None:
         self._store, self._lifecycle_commands = store, lifecycle_commands
         self._project_access, self._settings = project_access, settings
+        self._prepare_workflow = prepare_workflow
         self._execution = _WorkflowRunExecution(
             store,
             workspace,
@@ -523,7 +550,11 @@ class WorkflowRunService:
         )
         if setup.failure is not None:
             return setup.failure
-        assert setup.workflow_run is not None and setup.message is not None
+        assert (
+            setup.workflow_run is not None
+            and setup.message is not None
+            and setup.invocation_state is not None
+        )
         result = await self._execution.execute(
             schedule_id=schedule_id,
             spec=spec,
@@ -532,6 +563,7 @@ class WorkflowRunService:
             workflow_run=setup.workflow_run,
             output_path=setup.output_path,
             message=setup.message,
+            invocation_state=setup.invocation_state,
             coalesced=coalesced,
         )
         if isinstance(result, WorkflowScheduleRunRecord):
@@ -581,15 +613,18 @@ class WorkflowRunService:
         owner_id: str,
     ) -> _Setup:
         conversation_id = f"conv_{uuid.uuid4().hex}"
-        self._store.create_conversation(
-            conversation_id,
-            owner_id=owner_id,
-            surface="agent",
-            title=f"Workflow schedule {spec.instance_id}",
-        )
-        self._settings.set_surface(conversation_id, "agent")
-        self._settings.set_autonomous(conversation_id, True)
         fired_at = datetime.now(UTC)
+
+        def ensure_conversation() -> None:
+            self._store.create_conversation(
+                conversation_id,
+                owner_id=owner_id,
+                surface="agent",
+                title=f"Workflow schedule {spec.instance_id}",
+            )
+            self._settings.set_surface(conversation_id, "agent")
+            self._settings.set_autonomous(conversation_id, True)
+
         workflow_store = JsonDirWorkflowStore(
             self._project_access._project_store_now().root or "",
             owner_id=owner_id,
@@ -597,6 +632,7 @@ class WorkflowRunService:
         try:
             instance = workflow_store.get_instance(spec.instance_id)
         except ValueError as exc:
+            ensure_conversation()
             return await self._setup_failure(
                 schedule_id=schedule_id,
                 conversation_id=conversation_id,
@@ -607,6 +643,7 @@ class WorkflowRunService:
                 error=str(exc),
             )
         if instance is None:
+            ensure_conversation()
             message = (
                 f"Workflow schedule {schedule_id} could not run: instance "
                 f"{spec.instance_id!r} was not found."
@@ -621,6 +658,7 @@ class WorkflowRunService:
                 error=message,
             )
         if instance.definition_digest != spec.instance_digest:
+            ensure_conversation()
             message = (
                 f"Workflow schedule {schedule_id} could not run: pinned digest "
                 f"{spec.instance_digest!r} does not match current instance digest "
@@ -635,38 +673,54 @@ class WorkflowRunService:
                 explanation=message,
                 error=message,
             )
-        if not instance.enabled or instance.approval is None:
+        # Reuse the same invocation service used by clicked Run.  This is the
+        # fire-time TOCTOU gate: the exact pinned params, current definition,
+        # approval, MCP surface, and surface digest must still be valid.
+        prepared = self._prepare_workflow(
+            spec.instance_id,
+            spec.params,
+            owner_id,
+        )
+        if not prepared.accepted:
+            ensure_conversation()
+            issues = ", ".join(issue.message for issue in prepared.parameter_issues)
             message = (
-                f"Workflow schedule {schedule_id} could not run: instance "
-                f"{spec.instance_id!r} is not enabled and approved."
+                f"Workflow schedule {schedule_id} could not run: "
+                f"{prepared.reason or 'workflow is not ready'}"
+                + (f" ({issues})" if issues else "")
             )
             return await self._setup_failure(
                 schedule_id=schedule_id,
                 conversation_id=conversation_id,
                 fired_at=fired_at,
                 coalesced=coalesced,
-                detail=(
-                    "workflow_instance_not_enabled"
-                    if not instance.enabled
-                    else "workflow_instance_not_approved"
-                ),
+                detail="workflow_schedule_preflight_failed",
                 explanation=message,
                 error=message,
             )
+        assert prepared.state is not None and prepared.brief is not None
+        invocation_state = prepared.state.model_copy(update={"status": "running"})
+        workflow_run = WorkflowRun(
+            run_id=prepared.state.run_id,
+            definition=prepared.state.definition_snapshot,
+            params=prepared.state.validated_params,
+        )
         output_path = _render_output_path(
             instance.definition.output_contract.path_template,
-            instance.params,
+            prepared.state.validated_params,
         )
+        ensure_conversation()
         return _Setup(
             conversation_id=conversation_id,
             fired_at=fired_at,
-            workflow_run=WorkflowRun(
-                run_id=f"wfrun_{uuid.uuid4().hex}",
-                definition=instance.definition,
-                params=instance.params,
-            ),
+            workflow_run=workflow_run,
             output_path=output_path,
-            message=_schedule_message(schedule_id, spec, output_path, instance.params),
+            message=_schedule_message(
+                schedule_id,
+                invocation_state,
+                prepared.brief,
+            ),
+            invocation_state=invocation_state,
         )
 
     async def _setup_failure(

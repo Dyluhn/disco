@@ -6,7 +6,7 @@ export function FindingRows({ findings }: { findings: WorkflowValidationFinding[
     return (
       <div className="flex items-center gap-hair font-ui text-[0.8rem] text-text-muted">
         <CheckCircle2 className="size-4 text-supported" aria-hidden />
-        No validation findings.
+        No issues found.
       </div>
     );
   }
@@ -25,11 +25,9 @@ export function FindingRows({ findings }: { findings: WorkflowValidationFinding[
                 : "font-semibold text-warn"
             }
           >
-            {finding.severity}
+            {finding.severity === "error" ? "Needs attention" : "Review"}
           </span>
-          <span className="text-text-muted"> · {finding.code}</span>
           <div className="text-text">{finding.message}</div>
-          <div className="font-mono text-[0.7rem] text-text-faint">{finding.path}</div>
         </li>
       ))}
     </ul>

@@ -376,6 +376,74 @@ async def test_narrow_mcp_failure_does_not_sink_healthy_search_provider():
 
 
 @pytest.mark.asyncio
+async def test_composite_detailed_search_distinguishes_empty_and_partial_failure():
+    from disco.tools.mcp.retrieval_tier import CompositeSearchProvider
+
+    class _Empty:
+        name = "empty"
+
+        async def search_detailed(self, query, **kwargs):
+            return [], {"provider": self.name, "outcome": "empty", "result_count": 0}
+
+    class _Healthy:
+        name = "healthy"
+
+        async def search_detailed(self, query, **kwargs):
+            return [SearchHit(url="https://example.com/good", title="Good")], {
+                "provider": self.name,
+                "outcome": "ok",
+                "result_count": 1,
+            }
+
+    class _Broken:
+        name = "broken"
+
+        async def search_detailed(self, query, **kwargs):
+            raise RuntimeError("secret response body")
+
+    composite = CompositeSearchProvider(_Empty(), [_Healthy(), _Broken()])
+    hits, diagnostic = await composite.search_detailed("q", limit=4)
+
+    assert [hit.url for hit in hits] == ["https://example.com/good"]
+    assert diagnostic["provider_aggregate"] == "partial_outage"
+    assert diagnostic["providers"]["empty"]["outcome"] == "empty"
+    assert diagnostic["providers"]["broken"]["outcome"] == "upstream"
+    assert diagnostic["providers"]["broken"]["provider_error"] == "RuntimeError"
+    assert "secret response body" not in str(diagnostic)
+
+
+@pytest.mark.asyncio
+async def test_composite_detailed_search_reports_all_failed_and_invalid_response():
+    from disco.tools.mcp.retrieval_tier import CompositeSearchProvider
+
+    class _Invalid:
+        name = "invalid"
+
+        async def search_detailed(self, query, **kwargs):
+            return [], {
+                "provider": self.name,
+                "outcome": "invalid_response",
+                "result_count": 0,
+                "body": "must not be copied",
+            }
+
+    class _Broken:
+        name = "broken"
+
+        async def search(self, query, **kwargs):
+            raise RuntimeError("unavailable")
+
+    composite = CompositeSearchProvider(_Invalid(), [_Broken()])
+    hits, diagnostic = await composite.search_detailed("q", limit=4)
+
+    assert hits == []
+    assert diagnostic["provider_aggregate"] == "all_failed"
+    assert diagnostic["providers"]["invalid"]["outcome"] == "invalid_response"
+    assert "body" not in str(diagnostic)
+    assert "must not be copied" not in str(diagnostic)
+
+
+@pytest.mark.asyncio
 async def test_mcp_error_results_never_become_search_hits_or_citable_content():
     result = {
         "content": [{"type": "text", "text": "unknown source"}],
@@ -423,6 +491,46 @@ async def test_search_provider_handles_non_json_result():
     provider = _MCPRetrievalSearchProvider("srv", "search", fake_call.call)
     hits = await provider.search("query")
     assert hits == []
+
+
+@pytest.mark.asyncio
+async def test_search_provider_detailed_result_classifies_invalid_and_empty():
+    empty = _MCPRetrievalSearchProvider(
+        "srv",
+        "search",
+        _FakeMCPCall(
+            {
+                "srv/search": {
+                    "content": [{"type": "text", "text": json.dumps({"results": []})}],
+                    "isError": False,
+                }
+            }
+        ).call,
+    )
+    invalid = _MCPRetrievalSearchProvider(
+        "srv",
+        "search",
+        _FakeMCPCall(
+            {
+                "srv/search": {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": json.dumps({"results": [{"title": "no url"}]}),
+                        }
+                    ],
+                    "isError": False,
+                }
+            }
+        ).call,
+    )
+
+    empty_hits, empty_diagnostic = await empty.search_detailed("q")
+    invalid_hits, invalid_diagnostic = await invalid.search_detailed("q")
+    assert empty_hits == []
+    assert empty_diagnostic["outcome"] == "empty"
+    assert invalid_hits == []
+    assert invalid_diagnostic["outcome"] == "invalid_response"
 
 
 @pytest.mark.asyncio

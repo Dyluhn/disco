@@ -1,4 +1,4 @@
-"""Static vision-capability table for models that don't advertise capability.
+"""Static vision-capability table and the canonical tri-state resolver.
 
 V3 (§2) — pure, no httpx: importable from config.py without pulling network
 dependencies.  Fills the gaps left by providers that don't expose capability
@@ -8,8 +8,9 @@ has a sensible default even without a live probe.
 Probe-order integration (config.py):
   (1) per-model `vision` pin   → overrides everything
   (2) runtime probe result     → from wiring.py, beats table
-  (3) this table               → static best-effort
-  (4) unknown → False          ← fail-safe; never claim unproven vision
+  (3) provider-declared modality → preserved from the provider catalogue
+  (4) this table               → static best-effort
+  (5) unknown → unknown       ← fail-closed for image requests
 
 Rules:
   Anthropic   — all claude ≥ v3 are vision-capable → True.
@@ -19,13 +20,18 @@ Rules:
   OpenAI      — known vision models: gpt-4o/4.1/4.5, gpt-5*, o3/o4 → True.
                 Non-visual specializations (embeddings, Whisper, TTS) → False.
   Gemini      — all gemini-* models are multimodal → True.
-  Unknown     — False (fail-safe; the probe path covers exotic self-host).
+  Unknown     — unknown (fail-closed for image requests; never silently text-only).
 
 The table is intentionally small and documented so every entry is auditable.
-Do NOT add speculative entries — unknown → False is the right default.
+Do NOT add speculative entries — unknown remains unknown until a higher-authority
+source or the required operator confirmation resolves it.
 """
 
 from __future__ import annotations
+
+from typing import Literal
+
+VisionStatus = Literal["vision", "text-only", "unknown"]
 
 # Keywords that conclusively identify a NON-VISION model regardless of family.
 # Checked before vision patterns so an "embedding-4o" edge-case stays False.
@@ -58,8 +64,8 @@ _VISION_SUBSTRINGS: tuple[str, ...] = (
 )
 
 
-def table_vision(model_id: str, family: str | None = None) -> bool:
-    """Return True if the static table indicates the model supports vision.
+def table_vision_status(model_id: str, family: str | None = None) -> bool | None:
+    """Return the static table's tri-state answer.
 
     Parameters
     ----------
@@ -73,9 +79,8 @@ def table_vision(model_id: str, family: str | None = None) -> bool:
 
     Returns
     -------
-    bool
-        ``True`` = static table says vision; ``False`` = not known or
-        explicitly a non-vision model (fail-safe).
+    bool | None
+        ``True`` = vision, ``False`` = conclusively text-only, ``None`` = unknown.
     """
     lower = model_id.lower()
 
@@ -103,5 +108,47 @@ def table_vision(model_id: str, family: str | None = None) -> bool:
     if base_id.startswith(("o3", "o4")):
         return True
 
-    # ---- 4. Unknown → fail-safe False ---------------------------------------
-    return False
+    # ---- 4. Unknown ----------------------------------------------------------
+    return None
+
+
+def table_vision(model_id: str, family: str | None = None) -> bool:
+    """Back-compatible boolean view of the static table.
+
+    Callers that need to distinguish an unknown model from a confirmed
+    text-only model must use :func:`table_vision_status` or
+    :func:`resolve_vision_status`.
+    """
+
+    return table_vision_status(model_id, family) is True
+
+
+def resolve_vision_status(
+    *,
+    model_id: str,
+    family: str | None = None,
+    explicit: bool | None = None,
+    live_probe: bool | None = None,
+    provider_declared: bool | None = None,
+) -> VisionStatus:
+    """Resolve image understanding capability using one ordered authority.
+
+    The order is intentionally short and deterministic:
+    operator pin → current live probe → provider-declared modality →
+    conclusive static catalogue rule → unknown.  ``None`` means *not known*;
+    it is never converted to text-only here.
+    """
+
+    value = next(
+        (
+            candidate
+            for candidate in (explicit, live_probe, provider_declared)
+            if candidate is not None
+        ),
+        table_vision_status(model_id, family),
+    )
+    if value is True:
+        return "vision"
+    if value is False:
+        return "text-only"
+    return "unknown"

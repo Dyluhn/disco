@@ -37,6 +37,7 @@ from disco.core.llm import (
     SecretStore,
 )
 from disco.core.llm.secret_refs import resolve_provider_secret, secret_ref_allowed_for_origin
+from disco.core.llm.vision_table import resolve_vision_status
 from disco.core.llm.wiring import build_providers, probe_all_vision_with_approvals
 from disco.core.loop import host_verify_authoritative_enabled
 
@@ -422,6 +423,17 @@ class DriverRuntime:
             "pricing_mode": pricing_mode,
             "context_window": live["n_ctx"] or entry.context_window,
             "capabilities": sorted(capability.value for capability in entry.capabilities),
+            "vision_status": resolve_vision_status(
+                model_id=entry.model_id,
+                family=entry.family,
+                explicit=entry.vision,
+                live_probe=entry.vision_probe,
+                provider_declared=(
+                    entry.vision_declared
+                    if entry.vision_declared is not None
+                    else (Requirement.VISION in entry.capabilities or None)
+                ),
+            ),
         }
 
     def _resolve_secret(self, name: str | None) -> str | None:

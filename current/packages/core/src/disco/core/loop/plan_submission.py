@@ -6,9 +6,9 @@ from typing import TYPE_CHECKING, Protocol
 
 from .engine_contracts import (
     _FORCE_SUBMIT_DIAGNOSTIC,
-    _force_submit_directive,
-    _force_submit_repeats,
     _INVALID_PLAN_DONE_CONDITION_CAP,
+    ActionEvent,
+    AgentErrorEvent,
     ConversationStatus,
     Disp,
     Event,
@@ -19,6 +19,8 @@ from .engine_contracts import (
     PlanStep,
     StatusEvent,
     ToolCall,
+    _force_submit_directive,
+    _force_submit_repeats,
     preflight_plan_revision,
     signals,
     validate_plan_conditions,
@@ -30,6 +32,7 @@ if TYPE_CHECKING:
         GateCounterPort,
         LoopEventPort,
         PlanLifecyclePort,
+        ToolExecutionPort,
         TurnControlPort,
     )
 
@@ -42,6 +45,8 @@ if TYPE_CHECKING:
         LoopEventPort,
 
         PlanLifecyclePort,
+
+        ToolExecutionPort,
 
         TurnControlPort,
 
@@ -251,6 +256,19 @@ class PlanSubmissionController:
         return await self._loop._route_plan_approval_gate(plan)
 
     async def handle(self, tool_call: ToolCall, events: list[Event]) -> Disp:
+        guard = getattr(self._loop.executor, "plan_submission_refusal", None)
+        refusal = guard(events) if callable(guard) else None
+        if isinstance(refusal, str) and refusal.strip():
+            action = ActionEvent(thought="", tool_call=tool_call)
+            stored = await self._loop._emit(action)
+            await self._loop._emit(
+                AgentErrorEvent(
+                    error=refusal.strip(),
+                    action_id=stored.id,
+                    tool_call_id=tool_call.call_id,
+                )
+            )
+            return Disp.CONTINUE
         self._loop._plan_explore_reads = 0
         plan = self._loop._plan_from_args(tool_call.arguments, events)
         invalid = await self._reject_invalid_conditions(plan, tool_call, events)

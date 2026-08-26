@@ -7,6 +7,7 @@
  * applies to it exactly as it did to the original BuildSurface.tsx.
  */
 
+import { LoaderCircle, RefreshCw } from "lucide-react";
 import { DeliverablePanel } from "@/components/build/DeliverablePanel";
 import { SelfHostPanel } from "@/components/build/SelfHostPanel";
 import { canonicalPreviewBootstrapUrl } from "@/api/agent";
@@ -14,6 +15,7 @@ import { openFreshPreview } from "@/lib/previewLaunch";
 import { useToast } from "@/components/toastApi";
 import type { useDownloadProject, useExportManifest, useProjectRelease } from "@/hooks/useProjects";
 import type { DeliverableView } from "@/lib/buildTrace";
+import type { CommittedFinish } from "@/lib/committedFinish";
 import type { BuildController } from "./types";
 
 export function BuildDeliverableSection({
@@ -22,14 +24,23 @@ export function BuildDeliverableSection({
   download,
   exportManifest,
   release,
+  committedFinish,
 }: {
   b: BuildController;
   deliverable: DeliverableView | null;
   download: ReturnType<typeof useDownloadProject>;
   exportManifest: ReturnType<typeof useExportManifest>;
   release: ReturnType<typeof useProjectRelease>;
+  committedFinish: CommittedFinish | null;
 }) {
   const toast = useToast();
+  const handoffReady = b.status === "FINISHED" && committedFinish !== null;
+  const releaseLoading = handoffReady && (release.isLoading || release.isFetching);
+  const releaseError = handoffReady ? release.error : null;
+  const releaseErrorMessage =
+    releaseError?.name === "ReleaseSealMismatchError"
+      ? "Self-host details no longer match the finished workspace."
+      : "Self-host details could not be loaded.";
   return (
     <>
       {/* finished-artifact handoff: open the live app / download the files.
@@ -38,10 +49,10 @@ export function BuildDeliverableSection({
           while the manifest record doesn't exist yet → Manifest button 404s and
           Open 503s. Only show the panel once the run is truly done. */}
       <DeliverablePanel
-        deliverable={b.status === "FINISHED" ? deliverable : null}
+        deliverable={handoffReady ? deliverable : null}
         cid={b.cid}
         onOpen={
-          b.status === "FINISHED" && b.cid && deliverable?.kind === "app"
+          handoffReady && b.cid && deliverable?.kind === "app"
             ? () =>
                 openFreshPreview(
                   () => canonicalPreviewBootstrapUrl(b.cid!, "/"),
@@ -59,14 +70,45 @@ export function BuildDeliverableSection({
                 )
             : undefined
         }
-        onDownload={() => b.cid && download.mutate({ id: b.cid, binding: null })}
-        onExportManifest={() => b.cid && exportManifest.mutate(b.cid)}
+        onDownload={handoffReady ? () => b.cid && download.mutate({ id: b.cid, binding: null }) : undefined}
+        onExportManifest={handoffReady ? () => b.cid && exportManifest.mutate(b.cid) : undefined}
       />
       {/* WO-9: capability-driven Self-host handoff — renders from the release
           verdict ALONE (no mode/framing knowledge), so Build and Agent surfaces
           inherit an identical panel. Shown alongside the DeliverablePanel once
           the run is finished and the verdict has resolved. */}
-      {b.status === "FINISHED" && release.data && (
+      {releaseLoading && (
+        <div
+          role="status"
+          aria-busy="true"
+          data-disco-control="build.self-host-loading"
+          className="flex items-center gap-hair rounded-control border border-hairline px-body py-inline font-ui text-[0.78rem] text-text-muted"
+        >
+          <LoaderCircle className="size-3.5 animate-spin" aria-hidden />
+          Preparing self-host details…
+        </div>
+      )}
+      {releaseError && (
+        <div
+          role="alert"
+          data-disco-control="build.self-host-error"
+          className="flex items-center gap-inline rounded-control border border-unsupported/40 bg-unsupported/5 px-body py-inline"
+        >
+          <p className="flex-1 font-ui text-[0.78rem] text-unsupported">
+            {releaseErrorMessage} Try again to refresh it.
+          </p>
+          <button
+            type="button"
+            onClick={() => void release.refetch()}
+            disabled={release.isFetching}
+            className="inline-flex shrink-0 items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted hover:text-text disabled:opacity-50"
+          >
+            <RefreshCw className="size-3.5" aria-hidden />
+            {release.isFetching ? "Retrying…" : "Retry"}
+          </button>
+        </div>
+      )}
+      {handoffReady && release.data && (
         <SelfHostPanel
           release={release.data}
           onDownload={() => {

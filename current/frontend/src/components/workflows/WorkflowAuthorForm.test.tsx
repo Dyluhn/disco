@@ -37,7 +37,7 @@ describe("WorkflowAuthorForm", () => {
     expect(await screen.findByText(/Drafts a workflow from this request/)).toBeInTheDocument();
     expect(screen.getByText("Drafted Workflow")).toBeInTheDocument();
     expect(screen.getByText("Uses")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Approve" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create & enable" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Edit details" })).toBeInTheDocument();
   });
 
@@ -78,10 +78,10 @@ describe("WorkflowAuthorForm", () => {
     await user.type(screen.getByLabelText("Card"), "Workflow authored in a form test.");
     await user.click(screen.getByRole("button", { name: "Create draft" }));
 
-    expect(await screen.findByText("Validation findings")).toBeInTheDocument();
-    expect(screen.getByText("No validation findings.")).toBeInTheDocument();
+    expect(await screen.findByText("Configuration checks")).toBeInTheDocument();
+    expect(screen.getByText("No issues found.")).toBeInTheDocument();
     expect(
-      screen.getByText((_, element) => element?.textContent === "Simulation ok"),
+      screen.getByText((_, element) => element?.textContent === "Configuration checks pass"),
     ).toBeInTheDocument();
   });
 });

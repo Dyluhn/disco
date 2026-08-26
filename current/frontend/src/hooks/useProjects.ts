@@ -16,6 +16,7 @@ import {
 } from "@/api/projects";
 import type { ProjectManifest, ProjectsList } from "@/types/project";
 import type { ReleaseResponse } from "@/types/release";
+import { releaseSealKey, type CommittedFinish } from "@/lib/committedFinish";
 
 export const PROJECTS_KEY = ["projects"] as const;
 
@@ -64,10 +65,46 @@ export function useProjectManifest(conversationId: string | null) {
  * it needs, its ingress). Gated on a non-null id like `useProjectManifest`; offline
  * it resolves the in-repo fixture verdict so the capabilities UI works with no
  * backend. */
-export function useProjectRelease(conversationId: string | null) {
+export class ReleaseSealMismatchError extends Error {
+  readonly name = "ReleaseSealMismatchError";
+
+  constructor(
+    readonly expected: Pick<CommittedFinish, "versionSeq" | "treeDigest">,
+    readonly actual: Pick<ReleaseResponse, "version_seq" | "tree_digest">,
+  ) {
+    super("release response does not match the committed workspace seal");
+  }
+}
+
+/**
+ * Fetch the release verdict. The one-argument form is retained for the Projects
+ * list, which is a historical manifest-backed surface and has no event replay.
+ * Build/Agent passes the second argument explicitly (including null while the
+ * seal is still pending), which makes the query strictly seal-gated.
+ */
+export function useProjectRelease(
+  conversationId: string | null,
+  committedFinish?: CommittedFinish | null,
+) {
+  const sealAware = committedFinish !== undefined;
   return useQuery<ReleaseResponse>({
-    queryKey: ["project-release", conversationId],
-    queryFn: () => getProjectRelease(conversationId!),
-    enabled: !!conversationId,
+    queryKey: sealAware
+      ? releaseSealKey(conversationId, committedFinish ?? null)
+      : ["project-release", conversationId],
+    queryFn: async () => {
+      const response = await getProjectRelease(conversationId!);
+      if (sealAware && committedFinish) {
+        if (
+          response.version_seq !== committedFinish.versionSeq ||
+          response.tree_digest !== committedFinish.treeDigest
+        ) {
+          throw new ReleaseSealMismatchError(committedFinish, response);
+        }
+      }
+      return response;
+    },
+    enabled: !!conversationId && (!sealAware || !!committedFinish),
+    retry: false,
+    refetchOnWindowFocus: false,
   });
 }

@@ -224,7 +224,13 @@ export async function enableProviderModel(
     capabilities: live?.capabilities ?? [],
     // Provider metadata is advisory; only the explicit Settings control creates
     // a manual pin that can override later runtime detection.
-    vision: null,
+    vision: body.vision ?? null,
+    vision_declared:
+      live?.vision_status === "vision"
+        ? true
+        : live?.vision_status === "text-only"
+          ? false
+          : null,
     requires_api_key: provider.requires_api_key ?? true,
     price_in_per_m: live?.price_in_per_m ?? 0,
     price_out_per_m: live?.price_out_per_m ?? 0,

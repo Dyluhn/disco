@@ -55,6 +55,7 @@ from .research_harness_parts._cli import (
 )
 from .research_harness_parts._observe import (
     _CITATION,
+    _DECK_TIMEOUT_S,
     _DEPTH_TIMEOUTS_S,
     _FOOTNOTE_CITATION,
     _SECRET_KEYS,
@@ -82,6 +83,7 @@ from .research_harness_parts._run import (
 from .research_harness_parts._search_io import collect_search_io, render_search_timeline
 from .research_harness_parts._thrash import analyze_thrash
 from .research_harness_parts._transports import (
+    DeckCorrelationTransport,
     FakeTransport,
     LiveWebSocketTransport,
     ReplayTransport,
@@ -99,6 +101,7 @@ __all__ = [
     "ObservationEvent",
     "Observation",
     "ResearchTransport",
+    "DeckCorrelationTransport",
     "FakeTransport",
     "ReplayTransport",
     "LiveWebSocketTransport",
@@ -122,6 +125,7 @@ __all__ = [
     "_BODY_PROCESS_LANGUAGE",
     "_CITATION",
     "_DEPTH_TIMEOUTS_S",
+    "_DECK_TIMEOUT_S",
     "_DEPTH_WORD_TARGETS",
     "_depth_word_bounds",
     "_FAILURE_WORDS",

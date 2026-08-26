@@ -42,6 +42,7 @@ if TYPE_CHECKING:
     from .preview_capture_ownership import PreviewCaptureOwnership
     from .preview_service import PreviewService
     from .project_runtime_service import ProjectRuntimeService
+    from .reference_pack_runtime import ReferencePackRuntime
     from .resume_service import ResumeService
     from .run_controller import RunController
     from .run_kill_service import RunKillService
@@ -86,6 +87,7 @@ class _RuntimeWiringSchema:
     _config_store: ConfigStore
     sandbox: SandboxRuntimeService
     projects: ProjectRuntimeService
+    reference_packs: ReferencePackRuntime
     _loop_registry: LoopRegistry
     run_registry: RunRegistry
     _run_authorities: RunAuthorityLedger

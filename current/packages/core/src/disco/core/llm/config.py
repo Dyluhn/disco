@@ -27,7 +27,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ..env import disco_env
 from .types import ModelRole, Requirement
-from .vision_table import table_vision
+from .vision_table import resolve_vision_status
 
 _LOG = logging.getLogger("disco.config")
 
@@ -93,9 +93,16 @@ class ModelEntry(BaseModel):
     # local endpoints. This flag decides whether a missing secret blocks wiring.
     requires_api_key: bool = True
     # V1 (§2): manual vision override pin.  None = derive via the runtime probe
-    # order (probe → env back-compat → static table → False).  True/False =
+    # order (probe → provider metadata → static table → unknown).  True/False =
     # force the capability, bypassing all probes.  Persisted in disco-config.json.
     vision: bool | None = None
+    # Provider catalogue modality, kept separate from the resolved capability so
+    # a later live probe can override it without losing the provider's evidence.
+    vision_declared: bool | None = None
+    # Process-local live observation. ConfigStore strips this field before writes;
+    # it lets DTOs accurately report a live negative probe without persisting a
+    # transient deployment fact as operator configuration.
+    vision_probe: bool | None = None
     # Explicit model-execution TIER — the single source of truth for whether this
     # model gets the weak-model assist compensations. None = derive (back-compat:
     # the runtime's hosting heuristic, local→weak). "weak" = enable assist;
@@ -774,17 +781,19 @@ def apply_runtime_capabilities(
             # NLI cross-encoder and other non-chat backends — leave untouched.
             continue
 
-        # ---- resolve target vision bool -----------------------------------
-        if entry.vision is not None:
-            # (1) Manual pin: explicit True or False — highest priority.
-            target: bool = entry.vision
-        elif probe_results is not None and key in probe_results and probe_results[key] is not None:
-            # (2) Runtime probe result passed in from wiring.py.
-            target = bool(probe_results[key])
-        elif key == "driver-local":
-            # (2b) DRIVER_VISION env back-compat: authoritative only for the
-            # named driver-local entry, where the env reflects whether an
-            # mmproj is loaded RIGHT NOW in the running llama-server.
+        # A legacy config's resolved VISION bit is the only provider evidence it
+        # has. New entries carry ``vision_declared`` explicitly. Do not treat an
+        # absent bit as text-only: unknown stays unknown and image requests fail
+        # closed until the user confirms the model.
+        provider_declared = entry.vision_declared
+        if provider_declared is None and Requirement.VISION in entry.capabilities:
+            provider_declared = True
+        live_probe = (
+            probe_results.get(key)
+            if probe_results is not None and key in probe_results
+            else entry.vision_probe
+        )
+        if entry.vision is None and key == "driver-local":
             dv = disco_env("DRIVER_VISION")
             if dv in ("0", "1"):
                 if not _DRIVER_VISION_DEPRECATION_LOGGED:
@@ -794,17 +803,20 @@ def apply_runtime_capabilities(
                         "or the runtime probe in wiring.py instead."
                     )
                     _DRIVER_VISION_DEPRECATION_LOGGED = True
-                target = dv == "1"
-            else:
-                # (3) Fall through to the static table.
-                target = table_vision(entry.model_id, entry.family)
-        else:
-            # (3) Static capability table (Anthropic family rule, known OpenAI/Gemini).
-            target = table_vision(entry.model_id, entry.family)
+                live_probe = dv == "1"
+        resolved = resolve_vision_status(
+            model_id=entry.model_id,
+            family=entry.family,
+            explicit=entry.vision,
+            live_probe=live_probe,
+            provider_declared=provider_declared,
+        )
+        target = resolved == "vision"
+        probe_value = live_probe if resolved != "unknown" and live_probe is not None else None
 
         # ---- apply if different ------------------------------------------
         has_vision = Requirement.VISION in entry.capabilities
-        if target == has_vision:
+        if target == has_vision and entry.vision_probe == probe_value:
             continue  # already correct; leave the entry untouched
 
         caps = set(entry.capabilities)
@@ -812,7 +824,9 @@ def apply_runtime_capabilities(
             caps.add(Requirement.VISION)
         else:
             caps.discard(Requirement.VISION)
-        new_models[key] = entry.model_copy(update={"capabilities": frozenset(caps)})
+        new_models[key] = entry.model_copy(
+            update={"capabilities": frozenset(caps), "vision_probe": probe_value}
+        )
         changed = True
 
     if not changed:

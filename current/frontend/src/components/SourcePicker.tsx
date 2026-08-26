@@ -1,23 +1,16 @@
 import {
   BookOpen,
-  Globe2,
   GraduationCap,
   Newspaper,
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
 
-// Only the KEYLESS, always-available federation sources live here. The general
-// web-search PROVIDER (ddgs / tavily / brave / searxng) is a single choice owned
-// entirely by Settings → Data sources — exposing it here as per-query chips
-// duplicated that setting and let a chip silently override "the one they set".
-// So: no provider chips, no "needs setup" / "Add in Settings" affordance. An
-// EMPTY selection (the default) means "use my configured provider"; picking any
-// of these federates that keyless source on top for this one query.
-type SourceId = "ddgs" | "arxiv" | "news" | "semantic_scholar";
+// The configured web provider is owned by Settings. These are per-run
+// additions only; an empty selection keeps the configured provider unchanged.
+type SourceId = "arxiv" | "news" | "semantic_scholar";
 
 const SOURCES: Array<{ id: SourceId; label: string; Icon: LucideIcon }> = [
-  { id: "ddgs", label: "Web", Icon: Globe2 },
   { id: "news", label: "News", Icon: Newspaper },
   { id: "arxiv", label: "arXiv", Icon: BookOpen },
   { id: "semantic_scholar", label: "Semantic Scholar", Icon: GraduationCap },
@@ -41,7 +34,7 @@ export function SourcePicker({
   return (
     <div className="flex min-w-0 items-center gap-hair" aria-label="Research sources">
       <span className="shrink-0 font-ui text-[0.76rem] text-text-faint">
-        Sources
+        Additional sources
       </span>
       <div className="flex min-w-0 flex-wrap items-center gap-hair">
         {SOURCES.map(({ id, label, Icon }) => {

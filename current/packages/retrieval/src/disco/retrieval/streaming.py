@@ -18,7 +18,7 @@ import json
 import logging
 import re
 from collections.abc import AsyncIterator, Sequence
-from typing import Any, NamedTuple
+from typing import Any, NamedTuple, cast
 
 from disco.core.events import LLMMessage
 from disco.core.llm import (
@@ -29,7 +29,12 @@ from disco.core.llm import (
 )
 from disco.core.think import strip_think_spans
 
-from .engine import annotate_passage_dates, extract_discovered_hits
+from .engine import (
+    _is_explicit_provider_failure,
+    _trace_diagnostic,
+    annotate_passage_dates,
+    extract_discovered_hits,
+)
 from .grounding import (
     _CITE,
     _drop_weak,
@@ -41,7 +46,7 @@ from .grounding import (
 from .local_encoders import EncoderUnavailable
 from .models import ExtractedDoc, Passage, RetrievalRequest, SearchHit
 from .providers import ExtractionProvider, SearchProvider
-from .ranking import Embedder, QueryRewriter, Reranker
+from .ranking import Embedder, QueryRewriter, Reranker, deduplicate_search_hits
 from .url_policy import source_url_key
 from .vectorstore import VectorStore
 
@@ -434,9 +439,21 @@ async def _discover_round(
 ) -> list[SearchHit]:
     """Search for this round (honoring the denied domains from re-scope);
     raises `_ResearchAborted` on zero hits."""
-    hits = await search.search(
-        current_query, limit=discover_limit, domains_deny=domains_deny or None
-    )
+    detailed = getattr(search, "search_detailed", None)
+    if callable(detailed):
+        hits, diagnostic = await cast(Any, detailed)(
+            current_query,
+            limit=discover_limit,
+            domains_deny=domains_deny or None,
+        )
+        if not hits and _is_explicit_provider_failure(diagnostic):
+            bounded = _trace_diagnostic(diagnostic)
+            raise _ResearchAborted(f"Search provider failed: {bounded}")
+    else:
+        hits = await search.search(
+            current_query, limit=discover_limit, domains_deny=domains_deny or None
+        )
+    hits = deduplicate_search_hits(hits)[:discover_limit]
     if not hits:
         raise _ResearchAborted("No search results were found for this query.")
     return hits
@@ -607,28 +624,27 @@ async def stream_research_answer(
     budget so a reasoning model has room to think AND still emit the answer (with
     a small budget, reasoning eats it all and the content comes back empty).
 
-    When `rewriter` is provided and `max_research_rounds > 1`, the pipeline
-    detects a no-answer result (zero supported claims after NLI verification) and
-    reformulates the query for up to `min(max_research_rounds - 1, 2)` extra
-    rounds. Token frames are buffered and only emitted for the accepted round so
-    the user never sees a doomed draft. A lightweight `{"type":"phase",
-    "phase":"reformulating"}` frame is emitted between rounds so the UI shows
-    activity. The OFF-path (≥1 supported claim on round 0, or the default
-    `max_research_rounds=1`) is byte-identical to the pre-F1 code — the retry
-    block is unreachable when no extra rounds are allowed.
+    This ordinary Search surface is always one-shot. ``rewriter`` and
+    ``max_research_rounds`` remain accepted for API compatibility with older
+    callers, but are intentionally ignored; Deep Research owns any bounded
+    multi-query planning in its separate engine.
 
     ``seed_passages`` and ``corpus_ids`` add local evidence before rerank."""
-    # F1: cap extra rounds at 2 regardless of the caller's value.
-    bounded_extra = min(max(max_research_rounds - 1, 0), 2)
+    # This is the ordinary Search answer path. It is deliberately one-shot for
+    # every provider shape, including legacy providers without
+    # ``search_detailed``. Deep Research owns its bounded multi-query loop in
+    # the deep_research engine; allowing this surface to invoke a rewriter
+    # creates a second planner/retry policy and makes a simple Search request
+    # fan out unexpectedly.
+    del max_research_rounds
+    bounded_extra = 0
 
     yield {"type": "state", "status": "running"}
     try:
         exclude_urls: frozenset[str] = frozenset()
         current_query = query
 
-        for round_idx in range(1 + bounded_extra):
-            is_last_round = round_idx == bounded_extra
-
+        for _round_idx in range(1 + bounded_extra):
             try:
                 result = await _run_research_round(
                     current_query,
@@ -664,22 +680,14 @@ async def stream_research_answer(
                 yield {"type": "state", "status": "finished"}
                 return
 
-            if rewriter is None or is_last_round:
-                yield {
-                    "type": "error",
-                    "message": (
-                        "The available sources did not support any factual claim in "
-                        "the generated answer. Try a broader query or different sources."
-                    ),
-                }
-                return
-
-            # No supported claims + rewriter available + rounds remain → reformulate.
-            exclude_urls = exclude_urls | result.this_round_urls
-            yield {"type": "phase", "phase": "reformulating"}
-            new_qs = await rewriter.rewrite(current_query, n=1)
-            current_query = new_qs[0] if new_qs else current_query
-            # Buffered token_frames from the doomed round are discarded here.
+            yield {
+                "type": "error",
+                "message": (
+                    "The available sources did not support any factual claim in "
+                    "the generated answer. Try a broader query or different sources."
+                ),
+            }
+            return
 
     except EncoderUnavailable as exc:
         # RAM guard: the encoder pre-check stopped a model load that would OOM the

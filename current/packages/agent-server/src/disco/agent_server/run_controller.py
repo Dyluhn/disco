@@ -60,6 +60,11 @@ class RunController:
         async def resolve_loop() -> AgentLoop:
             force_recompose = await self._build_platform.prepare_route_pin(conversation_id)
             snapshot = await self._drivers.resolve_context(conversation_id)
+            if await self._loops.workflow_resolution_required(conversation_id):
+                return await self._loops.loop_for_workflow_resolved(
+                    conversation_id,
+                    snapshot,
+                )
             if force_recompose is True:
                 return self._loops.loop_for_resolved(
                     conversation_id,

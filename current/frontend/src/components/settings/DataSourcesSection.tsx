@@ -40,6 +40,7 @@ interface Opt<P extends string> {
   baseUrlType?: "text" | "url";
   showApiKeyEnv?: boolean;
   apiKeyPlaceholder?: string;
+  credentialName?: string;
 }
 
 const SEARCH_OPTS: Opt<SearchProvider>[] = [
@@ -74,6 +75,7 @@ const SEARCH_OPTS: Opt<SearchProvider>[] = [
     help: "Academic papers + abstracts. Optional API key raises rate limits.",
     showApiKeyEnv: true,
     apiKeyPlaceholder: "e.g. SEMANTIC_SCHOLAR_API_KEY",
+    credentialName: "SEMANTIC_SCHOLAR_API_KEY",
   },
   {
     id: "site_scoped",
@@ -89,6 +91,7 @@ const SEARCH_OPTS: Opt<SearchProvider>[] = [
     tier: "paid",
     label: "Tavily (paid)",
     help: "Hosted search API. Store its key in Providers.",
+    credentialName: "TAVILY_API_KEY",
   },
   {
     id: "brave",
@@ -96,6 +99,7 @@ const SEARCH_OPTS: Opt<SearchProvider>[] = [
     label: "Brave Search (paid)",
     help: "Brave's hosted Search API. Store its key in Providers.",
     apiKeyPlaceholder: "e.g. BRAVE_SEARCH_API_KEY",
+    credentialName: "BRAVE_SEARCH_API_KEY",
   },
 ];
 
@@ -117,6 +121,7 @@ const EXTRACT_OPTS: Opt<ExtractionProvider>[] = [
     tier: "paid",
     label: "Firecrawl (paid)",
     help: "Hosted scrape API → clean markdown. Store its key in Providers.",
+    credentialName: "FIRECRAWL_API_KEY",
   },
 ];
 
@@ -234,6 +239,7 @@ function ProviderGroup<P extends string>({
               value={apiKeyEnv}
               onChange={onApiKeyEnv}
               placeholder={active?.apiKeyPlaceholder ?? "e.g. TAVILY_API_KEY"}
+              suggestedName={active?.credentialName}
               optional={active?.tier !== "paid"}
             />
           )}

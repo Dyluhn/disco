@@ -36,13 +36,13 @@ _PRODUCT_ROOT_FILES = frozenset(
 )
 _PRODUCT_FRONTEND_FILES = frozenset(
     {
-        "current/frontend/.env.example",
-        "current/frontend/Dockerfile",
-        "current/frontend/index.html",
-        "current/frontend/nginx.conf",
-        "current/frontend/package-lock.json",
-        "current/frontend/package.json",
-        "current/frontend/vite.config.ts",
+        "frontend/.env.example",
+        "frontend/Dockerfile",
+        "frontend/index.html",
+        "frontend/nginx.conf",
+        "frontend/package-lock.json",
+        "frontend/package.json",
+        "frontend/vite.config.ts",
     }
 )
 _NONPRODUCT_PARTS = frozenset(
@@ -50,7 +50,7 @@ _NONPRODUCT_PARTS = frozenset(
 )
 
 
-def _is_product_subject_path(path: str) -> bool:
+def _is_product_subject_path(path: str, *, current_layout: bool) -> bool:
     """Whether a worktree path can change the shipped runtime subject.
 
     Test, oracle, evidence, and governance bytes are deliberately excluded. Shared
@@ -58,19 +58,25 @@ def _is_product_subject_path(path: str) -> bool:
     them can change the runtime even when package source is untouched.
     """
 
+    if path in _PRODUCT_ROOT_FILES:
+        return True
+    if current_layout:
+        if not path.startswith("current/"):
+            return False
+        path = path.removeprefix("current/")
     parts = Path(path).parts
     if not parts or any(part in _NONPRODUCT_PARTS for part in parts):
         return False
-    if path in _PRODUCT_ROOT_FILES or path in _PRODUCT_FRONTEND_FILES:
+    if path in _PRODUCT_FRONTEND_FILES:
         return True
-    if path.startswith(("current/deploy/", "current/integrations/", "current/prompts/")):
+    if path.startswith(("deploy/", "integrations/", "prompts/")):
         return True
-    if path.startswith("current/packages/"):
+    if path.startswith("packages/"):
         return "src" in parts or "scripts" in parts or Path(path).name == "pyproject.toml"
-    if path.startswith("current/frontend/src/"):
+    if path.startswith("frontend/src/"):
         name = Path(path).name
         return not any(marker in name for marker in (".test.", ".spec."))
-    return path.startswith(("current/frontend/public/", "current/frontend/docker-entrypoint.d/"))
+    return path.startswith(("frontend/public/", "frontend/docker-entrypoint.d/"))
 
 
 def product_subject_identity(
@@ -81,13 +87,14 @@ def product_subject_identity(
     """Hash only shipped runtime bytes plus explicit model/provider bindings."""
 
     root = Path(repo)
+    current_layout = (root / "current" / "packages").is_dir()
     listed = subprocess.check_output(
         ["git", "-C", str(root), "ls-files", "-co", "--exclude-standard", "-z"]
     )
     paths = sorted(
         path
         for path in listed.decode("utf-8", errors="surrogateescape").split("\0")
-        if path and _is_product_subject_path(path)
+        if path and _is_product_subject_path(path, current_layout=current_layout)
     )
     digest = hashlib.sha256()
     for relative in paths:

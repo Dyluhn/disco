@@ -21,6 +21,8 @@ plus an optional statically-injected provider set (tests).
 
 from __future__ import annotations
 
+import hashlib
+import secrets
 from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
@@ -113,6 +115,10 @@ class DeepResearchProvider:
         )
         self._research_providers: dict[str, Any] | None = None
         self._research_encoders_key: tuple[object, ...] | None = None
+        # A process-local keyed fingerprint lets the provider cache observe a
+        # secret replacement under the same reference without retaining or
+        # exposing a stable hash of credential material.
+        self._secret_cache_key = secrets.token_bytes(32)
 
     # ---- public surface ---------------------------------------------------
 
@@ -143,6 +149,15 @@ class DeepResearchProvider:
             return ""
         return self._resolve_secret(secret_ref) or ""
 
+    def _secret_cache_token(self, value: str) -> bytes:
+        if not value:
+            return b""
+        return hashlib.blake2s(
+            value.encode("utf-8"),
+            key=self._secret_cache_key,
+            digest_size=16,
+        ).digest()
+
     def research(
         self,
         search_override: Any | None = None,
@@ -156,12 +171,31 @@ class DeepResearchProvider:
         module-cached, not per provider instance).
         """
         if self._injected_providers is not None:
-            if search_override is not None:
-                return {
-                    **self._injected_providers,
-                    "search": search_override,
-                }
-            return self._injected_providers
+            configured = self._injected_providers
+            if search_override is None:
+                return configured
+            from disco.retrieval.wiring import compose_search_providers
+
+            return {
+                **configured,
+                "search": compose_search_providers(
+                    configured["search"], (search_override,)
+                ),
+            }
+        if search_override is not None:
+            # Build the configured set once, then compose only the search slot.
+            # This keeps extraction and all encoder object identities stable for
+            # the duration of a process and makes empty additions an identity
+            # operation at the provider boundary.
+            configured = self.research()
+            from disco.retrieval.wiring import compose_search_providers
+
+            return {
+                **configured,
+                "search": compose_search_providers(
+                    configured["search"], (search_override,)
+                ),
+            }
         cfg = self._config_store.load()
         enc, sch, ext = cfg.encoders, cfg.search, cfg.extraction
 
@@ -198,30 +232,13 @@ class DeepResearchProvider:
             sch.provider,
             sch.base_url,
             sch.api_key_env,
+            self._secret_cache_token(search_key),
             ext.provider,
             ext.base_url,
             ext.api_key_env,
+            self._secret_cache_token(ext_key),
             approval_key,
         )
-        if search_override is not None:
-            from disco.retrieval.live import build_live_retrieval
-
-            return build_live_retrieval(
-                remote=enc.remote,
-                reranker_url=enc.reranker_url,
-                embedder_url=enc.embedder_url,
-                nli_url=enc.nli_url,
-                search_provider=sch.provider,
-                search_base_url=sch.base_url,
-                search_api_key=search_key,
-                search_secret_ref=sch.api_key_env,
-                search_override=search_override,
-                extraction_provider=ext.provider,
-                extraction_base_url=ext.base_url,
-                extraction_api_key=ext_key,
-                extraction_secret_ref=ext.api_key_env,
-                origin_approved=self._origin_approved,
-            )
         if self._research_providers is None or self._research_encoders_key != key:
             from disco.retrieval.live import build_live_retrieval
 
@@ -247,8 +264,37 @@ class DeepResearchProvider:
         self,
         sources: Sequence[str] | None,
     ) -> Any | None:
-        """Build a multi-search override for per-run source selection."""
-        clean = tuple(str(source).strip() for source in (sources or ()) if str(source).strip())
+        """Build additive source providers for one run.
+
+        The configured Settings provider is composed later by :meth:`research`.
+        Only keyless/additional research sources are accepted here; an explicit
+        unsupported source is a configuration error rather than a silently
+        dropped request or an implicit DDGS fallback.
+        """
+        allowed = frozenset({"arxiv", "news", "semantic_scholar"})
+        legacy_baseline = frozenset(
+            {"ddgs", "searxng", "tavily", "brave", "site_scoped"}
+        )
+        clean: list[str] = []
+        for raw in sources or ():
+            source = str(raw).strip().lower()
+            if not source:
+                continue
+            # Older checkpoints could persist the then-visible baseline search
+            # provider as a source chip.  It is already composed from Settings,
+            # so normalize that legacy value away instead of querying it twice
+            # or making an otherwise resumable report fail.
+            if source in legacy_baseline:
+                continue
+            if source not in allowed:
+                from disco.retrieval.live import ProviderConfigError
+
+                raise ProviderConfigError(
+                    f"unsupported additional research source {source!r}; "
+                    "choose News, arXiv, or Semantic Scholar"
+                )
+            if source not in clean:
+                clean.append(source)
         if not clean:
             return None
         cfg = self._config_store.load()
@@ -257,8 +303,16 @@ class DeepResearchProvider:
 
         provider_urls = {
             "tavily": "https://api.tavily.com",
-            "semantic_scholar": sch.base_url or "https://api.semanticscholar.org",
-            "brave": sch.base_url or "https://api.search.brave.com",
+            "semantic_scholar": (
+                sch.base_url
+                if sch.provider == "semantic_scholar" and sch.base_url
+                else "https://api.semanticscholar.org"
+            ),
+            "brave": (
+                sch.base_url
+                if sch.provider == "brave" and sch.base_url
+                else "https://api.search.brave.com"
+            ),
         }
 
         def key_for(provider: str, *fallback_names: str) -> str:

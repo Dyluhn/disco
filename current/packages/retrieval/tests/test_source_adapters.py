@@ -96,7 +96,30 @@ async def test_arxiv_malformed_xml_degrades_to_empty():
         transport=_transport(lambda req: httpx.Response(200, content=b"<feed>"))
     )
 
-    assert await provider.search("bad") == []
+    hits, diagnostic = await provider.search_detailed("bad")
+    assert hits == []
+    assert diagnostic["outcome"] == "invalid_response"
+    assert diagnostic["provider"] == "arxiv"
+
+
+async def test_arxiv_valid_empty_is_distinct_from_upstream_failure():
+    empty = ArxivSearchProvider(
+        transport=_transport(
+            lambda req: httpx.Response(
+                200,
+                content=b'<feed xmlns="http://www.w3.org/2005/Atom" />',
+            )
+        )
+    )
+    failed = ArxivSearchProvider(
+        transport=_transport(lambda req: httpx.Response(503, content=b"busy"))
+    )
+
+    _, empty_diagnostic = await empty.search_detailed("none")
+    _, failed_diagnostic = await failed.search_detailed("none")
+    assert empty_diagnostic["outcome"] == "empty"
+    assert failed_diagnostic["outcome"] == "upstream"
+    assert failed_diagnostic["status_code"] == 503
 
 
 async def test_arxiv_recency_excludes_old_or_undated_results():
@@ -169,7 +192,25 @@ async def test_news_malformed_xml_degrades_to_empty():
         transport=_transport(lambda req: httpx.Response(200, content=b"<rss>"))
     )
 
-    assert await provider.search("bad") == []
+    hits, diagnostic = await provider.search_detailed("bad")
+    assert hits == []
+    assert diagnostic["outcome"] == "invalid_response"
+    assert diagnostic["provider"] == "news"
+
+
+async def test_news_valid_empty_is_distinct_from_upstream_failure():
+    empty = NewsSearchProvider(
+        transport=_transport(lambda req: httpx.Response(200, content=b"<rss><channel /></rss>"))
+    )
+    failed = NewsSearchProvider(
+        transport=_transport(lambda req: httpx.Response(503, content=b"busy"))
+    )
+
+    _, empty_diagnostic = await empty.search_detailed("none")
+    _, failed_diagnostic = await failed.search_detailed("none")
+    assert empty_diagnostic["outcome"] == "empty"
+    assert failed_diagnostic["outcome"] == "upstream"
+    assert failed_diagnostic["status_code"] == 503
 
 
 async def test_news_week_time_filter_appends_when_operator():
@@ -235,7 +276,21 @@ async def test_semantic_scholar_http_error_degrades_to_empty():
         transport=_transport(lambda req: httpx.Response(500, text="nope"))
     )
 
-    assert await provider.search("q") == []
+    hits, diagnostic = await provider.search_detailed("q")
+    assert hits == []
+    assert diagnostic["outcome"] == "upstream"
+    assert diagnostic["status_code"] == 500
+
+
+async def test_semantic_scholar_malformed_json_is_invalid_response():
+    provider = SemanticScholarSearchProvider(
+        transport=_transport(lambda req: httpx.Response(200, text="not-json"))
+    )
+
+    hits, diagnostic = await provider.search_detailed("q")
+    assert hits == []
+    assert diagnostic["outcome"] == "invalid_response"
+    assert diagnostic["provider"] == "semantic_scholar"
 
 
 async def test_semantic_scholar_threads_strict_recency_filter():
@@ -392,6 +447,8 @@ async def test_multi_search_exceptions_are_aggregate_failures():
         )
     ).search_detailed("q")
     assert all_failed[1]["provider_aggregate"] == "all_failed"
+    assert all_failed[1]["providers"]["one"]["outcome"] == "upstream"
+    assert all_failed[1]["providers"]["two"]["provider_error"] == "RuntimeError"
 
     mixed = await MultiSearchProvider(
         (

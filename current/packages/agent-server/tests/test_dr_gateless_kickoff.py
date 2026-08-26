@@ -208,6 +208,24 @@ def test_checkpoint_resume_rebuilds_typed_evidence_and_trail():
     assert trail == [{"kind": "search", "query": "local llm inference 2026"}]
 
 
+def test_checkpoint_source_selection_survives_cleared_runtime_state():
+    from disco.agent_server._deep_research_service_parts.execute import resolve_additional_sources
+
+    class Settings:
+        def get_research_sources(self, conversation_id):
+            raise AssertionError("resume must not consult transient settings")
+
+    service = type("Service", (), {"_settings": Settings()})()
+    selected = ResearchCheckpointEvent(
+        query="q",
+        additional_sources=["news", "arxiv"],
+    )
+    legacy = ResearchCheckpointEvent(query="q")
+
+    assert resolve_additional_sources(service, "c1", selected) == ["news", "arxiv"]
+    assert resolve_additional_sources(service, "c1", legacy) == []
+
+
 async def test_finished_report_without_new_message_is_noop(monkeypatch):
     """A finished report with no fresh user message is a finished
     conversation — no new run, no follow-up."""

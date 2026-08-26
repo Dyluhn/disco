@@ -86,6 +86,20 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="fetch the opt-in DISCO_INSPECT trace after each live conversation",
     )
+    parser.add_argument(
+        "--deck",
+        action="store_true",
+        help=(
+            "after a successful live deep-research report, start and observe the "
+            "server-owned Agent report→deck handoff"
+        ),
+    )
+    parser.add_argument(
+        "--deck-timeout",
+        type=float,
+        default=None,
+        help="deck observation timeout in seconds (default 1200)",
+    )
     parser.add_argument("--output-dir", default="/tmp/disco-deep-research-harness")
     parser.add_argument(
         "--concurrency",
@@ -196,6 +210,8 @@ async def _main_async(args: argparse.Namespace) -> int:
             cassette=cassette,
             auth_token=args.auth_token,
             capture_inspect=args.inspect_model_io,
+            deck=args.deck,
+            deck_timeout_s=args.deck_timeout,
         )
 
     def make_transport(request: ResearchRequest) -> ResearchTransport:

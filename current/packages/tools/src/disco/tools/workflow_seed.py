@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
 
 from disco.core.llm import ConfigStore
@@ -30,32 +31,67 @@ FORM_FILL_INSTANCE_ID = "form_fill"
 SKILL_AUTHORING_INSTANCE_ID = "skill_authoring"
 
 
-def _approved_enabled_instance(definition: WorkflowDefinition) -> WorkflowInstance:
+SurfaceDigestGetter = Callable[[WorkflowInstance], str]
+
+
+def _approved_enabled_instance(
+    definition: WorkflowDefinition,
+    *,
+    surface_digest_getter: SurfaceDigestGetter | None = None,
+) -> WorkflowInstance:
     digest = definition.digest()
-    return WorkflowInstance(
+    instance = WorkflowInstance(
         definition_digest=digest,
         definition=definition,
+        origin="built_in",
         params={},
         connector_bindings={},
         enabled=True,
         approval=WorkflowApproval(
             approved_at="2026-07-04T00:00:00Z",
             approved_by="disco_builtin_seed",
+            # The standalone seed helpers retain their historical fallback for
+            # callers that do not have a host surface.  Runtime startup passes
+            # the route/runtime authority below, which replaces this with the
+            # exact compiled-surface digest used by readiness and UI approval.
             surface_shown_digest=digest,
         ),
     )
+    if surface_digest_getter is None:
+        return instance
+    return instance.model_copy(
+        update={
+            "approval": WorkflowApproval(
+                approved_at="2026-07-04T00:00:00Z",
+                approved_by="disco_builtin_seed",
+                surface_shown_digest=surface_digest_getter(instance),
+            )
+        }
+    )
 
 
-def general_workspace_task_instance() -> WorkflowInstance:
-    return _approved_enabled_instance(GENERAL_WORKSPACE_TASK_DEFINITION)
+def general_workspace_task_instance(
+    *, surface_digest_getter: SurfaceDigestGetter | None = None
+) -> WorkflowInstance:
+    return _approved_enabled_instance(
+        GENERAL_WORKSPACE_TASK_DEFINITION, surface_digest_getter=surface_digest_getter
+    )
 
 
-def scripted_workspace_task_instance() -> WorkflowInstance:
-    return _approved_enabled_instance(SCRIPTED_WORKSPACE_TASK_DEFINITION)
+def scripted_workspace_task_instance(
+    *, surface_digest_getter: SurfaceDigestGetter | None = None
+) -> WorkflowInstance:
+    return _approved_enabled_instance(
+        SCRIPTED_WORKSPACE_TASK_DEFINITION, surface_digest_getter=surface_digest_getter
+    )
 
 
-def document_deck_studio_instance() -> WorkflowInstance:
-    return _approved_enabled_instance(DOCUMENT_DECK_STUDIO_DEFINITION)
+def document_deck_studio_instance(
+    *, surface_digest_getter: SurfaceDigestGetter | None = None
+) -> WorkflowInstance:
+    return _approved_enabled_instance(
+        DOCUMENT_DECK_STUDIO_DEFINITION, surface_digest_getter=surface_digest_getter
+    )
 
 
 def daily_email_brief_instance() -> WorkflowInstance:
@@ -64,6 +100,7 @@ def daily_email_brief_instance() -> WorkflowInstance:
     return WorkflowInstance(
         definition_digest=digest,
         definition=definition,
+        origin="built_in",
         params={},
         connector_bindings={},
         enabled=False,
@@ -71,16 +108,28 @@ def daily_email_brief_instance() -> WorkflowInstance:
     )
 
 
-def browser_automation_instance() -> WorkflowInstance:
-    return _approved_enabled_instance(BROWSER_AUTOMATION_DEFINITION)
+def browser_automation_instance(
+    *, surface_digest_getter: SurfaceDigestGetter | None = None
+) -> WorkflowInstance:
+    return _approved_enabled_instance(
+        BROWSER_AUTOMATION_DEFINITION, surface_digest_getter=surface_digest_getter
+    )
 
 
-def form_fill_instance() -> WorkflowInstance:
-    return _approved_enabled_instance(FORM_FILL_DEFINITION)
+def form_fill_instance(
+    *, surface_digest_getter: SurfaceDigestGetter | None = None
+) -> WorkflowInstance:
+    return _approved_enabled_instance(
+        FORM_FILL_DEFINITION, surface_digest_getter=surface_digest_getter
+    )
 
 
-def skill_authoring_instance() -> WorkflowInstance:
-    return _approved_enabled_instance(SKILL_AUTHORING_DEFINITION)
+def skill_authoring_instance(
+    *, surface_digest_getter: SurfaceDigestGetter | None = None
+) -> WorkflowInstance:
+    return _approved_enabled_instance(
+        SKILL_AUTHORING_DEFINITION, surface_digest_getter=surface_digest_getter
+    )
 
 
 def _workflows_dir(projects_root: str | Path | None = None) -> Path:
@@ -164,24 +213,59 @@ def seed_skill_authoring(projects_root: str | Path | None = None) -> Path:
 
 def seed_builtin_workflows(
     projects_root: str | Path | None = None,
+    *,
+    surface_digest_getter: SurfaceDigestGetter | None = None,
 ) -> tuple[tuple[str, Path], ...]:
     return (
         (
             GENERAL_WORKSPACE_TASK_INSTANCE_ID,
-            seed_general_workspace_task(projects_root),
+            _seed_instance(
+                GENERAL_WORKSPACE_TASK_INSTANCE_ID,
+                general_workspace_task_instance(surface_digest_getter=surface_digest_getter),
+                projects_root,
+            ),
         ),
         (
             SCRIPTED_WORKSPACE_TASK_INSTANCE_ID,
-            seed_scripted_workspace_task(projects_root),
+            _seed_instance(
+                SCRIPTED_WORKSPACE_TASK_INSTANCE_ID,
+                scripted_workspace_task_instance(surface_digest_getter=surface_digest_getter),
+                projects_root,
+            ),
         ),
         (
             DOCUMENT_DECK_STUDIO_INSTANCE_ID,
-            seed_document_deck_studio(projects_root),
+            _seed_instance(
+                DOCUMENT_DECK_STUDIO_INSTANCE_ID,
+                document_deck_studio_instance(surface_digest_getter=surface_digest_getter),
+                projects_root,
+            ),
         ),
         (DAILY_EMAIL_BRIEF_INSTANCE_ID, seed_daily_email_brief(projects_root)),
-        (BROWSER_AUTOMATION_INSTANCE_ID, seed_browser_automation(projects_root)),
-        (FORM_FILL_INSTANCE_ID, seed_form_fill(projects_root)),
-        (SKILL_AUTHORING_INSTANCE_ID, seed_skill_authoring(projects_root)),
+        (
+            BROWSER_AUTOMATION_INSTANCE_ID,
+            _seed_instance(
+                BROWSER_AUTOMATION_INSTANCE_ID,
+                browser_automation_instance(surface_digest_getter=surface_digest_getter),
+                projects_root,
+            ),
+        ),
+        (
+            FORM_FILL_INSTANCE_ID,
+            _seed_instance(
+                FORM_FILL_INSTANCE_ID,
+                form_fill_instance(surface_digest_getter=surface_digest_getter),
+                projects_root,
+            ),
+        ),
+        (
+            SKILL_AUTHORING_INSTANCE_ID,
+            _seed_instance(
+                SKILL_AUTHORING_INSTANCE_ID,
+                skill_authoring_instance(surface_digest_getter=surface_digest_getter),
+                projects_root,
+            ),
+        ),
     )
 
 

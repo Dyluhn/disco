@@ -209,7 +209,27 @@ _AUDIENCES: tuple[tuple[str, tuple[str, ...]], ...] = (
 
 # must_have_sections — fixed iteration order = stable output order.
 _SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("authentication", ("login", "log in", "signup", "sign up", "auth", "register", "password")),
+    (
+        "authentication",
+        ("login", "log in", "signup", "sign up", "auth", "authentication", "register", "password"),
+    ),
+    # Authorization is a functional requirement, independent of visual language.
+    # In particular, RBAC must survive brief extraction even when the request has
+    # no style cue (and a style cue must not manufacture this section).
+    (
+        "authorization",
+        (
+            "rbac",
+            "role based access",
+            "role-based access",
+            "permission",
+            "permissions",
+            "authorization",
+            "authorize",
+            "moderator",
+            "moderators",
+        ),
+    ),
     ("payments", ("payment", "payments", "checkout", "stripe", "billing", "subscription", "cart")),
     ("search", ("search", "filter", "filtering")),
     ("dashboard", ("dashboard", "analytics", "report", "reports", "charts", "graph", "graphs")),
@@ -223,6 +243,39 @@ _SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
 )
 
 _KEY_ENTITY_CAP = 8
+
+# AppKit is a governed web-app path, not a generic "design system" switch.
+# Keep this predicate deliberately conservative: visual language never activates
+# the contract by itself, while common web products with real functional
+# requirements (including a forum) do.  The host owns the decision timing; core
+# owns the pure, deterministic applicability rule.
+_APPKIT_INTRINSIC_FUNCTIONAL_KINDS: frozenset[str] = frozenset(
+    {"dashboard", "ecommerce", "chat_app"}
+)
+_APPKIT_GENERIC_WEB_KINDS: frozenset[str] = frozenset(
+    {"web_app", "blog", "landing_page"}
+)
+_APPKIT_WEB_ENTITIES: frozenset[str] = frozenset(
+    {"forum", "community", "directory", "portal", "crm", "intranet"}
+)
+_APPKIT_FUNCTIONAL_SECTIONS: frozenset[str] = frozenset(
+    {
+        "authentication",
+        "authorization",
+        "payments",
+        "search",
+        "dashboard",
+        "notifications",
+        "user_profiles",
+        "database",
+        "realtime",
+        "uploads",
+        "admin",
+    }
+)
+_APPKIT_UNSUPPORTED_KINDS: frozenset[str] = frozenset(
+    {"api", "cli", "game", "mobile_app", "data_tool"}
+)
 
 
 def _normalize(request: str) -> str:
@@ -293,6 +346,28 @@ def classify_build_brief(request: str) -> BuildBrief:
         audience=audience,
         must_have_sections=must_have_sections,
     )
+
+
+def appkit_applicable(brief: BuildBrief) -> bool:
+    """Return whether a classified Build request fits governed AppKit.
+
+    This is intentionally a small host policy, not a second classifier. APIs,
+    CLIs, games, mobile apps, and data pipelines remain freeform. Intrinsically
+    functional web products are eligible; generic web products and otherwise-
+    unknown products (for example, ``forum``) must name a supported functional
+    capability. A style word such as ``brutalist`` has no effect on the result.
+    """
+
+    kind = str(brief.app_kind)
+    if kind in _APPKIT_UNSUPPORTED_KINDS:
+        return False
+    has_function = bool(set(brief.must_have_sections) & _APPKIT_FUNCTIONAL_SECTIONS)
+    if kind in _APPKIT_INTRINSIC_FUNCTIONAL_KINDS:
+        return True
+    if kind in _APPKIT_GENERIC_WEB_KINDS:
+        return has_function
+    has_web_entity = any(entity in _APPKIT_WEB_ENTITIES for entity in brief.key_entities)
+    return has_web_entity and has_function
 
 
 # ---- golden fixture (shared with the TS classifier) ---------------------------

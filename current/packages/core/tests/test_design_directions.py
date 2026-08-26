@@ -100,6 +100,15 @@ def test_pick_direction_is_deterministic_and_keyword_sensitive() -> None:
     assert pick_direction("A local artisan bakery website", "conv-1").id == "warm-craft"
 
 
+def test_functional_rbac_and_visual_direction_are_independent() -> None:
+    # RBAC is not a visual keyword, so it must not change the chosen direction
+    # relative to the same functional request without that requirement.
+    assert pick_direction("Build a forum with RBAC", "conv-rbac") == pick_direction(
+        "Build a forum", "conv-rbac"
+    )
+    assert pick_direction("Build a brutalist forum", "conv-style").id == "brutalist"
+
+
 def test_render_design_direction_is_stable_and_carries_anti_slop_bans() -> None:
     direction = DIRECTION_BY_ID["dark-glass"]
     first = render_design_direction(direction)

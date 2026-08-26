@@ -117,7 +117,7 @@ def _policy_findings(defn: WorkflowDefinition) -> list[WorkflowValidationFinding
     if "browser" in defn.tools and not defn.policies.egress_allow:
         findings.append(
             _finding(
-                "warning",
+                "error",
                 "browser_without_egress",
                 "policies.egress_allow",
                 "workflow uses browser but policies.egress_allow is empty; "

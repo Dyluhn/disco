@@ -59,17 +59,17 @@ class ProviderOperationError(RuntimeError):
         super().__init__("configured retrieval provider failed all retrieval operations")
 
 
-_PAID_PROVIDER_NAMES = frozenset({"tavily", "brave", "firecrawl"})
 _NON_FAILURE_OUTCOMES = frozenset({"ok", "empty"})
 
 
 def _is_explicit_provider_failure(diagnostic: object) -> bool:
-    """Recognize only explicit paid-provider or aggregate failure facts.
+    """Recognize only explicit provider or aggregate failure facts.
 
     Legacy providers intentionally have no outcome field; their empty result
-    is healthy/unknown rather than evidence of an outage.  Multi-provider
-    adapters expose the aggregate beside the provider map, so the classifier
-    accepts that stable top-level fact as well as the flat adapter shape.
+    is healthy/unknown rather than evidence of an outage.  Detailed providers
+    expose a provider name and outcome, so a failed adapter cannot be mistaken
+    for a valid empty result. Multi-provider adapters expose the aggregate
+    beside the provider map.
     """
 
     if not isinstance(diagnostic, dict):
@@ -78,11 +78,7 @@ def _is_explicit_provider_failure(diagnostic: object) -> bool:
         return True
     provider = diagnostic.get("provider")
     outcome = diagnostic.get("outcome")
-    return (
-        provider in _PAID_PROVIDER_NAMES
-        and isinstance(outcome, str)
-        and outcome not in _NON_FAILURE_OUTCOMES
-    )
+    return bool(provider) and isinstance(outcome, str) and outcome not in _NON_FAILURE_OUTCOMES
 
 
 def _trace_text(value: object, limit: int) -> str:
@@ -327,7 +323,10 @@ class DefaultRetrievalEngine:
         same fused ``all_hits`` collection.
         """
         if not req.use_web:
-            return [], [], []
+            # Keep one diagnostic slot per transformed query even when web
+            # discovery is intentionally disabled; the trace zipper below
+            # remains shape-stable for corpus-only retrieval.
+            return [], [[] for _ in queries], [{} for _ in queries]
         hit_lists: list[list[SearchHit]] = []
         diagnostics: list[object] = []
         all_provider_failures = 0

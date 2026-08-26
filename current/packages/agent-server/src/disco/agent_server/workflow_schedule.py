@@ -186,10 +186,20 @@ class JsonWorkflowScheduleStore:
         now: datetime | None = None,
     ) -> WorkflowScheduleRow:
         current = now or _now()
+        resolved_owner = owner_id or install_owner_id()
+        existing = [
+            row
+            for row in self.list_schedules(owner_id=resolved_owner)
+            if row.spec.instance_id == spec.instance_id
+        ]
+        current_row = existing[0] if existing else None
         row = WorkflowScheduleRow(
-            owner_id=owner_id or install_owner_id(),
+            schedule_id=(
+                current_row.schedule_id if current_row is not None else _new_schedule_id()
+            ),
+            owner_id=resolved_owner,
             spec=spec,
-            created_at=current,
+            created_at=(current_row.created_at if current_row is not None else current),
             next_run=_next_future_run(
                 spec.cron,
                 current,
@@ -197,6 +207,10 @@ class JsonWorkflowScheduleStore:
             ),
         )
         _write_json_atomic(self._path_for(row.schedule_id), row.to_json_dict())
+        # One workflow has one editable schedule. Clean up any legacy duplicate
+        # rows only after the replacement is durably published.
+        for duplicate in existing[1:]:
+            self._path_for(duplicate.schedule_id).unlink(missing_ok=True)
         return row
 
     def list_schedules(

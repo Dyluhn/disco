@@ -13,9 +13,9 @@ import asyncio
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
+DEVELOPMENT_ROOT = Path(__file__).resolve().parents[2]
+if str(DEVELOPMENT_ROOT) not in sys.path:
+    sys.path.insert(0, str(DEVELOPMENT_ROOT))
 
 from harness.reliability._runner.campaign import (
     _amain,

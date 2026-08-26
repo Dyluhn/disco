@@ -55,11 +55,11 @@ export function DraftReviewPanel({
       </div>
 
       <section className="flex flex-col gap-hair">
-        <h4 className="font-ui text-[0.86rem] font-semibold text-text">Validation findings</h4>
+        <h4 className="font-ui text-[0.86rem] font-semibold text-text">Configuration checks</h4>
         <FindingRows findings={result.workflow.validation_findings} />
         {errorFindings && (
           <div className="font-ui text-[0.78rem] text-unsupported">
-            Error findings block approval.
+            These checks need attention before this capability can be enabled.
           </div>
         )}
       </section>
@@ -70,7 +70,7 @@ export function DraftReviewPanel({
         ) : (
           <AlertTriangle className="size-4 text-warn" aria-hidden />
         )}
-        Simulation {result.simulation.ok ? "ok" : "needs attention"}
+        Configuration checks {result.simulation.ok ? "pass" : "need attention"}
       </div>
 
       {approveIsError && (
@@ -95,7 +95,7 @@ export function DraftReviewPanel({
           ) : (
             <Check className="size-3.5" aria-hidden />
           )}
-          {result.workflow.approved ? "Approved" : "Approve"}
+          {result.workflow.approved ? "Enabled" : "Create & enable"}
         </button>
         <button
           type="button"

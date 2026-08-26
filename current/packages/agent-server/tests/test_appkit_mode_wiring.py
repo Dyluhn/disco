@@ -24,6 +24,7 @@ from disco.core import (
     WorkspaceMutationEvent,
     WorkspaceVersionEvent,
 )
+from disco.core.appkit import classify_build_brief
 from disco.core.llm import DefaultLLMRouter, ModelRole, OperatingMode
 from disco.core.loop import BlastRadiusConfirm, RouterAgent
 from disco.core.loop.driver import Driver
@@ -424,3 +425,34 @@ def test_appkit_mode_flag_round_trips_from_body() -> None:
     resp2 = asyncio.run(route.endpoint(CreateConversationBody(surface="agent")))
     cid2 = resp2["conversation_id"]
     assert rt.settings._effective_appkit_mode(cid2) is False
+
+
+def test_auto_appkit_selection_is_host_owned_and_surface_scoped() -> None:
+    import asyncio
+
+    store = SqliteEventStore(":memory:")
+    rt = ConversationRuntime(store)
+    store.create_conversation("forum", owner_id="local", surface="build")
+    assert asyncio.run(
+        rt._promote_appkit_for_build("forum", classify_build_brief("Build a forum with RBAC"))
+    ) is True
+    assert store.conversation_appkit_mode_sync("forum") is True
+
+    store.create_conversation("api", owner_id="local", surface="build")
+    assert asyncio.run(
+        rt._promote_appkit_for_build("api", classify_build_brief("Build an API with auth"))
+    ) is False
+    assert store.conversation_appkit_mode_sync("api") is False
+
+    store.create_conversation("agent", owner_id="local", surface="agent")
+    assert asyncio.run(
+        rt._promote_appkit_for_build("agent", classify_build_brief("Build a forum with RBAC"))
+    ) is False
+    assert store.conversation_appkit_mode_sync("agent") is False
+
+    store.create_conversation("artifact", owner_id="local", surface="build")
+    rt.settings.set_artifact_mode("artifact", True)
+    assert asyncio.run(
+        rt._promote_appkit_for_build("artifact", classify_build_brief("Build a forum with RBAC"))
+    ) is False
+    assert store.conversation_appkit_mode_sync("artifact") is False

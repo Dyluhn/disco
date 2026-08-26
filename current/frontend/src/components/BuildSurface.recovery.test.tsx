@@ -214,6 +214,32 @@ describe("finished app handoff isolation", () => {
       artifact_kind: "app",
       source: "agent",
     } as AgentEvent,
+    {
+      kind: "status",
+      id: "s-finished",
+      seq: 10,
+      status: "FINISHED",
+      source: "system",
+    } as AgentEvent,
+    {
+      kind: "workspace_version",
+      id: "v-finished",
+      seq: 12,
+      version_seq: 3,
+      tree_digest: "tree-3",
+      trigger: "finish",
+      source: "system",
+      final_seal: {
+        schema_version: 1,
+        scope: { namespace: "workspace.tree", identifier: "cid-1" },
+        terminal_seq: 10,
+        latest_effect_seq: null,
+        version_seq: 3,
+        tree_digest: "tree-3",
+        file_count: 1,
+        total_bytes: 1,
+      },
+    } as AgentEvent,
   ];
 
   it("opens a blank window synchronously and mints only after the click", async () => {

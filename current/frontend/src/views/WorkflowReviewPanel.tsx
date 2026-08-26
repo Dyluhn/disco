@@ -1,9 +1,14 @@
-import { AlertTriangle, Check, Loader2, Plus, ShieldCheck, Workflow } from "lucide-react";
-import { useState } from "react";
+import { AlertTriangle, ChevronDown, Loader2, Plus, ShieldCheck, Workflow } from "lucide-react";
+import { useId, useState } from "react";
 import { WorkflowAuthorForm } from "@/components/workflows/WorkflowAuthorForm";
-import { useApproveWorkflow, useWorkflowReviews } from "@/hooks/useWorkflows";
+import {
+  useApproveWorkflow,
+  useSetWorkflowEnabled,
+  useWorkflowReviews,
+} from "@/hooks/useWorkflows";
 import type { WorkflowReview } from "@/types/workflow";
 import { WorkflowRunSchedule } from "./workflowReview/WorkflowRunSchedule";
+import { WorkflowSchedule } from "./workflowReview/WorkflowSchedule";
 
 function JsonBlock({ label, value }: { label: string; value: unknown }) {
   return (
@@ -53,22 +58,41 @@ function FindingList({ workflow }: { workflow: WorkflowReview }) {
   );
 }
 
+type WorkflowState = "ready" | "needs_setup" | "off";
+
+function workflowState(workflow: WorkflowReview): WorkflowState {
+  return workflow.readiness.status;
+}
+
+function workflowStateLabel(state: WorkflowState): string {
+  if (state === "ready") return "Ready";
+  if (state === "off") return "Off";
+  return "Needs setup";
+}
+
 function WorkflowCard({
   workflow,
   approving,
+  toggling,
   onApprove,
+  onToggle,
 }: {
   workflow: WorkflowReview;
   approving: boolean;
+  toggling: boolean;
   onApprove: (workflow: WorkflowReview) => void;
+  onToggle: (workflow: WorkflowReview) => void;
 }) {
   const hasError = workflow.validation_findings.some((finding) => finding.severity === "error");
-  const status = workflow.approved ? "Approved" : hasError ? "Blocked" : "Draft";
+  const state = workflowState(workflow);
+  const status = workflowStateLabel(state);
+  const advancedId = useId();
+  const [advancedOpen, setAdvancedOpen] = useState(false);
 
   return (
     <article
       className="flex flex-col gap-section rounded-card border border-hairline bg-surface-1 p-body"
-      data-workflow-id={workflow.instance_id}
+      data-workflow-state={state}
     >
       <header className="flex flex-col gap-inline md:flex-row md:items-start md:justify-between">
         <div className="min-w-0">
@@ -79,52 +103,100 @@ function WorkflowCard({
             </h2>
             <span
               className="rounded-full border border-hairline px-inline py-px font-ui text-[0.68rem] uppercase tracking-wide text-text-muted"
-              data-status={status.toLowerCase()}
+              data-status={state}
             >
               {status}
             </span>
           </div>
           <p className="mt-hair font-ui text-[0.84rem] text-text-muted">{workflow.card}</p>
-          <div className="mt-hair font-mono text-[0.68rem] text-text-faint">
-            {workflow.instance_id} · {workflow.surface_shown_digest}
-          </div>
         </div>
-        <button
-          type="button"
-          onClick={() => onApprove(workflow)}
-          disabled={workflow.approved || hasError || approving}
-          data-validation-blocked={hasError}
-          aria-label={`Approve ${workflow.name}`}
-          className="inline-flex min-h-11 shrink-0 items-center justify-center gap-hair rounded-control border border-hairline px-body py-hair font-ui text-[0.82rem] text-text-muted transition-colors hover:border-supported/50 hover:text-supported disabled:cursor-not-allowed disabled:opacity-50 lg:min-h-0"
-        >
-          {approving ? (
-            <Loader2 className="size-3.5 animate-spin" aria-hidden />
-          ) : (
-            <Check className="size-3.5" aria-hidden />
+        <div className="flex shrink-0 items-center gap-inline">
+          {!workflow.approved && (
+            <button
+              type="button"
+              onClick={() => onApprove(workflow)}
+              disabled={hasError || approving}
+              data-validation-blocked={hasError}
+              aria-label={`Set up ${workflow.name}`}
+              className="inline-flex min-h-11 items-center justify-center gap-hair rounded-control border border-hairline px-body py-hair font-ui text-[0.82rem] text-text-muted transition-colors hover:border-supported/50 hover:text-supported disabled:cursor-not-allowed disabled:opacity-50 lg:min-h-0"
+            >
+              {approving && <Loader2 className="size-3.5 animate-spin" aria-hidden />}
+              Set up
+            </button>
           )}
-          {workflow.approved ? "Approved" : "Approve"}
-        </button>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={workflow.enabled}
+            aria-label={`Enable ${workflow.name}`}
+            onClick={() => onToggle(workflow)}
+            disabled={
+              toggling || (!workflow.enabled && (!workflow.approved || hasError))
+            }
+            className="inline-flex min-h-11 items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.76rem] text-text-muted transition-colors hover:border-accent/60 hover:text-text disabled:cursor-not-allowed disabled:opacity-50 lg:min-h-0"
+          >
+            <span
+              aria-hidden
+              className={`relative h-4 w-7 rounded-full transition-colors ${workflow.enabled ? "bg-accent" : "bg-surface-3"}`}
+            >
+              <span
+                className={`absolute top-0.5 size-3 rounded-full bg-surface-1 transition-transform ${workflow.enabled ? "translate-x-3.5" : "translate-x-0.5"}`}
+              />
+            </span>
+            {workflow.enabled ? "Enabled" : "Off"}
+          </button>
+        </div>
       </header>
 
-      {workflow.approved && <WorkflowRunSchedule workflow={workflow} />}
+      {state === "ready" && <WorkflowRunSchedule workflow={workflow} />}
 
-      <section className="flex flex-col gap-inline" aria-label={`${workflow.name} findings`}>
-        <h3 className="font-ui text-[0.86rem] font-semibold text-text">Validation Findings</h3>
-        <FindingList workflow={workflow} />
-      </section>
-
-      <div className="grid gap-section xl:grid-cols-2">
-        <JsonBlock
-          label={`${workflow.name} tool surface`}
-          value={{
-            allowed_tools: workflow.compiled_surface.allowed_tools,
-            advertised_tools: workflow.compiled_surface.advertised_tools,
-            tool_definitions: workflow.compiled_surface.tool_definitions,
-          }}
-        />
-        <JsonBlock label={`${workflow.name} MCP mounts`} value={workflow.compiled_surface.mcp_mounts} />
-        <JsonBlock label={`${workflow.name} skills`} value={workflow.compiled_surface.skills} />
-        <JsonBlock label={`${workflow.name} policies`} value={workflow.compiled_surface.policies} />
+      {/* The workflow library is the default view. Power users still have the
+          complete sealed surface, but it is deliberately behind one explicit
+          disclosure so JSON never competes with the Run action. */}
+      <div className="rounded-control border border-hairline bg-surface-2">
+        <button
+          type="button"
+          aria-expanded={advancedOpen}
+          aria-controls={advancedId}
+          onClick={() => setAdvancedOpen((open) => !open)}
+          className="group flex min-h-11 w-full items-center gap-hair px-inline py-hair text-left font-ui text-[0.78rem] text-text-muted hover:text-text lg:min-h-0"
+        >
+          <ChevronDown className="size-3.5 shrink-0 text-text-faint transition-transform group-aria-expanded:rotate-180" aria-hidden />
+          <span>Advanced details</span>
+          <span className="text-text-faint">Sealed Agent capability surface</span>
+        </button>
+        {advancedOpen && (
+          <div id={advancedId} className="flex flex-col gap-section border-t border-hairline p-inline">
+            <section className="flex flex-col gap-inline" aria-label={`${workflow.name} identity`}>
+              <h3 className="font-ui text-[0.78rem] font-semibold uppercase tracking-wide text-text-faint">
+                Instance identity
+              </h3>
+              <div className="grid gap-hair font-mono text-[0.7rem] text-text-muted md:grid-cols-2">
+                <span>Instance ID: {workflow.instance_id}</span>
+                <span>Definition digest: {workflow.definition_digest}</span>
+                <span>Surface digest: {workflow.surface_shown_digest}</span>
+              </div>
+            </section>
+            <section className="flex flex-col gap-inline" aria-label={`${workflow.name} findings`}>
+              <h3 className="font-ui text-[0.86rem] font-semibold text-text">Validation findings</h3>
+              <FindingList workflow={workflow} />
+            </section>
+            {state === "ready" && <WorkflowSchedule workflow={workflow} />}
+            <div className="grid gap-section xl:grid-cols-2">
+              <JsonBlock
+                label={`${workflow.name} tool surface`}
+                value={{
+                  allowed_tools: workflow.compiled_surface.allowed_tools,
+                  advertised_tools: workflow.compiled_surface.advertised_tools,
+                  tool_definitions: workflow.compiled_surface.tool_definitions,
+                }}
+              />
+              <JsonBlock label={`${workflow.name} MCP mounts`} value={workflow.compiled_surface.mcp_mounts} />
+              <JsonBlock label={`${workflow.name} skills`} value={workflow.compiled_surface.skills} />
+              <JsonBlock label={`${workflow.name} policies`} value={workflow.compiled_surface.policies} />
+            </div>
+          </div>
+        )}
       </div>
     </article>
   );
@@ -147,6 +219,7 @@ function Skeleton() {
 export function WorkflowReviewPanel() {
   const { data, isLoading, isError, refetch } = useWorkflowReviews();
   const approve = useApproveWorkflow();
+  const setEnabled = useSetWorkflowEnabled();
   const [creating, setCreating] = useState(false);
 
   return (
@@ -154,9 +227,9 @@ export function WorkflowReviewPanel() {
       <div className="mx-auto flex w-full max-w-[58rem] flex-col gap-section">
         <header className="flex flex-col gap-inline md:flex-row md:items-start md:justify-between">
           <div>
-            <h1 className="font-display text-[2rem] tracking-tight text-text">Workflow Instances</h1>
+            <h1 className="font-display text-[2rem] tracking-tight text-text">Workflows</h1>
             <p className="font-ui text-[0.88rem] text-text-muted">
-              All workflow instances, with their sealed tool surface, validation findings, and approval state.
+              Reusable capabilities your Agent can use in any chat.
             </p>
           </div>
           <button
@@ -165,7 +238,7 @@ export function WorkflowReviewPanel() {
             className="inline-flex min-h-11 w-fit items-center justify-center gap-hair rounded-control border border-hairline px-body py-hair font-ui text-[0.84rem] text-text-muted transition-colors hover:border-accent/60 hover:text-text lg:min-h-0"
           >
             <Plus className="size-4" aria-hidden />
-            Create workflow
+            New workflow
           </button>
         </header>
 
@@ -190,9 +263,9 @@ export function WorkflowReviewPanel() {
           </div>
         )}
 
-        {approve.isError && (
+        {(approve.isError || setEnabled.isError) && (
           <div role="alert" className="rounded-control border border-unsupported/50 bg-surface-1 p-inline font-ui text-[0.82rem] text-unsupported">
-            Approval failed.
+            Workflow update failed.
           </div>
         )}
 
@@ -202,21 +275,44 @@ export function WorkflowReviewPanel() {
           </div>
         )}
 
-        {!isLoading &&
-          !isError &&
-          (data?.workflows ?? []).map((workflow) => (
-            <WorkflowCard
-              key={workflow.instance_id}
-              workflow={workflow}
-              approving={approve.isPending && approve.variables?.instanceId === workflow.instance_id}
-              onApprove={(item) =>
-                approve.mutate({
-                  instanceId: item.instance_id,
-                  surfaceShownDigest: item.surface_shown_digest,
-                })
-              }
-            />
-          ))}
+        {!isLoading && !isError &&
+          ([
+            ["ready", "Available to your Agent"],
+            ["needs_setup", "Needs setup"],
+            ["off", "Off"],
+          ] as const).map(([groupState, groupTitle]) => {
+            const workflows = (data?.workflows ?? []).filter(
+              (workflow) => workflowState(workflow) === groupState,
+            );
+            if (workflows.length === 0) return null;
+            return (
+              <section key={groupState} aria-labelledby={`workflow-group-${groupState}`} className="flex flex-col gap-inline">
+                <h2 id={`workflow-group-${groupState}`} className="font-ui text-[0.82rem] font-semibold uppercase tracking-wide text-text-faint">
+                  {groupTitle}
+                </h2>
+                {workflows.map((workflow) => (
+                  <WorkflowCard
+                    key={workflow.instance_id}
+                    workflow={workflow}
+                    approving={approve.isPending && approve.variables?.instanceId === workflow.instance_id}
+                    toggling={setEnabled.isPending && setEnabled.variables?.instanceId === workflow.instance_id}
+                    onApprove={(item) =>
+                      approve.mutate({
+                        instanceId: item.instance_id,
+                        surfaceShownDigest: item.surface_shown_digest,
+                      })
+                    }
+                    onToggle={(item) =>
+                      setEnabled.mutate({
+                        instanceId: item.instance_id,
+                        enabled: !item.enabled,
+                      })
+                    }
+                  />
+                ))}
+              </section>
+            );
+          })}
       </div>
     </div>
   );

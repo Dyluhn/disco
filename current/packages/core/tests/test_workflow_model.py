@@ -168,7 +168,7 @@ def test_workflow_policies_reject_invalid_egress_hosts(entry: str) -> None:
         WorkflowPolicies(egress_allow=(entry,))
 
 
-def test_validate_definition_warns_browser_without_declared_egress() -> None:
+def test_validate_definition_blocks_browser_without_declared_egress() -> None:
     defn = _defn(tools=("browser",), policies=WorkflowPolicies())
 
     findings = validate_definition(
@@ -180,7 +180,7 @@ def test_validate_definition_warns_browser_without_declared_egress() -> None:
 
     browser_findings = [finding for finding in findings if finding.code == "browser_without_egress"]
     assert [(finding.severity, finding.path) for finding in browser_findings] == [
-        ("warning", "policies.egress_allow")
+        ("error", "policies.egress_allow")
     ]
 
     declared = _defn(
@@ -295,6 +295,12 @@ def test_schedule_spec_validates_cron() -> None:
 
     assert spec.enabled is True
     assert spec.timezone == "UTC"
+    assert spec.params == {}
+
+    scheduled = spec.model_copy(update={"params": {"query": "weekly digest"}})
+    assert ScheduleSpec.model_validate(scheduled.model_dump()).params == {
+        "query": "weekly digest"
+    }
 
     chicago = spec.model_copy(update={"timezone": "America/Chicago"})
     assert ScheduleSpec.model_validate(chicago.model_dump()).timezone == "America/Chicago"

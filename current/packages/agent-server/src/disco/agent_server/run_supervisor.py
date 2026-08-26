@@ -17,6 +17,7 @@ from disco.core import (
     LLMMessage,
     MessageEvent,
     StatusEvent,
+    WorkflowInvocationEvent,
     agent_view_consistent_events,
     workspace_run_intent_admission_required,
 )
@@ -100,6 +101,13 @@ def _latest_status_event(events: list[Event]) -> StatusEvent | None:
     return next((event for event in reversed(events) if isinstance(event, StatusEvent)), None)
 
 
+def _latest_workflow_invocation(events: list[Event]) -> WorkflowInvocationEvent | None:
+    return next(
+        (event for event in reversed(events) if isinstance(event, WorkflowInvocationEvent)),
+        None,
+    )
+
+
 def _actionless_auto_resume_attempted(events: list[Event]) -> bool:
     successful = signals.successful_action_ids(events)
     for event in reversed(events):
@@ -162,12 +170,14 @@ class RunFinalizer:
         reentry: RunReentryPort,
         policy: RunSurfacePolicy,
         observability: RunObservabilityPort,
+        workflow_handoff: Callable[[str], Awaitable[None]] | None = None,
     ) -> None:
         self._registry, self._ingress = registry, ingress
         self._recovery, self._kernels = recovery, kernels
         self._store, self._workspace, self._lifecycle = store, workspace, lifecycle
         self._reentry, self._policy = reentry, policy
         self._observability = observability
+        self._workflow_handoff = workflow_handoff
 
     async def rekick_unadmitted(self, conversation_id: str) -> None:
         try:
@@ -225,6 +235,25 @@ class RunFinalizer:
             return
         status = state.execution_status
         self._recovery.record_status(conversation_id, status)
+        events = await self._store.get_events(conversation_id)
+        workflow = _latest_workflow_invocation(events)
+        if workflow is not None and workflow.status in {"queued", "running", "needs_input"}:
+            latest_status = _latest_status_event(events)
+            if status is ConversationStatus.PAUSED and latest_status is not None:
+                if (
+                    latest_status is not None
+                    and latest_status.detail == "workflow_handoff"
+                    and workflow.status in {"queued", "running"}
+                    and self._workflow_handoff is not None
+                ):
+                    await self._workflow_handoff(conversation_id)
+                    return
+            await self._sync_workflow_terminal_status(
+                conversation_id,
+                workflow,
+                status,
+                latest_status,
+            )
         if await self._auto_resume_actionless(conversation_id, status, generation):
             return
         if status in _CONCLUDED_STATUSES or status in _RUN_PARKED_STATUSES:
@@ -236,6 +265,38 @@ class RunFinalizer:
             generation,
             agent_view_id=agent_view_id,
             run_intent_id=run_intent_id,
+        )
+
+    async def _sync_workflow_terminal_status(
+        self,
+        conversation_id: str,
+        invocation: WorkflowInvocationEvent,
+        status: ConversationStatus,
+        latest_status: StatusEvent | None,
+    ) -> None:
+        if invocation.status not in {"queued", "running", "needs_input"}:
+            return
+        target = None
+        if status is ConversationStatus.FINISHED and invocation.status != "completed":
+            target = "completed"
+        elif (
+            status in {ConversationStatus.ERROR, ConversationStatus.STUCK}
+            and invocation.status != "error"
+        ):
+            target = "error"
+        elif (
+            status is ConversationStatus.PAUSED
+            and invocation.status == "running"
+            and latest_status is not None
+            and latest_status.detail == "workflow_needs_input"
+        ):
+            target = "needs_input"
+        if target is None:
+            return
+        state = invocation.state.model_copy(update={"status": target})
+        await self._store.append(
+            conversation_id,
+            WorkflowInvocationEvent(state=state, status=target),
         )
 
     async def terminalize_crash(

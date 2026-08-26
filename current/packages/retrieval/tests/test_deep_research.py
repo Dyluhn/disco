@@ -42,6 +42,7 @@ from disco.core.llm import (
 from disco.retrieval.deep_research import (
     DeepResearchRun,
     DepthTier,
+    ReportFromRun,
     bounds_for,
     decompose_query,
 )
@@ -56,6 +57,26 @@ from disco.retrieval.models import (
     SearchHit,
 )
 from disco.retrieval.vectorstore import InMemoryVectorStore
+
+
+def test_checkpoint_persists_additional_sources_and_distinguishes_legacy_none() -> None:
+    def checkpoint(additional_sources: list[str] | None):
+        return ReportFromRun(
+            query="q",
+            summary="",
+            sections=[],
+            cited_passages=[],
+            reviewed_passages=[],
+            all_hits=[],
+            unsupported_count=0,
+            bounded_by="stopped",
+            depth_tier="standard_deep",
+            additional_sources=additional_sources,
+        ).to_event()
+
+    assert checkpoint(["news", "arxiv"]).additional_sources == ["news", "arxiv"]
+    assert checkpoint([]).additional_sources == []
+    assert checkpoint(None).additional_sources is None
 
 # ---- fakes ------------------------------------------------------------------
 

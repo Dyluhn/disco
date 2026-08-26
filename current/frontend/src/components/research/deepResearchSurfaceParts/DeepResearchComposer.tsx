@@ -119,6 +119,7 @@ export function DeepResearchComposer({ r, draftValue, setDraftValue, onScopeChan
                     ensureCid={r.ensurePreCid}
                     accept={RESEARCH_ATTACHMENT_ACCEPT}
                     attachmentTitle={RESEARCH_ATTACHMENT_NOTICE}
+                    attachmentNotice={RESEARCH_ATTACHMENT_NOTICE}
                     validateFiles={(files) =>
                       files.some((file) => !isResearchAttachmentAccepted(file))
                         ? RESEARCH_ATTACHMENT_NOTICE

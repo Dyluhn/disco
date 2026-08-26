@@ -44,6 +44,9 @@ export function ModelRow({
         <p className="break-all font-mono text-[0.7rem] text-text-faint">
           {model.model_id} · {contextLabel(contextWindow)} · {priceLabel(model)}
         </p>
+        <p className="font-ui text-[0.7rem] text-text-faint">
+          Images: {model.vision_status ?? (model.capabilities.includes("vision") ? "vision" : "unknown")}
+        </p>
       </div>
       <div className="flex shrink-0 flex-col items-end gap-hair">
         <ToggleSwitch

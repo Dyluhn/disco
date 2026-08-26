@@ -12,6 +12,7 @@ import sqlite3
 
 import pytest
 from disco.core import (
+    DatasourceEvent,
     EventKind,
     SqliteEventStore,
     WorkspaceRestoredEvent,
@@ -58,6 +59,28 @@ def test_appkit_identity_is_immutable_and_survives_store_restart(tmp_path) -> No
     assert reopened.conversation_appkit_mode_sync("appkit") is True
     assert reopened.conversation_appkit_mode_sync("ordinary") is False
     reopened.close()
+
+
+def test_appkit_promotion_is_atomic_and_allows_only_setup_events(store) -> None:
+    store.create_conversation("build", surface="build")
+    assert store.promote_appkit_mode_sync("build") is True
+    assert store.conversation_appkit_mode_sync("build") is True
+
+    store.create_conversation("not-build", surface="agent")
+    assert store.promote_appkit_mode_sync("not-build") is False
+
+    store.create_conversation("with-setup", surface="build")
+    asyncio.run(
+        store.append(
+            "with-setup",
+            DatasourceEvent(name="uploaded-reference", docs="Available to the build."),
+        )
+    )
+    assert store.promote_appkit_mode_sync("with-setup") is True
+
+    store.create_conversation("started", surface="build")
+    asyncio.run(store.append("started", user_msg("already started")))
+    assert store.promote_appkit_mode_sync("started") is False
 
 
 def test_appkit_identity_migration_defaults_existing_rows_off(tmp_path) -> None:
@@ -212,6 +235,14 @@ async def test_list_conversations_is_owner_scoped(store):
     assert await store.list_conversations(owner_id="bob") == ["c_bob"]
     # No query ever returns cross-owner data (§6.1).
     assert "c_bob" not in await store.list_conversations(owner_id="alice")
+
+
+async def test_owner_partition_index_is_distinct_and_deterministic(store):
+    store.create_conversation("c_bob_1", owner_id="bob")
+    store.create_conversation("c_alice", owner_id="alice")
+    store.create_conversation("c_bob_2", owner_id="bob")
+
+    assert await store.list_conversation_owner_ids() == ("alice", "bob")
 
 
 async def test_conversation_exists(store):

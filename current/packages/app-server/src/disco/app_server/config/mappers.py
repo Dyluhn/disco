@@ -14,6 +14,7 @@ from typing import Literal
 from disco.core.llm import ModelRole, RouterConfig
 from disco.core.llm.config import ModelEntry
 from disco.core.llm.types import Requirement
+from disco.core.llm.vision_table import resolve_vision_status
 
 from .dtos import (
     AssignmentsDTO,
@@ -118,13 +119,17 @@ def _note(entry) -> str:
 
 def _vision_status(entry: ModelEntry) -> Literal["vision", "text-only", "unknown"]:
     """Present only states the persisted settings authority can prove."""
-    if entry.vision is True:
-        return "vision"
-    if entry.vision is False:
-        return "text-only"
-    if Requirement.VISION in entry.capabilities:
-        return "vision"
-    return "unknown"
+    return resolve_vision_status(
+        model_id=entry.model_id,
+        family=entry.family,
+        explicit=entry.vision,
+        live_probe=entry.vision_probe,
+        provider_declared=(
+            entry.vision_declared
+            if entry.vision_declared is not None
+            else (Requirement.VISION in entry.capabilities or None)
+        ),
+    )
 
 
 def _models_from(config: RouterConfig) -> list[ModelDTO]:
@@ -196,6 +201,15 @@ def normalize_openrouter(data: list[dict]) -> list[OpenRouterModelDTO]:
                 price_in_per_m=_price(pricing.get("prompt")),
                 price_out_per_m=_price(pricing.get("completion")),
                 capabilities=caps,
+                vision_status=(
+                    "vision"
+                    if "image" in (arch.get("input_modalities") or [])
+                    else (
+                        "text-only"
+                        if arch.get("input_modalities")
+                        else "unknown"
+                    )
+                ),
                 image_output="image" in (arch.get("output_modalities") or []),
             )
         )
@@ -247,6 +261,11 @@ def _entry_from(
             upsert.requires_api_key if existing is None else existing.requires_api_key
         ),
         vision=vision,
+        vision_declared=(
+            upsert.vision_declared
+            if "vision_declared" in upsert.model_fields_set
+            else (existing.vision_declared if existing is not None else None)
+        ),
         # These are not editable on this surface; retain their architectural
         # meaning instead of erasing them on an unrelated catalogue edit.
         family=existing.family if existing is not None else None,

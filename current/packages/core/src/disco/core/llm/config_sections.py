@@ -28,7 +28,7 @@ from .config import (
     SearchSettings,
     TtsSettings,
 )
-from .types import ModelRole
+from .types import ModelRole, Requirement
 
 
 class _PreserveVisionModel:
@@ -166,6 +166,25 @@ class ConfigSectionWriter:
         )
         if target is not None and target not in cfg.models:
             raise ValueError(f"unknown vision_model {target!r}")
+        if target is not None:
+            selected = cfg.models[target]
+            from .vision_table import resolve_vision_status
+
+            status = resolve_vision_status(
+                model_id=selected.model_id,
+                family=selected.family,
+                explicit=selected.vision,
+                live_probe=selected.vision_probe,
+                provider_declared=(
+                    selected.vision_declared
+                    if selected.vision_declared is not None
+                    else (Requirement.VISION in selected.capabilities or None)
+                ),
+            )
+            if status != "vision":
+                raise ValueError(
+                    f"vision_model {target!r} is {status}; choose a confirmed image-capable model"
+                )
         return self._document.save(
             cfg.model_copy(
                 update={

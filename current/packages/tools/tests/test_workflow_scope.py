@@ -298,7 +298,7 @@ async def test_router_phase_denies_file_write_with_workflow_routing_hint() -> No
 
 
 @pytest.mark.asyncio
-async def test_workflow_run_denial_text_names_workflow_exit() -> None:
+async def test_workflow_run_denial_text_names_available_recovery() -> None:
     state = WorkflowPhaseState(
         phase=WorkflowPhase.RUN,
         instance_id="wf_read_only",
@@ -333,7 +333,7 @@ async def test_workflow_run_denial_text_names_workflow_exit() -> None:
     assert (
         result.content == "unknown or out-of-scope tool 'file_write'; available: ['file_read']. "
         "This workflow completes by writing outputs/report.md and then calling finish; "
-        "workflow_abort returns to the router if the goal needs tools outside this seal."
+        "Call needs_input for missing user information, or skip with an honest reason."
     )
     assert "enter_workflow" not in result.content
     assert "general_workspace_task" not in result.content
@@ -567,7 +567,7 @@ def test_builtin_workflow_definition_digests_are_stable(
     )
     if "browser" in definition.tools and not definition.policies.egress_allow:
         assert [(finding.severity, finding.code) for finding in findings] == [
-            ("warning", "browser_without_egress")
+            ("error", "browser_without_egress")
         ]
     else:
         assert findings == []
@@ -948,6 +948,25 @@ def test_seed_builtin_workflows_refreshes_stale_builtin_digest(tmp_path) -> None
     assert instance.approval is not None
     assert instance.approval.approved_by == "disco_builtin_seed"
     assert instance.approval.surface_shown_digest == digest
+
+
+def test_seed_builtin_workflows_can_bind_host_compiled_surface_digest(tmp_path) -> None:
+    expected = "sha256:compiled-surface"
+    seed_builtin_workflows(tmp_path, surface_digest_getter=lambda _instance: expected)
+    instances = {
+        row.instance_id: row.instance
+        for row in JsonDirWorkflowStore(tmp_path).list_instances()
+    }
+    for instance_id in (
+        GENERAL_WORKSPACE_TASK_INSTANCE_ID,
+        SCRIPTED_WORKSPACE_TASK_INSTANCE_ID,
+        DOCUMENT_DECK_STUDIO_INSTANCE_ID,
+        BROWSER_AUTOMATION_INSTANCE_ID,
+        FORM_FILL_INSTANCE_ID,
+        SKILL_AUTHORING_INSTANCE_ID,
+    ):
+        assert instances[instance_id].approval is not None
+        assert instances[instance_id].approval.surface_shown_digest == expected
 
 
 @pytest.mark.asyncio

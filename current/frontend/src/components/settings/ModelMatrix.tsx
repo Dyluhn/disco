@@ -103,6 +103,7 @@ function VisualModelRow({
           ariaLabel="Choose optional visual inspection model"
           busy={busy}
           noneLabel="Use main model when capable"
+          visionOnly
         />
         {model && (
           <div className="flex flex-wrap items-center gap-inline sm:justify-end">

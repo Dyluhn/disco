@@ -110,11 +110,19 @@ def test_build_route_atomically_persists_user_and_intent_after_runtime_restart()
     first = first_client.post(f"/conversations/{cid}/messages", json={"content": "build it"})
     assert first.status_code == 200
     first_events = first_client.get(f"/conversations/{cid}/events").json()["events"]
-    assert [(event["kind"], event.get("operation")) for event in first_events] == [
-        ("message", None),
-        ("workspace_mutation", "agent.run-intent.user-turn"),
+    # The host classifies the first Build turn even when an older/direct client
+    # omits the advisory build_brief marker.  The hidden brief, USER message,
+    # and run intent are one atomic ingress batch.
+    assert [
+        (event["kind"], event.get("source"), event.get("operation"))
+        for event in first_events
+    ] == [
+        ("message", "environment", None),
+        ("message", "user", None),
+        ("workspace_mutation", "system", "agent.run-intent.user-turn"),
     ]
-    assert first.json()["seq"] == first_events[0]["seq"]
+    assert first_events[0]["meta"]["build_brief"] is True
+    assert first.json()["seq"] == first_events[1]["seq"]
 
     restarted_runtime = _runtime(store, "unused")
     restarted_runtime.run_controller.kick = MagicMock()
@@ -198,4 +206,4 @@ def test_create_conversation_applies_research_sources():
         },
     ).json()["conversation_id"]
 
-    assert runtime.settings.get_research_sources(cid) == ("news", "arxiv", "ddgs")
+    assert runtime.settings.get_research_sources(cid) == ("news", "arxiv")

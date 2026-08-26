@@ -13,6 +13,7 @@ import { ModelCatalogue } from "@/components/settings/ModelCatalogue";
 import { ModelMatrix } from "@/components/settings/ModelMatrix";
 import { ProjectStorageSection } from "@/components/settings/ProjectStorageSection";
 import { ProvidersSection } from "@/components/settings/ProvidersSection";
+import { ReferencePacksSection } from "@/components/settings/ReferencePacksSection";
 import { RoleFallbackSection } from "@/components/settings/RoleFallbackSection";
 import { SandboxRuntimeSection } from "@/components/settings/SandboxRuntimeSection";
 import { SkillsSection } from "@/components/settings/SkillsSection";
@@ -34,6 +35,7 @@ import type {
 const NAV = [
   { id: "general", label: "General" },
   { id: "models", label: "Models" },
+  { id: "providers-keys", label: "Providers & Keys" },
   { id: "research-media", label: "Research & Media" },
   { id: "runtime", label: "Runtime" },
   { id: "extensions-storage", label: "Extensions & Storage" },
@@ -80,7 +82,7 @@ function modelIssue(
   return null;
 }
 
-function SettingsAttentionBanner() {
+export function SettingsAttentionBanner() {
   const { data: secrets } = useSecrets();
   const { data: openRouterKey } = useOpenRouterKey();
   const { data: imageGen } = useImageGenConfig();
@@ -96,7 +98,7 @@ function SettingsAttentionBanner() {
     issues.push({
       title: "Provider key needs attention",
       detail: "A stored key cannot be decrypted.",
-      href: "#providers",
+      href: "#advanced-provider-keys",
       cta: "Review providers",
     });
   }
@@ -151,7 +153,10 @@ function SettingsAttentionBanner() {
             href={issue.href}
             onClick={() => {
               const target = document.querySelector(issue.href);
-              const disclosure = target?.querySelector("details");
+              const disclosure =
+                (target instanceof HTMLDetailsElement ? target : null) ??
+                target?.querySelector("details") ??
+                target?.closest("section")?.querySelector("details");
               if (disclosure instanceof HTMLDetailsElement) disclosure.open = true;
             }}
             className="col-start-2 w-fit shrink-0 rounded-control border border-warn/25 px-inline py-hair font-ui text-[0.76rem] font-medium text-accent hover:border-warn/50 sm:col-start-auto"
@@ -275,13 +280,10 @@ export function SettingsView() {
               id="models"
               aliases={["models-providers"]}
               title="Models"
-              summary="Choose the models this instance uses and connect their providers."
+              summary="Choose the models this instance uses, assign their roles, and set resilience preferences."
             >
               <SettingsItem id="role-assignments">
                 <ModelMatrix />
-              </SettingsItem>
-              <SettingsItem>
-                <ProvidersSection />
               </SettingsItem>
               <SettingsItem id="model-library">
                 <span id="catalogue" aria-hidden className="block h-0 scroll-mt-section" />
@@ -296,6 +298,17 @@ export function SettingsView() {
                     <RoleFallbackSection />
                   </div>
                 </details>
+              </SettingsItem>
+            </SettingsGroup>
+
+            <SettingsGroup
+              id="providers-keys"
+              aliases={["providers"]}
+              title="Providers & Keys"
+              summary="Connect model providers and manage encrypted credentials used by paid services."
+            >
+              <SettingsItem>
+                <ProvidersSection />
               </SettingsItem>
             </SettingsGroup>
 
@@ -334,13 +347,16 @@ export function SettingsView() {
               id="extensions-storage"
               aliases={["workspace"]}
               title="Extensions & Storage"
-              summary="Choose where projects persist and manage reusable skills plus external tool connections."
+              summary="Choose where projects persist and manage reusable skills, reference packs, and external tool connections."
             >
               <SettingsItem id="project-storage">
                 <ProjectStorageSection />
               </SettingsItem>
               <SettingsItem id="skills">
                 <SkillsSection />
+              </SettingsItem>
+              <SettingsItem id="reference-packs">
+                <ReferencePacksSection />
               </SettingsItem>
               <SettingsItem id="connections">
                 <McpSection />

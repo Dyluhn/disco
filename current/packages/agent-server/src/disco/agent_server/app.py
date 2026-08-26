@@ -19,6 +19,7 @@ import contextlib
 import logging
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
+from typing import Any
 
 from disco.core.auth import allowed_frontend_origins
 from disco.core.inspect import InspectJournal, inspect_enabled, registry
@@ -39,6 +40,7 @@ from .auth import AgentAuthMiddleware, make_auth_router
 from .host_proxy import HostPreviewProxyMiddleware, make_preview_session_resolver
 from .host_service_bus import make_host_service_bus_router
 from .host_token_store import HostTokenStore
+from .reference_pack_runtime import ReferencePackRuntime
 from .report_deck_service import ReportDeckRunService
 from .routes import (
     make_activity_router,
@@ -55,6 +57,7 @@ from .routes import (
     make_preview_router,
     make_probes_router,
     make_projects_router,
+    make_reference_packs_router,
     make_release_router,
     make_report_decks_router,
     make_report_router,
@@ -70,6 +73,44 @@ from .routes import (
 )
 from .routes._common import _sanitize_name, make_preview_upstream_resolver
 from .runtime import ConversationRuntime
+
+
+class _ActiveSandboxWorkspaceReader:
+    """Strict Reference Pack reader backed by one live conversation sandbox.
+
+    ``SandboxInstance.file_exists`` is the sandbox-owned regular-file and
+    no-symlink check.  Keeping this adapter here makes the route incapable of
+    falling back to the agent-server process' current working directory.
+    """
+
+    def __init__(self, sandbox: Any) -> None:
+        self._sandbox = sandbox
+
+    async def read_file(self, path: str) -> bytes:
+        return await self._sandbox.read_file(path)
+
+    async def is_file(self, path: str) -> bool:
+        return bool(await self._sandbox.file_exists(path))
+
+    async def is_symlink(self, path: str) -> bool:
+        # ``file_exists`` is defined as regular file AND not symlink.  A path
+        # that fails it is rejected by the companion is_file check; reporting
+        # False here preserves the strict reader's fail-closed contract.
+        return False
+
+
+def _reference_pack_reader_provider(
+    runtime: ConversationRuntime | None,
+) -> Callable[[Any, str | None], Any]:
+    def provider(_request: Any, conversation_id: str | None) -> Any:
+        if runtime is None or not conversation_id:
+            return None
+        resources = getattr(runtime, "_run_resources", None)
+        executor = resources.executor(conversation_id) if resources is not None else None
+        sandbox = executor.sandbox if executor is not None else None
+        return _ActiveSandboxWorkspaceReader(sandbox) if sandbox is not None else None
+
+    return provider
 
 # `_sanitize_name` is re-exported here for tests that import it from this module
 # (test_upload.py) — its definition now lives in routes/_common.py.
@@ -146,7 +187,10 @@ def _seed_builtin_workflows_for_runtime(runtime: ConversationRuntime) -> None:
             return
         # Workflow routing reads this JSON store at request time, so startup must
         # refresh builtins before the first router/list-workflows request.
-        seed_builtin_workflows(root)
+        # Approval must bind to the exact compiled surface digest used by the
+        # workflow review route and Agent readiness.  A definition digest is
+        # not an approval for the host's current tool/MCP/skill environment.
+        seed_builtin_workflows(root, surface_digest_getter=runtime.workflow_surface_digest)
     except Exception:
         _LOG.warning("Builtin workflow seed failed", exc_info=True)
 
@@ -171,6 +215,7 @@ async def _cancel_lifespan_task(
 def _make_runtime_lifespan(
     event_db_path: str,
     runtime: ConversationRuntime | None,
+    report_deck_service: ReportDeckRunService | None = None,
 ) -> _AppLifespan:
     @contextlib.asynccontextmanager
     async def runtime_lifespan(_app: FastAPI) -> AsyncIterator[None]:
@@ -203,6 +248,9 @@ def _make_runtime_lifespan(
             )
             with contextlib.suppress(Exception):  # never block boot on reconciliation
                 await active_runtime.lifecycle.reconcile_orphaned_runs()
+            with contextlib.suppress(Exception):  # replay durable direct deck handoffs
+                if report_deck_service is not None:
+                    await report_deck_service.recover_pending()
             with contextlib.suppress(Exception):  # warm the live /props cache off-loop
                 await active_runtime.drivers.prewarm_model_probe()
             with contextlib.suppress(Exception):  # V2/V4: probe live vision modality once
@@ -307,6 +355,8 @@ def _include_routers(
     quotas: SqliteQuotaStore,
     stripe_configs: StripeAppConfigStore,
     webhook_configs: WebhookAppConfigStore,
+    reference_pack_runtime: ReferencePackRuntime | None = None,
+    report_deck_service: ReportDeckRunService | None = None,
 ) -> None:
     # Per-domain routers (routes/<domain>.py). Registration order preserves the
     # original relative order; the `{path:path}` catch-alls (workspace/artifacts/
@@ -330,6 +380,19 @@ def _include_routers(
     app.include_router(make_conversation_library_router(store, runtime))
     app.include_router(make_models_router(store, runtime))
     app.include_router(make_files_router(store, runtime))
+    async def authorize_reference_conversation(request: Any, conversation_id: str) -> bool:
+        from .routes._common import require_owned_conversation
+
+        await require_owned_conversation(request, store, conversation_id)
+        return True
+
+    app.include_router(
+        make_reference_packs_router(
+            service=reference_pack_runtime,
+            reader_provider=_reference_pack_reader_provider(runtime),
+            conversation_authorizer=authorize_reference_conversation,
+        )
+    )
     app.include_router(make_deck_editor_router(store, runtime))
     app.include_router(make_preview_router(store, runtime))
     app.include_router(make_preview_edit_router(store, runtime))
@@ -349,7 +412,7 @@ def _include_routers(
         make_report_decks_router(
             store,
             runtime,
-            None if runtime is None else ReportDeckRunService(store, runtime).start_port(),
+            None if report_deck_service is None else report_deck_service.start_port(),
         )
     )
     app.include_router(make_share_router(store, runtime))
@@ -399,8 +462,9 @@ def create_app(
     stripe_configs = stripe_config_store or StripeAppConfigStore(event_db_path)
     owns_webhook_config_store = webhook_config_store is None
     webhook_configs = webhook_config_store or WebhookAppConfigStore(event_db_path)
+    report_deck_service = ReportDeckRunService(store, runtime) if runtime is not None else None
     lifespan = _make_lifespan(
-        _make_runtime_lifespan(event_db_path, runtime),
+        _make_runtime_lifespan(event_db_path, runtime, report_deck_service),
         token_store,
         quotas,
         stripe_configs,
@@ -415,6 +479,19 @@ def create_app(
     app.state.quota_store = quotas
     app.state.stripe_config_store = stripe_configs
     app.state.webhook_config_store = webhook_configs
+    # One host-owned Reference Pack service supplies both CRUD routes and the
+    # later Agent/Build composition seams.  Keeping it on app.state also makes
+    # the store identity observable in integration tests without exposing raw
+    # filesystem authorities to request handlers.
+    # ConversationRuntime owns the single Reference Pack service when the
+    # agent is enabled.  The wire-only app still gets one local service for
+    # CRUD tests, but never creates a second store beside a live runtime.
+    reference_pack_runtime = (
+        getattr(runtime, "reference_packs", None)
+        if runtime is not None
+        else None
+    ) or ReferencePackRuntime(event_store=store)
+    app.state.reference_pack_runtime = reference_pack_runtime
     _configure_middleware(app, store, runtime)
     _include_routers(
         app,
@@ -424,5 +501,7 @@ def create_app(
         quotas,
         stripe_configs,
         webhook_configs,
+        reference_pack_runtime,
+        report_deck_service,
     )
     return app

@@ -12,6 +12,7 @@ import type { isolationForBackend } from "@/lib/isolation";
 import type { useDownloadProject } from "@/hooks/useProjects";
 import type { BuildController } from "./types";
 import type { BuildFraming } from "@/components/BuildSurface";
+import type { CommittedFinish } from "@/lib/committedFinish";
 
 export function BuildSurfaceHeader({
   b,
@@ -20,6 +21,7 @@ export function BuildSurfaceHeader({
   download,
   onDownloadClick,
   framing,
+  committedFinish,
 }: {
   b: BuildController;
   isolation: ReturnType<typeof isolationForBackend>;
@@ -27,6 +29,7 @@ export function BuildSurfaceHeader({
   download: ReturnType<typeof useDownloadProject>;
   onDownloadClick: () => void;
   framing: BuildFraming;
+  committedFinish: CommittedFinish | null;
 }) {
   return (
     <div className="flex flex-col gap-inline px-body pt-section">
@@ -58,7 +61,7 @@ export function BuildSurfaceHeader({
         </h1>
         {/* Export the saved project as a zip — only available for resumed
             projects and finished builds (a snapshot must exist on disk). */}
-        {b.cid && (b.resumed || b.status === "FINISHED") && (
+        {b.cid && (b.resumed || b.status === "FINISHED") && committedFinish && (
           <div className="flex shrink-0 flex-col items-end gap-hair">
             <button
               type="button"
@@ -78,6 +81,9 @@ export function BuildSurfaceHeader({
               </span>
             )}
           </div>
+        )}
+        {b.cid && b.status === "FINISHED" && !committedFinish && (
+          <span className="font-ui text-[0.72rem] text-text-faint">Preparing download…</span>
         )}
       </div>
     </div>

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import io
+import json
+import zipfile
 from collections.abc import Awaitable, Callable
 from typing import cast
 
@@ -23,13 +26,61 @@ from disco.core import (
     AgentErrorEvent,
     ConversationState,
     ConversationStatus,
+    ReportDeckInvocationEvent,
     ReportEvent,
     ReportSection,
     StatusEvent,
     ToolCall,
     ToolResult,
 )
+from disco.core.contract.export_render import check_export_render
 from disco.core.store.sqlite import SqliteEventStore
+from disco.tools.builtin._deck_schema import AuthoredDeck, AuthoredSlide
+
+
+class _Sandbox:
+    def __init__(self) -> None:
+        pptx = io.BytesIO()
+        with zipfile.ZipFile(pptx, "w") as archive:
+            archive.writestr("[Content_Types].xml", "<Types/>")
+            for index in (1, 2):
+                archive.writestr(
+                    f"ppt/slides/slide{index}.xml",
+                    f"<p:sld><a:t>ORBIT-731 slide {index}</a:t></p:sld>",
+                )
+        deck = AuthoredDeck(
+            title="ORBIT-731",
+            slides=[
+                AuthoredSlide(type="title", title="ORBIT-731"),
+                AuthoredSlide(type="bullets", title="Finding", body=["Evidence"]),
+            ],
+        )
+        html = (
+            '<html><body><section data-slide-id="s1">'
+            '<span class="brand-wordmark">Disco.</span>ORBIT-731</section>'
+            '<section data-slide-id="s2">Finding</section></body></html>'
+        )
+        self.files = {
+            "deck.pptx": pptx.getvalue(),
+            "deck.authored.json": json.dumps(deck.model_dump()).encode(),
+            "deck.html": html.encode(),
+        }
+
+    async def read_file(self, path: str) -> bytes:
+        return self.files[path]
+
+
+class _Executor:
+    def __init__(self) -> None:
+        self.sandbox = _Sandbox()
+
+
+class _Resources:
+    def __init__(self) -> None:
+        self._executor = _Executor()
+
+    def executor(self, _conversation_id: str) -> _Executor:
+        return self._executor
 
 
 def _report() -> ReportEvent:
@@ -41,15 +92,23 @@ def _report() -> ReportEvent:
 
 
 class _Settings:
+    def __init__(self) -> None:
+        self.artifact_targets: list[str] = []
+
     def set_artifact_mode(self, conversation_id: str, enabled: bool) -> None:
         assert conversation_id == "deck-target"
         assert enabled is True
+        self.artifact_targets.append(conversation_id)
 
 
 class _Contract:
+    def __init__(self) -> None:
+        self.deck_targets: list[str] = []
+
     def set_build_kind(self, conversation_id: str, kind: str) -> None:
         assert conversation_id == "deck-target"
         assert kind == "deck"
+        self.deck_targets.append(conversation_id)
 
 
 class _LoopFactory:
@@ -70,6 +129,7 @@ class _LoopFactory:
 class _Supervisor:
     def __init__(self) -> None:
         self.operation: Callable[[], Awaitable[ConversationState]] | None = None
+        self.before_create: Callable[[str], None] | None = None
 
     def create_operation_task(
         self,
@@ -77,6 +137,8 @@ class _Supervisor:
         operation: Callable[[], Awaitable[ConversationState]],
     ) -> tuple[object, int]:
         assert conversation_id == "deck-target"
+        if self.before_create is not None:
+            self.before_create(conversation_id)
         self.operation = operation
         return object(), 1
 
@@ -127,15 +189,30 @@ class _Runtime:
         self._cancellations = CancellationRegistry()
         self.success = success
         self.calls: list[ToolCall] = []
+        self._run_resources = _Resources()
 
     async def execute_disco_tool(self, conversation_id: str, call: ToolCall) -> ToolResult:
         assert conversation_id == "deck-target"
         self.calls.append(call)
+        structured = {
+            "filename": "deck.pptx",
+            "base_name": "deck",
+            "format": "pptx",
+            "renderer": "pptx-native",
+            "slide_count": 2,
+            "editable_source": "deck.authored.json",
+            "export_render": check_export_render(
+                "pptx",
+                self._run_resources.executor(conversation_id).sandbox.files["deck.pptx"],
+                declared_units=2,
+            ).model_dump(mode="json"),
+        }
         return ToolResult(
             call_id=call.call_id,
             tool_name=call.tool_name,
             success=self.success,
             content="deck complete" if self.success else "",
+            structured=structured if self.success else None,
             error=None if self.success else "renderer unavailable",
         )
 
@@ -261,6 +338,71 @@ async def test_managed_report_deck_failure_never_commits_finished() -> None:
 
     assert runtime._lifecycle_commands.commits == []
     assert runtime._loop_factory.cleared == ["deck-target"]
+
+
+@pytest.mark.asyncio
+async def test_successful_tool_with_missing_artifact_never_commits_finished() -> None:
+    store = SqliteEventStore(":memory:")
+    store.create_conversation("source", owner_id="owner-1", surface="deep_research")
+    report = _report()
+    await store.append("source", report)
+    runtime = _Runtime(store)
+    del runtime._run_resources.executor("deck-target").sandbox.files["deck.html"]
+    service = ReportDeckRunService(store, cast(ConversationRuntime, runtime))
+    port = service.start_port()
+    port._target_id_factory = lambda: "deck-target"
+    await port.start_report_deck("source", build_report_deck_job(report))
+    operation = runtime._run_supervisor.operation
+    assert operation is not None
+
+    with pytest.raises(RuntimeError, match="deck artifact is missing"):
+        await operation()
+
+    assert runtime._lifecycle_commands.commits == []
+    invocations = [
+        event
+        for event in await store.get_events("deck-target")
+        if isinstance(event, ReportDeckInvocationEvent)
+    ]
+    assert invocations[-1].status == "error"
+
+
+@pytest.mark.asyncio
+async def test_queued_report_deck_is_replayed_by_supervisor_after_restart() -> None:
+    store = SqliteEventStore(":memory:")
+    store.create_conversation("source", owner_id="owner-1", surface="deep_research")
+    report = _report()
+    await store.append("source", report)
+    store.create_conversation("deck-target", owner_id="owner-1", surface="agent")
+    await store.append("deck-target", report.model_copy(update={"id": "copied-report"}))
+    await store.append(
+        "deck-target",
+        ReportDeckInvocationEvent(
+            source_conversation_id="source",
+            goal=report.query,
+            filename="deck",
+            status="queued",
+        ),
+    )
+    runtime = _Runtime(store)
+    service = ReportDeckRunService(store, cast(ConversationRuntime, runtime))
+
+    admitted_contract: list[tuple[str, bool, str]] = []
+    runtime._run_supervisor.before_create = lambda conversation_id: admitted_contract.append(
+        (
+            conversation_id,
+            conversation_id in runtime.settings.artifact_targets,
+            "deck" if conversation_id in runtime.contract.deck_targets else "agent",
+        )
+    )
+    # Startup recovery enumerates persisted owner partitions. A non-default
+    # authenticated owner must not strand its queued deck after restart.
+    assert await service.recover_pending() == 1
+    assert admitted_contract == [("deck-target", True, "deck")]
+    operation = runtime._run_supervisor.operation
+    assert operation is not None
+    state = await operation()
+    assert state.execution_status is ConversationStatus.FINISHED
 
 
 @pytest.mark.asyncio

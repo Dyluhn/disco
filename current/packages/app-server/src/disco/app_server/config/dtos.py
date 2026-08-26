@@ -57,6 +57,9 @@ class ModelUpsert(BaseModel):
     # Omitted preserves an existing pin for older clients; explicit null returns
     # the model to auto-detection.
     vision: bool | None = None
+    # Provider evidence is carried through the enable flow but is not an
+    # operator pin. It remains separate so a live probe can take precedence.
+    vision_declared: bool | None = None
     requires_api_key: bool = True
     price_in_per_m: float = 0.0
     price_out_per_m: float = 0.0
@@ -76,6 +79,7 @@ class OpenRouterModelDTO(BaseModel):
     price_in_per_m: float
     price_out_per_m: float
     capabilities: list[str]
+    vision_status: Literal["vision", "text-only", "unknown"] = "unknown"
     # True when the model can OUTPUT images (architecture.output_modalities ∋ "image")
     # — lets the image-gen picker filter the catalogue to image-generation models.
     image_output: bool = False
@@ -147,6 +151,7 @@ class ProviderCatalogueModelDTO(BaseModel):
     price_in_per_m: float | None = None
     price_out_per_m: float | None = None
     capabilities: list[str] = []
+    vision_status: Literal["vision", "text-only", "unknown"] = "unknown"
 
 
 class ProviderEnableBody(BaseModel):
@@ -156,6 +161,9 @@ class ProviderEnableBody(BaseModel):
     # silently defaulting (the old 8192) poisons the engine's context budgeting.
     context_window: int | None = None
     max_output_tokens: int | None = Field(default=None, ge=1)
+    # Set only after the required unknown-capability prompt; known catalogue
+    # modalities leave this unset so provider evidence remains non-pinned.
+    vision: bool | None = None
 
 
 class SecretBody(BaseModel):

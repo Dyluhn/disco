@@ -212,6 +212,11 @@ describe("Settings — model catalogue (CRUD)", () => {
       "LEGACY_CUSTOM_KEY",
     );
     await user.click(within(dialog).getByRole("button", { name: /^Add model$/i }));
+    // Unknown model ids require an explicit modality answer before the model
+    // can be saved; answer the host-owned confirmation dialog.
+    await user.click(
+      within(await screen.findByRole("dialog")).getByRole("button", { name: "Text only" }),
+    );
 
     // the new model shows in the catalogue list (label derived like the backend)
     const label = await screen.findByText(/Test Model — test/i);

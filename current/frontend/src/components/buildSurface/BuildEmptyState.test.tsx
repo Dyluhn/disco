@@ -47,6 +47,27 @@ vi.mock("@/hooks/useDriverModels", () => ({
 vi.mock("@/components/build/BuildModelPicker", () => ({
   BuildModelPicker: () => <div data-testid="stub-model-picker" />,
 }));
+vi.mock("@/components/build/ReferencePackPicker", () => ({
+  ReferencePackPicker: ({ onChange }: { onChange: (packs: unknown[]) => void }) => (
+    <button
+      type="button"
+      aria-label="Use AppKit"
+      onClick={() =>
+        onChange([
+          {
+            id: "pack-1",
+            name: "AppKit",
+            current_version_id: "version-1",
+            current: { content_sha256: "sha-1" },
+            files: [],
+          },
+        ])
+      }
+    >
+      Reference Pack picker
+    </button>
+  ),
+}));
 // BuildEmptyState imports UploadComposer from the OTHER BuildSurface.tsx
 // (components/build/), not this directory's decomposition — stub just that
 // named export.
@@ -127,6 +148,25 @@ describe("BuildEmptyState — Assist tier toggle stays hidden", () => {
 });
 
 describe("BuildEmptyState — composer-anchored config (no controls above the box)", () => {
+  it("keeps selected Reference Pack chips visible after Options is collapsed", () => {
+    render(
+      <BuildEmptyState
+        framing="build"
+        copy={copy}
+        b={makeController()}
+        draft=""
+        setDraft={() => {}}
+      />,
+    );
+    const options = screen.getByRole("button", { name: /^Options/ });
+    fireEvent.click(options);
+    fireEvent.click(screen.getByRole("button", { name: /use appkit/i }));
+    expect(screen.getByTestId("selected-reference-packs")).toHaveTextContent("AppKit");
+    fireEvent.click(options);
+    expect(options).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByTestId("selected-reference-packs")).toBeInTheDocument();
+  });
+
   it.each(["build", "agent"] as const)(
     "keeps the model picker and Autonomous toggle inside the options panel (%s framing)",
     (framing) => {

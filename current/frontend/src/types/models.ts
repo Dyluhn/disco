@@ -8,6 +8,7 @@
 export type ModelProvider = "local" | "openrouter";
 
 export type Capability = "vision" | "long_context" | "tool_calling" | "json_mode";
+export type VisionStatus = "vision" | "text-only" | "unknown";
 
 export const CAPABILITY_LABEL: Record<Capability, string> = {
   vision: "Vision",
@@ -15,6 +16,23 @@ export const CAPABILITY_LABEL: Record<Capability, string> = {
   tool_calling: "Tool calling",
   json_mode: "JSON mode",
 };
+
+/** Small client-side mirror used only to decide whether the add dialog is needed.
+ * The backend remains authoritative and repeats the same tri-state resolution. */
+export function staticVisionStatus(modelId: string): VisionStatus {
+  const id = modelId.toLowerCase();
+  if (["embedding", "whisper", "-tts", "rerank"].some((part) => id.includes(part))) {
+    return "text-only";
+  }
+  if (
+    ["claude", "gpt-4o", "gpt-4.1", "gpt-4.5", "gpt-5", "gemini", "-vl", "internvl", "llava", "vision", "glm-4v", "glm-4.5v", "glm-4.6v"].some(
+      (part) => id.includes(part),
+    ) || /(^|\/)o[34](?:-|$)/.test(id)
+  ) {
+    return "vision";
+  }
+  return "unknown";
+}
 
 /** How the user pays for a model — the single source of truth for the cost
  * surfaces (W-05). "subscription" = a flat-rate plan: NO per-token price, shown as
@@ -34,7 +52,7 @@ export interface ModelInfo {
   /** Manual vision pin: null/undefined = auto-detect, true/false = override. */
   vision?: boolean | null;
   /** Truthful effective UI state; absence is treated as unknown for older servers. */
-  vision_status?: "vision" | "text-only" | "unknown";
+  vision_status?: VisionStatus;
   /** optional provenance note (e.g. quantization) shown as a quiet caption. */
   note?: string;
   // raw editable fields (mirror the backend ModelDTO) so an edit form prefills the
@@ -65,6 +83,7 @@ export interface OpenRouterModel {
   price_in_per_m: number;
   price_out_per_m: number;
   capabilities: Capability[];
+  vision_status?: VisionStatus;
   /** Model can OUTPUT images — lets the image-gen picker filter to image models. */
   image_output?: boolean;
   /** USD per million image-output tokens (the real image-gen cost, enriched from
@@ -130,6 +149,7 @@ export interface ProviderCatalogueModel {
   price_in_per_m?: number | null;
   price_out_per_m?: number | null;
   capabilities: Capability[];
+  vision_status?: VisionStatus;
 }
 
 export interface ProviderEnableBody {
@@ -138,6 +158,8 @@ export interface ProviderEnableBody {
   /** Required when the provider's catalogue doesn't report a context window. */
   context_window?: number | null;
   max_output_tokens?: number | null;
+  /** Required user confirmation only when the provider leaves image support unknown. */
+  vision?: boolean | null;
 }
 
 /** Create/edit payload for a catalogue model (mirrors the backend ModelUpsert). */
@@ -152,6 +174,7 @@ export interface ModelUpsert {
   capabilities: Capability[];
   /** null = auto-detect; true/false explicitly overrides detection. */
   vision?: boolean | null;
+  vision_declared?: boolean | null;
   requires_api_key?: boolean;
   price_in_per_m: number;
   price_out_per_m: number;

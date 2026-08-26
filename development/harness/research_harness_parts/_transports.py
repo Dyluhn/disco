@@ -10,18 +10,27 @@ import asyncio
 import copy
 import json
 import sys
+import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, Protocol, cast
 
 from ..cassette import Cassette
-from ._observe import Observation, ResearchRequest
+from ._deck import is_terminal as _deck_frame_is_terminal
+from ._deck import summarize_frames
+from ._observe import Observation, ResearchRequest, redact
 
 
 class ResearchTransport(Protocol):
     async def collect(
         self, request: ResearchRequest, observer: Observation
     ) -> list[dict[str, Any]]: ...
+
+
+class DeckCorrelationTransport(Protocol):
+    async def correlate_deck(
+        self, request: ResearchRequest, report: Mapping[str, Any]
+    ) -> dict[str, Any] | None: ...
 
 
 class FakeTransport:
@@ -32,8 +41,17 @@ class FakeTransport:
         frames: Sequence[Mapping[str, Any]]
         | Callable[[ResearchRequest], Sequence[Mapping[str, Any]]]
         | Callable[[ResearchRequest], Awaitable[Sequence[Mapping[str, Any]]]],
+        *,
+        deck: Mapping[str, Any]
+        | Callable[[ResearchRequest, Mapping[str, Any]], Mapping[str, Any] | None]
+        | Callable[
+            [ResearchRequest, Mapping[str, Any]],
+            Awaitable[Mapping[str, Any] | None],
+        ]
+        | None = None,
     ) -> None:
         self._frames = frames
+        self._deck = deck
         self.requests: list[ResearchRequest] = []
 
     async def collect(
@@ -48,6 +66,18 @@ class FakeTransport:
         for frame in result:
             observer.record(frame)
         return result
+
+    async def correlate_deck(
+        self, request: ResearchRequest, report: Mapping[str, Any]
+    ) -> dict[str, Any] | None:
+        if self._deck is None:
+            return None
+        result: Any = (
+            self._deck(request, report) if callable(self._deck) else copy.deepcopy(self._deck)
+        )
+        if hasattr(result, "__await__"):
+            result = await cast(Awaitable[Mapping[str, Any] | None], result)
+        return copy.deepcopy(dict(result)) if isinstance(result, Mapping) else None
 
 
 class ReplayTransport:
@@ -115,6 +145,12 @@ class ReplayTransport:
         if isinstance(inspect_trace, Mapping):
             observer.record_inspect_trace(inspect_trace)
         return frames
+
+    async def correlate_deck(
+        self, request: ResearchRequest, report: Mapping[str, Any]
+    ) -> dict[str, Any] | None:
+        output = self._seam_output(list(getattr(self.cassette, "_log", [])), "research.deck")
+        return dict(output) if isinstance(output, Mapping) else None
 
     @staticmethod
     def _seam_output(rows: Sequence[Mapping[str, Any]], seam: str) -> Any:
@@ -280,6 +316,114 @@ class LiveWebSocketTransport:
         if request.surface == "research":
             return await self._research_socket(request, observer)
         return await self._conversation_socket(request, observer)
+
+    async def correlate_deck(
+        self, request: ResearchRequest, report: Mapping[str, Any]
+    ) -> dict[str, Any] | None:
+        """Start and observe the server-owned report → Agent deck handoff.
+
+        This is deliberately a follow-up transport operation.  The product
+        route remains the authority for resolving the report and creating the
+        target Agent conversation; the harness only observes its public HTTP
+        response and WebSocket lifecycle.
+        """
+        source_id = self.conversation_id
+        base: dict[str, Any] = {
+            "requested": True,
+            "source_conversation_id": source_id,
+            "surface": "agent",
+            "contract": "deck",
+        }
+        if not source_id:
+            return {**base, "ok": False, "error": "deck_requires_deep_research_conversation"}
+        import httpx
+        import websockets
+
+        session_headers, mutation_headers = await self._session_credentials(request)
+        origin = session_headers.pop("Origin")
+        timeout = request.deck_timeout_s or 1200.0
+        async with httpx.AsyncClient(
+            base_url=self.base_url,
+            headers={**session_headers, **mutation_headers, "Origin": origin},
+            timeout=timeout,
+        ) as client:
+            try:
+                response = await client.post(
+                    f"/api/conversations/{source_id}/report/deck",
+                )
+                body = response.json()
+            except Exception as exc:  # network/control failure is a deck diagnostic
+                return {**base, "ok": False, "error": _safe_error(exc)}
+        if response.status_code >= 400 or not isinstance(body, Mapping):
+            return {
+                **base,
+                "ok": False,
+                "http_status": response.status_code,
+                "error": _safe_error(body if isinstance(body, Mapping) else response.text),
+            }
+        target_id = str(body.get("conversation_id") or body.get("job_id") or "")
+        if not target_id:
+            return {**base, "ok": False, "error": "deck_handoff_missing_target_id"}
+        base.update(
+            {
+                "target_conversation_id": target_id,
+                "job_id": str(body.get("job_id") or target_id),
+                "source_event_id": str(body.get("source_event_id") or ""),
+                "format": str(body.get("format") or "pptx"),
+            }
+        )
+        url = self.base_url.replace("https://", "wss://").replace("http://", "ws://")
+        frames: list[dict[str, Any]] = []
+        elapsed: list[int] = []
+        max_observed_frames = 512
+        started = time.monotonic()
+        try:
+            async with _connect(
+                websockets,
+                f"{url}/ws/conversations/{target_id}",
+                session_headers,
+                timeout,
+                origin=origin,
+            ) as ws:
+                initial_raw = await asyncio.wait_for(
+                    ws.recv(), timeout=min(timeout, 10.0)
+                )
+                initial = json.loads(initial_raw)
+                if not isinstance(initial, Mapping):
+                    raise RuntimeError("deck WebSocket did not return a state frame")
+                frames.append(dict(initial))
+                elapsed.append(round((time.monotonic() - started) * 1000))
+                if not _deck_frame_is_terminal(initial):
+                    async with asyncio.timeout(timeout):
+                        async for raw in ws:
+                            frame = json.loads(raw)
+                            if not isinstance(frame, Mapping):
+                                continue
+                            frames.append(dict(frame))
+                            elapsed.append(round((time.monotonic() - started) * 1000))
+                            if len(frames) > max_observed_frames:
+                                frames.pop(0)
+                                elapsed.pop(0)
+                            if _deck_frame_is_terminal(frame):
+                                break
+        except Exception as exc:
+            diagnostic = summarize_frames(frames, elapsed_ms=elapsed)
+            return {**base, **diagnostic, "ok": False, "error": _safe_error(exc)}
+        diagnostic = summarize_frames(frames, elapsed_ms=elapsed)
+        terminal = str(diagnostic.get("terminal_status") or "")
+        validation = diagnostic.get("artifact_validation")
+        typed_ok = isinstance(validation, Mapping) and bool(validation.get("typed_slides"))
+        native_ok = isinstance(validation, Mapping) and bool(validation.get("native_pptx"))
+        return {
+            **base,
+            **diagnostic,
+            "ok": terminal == "FINISHED"
+            and typed_ok
+            and native_ok
+            and not bool(validation.get("degraded"))
+            if isinstance(validation, Mapping)
+            else False,
+        }
 
     async def _research_socket(
         self, request: ResearchRequest, observer: Observation
@@ -475,3 +619,10 @@ def _connect(
         if headers:
             kwargs["extra_headers"] = dict(headers)
         return websockets.connect(url, **kwargs)
+
+
+def _safe_error(value: Any) -> str:
+    """Keep control errors useful without allowing credentials into artifacts."""
+    if isinstance(value, Mapping):
+        value = value.get("detail") or value.get("message") or value.get("error") or value
+    return str(redact(str(value)))[:500]

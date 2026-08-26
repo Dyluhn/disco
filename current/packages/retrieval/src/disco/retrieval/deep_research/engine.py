@@ -74,6 +74,7 @@ class ReportFromRun:
         review_notes: list[str] | None = None,
         research_trail: list[dict[str, Any]] | None = None,
         recency_window: Literal["month", "week"] | None = None,
+        additional_sources: list[str] | None = None,
     ) -> None:
         self.query = query
         self.summary = summary
@@ -92,6 +93,9 @@ class ReportFromRun:
         self.review_notes = list(review_notes or [])
         self.research_trail = list(research_trail or [])
         self.recency_window: Literal["month", "week"] | None = recency_window
+        self.additional_sources = (
+            list(additional_sources) if additional_sources is not None else None
+        )
         # Synthesis owns how much of this envelope the evidence can support;
         # retrieval never borrows it.  The concrete tier values are available
         # from ``DeepResearchRun.bound.report_spec`` and this transport carries
@@ -116,6 +120,7 @@ class ReportFromRun:
                 completed_queries=self.completed_probes,
                 depth_tier=self.depth_tier,
                 recency_window=self.recency_window,
+                additional_sources=self.additional_sources,
             )
             return fit_research_checkpoint_event(checkpoint)
 
@@ -169,6 +174,7 @@ class DeepResearchRun:
         conversation_id: str = "deep_research",
         gather_concurrency: int | None = None,
         recency_window: Literal["month", "week"] | None = None,
+        additional_sources: list[str] | None = None,
         upload_passages: list[Any] | None = None,
         corpus_ids: frozenset[str] = frozenset(),
     ) -> None:
@@ -186,6 +192,9 @@ class DeepResearchRun:
         self._depth = depth if isinstance(depth, str) else depth.value
         self._namespace = conversation_id
         self._recency_window: Literal["month", "week"] | None = recency_window
+        self._additional_sources = (
+            list(additional_sources) if additional_sources is not None else None
+        )
         # G1/DR-4 F2: pre-attached upload passages seed the evidence pool.
         # None / [] → OFF path.
         self._upload_passages: list[Any] = upload_passages or []
@@ -299,6 +308,7 @@ class DeepResearchRun:
             pending_probes=[],
             research_trail=outcome.trail,
             recency_window=self._recency_window,
+            additional_sources=self._additional_sources,
         )
         report.report_spec = self._bound.report_spec
         return report
@@ -331,6 +341,7 @@ class DeepResearchRun:
             completed_probes=_trail_queries(outcome.trail),
             pending_probes=[],
             review_notes=written.review_notes,
+            additional_sources=self._additional_sources,
         )
         report.report_spec = self._bound.report_spec
         return report

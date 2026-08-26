@@ -44,7 +44,7 @@ export function DeepSteerInput({ onSteer, disabled, appliedSteerIds = [] }: Prop
   return (
     <div className="flex flex-col gap-inline">
       <form
-        className="flex items-center gap-inline"
+        className="flex items-center gap-inline rounded-control border border-hairline bg-surface-1 px-inline py-hair transition-colors focus-within:border-hairline-strong"
         onSubmit={(e) => {
           e.preventDefault();
           submit();
@@ -58,7 +58,7 @@ export function DeepSteerInput({ onSteer, disabled, appliedSteerIds = [] }: Prop
           placeholder="Steer the research — e.g. focus on peer-reviewed sources"
           aria-label="Steer the research"
           data-disco-control="dr-steer-input"
-          className="min-h-11 min-w-0 flex-1 rounded-control border border-hairline bg-surface-1 px-inline py-hair font-ui text-[0.86rem] text-text outline-none transition-colors placeholder:text-text-faint focus-within:border-hairline-strong focus:border-hairline-strong disabled:opacity-50 lg:min-h-0"
+          className="min-h-11 min-w-0 flex-1 border-0 bg-transparent px-0 py-0 font-ui text-[0.86rem] text-text outline-none ring-0 placeholder:text-text-faint focus:border-0 focus:outline-none focus:ring-0 disabled:opacity-50 lg:min-h-0"
         />
         <button
           type="submit"

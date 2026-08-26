@@ -26,6 +26,9 @@ interface UploadComposerProps {
   attachmentTitle?: string;
   /** Return user-facing copy to reject a batch before cid creation/upload. */
   validateFiles?: (files: File[]) => string | null;
+  /** Optional visible copy for a narrowed picker contract (for example,
+   * Deep Research's text/PDF corpus). Generic Build uploads stay quiet. */
+  attachmentNotice?: string;
 }
 
 export function UploadComposer({
@@ -35,6 +38,7 @@ export function UploadComposer({
   accept,
   attachmentTitle = "Upload files to uploads/",
   validateFiles,
+  attachmentNotice,
 }: UploadComposerProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const { show } = useToast();
@@ -121,21 +125,28 @@ export function UploadComposer({
           Drop files to upload
         </div>
       )}
-      <button
-        type="button"
-        disabled={busy || !canAttach}
-        onClick={() => inputRef.current?.click()}
-        aria-label="Attach files"
-        title={attachmentTitle}
-        data-disco-control="upload-files"
-        className={cn(
-          "flex max-lg:min-h-11 items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:text-text disabled:opacity-40",
-          busy && "opacity-50",
+      <div className="flex flex-wrap items-center gap-inline">
+        <button
+          type="button"
+          disabled={busy || !canAttach}
+          onClick={() => inputRef.current?.click()}
+          aria-label="Attach files"
+          title={attachmentTitle}
+          data-disco-control="upload-files"
+          className={cn(
+            "flex max-lg:min-h-11 items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:text-text disabled:opacity-40",
+            busy && "opacity-50",
+          )}
+        >
+          <Paperclip className="size-3.5" aria-hidden />
+          {busy ? "Uploading…" : "Attach"}
+        </button>
+        {attachmentNotice && (
+          <span className="font-ui text-[0.72rem] text-text-faint" data-attachment-notice="true">
+            {attachmentNotice}
+          </span>
         )}
-      >
-        <Paperclip className="size-3.5" aria-hidden />
-        {busy ? "Uploading…" : "Attach"}
-      </button>
+      </div>
       <input
         ref={inputRef}
         id="build-upload-input"

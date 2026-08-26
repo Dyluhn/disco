@@ -145,6 +145,17 @@ requests, returned text/tool calls, declared decisions, routing, and token
 spans for thrash analysis; hidden reasoning is never captured.
 `--watch` prints a concise redacted version of that stream while the run is live.
 
+Report-to-deck correlation is opt-in with `--deck`. After a successful live
+Deep Research conversation, the harness POSTs the existing server-owned
+`/api/conversations/{id}/report/deck` handoff and observes the resulting Agent
+conversation until a terminal state. The run's `deck.json` and `summary.json`
+record only source/target IDs, bounded stage labels and elapsed times, and
+typed `slides_generate`/artifact validation; model prose is not copied into
+this diagnostic. Use `--deck-timeout` to change its 1,200-second observation
+bound. `--deck` does nothing to the default report path and is safe to use with
+fake/replay transports when a `research.deck` seam is present; without that
+seam replay reports the correlation as unobserved rather than fabricating it.
+
 Search diagnostics are intentionally additive. A provider may emit a
 structured `search_io` (or `retrieval`) event in the inspect trace or public
 stream; it also consumes the current public envelope

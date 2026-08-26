@@ -512,6 +512,23 @@ def test_vision_model_assignment_guards_catalogue_deletion(client):
     assert client.delete("/api/models/visual-only").status_code == 200
 
 
+def test_vision_model_assignment_rejects_unknown_capability(client):
+    new = {
+        "id": "unverified-visual",
+        "model_id": "mystery-7b",
+        "base_url": "http://127.0.0.1:9998/v1",
+        "context_window": 8192,
+        "capabilities": [],
+    }
+    assert client.post("/api/models", json=new).status_code == 201
+    response = client.put(
+        "/api/models/assignments",
+        json={"vision_model": "unverified-visual"},
+    )
+    assert response.status_code == 400
+    assert "confirmed image-capable" in response.json()["detail"]
+
+
 # ---- skills + mcp scaffolds -------------------------------------------------
 
 

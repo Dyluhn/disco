@@ -84,6 +84,32 @@ class _ConversationMixin:
         ).fetchone()
         return bool(row["appkit_mode"]) if row is not None else None
 
+    def promote_appkit_mode_sync(self, conversation_id: str) -> bool:
+        """Atomically promote a pristine Build conversation into AppKit.
+
+        Setup-only events (uploads and immutable reference-pack bindings) are
+        allowed so lazy/pre-created Build conversations take the same path as a
+        direct first send. A user/agent turn, plan/action, status, or other run
+        event closes the promotion window. The caller performs the in-process
+        pristine check under the workspace lock; these SQL predicates provide
+        the durable compare-and-set at the persistence boundary.
+        """
+        cur = self._conn.execute(
+            "UPDATE conversations SET appkit_mode = 1 "
+            "WHERE conversation_id = ? AND surface = 'build' AND appkit_mode = 0 "
+            "AND NOT EXISTS ("
+            "  SELECT 1 FROM events e WHERE e.conversation_id = ? AND NOT ("
+            "    e.kind IN ('datasource', 'reference_pack_binding') "
+            "    OR (e.kind = 'message' AND e.source = 'environment') "
+            "    OR (e.kind = 'workspace_mutation' AND "
+            "json_extract(e.payload, '$.operation') LIKE 'upload.%')"
+            "  )"
+            ")",
+            (conversation_id, conversation_id),
+        )
+        self._conn.commit()
+        return cur.rowcount == 1
+
     async def update_title(self, conversation_id: str, title: str) -> None:
         """Set a conversation's display title (the History/Projects label).
 
@@ -118,6 +144,18 @@ class _ConversationMixin:
 
     async def conversation_owner_id(self, conversation_id: str) -> str | None:
         return self.conversation_owner_id_sync(conversation_id)
+
+    async def list_conversation_owner_ids(self) -> tuple[str, ...]:
+        """Return the persisted owner partitions in deterministic order.
+
+        Startup recovery uses this narrow index query to replay owner-scoped
+        work without weakening any per-owner conversation read boundary.
+        """
+
+        rows = self._conn.execute(
+            "SELECT DISTINCT owner_id FROM conversations ORDER BY owner_id"
+        ).fetchall()
+        return tuple(str(row["owner_id"]) for row in rows)
 
     def conversation_owner_id_sync(self, conversation_id: str) -> str | None:
         row = self._conn.execute(

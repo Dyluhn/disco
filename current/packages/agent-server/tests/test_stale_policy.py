@@ -393,7 +393,7 @@ async def test_patch_route_deep_research_settings_preserves_upload_cid(tmp_path,
     assert rt.deep_research._depth_for(cid).value == "exhaustive"
     assert not hasattr(rt.deep_research, "_iterative_for")
     assert rt.deep_research._recency_for(cid) == "week"
-    assert rt.settings.get_research_sources(cid) == ("arxiv", "ddgs")
+    assert rt.settings.get_research_sources(cid) == ("arxiv",)
 
 
 async def test_patch_route_409_after_loop_composed(tmp_path, monkeypatch):

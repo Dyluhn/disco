@@ -146,6 +146,16 @@ export async function agentSend<T>(
   }).then(parse<T>);
 }
 
+/** Multipart mutation against the agent server. The browser must supply the
+ * boundary, so callers intentionally pass FormData without a Content-Type. */
+export async function agentMultipart<T>(
+  method: "POST" | "PUT" | "PATCH",
+  path: string,
+  body: FormData,
+): Promise<T> {
+  return agentFetch(path, { method, body }).then(parse<T>);
+}
+
 export async function agentFetch(pathOrUrl: string, init: RequestInit = {}): Promise<Response> {
   return authFetch(AGENT_BASE, pathOrUrl, init);
 }
