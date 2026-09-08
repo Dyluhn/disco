@@ -130,10 +130,12 @@ server that is what keeps the stack up after you disconnect; without it rootless
 Podman can also fail mid-build with `sd-bus call: Interactive authentication
 required` when the build runs outside a live login session.
 
-The `export` points the Build sandbox at *your* rootless Podman socket. Compose
-variable defaults cannot nest, so the compose file's own fallback can only spell
-the uid-1000 path; exporting it is correct whatever your uid is. Keep it exported
-for every later `podman compose` command in the same shell (`logs`, `exec`, `down`).
+The `export` points the Build sandbox at *your* rootless Podman socket. The
+compose file is written for the compose providers distributions actually ship,
+which substitute variables in a single pass — so its own fallback can only spell
+the literal uid-1000 path, not `$XDG_RUNTIME_DIR`. Exporting it is correct at any
+uid. Keep it exported for every later `podman compose` command in the same shell
+(`logs`, `exec`, `down`).
 
 **Rootless Docker** — do NOT run the Podman lines above; `podman.socket` does not
 exist on a Docker host and the enable step fails:

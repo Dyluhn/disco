@@ -229,9 +229,10 @@ export DISCO_SANDBOX_SOCKET=$XDG_RUNTIME_DIR/podman/podman.sock
 podman compose up -d --build
 ```
 
-Export the socket rather than relying on the compose default. Compose variable
-defaults cannot nest — a distribution's compose provider substitutes one pass —
-so the fallback baked into `compose.yaml` can only spell the literal
+Export the socket rather than relying on the compose default. `compose.yaml` is
+written for the compose providers distributions ship, which substitute variables
+in a single pass and so cannot expand a nested `${A:-${B}}` — the fallback baked
+into the file can therefore only spell the literal
 `/run/user/1000/podman/podman.sock`, which is wrong for any UID but 1000. Keep
 `DISCO_SANDBOX_SOCKET` exported for every later `podman compose` command in the
 same shell. `DISCO_LOCAL_ENGINE=podman` is the default and
