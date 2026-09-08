@@ -170,15 +170,56 @@ uid. Keep it exported for every later `podman compose` command in the same shell
 (`logs`, `exec`, `down`).
 
 **Rootless Docker** — do NOT run the Podman lines above; `podman.socket` does not
-exist on a Docker host and the enable step fails:
+exist on a Docker host and the enable step fails. Rootless Docker is not a
+distribution package on Ubuntu; it comes from Docker's own installer, and the
+`apt` line below is only the CLI, the compose plugin and the user-namespace
+tools it needs:
 
 ```bash
+sudo apt-get update && sudo apt-get install -y \
+  git curl uidmap dbus-user-session docker-compose-v2
+sudo systemctl disable --now docker.service docker.socket   # the rootful daemon apt pulled in
+systemctl --user daemon-reload && systemctl --user start dbus.socket
+loginctl enable-linger "$USER"
+curl -fsSL https://get.docker.com/rootless | sh
+```
+
+On Ubuntu 23.10 and later that last command stops with
+
+```
+[rootlesskit:parent] error: failed to start the child: fork/exec /proc/self/exe: permission denied
+[ERROR] RootlessKit failed, see the error messages and https://rootlesscontaine.rs/getting-started/common/
+```
+
+because Ubuntu restricts unprivileged user namespaces. The binaries are already
+in place at that point; grant `rootlesskit` the exception and finish:
+
+```bash
+sudo tee /etc/apparmor.d/home."$USER".bin.rootlesskit >/dev/null <<EOF
+abi <abi/4.0>,
+include <tunables/global>
+$HOME/bin/rootlesskit flags=(unconfined) {
+  userns,
+}
+EOF
+sudo systemctl restart apparmor.service
+PATH="$HOME/bin:$PATH" dockerd-rootless-setuptool.sh install
+```
+
+Then point this shell at the rootless daemon and bring the stack up:
+
+```bash
+export PATH="$HOME/bin:$PATH"
+export DOCKER_HOST="unix://$XDG_RUNTIME_DIR/docker.sock"
 git clone https://github.com/Dyluhn/disco.git
 cd disco
 DISCO_LOCAL_ENGINE=docker DISCO_SANDBOX_SOCKET=$XDG_RUNTIME_DIR/docker.sock \
   docker compose up -d --build
 docker compose logs app-server
 ```
+
+Keep both exports set for every later `docker compose` command in this shell, or
+add them to `~/.bashrc` as the installer suggests.
 
 Confirm all four services before going further — a compose provider can report
 success while one image failed to build:

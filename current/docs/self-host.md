@@ -24,13 +24,19 @@ podman compose logs app-server
 
 Then open **http://localhost:8088** in a browser.
 
-On a Docker host, skip the two Podman lines above — `podman.socket` does not
-exist there and the enable step fails — and substitute:
+On a Docker host, skip the Podman lines above — `podman.socket` does not exist
+there and the enable step fails — and substitute:
 
 ```bash
+export PATH="$HOME/bin:$PATH"
+export DOCKER_HOST="unix://$XDG_RUNTIME_DIR/docker.sock"
 DISCO_LOCAL_ENGINE=docker DISCO_SANDBOX_SOCKET=$XDG_RUNTIME_DIR/docker.sock \
   docker compose up -d --build
 ```
+
+Rootless Docker is not a distribution package on Ubuntu, and Ubuntu 23.10+ needs
+an AppArmor exception for `rootlesskit`. The README's **Rootless Docker** block
+has the whole install, including the error you get without that exception.
 
 See [Sandbox Image](#sandbox-image) for the rootful alternative and why the
 rootless socket is preferred. Compose prints `pull access denied for
