@@ -118,6 +118,15 @@ def approve_image_gen_origin(
         )
 
 
+# The two hosted MCP search servers of the bundled keyless tier. Mirrors
+# `disco.retrieval._provider_wiring._SEARCH_TRUST_ORIGINS`; duplicated rather
+# than imported so app-server keeps its independence from the retrieval package.
+_KEYLESS_MCP_SEARCH_ORIGINS = {
+    "exa": "https://mcp.exa.ai",
+    "parallel": "https://search.parallel.ai",
+}
+
+
 def approve_data_source_origins(
     store: ConfigStore, secrets: SecretStore, dto: DataSourcesConfigDTO
 ) -> None:
@@ -130,6 +139,13 @@ def approve_data_source_origins(
         search_url = dto.search_base_url.strip() or "https://api.search.brave.com"
     elif dto.search_provider == "semantic_scholar":
         search_url = dto.search_base_url.strip() or "https://api.semanticscholar.org"
+    elif dto.search_provider in _KEYLESS_MCP_SEARCH_ORIGINS and dto.search_api_key_env.strip():
+        # Keyless, these two are pre-approved bundled origins (no secret leaves
+        # the box, only a query). Attaching a key makes the origin credentialed,
+        # so choosing one WITH a key records the approval like any paid tier.
+        search_url = (
+            dto.search_base_url.strip() or _KEYLESS_MCP_SEARCH_ORIGINS[dto.search_provider]
+        )
     if search_url:
         approve_origin(
             store,

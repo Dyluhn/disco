@@ -1,11 +1,8 @@
-"""Event-log replay runner (plan Phase 3). The pure machinery — normalize / split /
-diff — is tested on REAL event objects (constructed from the real classes), proving
-it strips exactly the volatile fields and catches a real output divergence. The
-full deterministic engine re-run is gated on a captured (event-log + cassette) pair
-(`_capture_loop_demo.py`); it skips cleanly when that fixture is absent, the same
-env-blocked heavy capture as the Phase 2 --replay e2e.
+"""Research event replay with a real gateless capture. Semantic actions, tool
+results, checkpoint work and the complete report must match. Transport token
+pulses and generated storage identities are tested separately from replay.
 
-Run: PYTHONPATH=. uv run pytest development/harness/tests/test_replay_runner.py
+Run: uv run pytest development/harness/tests/test_replay_runner.py
 """
 
 from __future__ import annotations
@@ -22,10 +19,10 @@ from disco.core.events import (
     ToolCall,
     ToolResult,
 )
-
 from harness.replay_runner import (
     diff_sequences,
     is_input,
+    is_legacy_plan_fixture,
     normalize_event,
     split_io,
 )
@@ -131,6 +128,13 @@ def test_diff_catches_a_kind_change():
     assert diffs and "kind" in diffs[0]
 
 
+def test_legacy_plan_fixture_is_detected() -> None:
+    from disco.core.events import PlanEvent
+
+    assert is_legacy_plan_fixture([PlanEvent(summary="old", steps=[], revision=1)])
+    assert not is_legacy_plan_fixture([])
+
+
 # ---- full deterministic replay (gated on the captured fixture) --------------
 
 _FIXTURE = Path(__file__).resolve().parents[1] / "cassettes" / "loop_demo.events.jsonl"
@@ -141,13 +145,17 @@ _FIXTURE = Path(__file__).resolve().parents[1] / "cassettes" / "loop_demo.events
 )
 async def test_deterministic_replay_reproduces_recorded_events():
     from disco.core import SqliteEventStore
-
+    from disco.core.events import EventKind
     from harness.cassette import Cassette
     from harness.replay_runner import load_events, replay_conversation
     from harness.runtime import build_replay_runtime
 
     cassette = Cassette.load(str(_FIXTURE.with_name("loop_demo.cassette.jsonl")))
     recorded = load_events(_FIXTURE)
+    assert not any(event.kind == EventKind.PLAN for event in recorded), (
+        "checked-in fixture must exercise the current gateless protocol; "
+        "recapture with make capture-loop"
+    )
 
     def _builder(store):
         return build_replay_runtime(cassette, store)
@@ -161,3 +169,61 @@ async def test_deterministic_replay_reproduces_recorded_events():
     )
     _, recorded_outputs = split_io(recorded)
     assert diff_sequences(recorded_outputs, outputs) == []
+
+
+def test_research_replay_ignores_transport_pulses_but_keeps_checkpoint_work():
+    def trace(name, args):
+        return _action(f"Deep Research: {name}", name, args)
+
+    before = trace(
+        "research_checkpoint_commit",
+        {
+            "conversation_id": "old",
+            "run_id": "a",
+            "checkpoint_id": "digest-a",
+            "stage": "review",
+            "turns_spent": 4,
+            "sources_spent": 12,
+        },
+    )
+    after = trace(
+        "research_checkpoint_commit",
+        {
+            "conversation_id": "new",
+            "run_id": "b",
+            "checkpoint_id": "digest-b",
+            "stage": "review",
+            "turns_spent": 4,
+            "sources_spent": 12,
+        },
+    )
+    activity = trace("model_activity", {"seconds": 1.5, "tokens_streamed": 50})
+    assert diff_sequences([before, activity], [after]) == []
+    for changed in ({"stage": "research"}, {"turns_spent": 3}, {"sources_spent": 11}):
+        changed_event = trace(
+            "research_checkpoint_commit", {**after.tool_call.arguments, **changed}
+        )
+        assert diff_sequences([before], [changed_event])
+    assert diff_sequences([before], [])
+    # A proposed model tool call with the same name is still a semantic event.
+    assert diff_sequences([_action("run this tool", "model_activity", {})], [])
+
+
+def test_research_pool_storage_identity_does_not_hide_changed_sources():
+    before = _action(
+        "Deep Research: research_pool",
+        "research_pool",
+        {"pool_id": "old", "bytes": 100, "sources": 12},
+    )
+    after = _action(
+        "Deep Research: research_pool",
+        "research_pool",
+        {"pool_id": "new", "bytes": 104, "sources": 12},
+    )
+    assert diff_sequences([before], [after]) == []
+    changed = _action(
+        "Deep Research: research_pool",
+        "research_pool",
+        {"pool_id": "new", "bytes": 104, "sources": 11},
+    )
+    assert diff_sequences([before], [changed])

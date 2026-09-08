@@ -541,6 +541,7 @@ def _wire_run_control(rt: _RuntimeWiringSchema) -> DeferredRunCompletion:
         rt._cancellations,
         rt.run_controller,
         rt._run_kills,
+        rt.deep_research,
     )
     rt._disco_kernel = DiscoKernel._from_owners(
         rt._store,

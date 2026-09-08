@@ -30,6 +30,8 @@ from disco.core.llm import (
 )
 from disco.core.think import strip_think_spans
 
+from ._output_ceiling import research_turn_max_tokens
+
 
 @dataclass(frozen=True)
 class SubQuestion:
@@ -134,6 +136,10 @@ async def decompose_query(
             LLMMessage(role="user", content=instruction),
         ],
         temperature=0.0,
+        # Finite request capacity includes reasoning and visible plan text.
+        max_tokens=research_turn_max_tokens(),
+        # Leave reasoning selection to the configured provider/model.
+        enable_thinking=None,
     )
     resp = await router.complete(req)
     text = strip_think_spans(resp.text)

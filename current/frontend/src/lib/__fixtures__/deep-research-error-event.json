@@ -1,0 +1,19 @@
+{
+  "id": "evt_0d94fb2f36db42fea3a4e2b0565a4ad1",
+  "source": "system",
+  "timestamp": "2026-09-02T08:33:46.344406Z",
+  "schema_version": 1,
+  "seq": null,
+  "agent_view_id": null,
+  "meta": {},
+  "kind": "error",
+  "code": "deep_research_failed",
+  "detail": "ResearchAgentError: research exhausted its turn budget without usable evidence \u2014 search provider failing: 4/4 queries degraded (SearchRateLimited). STATE: 12 sources are in the evidence pool and travel with this run's trace; 8 of 8 research turns used; 3 queries were still queued for the host to retry and were never tested. NEXT: search engines brave, mojeek are cooling until 08:43 UTC \u2014 ask again after that, or choose a different search provider in the research source settings. STILL AVAILABLE: the question and its depth, recency and source settings stay on this conversation, so asking again after the fix starts from them.",
+  "failure": {
+    "failure_class": "search_infrastructure",
+    "why": "research exhausted its turn budget without usable evidence \u2014 search provider failing: 4/4 queries degraded (SearchRateLimited)",
+    "state": "12 sources are in the evidence pool and travel with this run's trace; 8 of 8 research turns used; 3 queries were still queued for the host to retry and were never tested",
+    "next": "search engines brave, mojeek are cooling until 08:43 UTC \u2014 ask again after that, or choose a different search provider in the research source settings",
+    "allowed": "the question and its depth, recency and source settings stay on this conversation, so asking again after the fix starts from them."
+  }
+}

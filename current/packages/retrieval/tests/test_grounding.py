@@ -32,6 +32,24 @@ def test_extract_claims_splits_on_citations():
     assert claims[0].cited_passage_ids == ["p1"]
 
 
+def test_case_name_v_is_not_a_sentence_boundary():
+    """``Bartz v. Anthropic`` stays one sentence; the verifier must never hand
+    the writer a fragment like ``In Bartz v`` to cite (phase-6 run-02)."""
+    from disco.retrieval.grounding import _split_sentences
+
+    text = (
+        "In Bartz v. Anthropic the court found fair use [[s1]]. "
+        "Kadrey v. Meta went the same way [[s2]]."
+    )
+    assert [s.strip() for s in _split_sentences(text)] == [
+        "In Bartz v. Anthropic the court found fair use [[s1]].",
+        "Kadrey v. Meta went the same way [[s2]].",
+    ]
+    assert _split_sentences("| Kadrey v. Meta | dismissed [[s3]] |") == [
+        "| Kadrey v. Meta | dismissed [[s3]] |"
+    ]
+
+
 # ---- NLI verdicts + self-correction -----------------------------------------
 
 

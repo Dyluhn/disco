@@ -25,7 +25,7 @@ from collections import Counter
 from typing import Any
 
 COLLECTED_TRANSITION_KEYS = {"before_count", "after_count", "added_ids"}
-COLLECTED_TRANSITION_OPTIONAL = {"relocated_count"}
+COLLECTED_TRANSITION_OPTIONAL = {"relocated_count", "retired_count"}
 MAPPING_ADDITION_KEYS = {
     "python_test_files",
     "python_static_test_ids",
@@ -42,11 +42,13 @@ def row_key(row: dict[str, Any]) -> str:
 
 
 def string_additions(
-    value: Any, label: str, *, unique: bool, problems: list[str],
+    value: Any,
+    label: str,
+    *,
+    unique: bool,
+    problems: list[str],
 ) -> list[str]:
-    if not isinstance(value, list) or not all(
-        isinstance(item, str) and item for item in value
-    ):
+    if not isinstance(value, list) or not all(isinstance(item, str) and item for item in value):
         problems.append(f"{label} must be an exact string list")
         return []
     if value != sorted(value):
@@ -86,8 +88,7 @@ def fixture_additions(
     valid: list[dict[str, Any]] = []
     for row in rows:
         strings_valid = all(
-            isinstance(row.get(key), str) and bool(row[key])
-            for key in ("path", "fixture", "scope")
+            isinstance(row.get(key), str) and bool(row[key]) for key in ("path", "fixture", "scope")
         )
         line = row.get("line")
         if (
@@ -107,7 +108,10 @@ def fixture_additions(
 
 
 def claim_disjoint(
-    label: str, values: list[str], claims: dict[str, set[str]], problems: list[str],
+    label: str,
+    values: list[str],
+    claims: dict[str, set[str]],
+    problems: list[str],
 ) -> None:
     owned = claims.setdefault(label, set())
     overlap = sorted(owned.intersection(values))
@@ -117,27 +121,35 @@ def claim_disjoint(
 
 
 def check_subset(
-    label: str, additions: list[str], current: list[str], problems: list[str],
+    label: str,
+    additions: list[str],
+    current: list[str],
+    problems: list[str],
 ) -> None:
     excess = Counter(additions) - Counter(current)
     if excess:
         problems.append(
-            f"{label} additions are absent from the current inventory: "
-            f"{sorted(excess.elements())}"
+            f"{label} additions are absent from the current inventory: {sorted(excess.elements())}"
         )
 
 
-def _relocated_count(row: dict[str, Any], label: str, problems: list[str]) -> int:
-    value = row.get("relocated_count", 0)
+def _relocated_count(
+    row: dict[str, Any], label: str, problems: list[str], key: str = "relocated_count"
+) -> int:
+    value = row.get(key, 0)
     if not isinstance(value, int) or isinstance(value, bool) or value < 0:
-        problems.append(f"{label}.relocated_count must be a non-negative integer")
+        problems.append(f"{label}.{key} must be a non-negative integer")
         return 0
     return value
 
 
 def check_collected_row(
-    transition: dict[str, Any], baseline: dict[str, Any], name: str, row: Any,
-    claims: dict[str, set[str]], problems: list[str],
+    transition: dict[str, Any],
+    baseline: dict[str, Any],
+    name: str,
+    row: Any,
+    claims: dict[str, set[str]],
+    problems: list[str],
 ) -> int:
     owner = transition.get("package", "<invalid>")
     label = f"{owner}.collected_roots.{name}"
@@ -148,10 +160,9 @@ def check_collected_row(
     ):
         problems.append(f"{label} schema mismatch")
         return 0
-    added = string_additions(
-        row["added_ids"], f"{label}.added_ids", unique=True, problems=problems
-    )
+    added = string_additions(row["added_ids"], f"{label}.added_ids", unique=True, problems=problems)
     relocated = _relocated_count(row, label, problems)
+    retired = _relocated_count(row, label, problems, "retired_count")
     before = row["before_count"]
     after = row["after_count"]
     valid_counts = all(
@@ -160,9 +171,9 @@ def check_collected_row(
     )
     if not valid_counts:
         problems.append(f"{label} counts must be non-negative integers")
-    elif before - relocated + len(added) != after:
+    elif before - relocated - retired + len(added) != after:
         problems.append(
-            f"{label} count/addition mismatch: {before} - {relocated} + "
+            f"{label} count/addition mismatch: {before} - {relocated} - {retired} + "
             f"{len(added)} != {after}"
         )
     current = baseline.get("collected", {}).get("roots", {}).get(name)
@@ -172,9 +183,7 @@ def check_collected_row(
     check_subset(f"{label}.added_ids", added, current, problems)
     if valid_counts and after > len(current):
         problems.append(f"{label}.after_count exceeds current count {len(current)}")
-    is_current = transition.get("source_identity_after") == baseline.get(
-        "source_identity"
-    )
+    is_current = transition.get("source_identity_after") == baseline.get("source_identity")
     if valid_counts and is_current and after != len(current):
         problems.append(f"{label}.after_count must equal current count {len(current)}")
     claim_disjoint(f"collected_roots.{name}", added, claims, problems)
@@ -182,8 +191,10 @@ def check_collected_row(
 
 
 def check_collected_additions(
-    transition: dict[str, Any], baseline: dict[str, Any],
-    claims: dict[str, set[str]], problems: list[str],
+    transition: dict[str, Any],
+    baseline: dict[str, Any],
+    claims: dict[str, set[str]],
+    problems: list[str],
 ) -> int:
     owner = transition.get("package", "<invalid>")
     rows = transition.get("collected_roots")
@@ -205,7 +216,8 @@ def check_collected_additions(
 
 
 def check_null_advance(
-    transition: dict[str, Any], problems: list[str],
+    transition: dict[str, Any],
+    problems: list[str],
 ) -> None:
     """Validate a transition row that owns no addition at all.
 
@@ -241,13 +253,17 @@ def check_null_advance(
             continue
         if row.get("before_count") != row.get("after_count"):
             problems.append(f"{label} null advance must not change its collected count")
+        if row.get("retired_count", 0):
+            problems.append(f"{label} null advance must not retire a test")
         if row.get("relocated_count", 0):
             problems.append(f"{label} null advance must not relocate a test")
 
 
 def check_mapping_additions(
-    transition: dict[str, Any], baseline: dict[str, Any],
-    claims: dict[str, set[str]], problems: list[str],
+    transition: dict[str, Any],
+    baseline: dict[str, Any],
+    claims: dict[str, set[str]],
+    problems: list[str],
 ) -> int:
     owner = transition.get("package", "<invalid>")
     additions = transition.get("mapping_static_additions")
@@ -270,9 +286,7 @@ def check_mapping_additions(
             ]
         else:
             unique = key.endswith("_files")
-            values = string_additions(
-                additions[key], label, unique=unique, problems=problems
-            )
+            values = string_additions(additions[key], label, unique=unique, problems=problems)
             authority = current.get(key, [])
             if not isinstance(authority, list):
                 authority = []

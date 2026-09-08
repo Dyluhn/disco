@@ -8,11 +8,11 @@ test-fake runs.
 
 Examples::
 
-    PYTHONPATH=. python -m harness.research_harness --transport replay \
+    uv run python -m harness.research_harness --transport replay \
       --cassette development/harness/cassettes/research_demo.jsonl \
       --query "What is vcrpy?" --output-dir /tmp/dr-run
 
-    PYTHONPATH=. python -m harness.research_harness --transport live \
+    uv run python -m harness.research_harness --transport live \
       --surface deep_research --depth exhaustive --recency week \
       --query "What changed this week in ..." --output-dir /tmp/dr-live
 
@@ -29,7 +29,6 @@ from __future__ import annotations
 
 from .research_harness_parts._checks import (
     _BODY_PROCESS_LANGUAGE,
-    _DEPTH_WORD_TARGETS,
     _FAILURE_WORDS,
     _MARKDOWN_HEADING,
     _PUNCTUATION_ONLY,
@@ -44,6 +43,7 @@ from .research_harness_parts._checks import (
     _section_is_substantive,
     _word_count,
     check_invariants,
+    declared_unverified_sentences,
     normalize_report,
 )
 from .research_harness_parts._cli import (
@@ -58,6 +58,7 @@ from .research_harness_parts._observe import (
     _FOOTNOTE_CITATION,
     _SECRET_KEYS,
     _SECRET_VALUE,
+    WRITE_FROM_POOL_SURFACE,
     Observation,
     ObservationEvent,
     ResearchRequest,
@@ -67,6 +68,7 @@ from .research_harness_parts._observe import (
     phase_for,
     redact,
 )
+from .research_harness_parts._quality_metrics import report_quality_metrics
 from .research_harness_parts._run import (
     SCHEMA_VERSION,
     HarnessFailure,
@@ -77,6 +79,8 @@ from .research_harness_parts._run import (
     run_harness,
     write_artifacts,
 )
+from .research_harness_parts._search_io import collect_search_io, render_search_timeline
+from .research_harness_parts._thrash import analyze_thrash
 from .research_harness_parts._transports import (
     FakeTransport,
     LiveWebSocketTransport,
@@ -84,12 +88,14 @@ from .research_harness_parts._transports import (
     ResearchTransport,
     _connect,
     _conversation_status,
+    _is_terminal_research_frame,
     _transport_for,
 )
 
 __all__ = [
     "SCHEMA_VERSION",
     "DEFAULT_ACCEPTANCE_CORPUS",
+    "WRITE_FROM_POOL_SURFACE",
     "ResearchRequest",
     "ObservationEvent",
     "Observation",
@@ -103,9 +109,14 @@ __all__ = [
     "run_batch",
     "normalize_report",
     "check_invariants",
+    "declared_unverified_sentences",
     "render_report_markdown",
     "write_artifacts",
     "render_summary_markdown",
+    "analyze_thrash",
+    "report_quality_metrics",
+    "collect_search_io",
+    "render_search_timeline",
     "redact",
     "phase_for",
     "main",
@@ -113,7 +124,6 @@ __all__ = [
     "_BODY_PROCESS_LANGUAGE",
     "_CITATION",
     "_DEPTH_TIMEOUTS_S",
-    "_DEPTH_WORD_TARGETS",
     "_FAILURE_WORDS",
     "_FOOTNOTE_CITATION",
     "_MARKDOWN_HEADING",
@@ -125,6 +135,7 @@ __all__ = [
     "_citation_ids",
     "_connect",
     "_conversation_status",
+    "_is_terminal_research_frame",
     "_failure_text",
     "_heading_hierarchy_is_valid",
     "_is_stopped_checkpoint",

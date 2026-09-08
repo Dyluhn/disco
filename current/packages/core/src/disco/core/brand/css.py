@@ -231,6 +231,13 @@ _PRINT_SKELETON_CSS = """\
   margin-right:0.04em;
   vertical-align:-0.1em;
 }
+.cover-question{
+  font-family:var(--ui);
+  font-size:10pt;
+  color:var(--text-muted);
+  line-height:1.4;
+  margin-bottom:0.25in;
+}
 .cover-subtitle{
   font-family:var(--reading);
   font-style:italic;

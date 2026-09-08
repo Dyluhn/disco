@@ -21,30 +21,48 @@ silently substituting a bundled provider. Base URLs are injected
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import logging
 import os
-from collections.abc import Callable, Mapping, Sequence
-from typing import Any, Literal
+import time
+from collections.abc import Callable, Mapping
+from typing import Any
 
 import httpx
-from disco.core.host_egress import EgressDenied, validate_untrusted_url
 
+from . import _crawl4ai as _crawl4ai
+from ._low_trust_hosts import drop_low_trust
+from ._retrieval_cache import (
+    RetrievalCache,
+    cached_search,
+    search_cache_key,
+)
 from .local_encoders import EncoderUnavailable
-from .models import ExtractedDoc, Passage, SearchHit
+from .models import Passage, SearchHit
 from .nli import Entailment
 from .providers import SearchProvider
-from .url_policy import parse_source_date, url_allowed
+from .ranking import deduplicate_search_hits
+from .url_policy import parse_source_date, query_domain_scopes, url_allowed
+
+# Keep the historical ``live`` import surface while the cohesive provider lives
+# in its own module. These private aliases are intentionally thin; behavior and
+# dependency lookup remain in the provider implementation.
+Crawl4aiExtractionProvider = _crawl4ai.Crawl4aiExtractionProvider
+ExtractStatus = _crawl4ai.ExtractStatus
+_CRAWL_CONFIG = _crawl4ai._CRAWL_CONFIG
 
 _LOG = logging.getLogger(__name__)
 
-# Wiring policy (unapproved/unconstructible requested providers raise) lives
-# in `_provider_wiring`; re-exported here as the stable import surface.
-from ._provider_wiring import (  # noqa: E402
-    ProviderConfigError,
-    _resolve_extraction_wiring,
-    _resolve_search_wiring,
-)
+# Wiring policy (unapproved/unconstructible requested providers raise) lives in
+# `_provider_wiring`; provider selection + composition in `_search_wiring`. Both
+# are re-exported here because `disco.retrieval.live` is the import surface every
+# caller already knows — splitting the code must not split the callers.
+from ._provider_wiring import ProviderConfigError as ProviderConfigError  # noqa: E402
+from ._provider_wiring import _resolve_extraction_wiring as _resolve_extraction_wiring  # noqa: E402
+from ._provider_wiring import _resolve_search_wiring as _resolve_search_wiring  # noqa: E402
+from ._provider_wiring import build_retrieval_cache as build_retrieval_cache  # noqa: E402
+from ._search_wiring import build_keyless_search as build_keyless_search  # noqa: E402
+from ._search_wiring import build_multi_search as build_multi_search  # noqa: E402
+from ._search_wiring import make_search as _make_search  # noqa: E402
 
 # W-33: cap how long a remote-encoder connectivity probe waits. The probe only
 # needs to confirm the host ANSWERS (any HTTP status counts) — a dead endpoint
@@ -62,16 +80,31 @@ _PROBE_DEADLINE_S = _PROBE_TIMEOUT_S + 2.0
 # BOTH to a named EncoderUnavailable, never let one escape uncaught.
 _PROBE_HTTP_ERRORS = (httpx.HTTPError, httpx.InvalidURL)
 
-ExtractStatus = Literal["ok", "paywalled", "blocked", "not_found", "error"]
-
-
 # ---- SearXNG: discovery (query -> candidate URLs) ---------------------------
+
+
+# Research queries are issued against the general engines AND the academic ones.
+# `general` alone leaves journal coverage to whatever the web engines happen to
+# index, which is how open-access papers went missing from reports whose whole
+# question was academic; `science` adds arXiv/Crossref/OpenAlex/PubMed on the
+# instance that has them enabled and costs nothing on one that doesn't.
+SEARXNG_DEFAULT_CATEGORIES = "general,science"
 
 
 class SearxngSearchProvider:
     """[ModelProvider — SearchProvider] SearXNG JSON. Discovery only: maps each
     result to a SearchHit (the `content` snippet is provider text, NOT trusted as
-    content — extraction produces the citable passages)."""
+    content — extraction produces the citable passages).
+
+    Per-engine truth is preserved end to end: the response's
+    ``unresponsive_engines`` list reaches the diagnostic verbatim, so exactly the
+    engines SearXNG named as cut off go into the cooldown registry — never the
+    instance as a whole, which is still answering through its healthy engines.
+
+    With a ``cache``, a repeat of the same question against the same instance is
+    answered from disk. Only an answer that ANSWERED is ever stored (see
+    ``_cached_results``) — a degraded or empty one would freeze an outage.
+    """
 
     name = "searxng"
 
@@ -80,11 +113,15 @@ class SearxngSearchProvider:
         base_url: str,
         *,
         timeout_s: float = 15.0,
+        categories: str = SEARXNG_DEFAULT_CATEGORIES,
         transport: httpx.AsyncBaseTransport | None = None,
+        cache: RetrievalCache | None = None,
     ) -> None:
         self._base = base_url.rstrip("/")
         self._timeout = timeout_s
+        self._categories = categories.strip()
         self._transport = transport
+        self._cache = cache
 
     async def search(
         self,
@@ -95,19 +132,57 @@ class SearxngSearchProvider:
         domains_deny: frozenset[str] | None = None,
         time_filter: str | None = None,
     ) -> list[SearchHit]:
+        hits, _diagnostic = await self.search_detailed(
+            query,
+            limit=limit,
+            domains_allow=domains_allow,
+            domains_deny=domains_deny,
+            time_filter=time_filter,
+        )
+        return hits
+
+    async def search_detailed(
+        self,
+        query: str,
+        *,
+        limit: int = 10,
+        domains_allow: frozenset[str] | None = None,
+        domains_deny: frozenset[str] | None = None,
+        time_filter: str | None = None,
+    ) -> tuple[list[SearchHit], dict[str, object]]:
         params = self._build_params(query, time_filter)
-        results = await self._fetch_results(params)
-        return self._to_hits(results, domains_allow, domains_deny, limit)
+        results, diagnostic = await self._cached_results(params)
+        query_allow, query_deny = query_domain_scopes(query)
+        scoped = [r for r in results if url_allowed(r.get("url") or "", query_allow, query_deny)]
+        if len(scoped) != len(results):
+            diagnostic["query_scope_dropped"] = len(results) - len(scoped)
+        hits, low_trust_dropped = self._to_hits(scoped, domains_allow, domains_deny, limit)
+        if low_trust_dropped:
+            # One line per search, not per hit: the trace should show what the
+            # wall removed without becoming the loudest thing in the log.
+            _LOG.debug("low-trust wall dropped %d hit(s) for %r", low_trust_dropped, query)
+            diagnostic["low_trust_dropped"] = low_trust_dropped
+        return hits, diagnostic
+
+    async def _cached_results(self, params: dict) -> tuple[list, dict[str, object]]:
+        """This search's results, from the cache when one is warm and trustworthy."""
+        key = search_cache_key(
+            self._base, self._categories, str(params.get("time_range", "")), str(params["q"])
+        )
+        return await cached_search(self._cache, key, lambda: self._fetch_results(params))
 
     def _build_params(self, query: str, time_filter: str | None) -> dict:
         # DR-3 E1: SearXNG uses `time_range` param; accept "month"/"week".
         # "day" is avoided per spec (near-zero results).
         params: dict = {"q": query, "format": "json"}
+        if self._categories:
+            params["categories"] = self._categories
         if time_filter in {"month", "week"}:
             params["time_range"] = time_filter
         return params
 
-    async def _fetch_results(self, params: dict) -> list:
+    async def _fetch_results(self, params: dict) -> tuple[list, dict[str, object]]:
+        started = time.perf_counter()
         try:
             async with httpx.AsyncClient(
                 timeout=self._timeout,
@@ -117,13 +192,33 @@ class SearxngSearchProvider:
             ) as client:
                 resp = await client.get(f"{self._base}/search", params=params)
                 resp.raise_for_status()
-                return resp.json().get("results", [])
+                payload = resp.json()
+                results = payload.get("results", [])
+                unresponsive = payload.get("unresponsive_engines", [])
+                diagnostic: dict[str, object] = {
+                    "status_code": resp.status_code,
+                    "result_count": len(results) if isinstance(results, list) else 0,
+                    "latency_ms": max(0, int((time.perf_counter() - started) * 1_000)),
+                }
+                if isinstance(unresponsive, list) and unresponsive:
+                    diagnostic["unresponsive_engines"] = [
+                        str(item)[:80] for item in unresponsive[:20]
+                    ]
+                return results if isinstance(results, list) else [], diagnostic
         except (httpx.HTTPError, ValueError) as exc:
             # Discovery failure degrades to no hits for THIS round (the run's
             # zero-evidence gate raises later if nothing was ever admitted),
             # but is never silent.
             _LOG.warning("SearXNG search failed: %s: %s", type(exc).__name__, exc)
-            return []
+            status_code = (
+                exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
+            )
+            return [], {
+                "provider_error": type(exc).__name__,
+                "status_code": status_code,
+                "result_count": 0,
+                "latency_ms": max(0, int((time.perf_counter() - started) * 1_000)),
+            }
 
     def _to_hits(
         self,
@@ -131,7 +226,7 @@ class SearxngSearchProvider:
         domains_allow: frozenset[str] | None,
         domains_deny: frozenset[str] | None,
         limit: int,
-    ) -> list[SearchHit]:
+    ) -> tuple[list[SearchHit], int]:
         hits: list[SearchHit] = []
         for i, res in enumerate(results):
             url = res.get("url") or ""
@@ -139,173 +234,33 @@ class SearxngSearchProvider:
                 continue
             if not url_allowed(url, domains_allow, domains_deny):
                 continue
+            raw_engines = res.get("engines")
+            engines = (
+                [str(item).strip() for item in raw_engines if str(item).strip()]
+                if isinstance(raw_engines, list)
+                else []
+            )
+            if not engines:
+                engines = [str(res.get("engine") or "searxng")]
             hits.append(
                 SearchHit(
                     url=url,
                     title=res.get("title") or url,
                     snippet=res.get("content") or "",
-                    source_engine=res.get("engine") or "searxng",
+                    source_engine="+".join(dict.fromkeys(engines)),
                     rank=i,
                     published_at=parse_source_date(
                         res.get("publishedDate") or res.get("published_date")
                     ),
                 )
             )
-            if len(hits) >= limit:
-                break
-        return hits
+        # The wall runs BEFORE dedupe and the limit so a page of Reddit threads
+        # costs the round nothing: the freed slots go to hits that survive it.
+        kept, low_trust_dropped = drop_low_trust(hits, domains_allow)
+        return deduplicate_search_hits(kept)[:limit], low_trust_dropped
 
 
 # ---- Crawl4AI: extraction (URL -> clean content + passages) -----------------
-
-# Crawl4AI's default `fit_markdown` is empty on many large pages (e.g. Wikipedia),
-# leaving only `raw_markdown` — which opens with kilobytes of nav/menu/language-link
-# chrome before any article prose. Asking for a PruningContentFilter makes the
-# server populate `fit_markdown` with the actual content (verified: on the WP
-# "Nineteen Eighty-Four" page this moves the body from char ~9k to char ~150).
-_CRAWL_CONFIG = {
-    "type": "CrawlerRunConfig",
-    "params": {
-        "markdown_generator": {
-            "type": "DefaultMarkdownGenerator",
-            "params": {
-                "content_filter": {
-                    "type": "PruningContentFilter",
-                    "params": {"threshold": 0.45, "threshold_type": "dynamic"},
-                }
-            },
-        }
-    },
-}
-
-
-class Crawl4aiExtractionProvider:
-    """[ExtractionProvider] Crawl4AI synchronous /crawl. Maps the returned
-    `markdown.fit_markdown` to clean content and chunks it into citable Passages.
-    Non-ok fetches become ExtractedDoc with the right status (§2.2)."""
-
-    name = "crawl4ai"
-
-    def __init__(
-        self,
-        base_url: str,
-        *,
-        timeout_s: float = 90.0,
-        max_chars: int = 16_000,
-        passage_chars: int = 1_100,
-        max_passages: int = 12,
-        transport: httpx.AsyncBaseTransport | None = None,
-    ) -> None:
-        self._base = base_url.rstrip("/")
-        self._timeout = timeout_s
-        self._max_chars = max_chars
-        self._passage_chars = passage_chars
-        self._max_passages = max_passages
-        self._transport = transport
-
-    async def extract(self, url: str) -> ExtractedDoc:
-        docs = await self.extract_many([url])
-        return docs[0]
-
-    async def extract_many(self, urls: list[str]) -> list[ExtractedDoc]:
-        if not urls:
-            return []
-        for url in urls:
-            try:
-                validate_untrusted_url(url)
-            except EgressDenied as exc:
-                return [self._failed(u, i, str(exc)) for i, u in enumerate(urls)]
-        try:
-            async with httpx.AsyncClient(
-                timeout=self._timeout,
-                transport=self._transport,
-                trust_env=False,
-                follow_redirects=False,
-            ) as client:
-                resp = await client.post(
-                    f"{self._base}/crawl",
-                    json={"urls": urls, "crawler_config": _CRAWL_CONFIG},
-                )
-                resp.raise_for_status()
-                results = resp.json().get("results", [])
-        except (httpx.HTTPError, ValueError) as exc:
-            return [self._failed(u, idx, str(exc)) for idx, u in enumerate(urls)]
-
-        by_url = {r.get("url"): r for r in results}
-        out: list[ExtractedDoc] = []
-        for idx, url in enumerate(urls):
-            res = by_url.get(url) or (results[idx] if idx < len(results) else None)
-            out.append(self._to_doc(url, idx, res))
-        return out
-
-    def _failed(self, url: str, idx: int, error: str) -> ExtractedDoc:
-        return ExtractedDoc(
-            url=url, title=url, content="", fetched_ok=False, error=error, status="error"
-        )
-
-    def _status(self, success: bool, code: int | None) -> ExtractStatus:
-        if success and (code is None or 200 <= code < 300):
-            return "ok"
-        if code in (401, 403):
-            return "blocked"
-        if code == 402:
-            return "paywalled"
-        if code == 404:
-            return "not_found"
-        return "error"
-
-    def _to_doc(self, url: str, idx: int, res: dict | None) -> ExtractedDoc:
-        if res is None:
-            return self._failed(url, idx, "no result returned")
-        code = res.get("status_code")
-        status = self._status(bool(res.get("success")), code)
-        md = res.get("markdown")
-        content = ""
-        if isinstance(md, dict):
-            content = md.get("fit_markdown") or md.get("raw_markdown") or ""
-        elif isinstance(md, str):
-            content = md
-        content = content.strip()[: self._max_chars]
-        title = (res.get("metadata") or {}).get("title") or url
-
-        if status != "ok" or not content:
-            return ExtractedDoc(
-                url=url,
-                title=title,
-                content=content,
-                fetched_ok=False,
-                error=res.get("error_message") or (f"http {code}" if code else "empty content"),
-                status="error" if status == "ok" else status,  # empty content => error
-            )
-        return ExtractedDoc(
-            url=url,
-            title=title,
-            content=content,
-            passages=self._chunk(url, title, content),
-            fetched_ok=True,
-            status="ok",
-        )
-
-    def _chunk(self, url: str, title: str, content: str) -> list[Passage]:
-        sid = hashlib.md5(url.encode()).hexdigest()[:6]  # noqa: S324 — non-security id
-        paras = [p.strip() for p in content.split("\n\n") if len(p.strip()) >= 40]
-        passages: list[Passage] = []
-        buf = ""
-        for para in paras:
-            if buf and len(buf) + len(para) > self._passage_chars:
-                passages.append(self._passage(sid, len(passages), url, title, buf))
-                buf = ""
-            buf += para + "\n\n"
-            if len(passages) >= self._max_passages:
-                break
-        if buf.strip() and len(passages) < self._max_passages:
-            passages.append(self._passage(sid, len(passages), url, title, buf))
-        return passages
-
-    @staticmethod
-    def _passage(sid: str, i: int, url: str, title: str, text: str) -> Passage:
-        return Passage(id=f"{sid}_p{i}", source_url=url, source_title=title, text=text.strip())
-
 
 # ---- bge-reranker: cross-encoder rerank (TEI) -------------------------------
 
@@ -473,7 +428,12 @@ class SidecarNLIVerifier:
     contradiction→unsupported) and the `entailment` probability as the score.
 
     SYNC to fulfill the existing `entail`/`score` interface; results are cached per
-    (premise, claim) so the grounding pipeline's entail()+score() = one HTTP call."""
+    (premise, claim) so the grounding pipeline's entail()+score() = one HTTP call.
+
+    A transport failure still degrades to neutral — grounding feedback must never
+    fabricate a contradiction out of an outage — but the no-op is COUNTED, and
+    `verifier_failures` reaches the report's metadata so a run whose grounding
+    checks partially did not run says so."""
 
     def __init__(
         self,
@@ -486,6 +446,12 @@ class SidecarNLIVerifier:
         self._timeout = timeout_s
         self._transport = transport
         self._cache: dict[tuple[str, str], dict] = {}
+        self._failures = 0
+
+    @property
+    def verifier_failures(self) -> int:
+        """Verification calls that failed and degraded to neutral."""
+        return self._failures
 
     async def probe(self) -> None:
         """W-33 pre-flight: confirm this NLI verifier endpoint is configured AND
@@ -543,7 +509,10 @@ class SidecarNLIVerifier:
                 resp.raise_for_status()
                 data = resp.json()
         except (httpx.HTTPError, ValueError):
-            data = {}  # verification failure -> neutral (weak), never crash
+            # Neutral (weak), never a crash — and never silent: the count is
+            # what lets the report declare its grounding as partial.
+            data = {}
+            self._failures += 1
         self._cache[key] = data
         return data
 
@@ -552,6 +521,10 @@ class SidecarNLIVerifier:
 
     def entail(self, premise: str, hypothesis: str) -> Entailment:
         return _LABEL.get(self._verify(premise, hypothesis).get("label", ""), "neutral")
+
+    def verification_available(self, premise: str, hypothesis: str) -> bool:
+        data = self._verify(premise, hypothesis)
+        return data.get("label") in _LABEL
 
 
 # ---- wiring factory ---------------------------------------------------------
@@ -567,125 +540,16 @@ _DEFAULTS = {
 }
 
 
-def _make_search(provider: str, base_url: str, api_key: str):
-    """Select the discovery provider (§B2). BUNDLED `ddgs` is the default — no key,
-    no service. `searxng` self-hosts; `tavily` is a paid key."""
-    from .bundled_providers import BraveSearchProvider, DdgsSearchProvider, TavilySearchProvider
-    from .source_adapters import (
-        ArxivSearchProvider,
-        NewsSearchProvider,
-        SemanticScholarSearchProvider,
-        SiteScopedSearchProvider,
-    )
-
-    if provider == "searxng":
-        return SearxngSearchProvider(base_url)
-    if provider == "tavily":
-        return TavilySearchProvider(api_key)
-    if provider == "brave":
-        return BraveSearchProvider(api_key, base_url=base_url or "https://api.search.brave.com")
-    if provider == "arxiv":
-        return ArxivSearchProvider(base_url=base_url) if base_url else ArxivSearchProvider()
-    if provider == "news":
-        return NewsSearchProvider(base_url=base_url) if base_url else NewsSearchProvider()
-    if provider == "semantic_scholar":
-        return (
-            SemanticScholarSearchProvider(base_url=base_url, api_key=api_key)
-            if base_url
-            else SemanticScholarSearchProvider(api_key=api_key)
-        )
-    if provider == "site_scoped":
-        return SiteScopedSearchProvider(sites=base_url)
-    return DdgsSearchProvider()  # default / "ddgs"
-
-
-# B2 dispatch table: source id -> (provider name, cfg key for base_url, cfg key
-# for api_key, cfg key that gates inclusion). An empty spec slot means "no such
-# field" (cfg.get("", "") always resolves to ""); an empty gate key means
-# "always included" (bundled sources need no key/url).
-_MULTI_SEARCH_SPEC: dict[str, tuple[str, str, str, str]] = {
-    "ddgs": ("ddgs", "", "", ""),
-    "arxiv": ("arxiv", "", "", ""),
-    "news": ("news", "", "", ""),
-    "semantic_scholar": ("semantic_scholar", "", "ss_key", ""),
-    "searxng": ("searxng", "searxng_url", "", "searxng_url"),
-    "tavily": ("tavily", "", "tavily_key", "tavily_key"),
-    "brave": ("brave", "brave_url", "brave_key", "brave_key"),
-    "site_scoped": ("site_scoped", "site_scoped_sites", "", "site_scoped_sites"),
-}
-
-
-def _multi_search_candidate(source_id: str, cfg: Mapping[str, str]) -> SearchProvider | None:
-    spec = _MULTI_SEARCH_SPEC.get(source_id)
-    if spec is None:
-        return None
-    provider, url_key, key_key, gate_key = spec
-    if gate_key and not cfg[gate_key]:
-        return None
-    return _make_search(provider, cfg.get(url_key, ""), cfg.get(key_key, ""))
-
-
-def _collect_multi_search_providers(
-    sources: Sequence[str], cfg: Mapping[str, str]
-) -> list[SearchProvider]:
-    providers: list[SearchProvider] = []
-    seen: set[str] = set()
-    for raw in sources:
-        source_id = str(raw).strip().lower()
-        if not source_id or source_id in seen:
-            continue
-        seen.add(source_id)
-        candidate = _multi_search_candidate(source_id, cfg)
-        if candidate is not None:
-            providers.append(candidate)
-    return providers
-
-
-def build_multi_search(
-    sources: Sequence[str],
-    *,
-    searxng_url: str = "",
-    tavily_key: str = "",
-    ss_key: str = "",
-    brave_key: str = "",
-    brave_url: str = "",
-    site_scoped_sites: str = "",
-) -> SearchProvider:
-    """Compose a MultiSearchProvider from a per-query source id list."""
-    from .bundled_providers import DdgsSearchProvider
-    from .source_adapters import MultiSearchProvider
-
-    cfg = {
-        "searxng_url": searxng_url,
-        "tavily_key": tavily_key,
-        "ss_key": ss_key,
-        "brave_key": brave_key,
-        "brave_url": brave_url,
-        "site_scoped_sites": site_scoped_sites,
-    }
-    providers = _collect_multi_search_providers(sources, cfg)
-    if not providers:
-        requested = [str(source).strip().lower() for source in sources if str(source).strip()]
-        if requested:
-            # The user explicitly chose sources; substituting a different
-            # provider behind their back is a config error, not a fallback.
-            raise ProviderConfigError(
-                f"none of the requested search sources could be constructed: {requested}; "
-                "check their configuration or choose different sources"
-            )
-        return DdgsSearchProvider()
-    if len(providers) == 1:
-        return providers[0]
-    return MultiSearchProvider(tuple(providers))
-
-
-def _make_extraction(provider: str, base_url: str, api_key: str):
+def _make_extraction(provider: str, base_url: str, api_key: str, data_dir: str = ""):
     """Select the extraction provider (§B1). BUNDLED `local` is the default — in-
-    process, no service. `crawl4ai` self-hosts; `firecrawl` is a paid key."""
+    process, no service. `crawl4ai` self-hosts; `firecrawl` is a paid key.
+
+    The page cache is built only for the provider that can use it, and only when
+    `data_dir` names somewhere to put it — an empty one means run uncached."""
     from .bundled_providers import FirecrawlExtractionProvider, LocalExtractionProvider
 
     if provider == "crawl4ai":
-        return Crawl4aiExtractionProvider(base_url)
+        return Crawl4aiExtractionProvider(base_url, cache=build_retrieval_cache(data_dir))
     if provider == "firecrawl":
         return FirecrawlExtractionProvider(api_key, base_url or "https://api.firecrawl.dev")
     return LocalExtractionProvider()  # default / "local"
@@ -697,6 +561,13 @@ def _env_url(e: Mapping[str, str], key: str) -> str:
     if v is None and key.startswith("DISCO_"):
         v = e.get("PMX_" + key[len("DISCO_") :])
     return v if v is not None else _DEFAULTS[key]
+
+
+def _env_data_dir(e: Mapping[str, str]) -> str:
+    """The data dir, or "" when none is configured. Read from the SAME mapping
+    the rest of this wiring reads, so `build_live_retrieval(env={})` stays
+    hermetic instead of reaching past its argument into the real environment."""
+    return e.get("DISCO_DATA_DIR") or e.get("PMX_DATA_DIR") or ""
 
 
 def _resolve_remote_flag(remote: bool | None, e: Mapping[str, str]) -> bool:
@@ -756,10 +627,11 @@ def build_live_retrieval(
     reranker_url: str = "",
     embedder_url: str = "",
     nli_url: str = "",
-    search_provider: str = "ddgs",
+    search_provider: str = "bundled",
     search_base_url: str = "",
     search_api_key: str = "",
     search_secret_ref: str = "",
+    search_categories: str = "",
     search_override: SearchProvider | None = None,
     extraction_provider: str = "local",
     extraction_base_url: str = "",
@@ -798,8 +670,17 @@ def build_live_retrieval(
         approved,
     )
     providers: dict[str, Any] = {
-        "search": search_override or _make_search(search_provider, search_url, search_api_key),
-        "extraction": _make_extraction(extraction_provider, extraction_url, extraction_api_key),
+        "search": search_override
+        or _make_search(
+            search_provider,
+            search_url,
+            search_api_key,
+            categories=search_categories,
+            data_dir=_env_data_dir(e),
+        ),
+        "extraction": _make_extraction(
+            extraction_provider, extraction_url, extraction_api_key, _env_data_dir(e)
+        ),
     }
     r_url, e_url, n_url = _resolve_encoder_urls(reranker_url, embedder_url, nli_url, e)
     providers.update(_build_encoder_providers(use_remote, r_url, e_url, n_url, approved))

@@ -85,7 +85,7 @@ describe("useDeepResearch lazy conversation lifecycle", () => {
       result.current.setLeaderId("driver-final");
       result.current.setDepthTier("exhaustive");
       result.current.setRecencyWindow("week");
-      result.current.setSelectedSources(["arxiv", "ddgs"]);
+      result.current.setSelectedSources(["arxiv", "web"]);
     });
     act(() => result.current.submit("research this carefully"));
 
@@ -94,7 +94,7 @@ describe("useDeepResearch lazy conversation lifecycle", () => {
         modelOverride: "driver-final",
         depthTier: "exhaustive",
         recencyWindow: "week",
-        sources: ["arxiv", "ddgs"],
+        sources: ["arxiv", "web"],
       }),
     );
     await waitFor(() => expect(result.current.cid).toBe("conv_deep_lazy"));

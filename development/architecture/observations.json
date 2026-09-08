@@ -56,14 +56,6 @@
     "source_disposition_id": "DM-015"
   },
   {
-    "id": "DM-017",
-    "kind": "distributed_concern",
-    "location": "current/packages/core/src/disco/core/events.py:Event:187-217 + current/packages/core/src/disco/core/wire.py:WSServerFrame:39-65 + current/frontend/src/types/agent.ts:AgentEvent/WSServerFrame:388-489",
-    "concern": "backend/frontend event and WS discriminator sets drift (three event kinds and token frame absent from TS; connection is UI-local)",
-    "owner_package": "PKG-12-FE-SHELL",
-    "source_disposition_id": "DM-017"
-  },
-  {
     "id": "DM-018",
     "kind": "distributed_concern",
     "location": "current/packages/core/src/disco/core/llm/config.py:RouterConfig:450-542 + current/packages/core/src/disco/core/llm/config_store.py:124-187",

@@ -19,6 +19,14 @@ from ..effects import ToolBehavior
 from ..events import LLMMessage  # the wire-level message shape (event contract)
 
 EMPTY_REASONING_ONLY_METADATA_KEY = "empty_reasoning_only"
+# A completion that ended for ANY reason other than "stop" with nothing in the
+# content channel and no tool call — in practice a `length` finish whose whole
+# ceiling went into reasoning. Without this marker such a response is recorded
+# as a clean success by the router and the attempt trail, so the one class of
+# failure that costs a whole review round is invisible and uncountable. The
+# payload always names the real finish reason, so a non-`length` empty is
+# recorded as what it was rather than as a ceiling hit.
+CEILING_HIT_EMPTY_METADATA_KEY = "ceiling_hit_empty"
 
 # ---- capability vocabulary --------------------------------------------------
 

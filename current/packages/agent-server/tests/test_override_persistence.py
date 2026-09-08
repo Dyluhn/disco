@@ -240,10 +240,10 @@ async def test_on_disconnect_grace_fires_suspend_but_reconnect_cancels_it(tmp_pa
     assert not rt._run_resources.has_executor("conv_a")
 
 
-async def test_deep_research_resume_carries_the_partial_report_forward(tmp_path, monkeypatch):
+async def test_deep_research_resume_carries_checkpoint_forward(tmp_path, monkeypatch):
     """Checkpointed Deep Research resume (runtime wiring): a PAUSED run with a
-    checkpoint (bounded_by='stopped') ReportEvent on the log resumes by passing that
-    report as `resume_from` to the engine — so its gathered evidence and the queries
+    ResearchCheckpointEvent on the log resumes by passing that checkpoint as
+    `resume_from` to the engine — so its gathered evidence and the queries
     already issued are carried, not redone. v2 is gateless: no PlanEvent is involved
     and the RUNNING flip now happens inside the run (after preflight), never before."""
     from disco.core import (
@@ -251,8 +251,7 @@ async def test_deep_research_resume_carries_the_partial_report_forward(tmp_path,
         EventSource,
         LLMMessage,
         MessageEvent,
-        ReportEvent,
-        ReportSection,
+        ResearchCheckpointEvent,
         StatusEvent,
     )
 
@@ -273,16 +272,20 @@ async def test_deep_research_resume_carries_the_partial_report_forward(tmp_path,
         ),
     )
     # a checkpoint from a prior Stop: evidence gathered and queries issued so far.
-    partial = ReportEvent(
+    partial = ResearchCheckpointEvent(
         query="state of X",
-        summary="(partial)",
-        sections=[
-            ReportSection(id="s0", title="A", markdown="body [[p0]]", cited_passage_ids=["p0"])
+        passages=[
+            {
+                "id": "p0",
+                "source_url": "https://example.test/p0",
+                "source_title": "Source P0",
+                "text": "Evidence for X adoption.",
+            }
         ],
-        passages=[],
         all_hits=[],
-        bounded_by="stopped",
-        completed_probes=["X adoption 2026"],
+        trail=[{"kind": "search", "query": "X adoption 2026"}],
+        completed_queries=["X adoption 2026"],
+        depth_tier="standard_deep",
     )
     await store.append(cid, partial)
     await store.append(cid, StatusEvent(status=ConversationStatus.PAUSED, detail="stopped"))
@@ -300,5 +303,6 @@ async def test_deep_research_resume_carries_the_partial_report_forward(tmp_path,
     # it resumed with the checkpoint (its evidence + issued queries carried).
     assert captured["cid"] == cid
     assert captured["resume_from"] is not None
-    assert captured["resume_from"].completed_probes == ["X adoption 2026"]
-    assert [s.title for s in captured["resume_from"].sections] == ["A"]
+    assert captured["resume_from"].completed_queries == ["X adoption 2026"]
+    assert captured["resume_from"].trail == [{"kind": "search", "query": "X adoption 2026"}]
+    assert captured["resume_from"].passages[0]["id"] == "p0"

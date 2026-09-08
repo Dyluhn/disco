@@ -118,7 +118,7 @@ class TestVacuousControlGuards:
         assert any("refusing to report coverage" in p for p in result["problems"])
         assert result["orphan_total"] == result["certified_total"]
 
-    def test_collection_failure_is_an_error_not_an_empty_result(self, tmp_path):
+    def test_collection_failure_is_an_error_not_an_empty_result(self, tmp_path, monkeypatch):
         """F2's symptom was a *failed collection*; it must never read as zero ids."""
         spec = {
             "label": "deliberately broken",
@@ -133,6 +133,19 @@ class TestVacuousControlGuards:
         assert ids == set()
         assert error, "a failed collection must surface as an error, not silence"
         assert "deliberately broken" in error
+        from types import SimpleNamespace
+
+        monkeypatch.setattr(
+            inventory_execution.subprocess,
+            "run",
+            lambda *args, **kwargs: SimpleNamespace(
+                returncode=2,
+                stdout="current/packages/a.py::test_partial\n",
+                stderr="one module failed import",
+            ),
+        )
+        ids, error = inventory_execution.collect_for_command(tmp_path, spec)
+        assert ids == set() and "exit 2" in error and "1 ids" in error
 
 
 class TestCertifiedIdsSource:
@@ -149,3 +162,31 @@ class TestCertifiedIdsSource:
 
         assert set(certified) == {"packages", "harness", "integrations", "tests"}
         assert all(ids for ids in certified.values())
+
+
+def test_execution_node_ids_match_inventory_labels_without_changing_parameters(
+    tmp_path, monkeypatch
+):
+    from types import SimpleNamespace
+
+    raw = (
+        "current/packages/a.py::test_case[development/current/value]\n"
+        "development/harness/b.py::test_case\n"
+        "current/integrations/c.py::test_case\n"
+        "development/tests/d.py::test_case\n"
+    )
+    monkeypatch.setattr(
+        inventory_execution.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=raw, stderr=""),
+    )
+    ids, error = inventory_execution.collect_for_command(
+        tmp_path, {"label": "test", "argv": [], "needs_repo_root_on_path": False}
+    )
+    assert error == ""
+    assert ids == {
+        "packages/a.py::test_case[development/current/value]",
+        "harness/b.py::test_case",
+        "integrations/c.py::test_case",
+        "tests/d.py::test_case",
+    }

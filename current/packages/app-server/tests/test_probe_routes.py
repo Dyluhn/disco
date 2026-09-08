@@ -125,17 +125,18 @@ def test_key_test_unauthorized_is_not_a_500(client, state, monkeypatch):
 
 
 def test_data_source_bundled_is_honest_not_remote_green(client):
-    """The default ddgs/local tiers are in-process — reported as 'bundled', never
-    as a remote 'ok' that would imply a service answered."""
+    """The default bundled/local tiers need no configured service — reported as
+    'bundled', never as a remote 'ok' that would imply a service answered."""
     body = client.post("/api/data-sources/search/test").json()
     assert body["ok"] is True and body["status"] == "bundled"
-    assert body["provider"] == "ddgs"
+    assert body["provider"] == "bundled"
 
 
 def test_data_source_new_keyless_search_tiers_are_bundled(client, state):
     from disco.app_server.config.dtos import DataSourcesConfigDTO
 
-    for provider in ("arxiv", "news", "semantic_scholar", "site_scoped"):
+    for provider in ("exa", "parallel", "wikipedia", "arxiv", "news",
+                     "semantic_scholar", "site_scoped"):
         state.features.update_data_sources_config(
             DataSourcesConfigDTO(
                 search_provider=provider,
@@ -275,9 +276,11 @@ async def test_probe_brave_search_bad_key_is_credential_failure_not_reachable():
     assert "rejected" in detail
 
 
-async def test_probe_tavily_search_puts_key_in_json_body():
-    """Tavily's real auth shape is the key inside the JSON body — no header at
-    all — against the real /search endpoint."""
+async def test_probe_tavily_search_sends_bearer_and_keeps_the_key_out_of_the_body():
+    """Tavily's CURRENT auth shape is `Authorization: Bearer`, with no credential
+    in the JSON body — the body-key form this probe used to send is obsolete, so
+    it tested a request the vendor no longer accepts and the runtime no longer
+    sends. Asserted by shape (header present, body field absent), never by value."""
     from disco.app_server.probe_clients import probe_tavily_search
 
     captured: dict = {}
@@ -286,17 +289,19 @@ async def test_probe_tavily_search_puts_key_in_json_body():
         import json
 
         captured["url"] = str(request.url)
+        captured["headers"] = request.headers
         captured["body"] = json.loads(request.content)
         return httpx.Response(200, json={"results": []})
 
     ok, status, _ = await probe_tavily_search(
         "https://api.tavily.com",
-        api_key="tvly-live",
+        api_key="placeholder",
         transport=httpx.MockTransport(handler),
     )
     assert ok is True and status == "ok"
     assert captured["url"] == "https://api.tavily.com/search"
-    assert captured["body"]["api_key"] == "tvly-live"
+    assert captured["headers"]["authorization"].startswith("Bearer ")
+    assert "api_key" not in captured["body"]
 
 
 async def test_probe_tavily_search_bad_key_is_credential_failure():
@@ -313,7 +318,8 @@ async def test_probe_tavily_search_bad_key_is_credential_failure():
 
 async def test_probe_firecrawl_extract_uses_bearer_on_real_scrape_endpoint():
     """Firecrawl's real auth shape IS `Authorization: Bearer`, but against the
-    real /v1/scrape endpoint, not a bare root GET."""
+    real scrape endpoint, not a bare root GET — and against the CURRENT V2
+    contract, which is the one the runtime extractor speaks."""
     from disco.app_server.probe_clients import probe_firecrawl_extract
 
     captured: dict = {}
@@ -325,12 +331,12 @@ async def test_probe_firecrawl_extract_uses_bearer_on_real_scrape_endpoint():
 
     ok, status, _ = await probe_firecrawl_extract(
         "https://api.firecrawl.dev",
-        api_key="fc-live",
+        api_key="placeholder",
         transport=httpx.MockTransport(handler),
     )
     assert ok is True and status == "ok"
-    assert captured["url"] == "https://api.firecrawl.dev/v1/scrape"
-    assert captured["headers"].get("authorization") == "Bearer fc-live"
+    assert captured["url"] == "https://api.firecrawl.dev/v2/scrape"
+    assert captured["headers"]["authorization"].startswith("Bearer ")
 
 
 async def test_probe_firecrawl_extract_bad_key_is_credential_failure():

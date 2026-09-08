@@ -9,15 +9,20 @@ report at the final append.
 
 from __future__ import annotations
 
-import json
 from collections.abc import Iterator
 from typing import Any
 
-from disco.core import ReportEvent
+from disco.core import ReportEvent, ResearchCheckpointEvent
+from disco.core.store.sqlite import estimated_payload_bytes
+
+from ..url_policy import source_url_key
 
 # Leave generous room for the sequence number and any future envelope fields
 # added by the store.  The store's hard cap is 1 MiB; this is a producer target,
-# not a second persistence limit.
+# not a second persistence limit.  Sizes here are measured with the store's own
+# ruler (`estimated_payload_bytes`) — measuring the real JSON length instead let
+# a "fitted" report be rejected at the append, because the gate's conservative
+# estimate runs above it.
 _REPORT_EVENT_TARGET_BYTES = 960 * 1024
 _OPTIONAL_EVIDENCE_HEADROOM_BYTES = 8 * 1024
 _CITED_EXCERPT_CHARS = 1_536
@@ -26,8 +31,8 @@ _DISCOVERY_SNIPPET_CHARS = 256
 _SOURCE_TITLE_CHARS = 512
 
 
-def _payload_bytes(event: ReportEvent) -> int:
-    return len(event.model_dump_json().encode("utf-8"))
+def _payload_bytes(event: ReportEvent | ResearchCheckpointEvent) -> int:
+    return estimated_payload_bytes(event.model_dump(mode="json"))
 
 
 def _truncate(value: Any, limit: int) -> Any:
@@ -39,17 +44,13 @@ def _truncate(value: Any, limit: int) -> Any:
 def _compact_passage(raw: dict[str, Any], *, text_chars: int) -> dict[str, Any]:
     compact = dict(raw)
     compact["text"] = _truncate(compact.get("text", ""), text_chars)
-    compact["source_title"] = _truncate(
-        compact.get("source_title", ""), _SOURCE_TITLE_CHARS
-    )
+    compact["source_title"] = _truncate(compact.get("source_title", ""), _SOURCE_TITLE_CHARS)
     return compact
 
 
 def _compact_hit(raw: dict[str, Any]) -> dict[str, Any]:
     compact = dict(raw)
-    compact["snippet"] = _truncate(
-        compact.get("snippet", ""), _DISCOVERY_SNIPPET_CHARS
-    )
+    compact["snippet"] = _truncate(compact.get("snippet", ""), _DISCOVERY_SNIPPET_CHARS)
     compact["title"] = _truncate(compact.get("title", ""), _SOURCE_TITLE_CHARS)
     return compact
 
@@ -62,13 +63,11 @@ def _one_reviewed_passage_per_source(
     seen_sources: set[str] = set()
     for passage in passages:
         source = str(passage.get("source_url", ""))
-        key = source or f"passage:{passage.get('id', '')}"
+        key = source_url_key(source) if source else f"passage:{passage.get('id', '')}"
         if key in seen_sources:
             continue
         seen_sources.add(key)
-        kept.append(
-            _compact_passage(passage, text_chars=_REVIEWED_EXCERPT_CHARS)
-        )
+        kept.append(_compact_passage(passage, text_chars=_REVIEWED_EXCERPT_CHARS))
     return kept
 
 
@@ -85,11 +84,7 @@ def _interleaved_optional_evidence(
 
 
 def _json_item_bytes(value: dict[str, Any]) -> int:
-    return len(
-        json.dumps(value, default=str, ensure_ascii=False, separators=(",", ":")).encode(
-            "utf-8"
-        )
-    ) + 1
+    return estimated_payload_bytes(value) + 1
 
 
 def fit_report_event(event: ReportEvent) -> ReportEvent:
@@ -105,8 +100,7 @@ def fit_report_event(event: ReportEvent) -> ReportEvent:
         return event
 
     cited = [
-        _compact_passage(passage, text_chars=_CITED_EXCERPT_CHARS)
-        for passage in event.passages
+        _compact_passage(passage, text_chars=_CITED_EXCERPT_CHARS) for passage in event.passages
     ]
     reviewed = _one_reviewed_passage_per_source(event.reviewed_passages)
     hits = [_compact_hit(hit) for hit in event.all_hits]
@@ -134,9 +128,7 @@ def fit_report_event(event: ReportEvent) -> ReportEvent:
     # envelope on a balanced prefix of resume evidence and discovery audit rows.
     base = compact.model_copy(update={"reviewed_passages": [], "all_hits": []})
     remaining = (
-        _REPORT_EVENT_TARGET_BYTES
-        - _OPTIONAL_EVIDENCE_HEADROOM_BYTES
-        - _payload_bytes(base)
+        _REPORT_EVENT_TARGET_BYTES - _OPTIONAL_EVIDENCE_HEADROOM_BYTES - _payload_bytes(base)
     )
     if remaining <= 0:
         return base
@@ -152,9 +144,7 @@ def fit_report_event(event: ReportEvent) -> ReportEvent:
             kept_reviewed.append(item)
         else:
             kept_hits.append(item)
-    bounded = base.model_copy(
-        update={"reviewed_passages": kept_reviewed, "all_hits": kept_hits}
-    )
+    bounded = base.model_copy(update={"reviewed_passages": kept_reviewed, "all_hits": kept_hits})
     # The estimate above intentionally holds 8 KiB in reserve, but retain a
     # final exact guard so serializer overhead can never leak past the target.
     while _payload_bytes(bounded) > _REPORT_EVENT_TARGET_BYTES:
@@ -170,4 +160,58 @@ def fit_report_event(event: ReportEvent) -> ReportEvent:
     return bounded
 
 
-__all__ = ["fit_report_event"]
+def fit_research_checkpoint_event(
+    event: ResearchCheckpointEvent,
+) -> ResearchCheckpointEvent:
+    """Bound a resumable checkpoint without pretending it is a report."""
+    if _payload_bytes(event) <= _REPORT_EVENT_TARGET_BYTES:
+        return event
+
+    passages = _one_reviewed_passage_per_source(event.passages)
+    hits = [_compact_hit(hit) for hit in event.all_hits]
+    compact = event.model_copy(
+        update={
+            "passages": passages,
+            "all_hits": hits,
+            "meta": {
+                **event.meta,
+                "checkpoint_evidence_compacted": True,
+                "passages_total": len(event.passages),
+                "all_hits_total": len(event.all_hits),
+            },
+        }
+    )
+    if _payload_bytes(compact) <= _REPORT_EVENT_TARGET_BYTES:
+        return compact
+
+    base = compact.model_copy(update={"passages": [], "all_hits": []})
+    remaining = (
+        _REPORT_EVENT_TARGET_BYTES - _OPTIONAL_EVIDENCE_HEADROOM_BYTES - _payload_bytes(base)
+    )
+    if remaining <= 0:
+        return base
+
+    kept_passages: list[dict[str, Any]] = []
+    kept_hits: list[dict[str, Any]] = []
+    for kind, item in _interleaved_optional_evidence(passages, hits):
+        cost = _json_item_bytes(item)
+        if cost > remaining:
+            continue
+        remaining -= cost
+        if kind == "reviewed":
+            kept_passages.append(item)
+        else:
+            kept_hits.append(item)
+    bounded = base.model_copy(update={"passages": kept_passages, "all_hits": kept_hits})
+    while _payload_bytes(bounded) > _REPORT_EVENT_TARGET_BYTES:
+        if kept_hits:
+            kept_hits.pop()
+        elif kept_passages:
+            kept_passages.pop()
+        else:
+            break
+        bounded = base.model_copy(update={"passages": kept_passages, "all_hits": kept_hits})
+    return bounded
+
+
+__all__ = ["fit_report_event", "fit_research_checkpoint_event"]

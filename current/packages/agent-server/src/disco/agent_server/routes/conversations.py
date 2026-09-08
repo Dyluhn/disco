@@ -21,6 +21,7 @@ from disco.core.appkit import BuildBrief, classify_build_brief
 from disco.core.flags import appkit_enabled
 from disco.core.store.base import ConversationSummary
 from disco.core.store.sqlite import SqliteEventStore
+from disco.retrieval.deep_research.recovery import remove_research_artifacts
 from disco.tools.projects import StorageStatus
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 from pydantic import BaseModel
@@ -582,6 +583,7 @@ async def _handle_delete(
     deleted = await store.delete_conversation(conversation_id, owner_id=owner_id)
     if deleted:
         remove_report_audio_cache(conversation_id)
+        remove_research_artifacts(conversation_id)
     return {"id": conversation_id, "deleted": deleted}
 
 

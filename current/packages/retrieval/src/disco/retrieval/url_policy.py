@@ -8,10 +8,11 @@ matches that host and its subdomains, but never ``notexample.com`` or
 from __future__ import annotations
 
 import datetime
+import re
 from email.utils import parsedate_to_datetime
 from urllib.parse import parse_qsl, urlencode, urlparse
 
-_TRACKING_QUERY_KEYS = frozenset({"fbclid", "gclid", "mc_cid", "mc_eid"})
+_TRACKING_QUERY_KEYS = frozenset({"fbclid", "gclid", "mc_cid", "mc_eid", "msclkid", "msockid"})
 
 
 def parse_source_date(value: object) -> datetime.date | None:
@@ -86,3 +87,23 @@ def source_url_key(url: str) -> str:
     ]
     suffix = f"?{urlencode(sorted(query))}" if query else ""
     return f"{authority}{path}{suffix}"
+
+
+def query_domain_scopes(query: str) -> tuple[frozenset[str] | None, frozenset[str]]:
+    """Recognize explicit site operators without treating quoted prose as policy.
+
+    Restrict hosts, allowing canonical path changes such as /Headers to
+    /Reference/Headers. Multiple positive sites form the usual search union;
+    separately configured host policies are still applied by the provider.
+    """
+    allow, deny = set(), set()
+    pattern = r'"[^"\n]*"|(?:^|[\s(])(-?)site:(?:"([^"\n]+)"|([^\s)]+))'
+    for match in re.finditer(pattern, query, re.IGNORECASE):
+        sign, quoted, plain = match.groups()
+        if sign is None:
+            continue
+        value = quoted or plain
+        domain = normalize_domain(value)
+        if domain:
+            (deny if sign else allow).add(domain)
+    return frozenset(allow) if allow else None, frozenset(deny)

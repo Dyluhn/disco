@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import inspect
 from collections.abc import Coroutine
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
@@ -81,12 +82,23 @@ class RunRegistry:
         self,
         conversation_id: str,
         task: RunTask,
+        *,
+        owned_coroutine: Coroutine[Any, Any, AgentLoop] | None = None,
     ) -> int:
         if self.active_task(conversation_id) is not None:
             raise RuntimeError("conversation already has a live run task")
         generation = self._generations.get(conversation_id, 0) + 1
         self._generations[conversation_id] = generation
         self._tasks[conversation_id] = task
+        if owned_coroutine is not None:
+
+            def close_unstarted_loop(_completed: RunTask) -> None:
+                # Registration owns a supplied coroutine even if cancellation
+                # or authority failure prevents reaching its await.
+                if inspect.getcoroutinestate(owned_coroutine) == inspect.CORO_CREATED:
+                    owned_coroutine.close()
+
+            task.add_done_callback(close_unstarted_loop)
         return generation
 
     def complete_task(

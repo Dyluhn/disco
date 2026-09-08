@@ -34,6 +34,9 @@ PROTECTED: tuple[str, ...] = (
     "development/architecture/ownership.json",
     "development/architecture/public-api.json",
     "development/architecture/test-inventory.json",
+    "development/architecture/research-test-retirements.json",
+    "development/architecture/research-api-closeout.json",
+    "development/architecture/research-test-retirement-dispositions.json",
     "development/scripts/check_soak_freeze.py",
     "development/scripts/check_arch_budget.py",
     "development/scripts/check_governance_seal.py",
@@ -92,6 +95,7 @@ PROTECTED: tuple[str, ...] = (
     # helpers is precisely the weakening this module's docstring warns about.
     "development/scripts/architecture/public_api_parts/__init__.py",
     "development/scripts/architecture/public_api_parts/_authority.py",
+    "development/scripts/architecture/public_api_parts/_closeout.py",
     "development/scripts/architecture/public_api_parts/_constants.py",
     "development/scripts/architecture/public_api_parts/_contracts.py",
     # Epic 12-A added the fourth authority: no record type could express a
@@ -105,6 +109,7 @@ PROTECTED: tuple[str, ...] = (
     "development/scripts/architecture/test_inventory_parts/_rows.py",
     "development/scripts/architecture/test_inventory_parts/_splits.py",
     "development/scripts/architecture/test_inventory_parts/_transitions.py",
+    "development/scripts/architecture/test_inventory_parts/_retirements.py",
     # Epic 11-A decomposed generate_debt.py for the same reason (695 of its own
     # 700-line budget, with four sub-epic seals to register). Only frozen DATA
     # moved, but that data decides which rows leave the active ledger, so it is
@@ -226,9 +231,7 @@ def _exact_string_list(
     problems: list[str],
 ) -> None:
     """Require one exact ordered list of non-empty strings."""
-    if not isinstance(value, list) or not all(
-        isinstance(item, str) and item for item in value
-    ):
+    if not isinstance(value, list) or not all(isinstance(item, str) and item for item in value):
         problems.append(f"{SEAL_INVOCATION} field '{field}' must be a string list")
         return
     if value == expected:
@@ -236,9 +239,7 @@ def _exact_string_list(
     before = len(problems)
     _report_list_membership(value, expected, field=field, problems=problems)
     if len(problems) == before:
-        problems.append(
-            f"{SEAL_INVOCATION} field '{field}' has invalid command order"
-        )
+        problems.append(f"{SEAL_INVOCATION} field '{field}' has invalid command order")
 
 
 def _report_list_membership(
@@ -251,19 +252,13 @@ def _report_list_membership(
     """Report missing, unexpected and duplicate exact-list members."""
     for item in expected:
         if item not in value:
-            problems.append(
-                f"{SEAL_INVOCATION} field '{field}' missing command: {item}"
-            )
+            problems.append(f"{SEAL_INVOCATION} field '{field}' missing command: {item}")
     for item in value:
         if item not in expected:
-            problems.append(
-                f"{SEAL_INVOCATION} field '{field}' has unexpected command: {item}"
-            )
+            problems.append(f"{SEAL_INVOCATION} field '{field}' has unexpected command: {item}")
     duplicates = sorted({item for item in value if value.count(item) > 1})
     for item in duplicates:
-        problems.append(
-            f"{SEAL_INVOCATION} field '{field}' has duplicate command: {item}"
-        )
+        problems.append(f"{SEAL_INVOCATION} field '{field}' has duplicate command: {item}")
 
 
 def _check_section_provisioning(
@@ -342,9 +337,7 @@ def check_seal_invocation(root: Path | None = None) -> dict[str, Any]:
     if invocation.get("provisioning_command") != PROVISIONING_COMMANDS[0]:
         problems.append(f"{SEAL_INVOCATION} has invalid provisioning_command")
     if invocation.get("frontend_provisioning_command") != PROVISIONING_COMMANDS[1]:
-        problems.append(
-            f"{SEAL_INVOCATION} has invalid frontend_provisioning_command"
-        )
+        problems.append(f"{SEAL_INVOCATION} has invalid frontend_provisioning_command")
 
     _check_section(invocation, "ci", ORDERED_COMMANDS, problems)
     _check_section(invocation, "release", ORDERED_COMMANDS, problems)

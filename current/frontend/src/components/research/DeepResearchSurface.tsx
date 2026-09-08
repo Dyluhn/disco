@@ -46,6 +46,7 @@
  *   - DeepResearchReportView       — report/sources/follow-ups/need-more/footer
  */
 
+import { useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { useDeepResearch } from "@/hooks/useDeepResearch";
 import type { ScopeId } from "@/shell/mode";
@@ -98,6 +99,39 @@ export function DeepResearchSurface({
     handleTopBarIncludeConfirm,
   } = useDeepResearchSurfaceState({ r, onScopeChange, draft, onDraftChange });
 
+  // The URL has to carry the run.
+  //
+  // A run started from `/` left the address bar at `/` while the engine worked,
+  // so ANY reload — a user's F5, a vite HMR full reload — landed back on the
+  // composer with the run still going and reachable only through History. The
+  // entry is REPLACED (never pushed: the composer is not a place to go Back to
+  // while a run is live) and a reload then re-enters through
+  // `ResumeDeepResearch`, which subscribes and replays history-then-live.
+  //
+  // WAITING FOR THE FIRST EVENT is load-bearing, not caution. Moving on the
+  // conversation id alone re-routes the surface while the opening
+  // `send_message` is still QUEUED against a socket that has not finished
+  // connecting; the unmount closes that socket, the queued frame dies with it,
+  // and the run never starts — proven on the isolated stack, where the
+  // conversation was created and its log stayed empty. One persisted event is
+  // the server's own evidence that the question landed.
+  //
+  // A run opened FROM `/deep/:cid` is already at its own URL. Recording that
+  // too keeps this once per run: a surface the user has deliberately left
+  // cannot be pulled back to the run it still holds in memory.
+  const runCid = r.cid;
+  const runHasEvents = r.activity.lastEventAt !== null;
+  const urlCarriesRun = useRef<string | null>(null);
+  useEffect(() => {
+    if (resumeCid) {
+      urlCarriesRun.current = resumeCid;
+      return;
+    }
+    if (!runCid || !runHasEvents || urlCarriesRun.current === runCid) return;
+    urlCarriesRun.current = runCid;
+    navigate(`/deep/${runCid}`, { replace: true });
+  }, [resumeCid, runCid, runHasEvents, navigate]);
+
   // Gap #39 — a stable, assertable DR lifecycle phase. The run itself is
   // model+live-search+streaming (non-deterministic), but the PHASE TRANSITIONS
   // (idle → running → paused/error → done) are deterministic and can be
@@ -135,9 +169,18 @@ export function DeepResearchSurface({
           r={r}
           onStandardSearch={() => {
             if (onScopeChange) onScopeChange("standard");
-            else navigate("/");
+            // At the run's own URL the parent that owned the scope is gone, so
+            // this leaves for the main surface — carrying the question, which
+            // is what the in-place scope flip preserved.
+            else navigate("/", { state: { seedQuery: r.query } });
           }}
-          handleNewResearch={handleNewResearch}
+          handleNewResearch={() => {
+            // The run's URL re-seeds the session from `resumeCid`, so clearing
+            // the session alone would put the same run straight back and New
+            // research would be a button that does nothing.
+            handleNewResearch();
+            navigate("/", { replace: true });
+          }}
           exportCaps={exportCaps}
           doneNotify={doneNotify}
           topBarIncludeOpen={topBarIncludeOpen}

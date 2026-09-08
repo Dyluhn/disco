@@ -8,16 +8,16 @@ import {
 import { cn } from "@/lib/cn";
 
 // Only the KEYLESS, always-available federation sources live here. The general
-// web-search PROVIDER (ddgs / tavily / brave / searxng) is a single choice owned
+// web-search PROVIDER (bundled / tavily / brave / searxng) is a single choice owned
 // entirely by Settings → Data sources — exposing it here as per-query chips
 // duplicated that setting and let a chip silently override "the one they set".
 // So: no provider chips, no "needs setup" / "Add in Settings" affordance. An
 // EMPTY selection (the default) means "use my configured provider"; picking any
 // of these federates that keyless source on top for this one query.
-type SourceId = "ddgs" | "arxiv" | "news" | "semantic_scholar";
+type SourceId = "web" | "arxiv" | "news" | "semantic_scholar";
 
 const SOURCES: Array<{ id: SourceId; label: string; Icon: LucideIcon }> = [
-  { id: "ddgs", label: "Web", Icon: Globe2 },
+  { id: "web", label: "Web", Icon: Globe2 },
   { id: "news", label: "News", Icon: Newspaper },
   { id: "arxiv", label: "arXiv", Icon: BookOpen },
   { id: "semantic_scholar", label: "Semantic Scholar", Icon: GraduationCap },

@@ -34,7 +34,7 @@ from typing import Any
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _helpers import assert_problem_contains, git_add, write  # noqa: E402
+from _helpers import PUBLIC_API_MEMBER_NAMES, assert_problem_contains, git_add, write  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "development" / "scripts"))
 from architecture import public_api  # noqa: E402
@@ -68,7 +68,7 @@ def _frontend_source(state: str) -> str:
     return (
         "export interface Envelope { id: string; }\n"
         f"{state}\n"
-        "export const schema = { type: \"object\" } as const;\n"
+        'export const schema = { type: "object" } as const;\n'
         "export function decode(input: string): Envelope {\n"
         "  return { id: input };\n"
         "}\n"
@@ -83,16 +83,22 @@ def _checkpoint(root: Path) -> str:
     git_add(root, ".")
     subprocess.run(
         [
-            "git", "-C", str(root),
-            "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
-            "commit", "-qm", "source checkpoint", "--allow-empty",
+            "git",
+            "-C",
+            str(root),
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "-qm",
+            "source checkpoint",
+            "--allow-empty",
         ],
         capture_output=True,
         check=True,
     )
-    return subprocess.check_output(
-        ["git", "-C", str(root), "rev-parse", "HEAD"], text=True
-    ).strip()
+    return subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"], text=True).strip()
 
 
 def _contexts_authority() -> dict[str, Any]:
@@ -112,13 +118,18 @@ def _contexts_authority() -> dict[str, Any]:
                     "source_identity": _FIXTURE_SOURCE_IDENTITY,
                     "owner_package": "PKG-12-FE-BUILD",
                     "edge_fields": [
-                        "source", "source_context", "import",
-                        "target", "target_context",
+                        "source",
+                        "source_context",
+                        "import",
+                        "target",
+                        "target_context",
                     ],
                     "edges": [
                         [
-                            "frontend/src/feature/source.ts", "feature",
-                            "../shared/types", "frontend/src/shared/types.ts",
+                            "frontend/src/feature/source.ts",
+                            "feature",
+                            "../shared/types",
+                            "frontend/src/shared/types.ts",
                             "shared",
                         ]
                     ],
@@ -182,7 +193,10 @@ def _write_authority(root: Path, source_identity: str) -> None:
 def _setup(root: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     """Build an accepted frontend surface and leave HEAD on its sibling."""
     _init_git(root)
-    write(root / "development/architecture/contexts.json", json.dumps(_contexts_authority(), indent=2) + "\n")
+    write(
+        root / "development/architecture/contexts.json",
+        json.dumps(_contexts_authority(), indent=2) + "\n",
+    )
     _write_frontend(root)
     write(root / _DIAGRAM_REL, "# Generated fixture architecture\n")
     write(root / _CONTRACT_REL, '{"event":"message","version":1}\n')
@@ -194,16 +208,26 @@ def _setup(root: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     monkeypatch.setattr(
         public_api,
         "_ACCEPTED_AUTHORITY_SHA256",
-        hashlib.sha256((root / "development/architecture/public-api.json").read_bytes()).hexdigest(),
+        hashlib.sha256(
+            (root / "development/architecture/public-api.json").read_bytes()
+        ).hexdigest(),
     )
     public_api.regenerate_public_api(root, _checkpoint(root))
     git_add(root, "development/architecture/public-api.json")
     tree = subprocess.check_output(["git", "-C", str(root), "write-tree"], text=True).strip()
     final = subprocess.check_output(
         [
-            "git", "-C", str(root),
-            "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
-            "commit-tree", tree, "-p", authority_identity,
+            "git",
+            "-C",
+            str(root),
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit-tree",
+            tree,
+            "-p",
+            authority_identity,
         ],
         input="final candidate\n",
         text=True,
@@ -268,7 +292,9 @@ def _transition(root: Path, name: str) -> dict[str, str]:
 
 
 def _widen(
-    root: Path, accepted: dict[str, Any], state: str = _WIDE_STATE,
+    root: Path,
+    accepted: dict[str, Any],
+    state: str = _WIDE_STATE,
 ) -> tuple[str, dict[str, str], dict[str, str]]:
     """Widen ``State``, commit, and return (identity, record, transition)."""
     _set_state(root, state)
@@ -277,8 +303,11 @@ def _widen(
 
 
 def _regenerate(
-    root: Path, identity: str, record: dict[str, Any] | None,
-    transition: dict[str, Any], **kwargs: Any,
+    root: Path,
+    identity: str,
+    record: dict[str, Any] | None,
+    transition: dict[str, Any],
+    **kwargs: Any,
 ) -> dict[str, Any]:
     return public_api.regenerate_public_api(
         root,
@@ -290,7 +319,8 @@ def _regenerate(
 
 
 def _accept_widening(
-    root: Path, monkeypatch: pytest.MonkeyPatch,
+    root: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> tuple[dict[str, Any], dict[str, str]]:
     """Land one accepted frontend declaration change and return its record.
 
@@ -315,9 +345,17 @@ def _sibling_head(root: Path, parent: str) -> None:
     tree = subprocess.check_output(["git", "-C", str(root), "write-tree"], text=True).strip()
     commit = subprocess.check_output(
         [
-            "git", "-C", str(root),
-            "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
-            "commit-tree", tree, "-p", parent,
+            "git",
+            "-C",
+            str(root),
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit-tree",
+            tree,
+            "-p",
+            parent,
         ],
         input="sibling\n",
         text=True,
@@ -385,7 +423,7 @@ class TestFrontendDeclarationAuthorized:
         the Python member authority however many rows the latter carries.
         """
         baseline = public_api.load_public_api(REPO_ROOT)
-        assert len(baseline["member_transitions"]) == 27
+        assert len(baseline["member_transitions"]) == len(PUBLIC_API_MEMBER_NAMES)
         assert all(row["surface"] == "python" for row in baseline["member_transitions"])
         for row in baseline.get("frontend_declaration_transitions", []):
             assert row["surface"] == "frontend"
@@ -495,7 +533,8 @@ class TestDeclarationRowValidity:
                 tmp_path,
                 identity,
                 additive_transitions=[
-                    _transition(tmp_path, "State"), _transition(tmp_path, "Envelope"),
+                    _transition(tmp_path, "State"),
+                    _transition(tmp_path, "Envelope"),
                 ],
                 frontend_declaration_transitions=unsorted_rows,
             )
@@ -676,8 +715,11 @@ class TestDeclarationDelta:
 
         with pytest.raises(RuntimeError) as error:
             public_api.regenerate_public_api(
-                tmp_path, identity, additive_transitions=[
-                    *accepted["additive_transitions"], _transition(tmp_path, "State"),
+                tmp_path,
+                identity,
+                additive_transitions=[
+                    *accepted["additive_transitions"],
+                    _transition(tmp_path, "State"),
                 ],
             )
         assert "old_target_sha256 does not pin the accepted target" in str(error.value)
@@ -797,11 +839,16 @@ class TestDeclarationHelpers:
     def test_declaration_of_rejects_a_malformed_descriptor(self) -> None:
         problems: list[str] = []
         record = {
-            "surface": "frontend", "path": _FRONTEND_REL, "public_name": "State",
+            "surface": "frontend",
+            "path": _FRONTEND_REL,
+            "public_name": "State",
             "declaration_kind": "TypeAliasDeclaration",
-            "old_signature": _NARROW_STATE, "new_signature": _WIDE_STATE,
-            "old_target_sha256": "a" * 64, "new_target_sha256": "b" * 64,
-            "owner_package": _OWNER, "accepting_commit": "c" * 40,
+            "old_signature": _NARROW_STATE,
+            "new_signature": _WIDE_STATE,
+            "old_target_sha256": "a" * 64,
+            "new_target_sha256": "b" * 64,
+            "owner_package": _OWNER,
+            "accepting_commit": "c" * 40,
             "accepting_receipt": _RECEIPT,
         }
         key = ("frontend", _FRONTEND_REL, "State", "b" * 64)
@@ -820,8 +867,10 @@ class TestDeclarationHelpers:
     def test_describe_is_stable_and_names_the_record(self) -> None:
         described = _frontend.describe(
             {
-                "path": _FRONTEND_REL, "public_name": "State",
-                "declaration_kind": "TypeAliasDeclaration", "owner_package": _OWNER,
+                "path": _FRONTEND_REL,
+                "public_name": "State",
+                "declaration_kind": "TypeAliasDeclaration",
+                "owner_package": _OWNER,
                 "accepting_commit": "c" * 40,
             }
         )

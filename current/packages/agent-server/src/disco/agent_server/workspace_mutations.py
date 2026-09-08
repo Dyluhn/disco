@@ -15,6 +15,7 @@ from disco.core import (
     ObservationEvent,
     WorkspaceMutationEvent,
 )
+from disco.retrieval.deep_research import RESEARCH_TRACE_ACTIONS
 
 if TYPE_CHECKING:
     from disco.core.store.sqlite import SqliteEventStore
@@ -129,6 +130,16 @@ class _WorkspaceMutations:
 
     @staticmethod
     def _dangling_action_closures(history: list[Event]) -> list[AgentErrorEvent]:
+        """Supersede the admitted actions a newer instruction overtook.
+
+        Deep research's own trace actions are exempt (`RESEARCH_TRACE_ACTIONS`),
+        the same rule the kill and resume paths already apply: the server
+        appends them to narrate its run, nothing ever pairs them, and no model
+        reads them. Closing them appended one "a newer user or host instruction
+        arrived" error per turn counter and per token heartbeat — 303 of them on
+        one follow-up to a finished report, enough to overrun the 256-slot
+        subscriber queue and close every listening socket.
+        """
         resolved = {
             event.action_id
             for event in history
@@ -147,5 +158,7 @@ class _WorkspaceMutations:
                 agent_view_id=action.agent_view_id,
             )
             for action in history
-            if isinstance(action, ActionEvent) and action.id not in resolved
+            if isinstance(action, ActionEvent)
+            and action.id not in resolved
+            and action.tool_call.tool_name not in RESEARCH_TRACE_ACTIONS
         ]

@@ -69,7 +69,12 @@ async def research_answer(
     """[CONTRACT §6] The standard-answer Research flow: retrieve with provenance,
     then run the grounding pipeline (constrained generation + NLI verification +
     self-correction). The loop drives *when* to call this; it owns no retrieval
-    logic. Deep Research is the same composition at `depth='deep'`."""
+    logic.
+
+    `query` reaches the search provider as written — `depth` sizes the tier's
+    budgets and is recorded in the trace, it does not transform the query.
+    Deep Research is its own agent loop (`deep_research.agent`), not this
+    composition at a bigger `depth`."""
     result = await engine.retrieve(
         RetrievalRequest(query=query, depth=depth, top_k=top_k, corpus_ids=corpus_ids)
     )

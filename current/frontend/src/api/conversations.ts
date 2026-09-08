@@ -72,6 +72,11 @@ export async function setConversationSpace(
 
 /** Delete a conversation (destructive). Owner-scoped both client- and server-side. */
 export async function deleteConversation(id: string): Promise<{ id: string }> {
+  if (agentLive()) {
+    // The runtime owner cancels and drains active work before deleting its data.
+    await agentSend("DELETE", `/conversations/${encodeURIComponent(id)}`);
+    return { id };
+  }
   if (isLive()) {
     await apiSend<{ id: string; deleted: boolean }>(
       "DELETE",

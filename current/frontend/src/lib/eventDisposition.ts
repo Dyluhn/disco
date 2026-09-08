@@ -42,6 +42,7 @@ export const KNOWN_EVENT_KINDS = [
   "error",
   "plan",
   "report",
+  "research_checkpoint",
   "alternatives",
   "knowledge",
   "runtime_constraint",
@@ -98,6 +99,10 @@ export const EVENT_DISPOSITION: Record<
   error: { disposition: "rendered", where: "Conversation-level error surface (states.tsx error card)." },
   plan: { disposition: "rendered", where: "PlanPanel (Build/Agent plan gate). Deep Research is gateless and emits no PlanEvent." },
   report: { disposition: "rendered", where: "DeepReportView (Deep Research)." },
+  research_checkpoint: {
+    disposition: "rendered",
+    where: "DeepResearchCheckpoint (paused Deep Research run with resumable evidence).",
+  },
   alternatives: { disposition: "rendered", where: "AlternativesGate (Build/Agent, after repeated tool failure)." },
   deliverable: { disposition: "rendered", where: "DeliverablePanel (Build finished-artifact handoff)." },
   clarify: { disposition: "rendered", where: "ClarifyPanel (pre-plan clarification questions)." },

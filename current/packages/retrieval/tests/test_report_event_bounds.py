@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from disco.core import EventSource, ReportSection, SqliteEventStore
+from disco.core import (
+    EventSource,
+    ReportSection,
+    ResearchCheckpointEvent,
+    SqliteEventStore,
+)
 from disco.retrieval.deep_research.engine import ReportFromRun
 from disco.retrieval.models import Passage, SearchHit
 
@@ -26,6 +31,64 @@ def _hit(index: int) -> SearchHit:
         rank=index,
         status="ok",
     )
+
+
+def _short_hit(index: int) -> SearchHit:
+    """A realistic discovery row: a short snippet and several small scalars.
+
+    Scalar-heavy rows are what the append gate's estimator is most conservative
+    about — it charges a flat 24 bytes for every number and null.
+    """
+    return SearchHit(
+        url=f"https://discovery.example/results/{index}",
+        title=f"Result {index}",
+        snippet=f"A short provider snippet for result {index}.",
+        source_engine="google+google cse",
+        rank=index % 32,
+        status="ok",
+    )
+
+
+async def test_report_fitted_to_the_target_still_appends_when_rows_are_small() -> None:
+    """Regression (live-caught 2026-09-02): an 80-minute exhaustive run lost its
+    whole report to `EventPayloadTooLarge` at the final append.
+
+    The report builder trimmed to its 960 KiB target measured as real JSON
+    bytes, while the store rejects on a conservative UPPER-BOUND estimate that
+    runs ~8% higher on evidence with many small rows — more than the 64 KiB the
+    target held back. Producer and gate now measure with the same ruler.
+    """
+    cited = [_passage(index, cited=True) for index in range(60)]
+    reviewed = [_passage(index, cited=False) for index in range(200)]
+    hits = [_short_hit(index) for index in range(3_000)]
+    result = ReportFromRun(
+        query="What does the evidence show?",
+        summary="Executive synthesis with decision-relevant findings. " * 100,
+        sections=[
+            ReportSection(
+                id="s0",
+                title="Evidence-led finding",
+                markdown=("Reader-facing report prose. " * 3_000).strip(),
+                cited_passage_ids=[passage.id for passage in cited],
+            )
+        ],
+        cited_passages=cited,
+        reviewed_passages=reviewed,
+        all_hits=hits,
+        unsupported_count=0,
+        bounded_by=None,
+        depth_tier="exhaustive",
+        claims=[],
+        completed_probes=[f"probe {index}" for index in range(80)],
+        pending_probes=[],
+    )
+
+    event = result.to_event()
+
+    store = SqliteEventStore(":memory:")
+    await store.append("small-rows", event)  # the bug: this raised
+    assert event.meta["report_evidence_compacted"] is True
+    assert event.all_hits  # trimmed, not emptied
 
 
 async def test_oversized_report_compacts_evidence_but_persists_full_report() -> None:
@@ -126,3 +189,44 @@ def test_small_report_event_remains_lossless() -> None:
     assert event.reviewed_passages == [reviewed[0].model_dump()]
     assert event.all_hits == [hits[0].model_dump()]
     assert event.meta == {}
+
+
+async def test_oversized_stop_persists_as_bounded_checkpoint_not_report() -> None:
+    passages = [_passage(index, cited=False) for index in range(240)]
+    hits = [_hit(index) for index in range(900)]
+    trail = [
+        {"kind": "search", "query": f"research angle {index}", "admitted": 1}
+        for index in range(80)
+    ]
+    result = ReportFromRun(
+        query="Paused investigation",
+        summary="",
+        sections=[],
+        cited_passages=[],
+        reviewed_passages=passages,
+        all_hits=hits,
+        unsupported_count=0,
+        bounded_by="stopped",
+        depth_tier="exhaustive",
+        completed_probes=[entry["query"] for entry in trail],
+        research_trail=trail,
+        recency_window="month",
+    )
+
+    event = result.to_event()
+
+    assert isinstance(event, ResearchCheckpointEvent)
+    assert event.query == "Paused investigation"
+    assert event.trail == trail
+    assert event.completed_queries == [entry["query"] for entry in trail]
+    assert event.recency_window == "month"
+    assert event.passages
+    assert event.all_hits
+    assert event.meta["checkpoint_evidence_compacted"] is True
+
+    store = SqliteEventStore(":memory:")
+    stored = await store.append("paused-report", event)
+    replayed = await store.get_events("paused-report")
+    assert isinstance(stored, ResearchCheckpointEvent)
+    assert replayed == [stored]
+    store.close()

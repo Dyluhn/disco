@@ -3,7 +3,7 @@ protocol emitted by `retrieval/streaming.py` (state → token → final → stat
 an error frame). Proves the canary alerts on the real degradation modes: a dead
 dependency, a pipeline error, and the silent "up but not grounding" case.
 
-Run: PYTHONPATH=. uv run pytest development/harness/tests/test_canary.py
+Run: uv run pytest development/harness/tests/test_canary.py
 """
 
 from __future__ import annotations

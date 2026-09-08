@@ -274,27 +274,27 @@ async def test_multi_search_fans_out_merges_dedupes_and_ignores_failures():
     provider = MultiSearchProvider(
         (
             FakeMultiProvider(
-                "ddgs",
+                "web",
                 [
                     SearchHit(
                         url="https://example.com/a",
                         title="A",
                         snippet="a",
-                        source_engine="ddgs",
+                        source_engine="web",
                         rank=0,
                     ),
                     SearchHit(
                         url="https://example.com/shared",
                         title="Shared weak",
                         snippet="weak",
-                        source_engine="ddgs",
+                        source_engine="web",
                         rank=5,
                     ),
                     SearchHit(
                         url="https://example.com/c",
                         title="C",
                         snippet="c",
-                        source_engine="ddgs",
+                        source_engine="web",
                         rank=2,
                     ),
                 ],
@@ -333,7 +333,7 @@ async def test_multi_search_fans_out_merges_dedupes_and_ignores_failures():
     assert [h.rank for h in hits] == [0, 1, 2]
     shared = hits[1]
     assert shared.title == "Shared best"
-    assert shared.source_engine == "arxiv+ddgs"
+    assert shared.source_engine == "arxiv+web"
 
 
 class FakeInnerSearchProvider:

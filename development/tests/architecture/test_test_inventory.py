@@ -19,9 +19,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _helpers import assert_problem_contains, null_advance_row, write
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "development" / "scripts"))
-from architecture.test_inventory_parts import _transitions  # noqa: E402
-
 from architecture import inventory_static, test_inventory  # noqa: E402
+from architecture.test_inventory_parts import _transitions  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -663,10 +662,24 @@ class TestMappingStatic:
             # PKG-33-MCP-CONNECTIVITY: one new agent-server file for the
             # approved-origin egress bypass (6 ids) plus one id extending the
             # compose-environment file for the server image's JS runtime.
-            "python_test_file_count": 855,
-            "python_static_test_id_count": 10579,
-            "typescript_test_file_count": 253,
-            "typescript_static_test_id_count": 1263,
+            # V30: nine additional source-selection/context test files and
+            # 45 static Python ids; retained earlier test identities stay certified.
+            # V38 adds six PDF/source/review-capacity files and 49 net static IDs.
+            # V41 adds stream-terminal and environment-read test files.
+            # Exact identity delta: 22 added/2 replaced static definitions;
+            # 21 added/2 replaced package cases and 11 harness cases.
+            # V48 adds the reader stage and local-extraction reach: seven new
+            # `packages/retrieval/tests` files — test_source_reading.py (+26),
+            # test_extraction_challenge_pages.py (+14),
+            # test_extraction_challenge_integration.py (+13),
+            # test_condition_carry.py (+7), test_text_match.py (+7),
+            # test_local_extraction_reach.py (+6), test_absence_claims.py (+5) —
+            # plus 3 in test_source_inspection.py and 2 in test_writer_evidence.py.
+            # 83 collected package ids added, 0 removed; TypeScript unchanged.
+            "python_test_file_count": 940,
+            "python_static_test_id_count": 11547,
+            "typescript_test_file_count": 287,
+            "typescript_static_test_id_count": 1484,
         }
         assert mapping["identity"] == baseline["source_identity"]
         assert {key: mapping[key] for key in expected_counts} == expected_counts
@@ -703,7 +716,8 @@ class TestMappingStatic:
         # one fixture, and the resource-manifest fold suite adds its
         # event_store fixture. The production-readiness wave adds five more
         # (MCP import client, session-hardening client, weak-secret latch reset).
-        assert len(fixtures) == 186
+        # V38 isolates the real PDF probe in existing live-retrieval unit fixtures.
+        assert len(fixtures) == 201
         assert fixtures == sorted(fixtures, key=_canonical_row)
         assert len({_canonical_row(row) for row in fixtures}) == len(fixtures)
         assert all(
@@ -720,7 +734,7 @@ class TestMappingStatic:
     def test_mapping_static_skip_marker_count_drift_fails(self, monkeypatch: pytest.MonkeyPatch):
         baseline = test_inventory.load_test_inventory(REPO_ROOT)
         markers = baseline["mapping_static"]["markers"]
-        assert len(markers) == 86
+        assert len(markers) == 87
         assert markers == sorted(markers, key=_canonical_row)
         assert len({_canonical_row(row) for row in markers}) == len(markers)
         assert all(set(row) == {"framework", "path", "line", "marker", "source"} for row in markers)
@@ -799,12 +813,12 @@ class TestFrontendCollection:
                 len(frontend["vitest_files_list"]),
             )
             == (frontend["vitest_ids"], frontend["vitest_files"])
-            == (1212, 189)
+            == (1423, 213)
         )
         assert frontend["vitest_ids_list"] == sorted(frontend["vitest_ids_list"])
         assert frontend["vitest_files_list"] == sorted(frontend["vitest_files_list"])
-        assert len(set(frontend["vitest_ids_list"])) == 1212
-        assert len(set(frontend["vitest_files_list"])) == 189
+        assert len(set(frontend["vitest_ids_list"])) == 1423
+        assert len(set(frontend["vitest_files_list"])) == 213
         assert set(frontend["playwright_configs"]) == set(test_inventory.PLAYWRIGHT_CONFIGS)
         for config, authority in frontend["playwright_configs"].items():
             assert len(authority["ids"]) == authority["id_count"]
@@ -897,6 +911,7 @@ class TestFrontendCollection:
         ids, files, error = test_inventory._collect_vitest(tmp_path)
         assert (ids, files) == ([], [])
         assert "parse failed" in error
+        monkeypatch.undo()  # Restore subprocess before the real pinned Git authority reads.
 
         baseline = test_inventory.load_test_inventory(REPO_ROOT)
         drifted = copy.deepcopy(baseline)
@@ -916,13 +931,13 @@ class TestFrontendCollection:
         assert (
             playwright[first]["id_count"],
             playwright[first]["file_count"],
-        ) == (38, 36)
+        ) == (49, 44)
         playwright[second]["ids"][-1] = "frontend/e2e-live/replacement.spec.ts::replacement"
         playwright[second]["ids"].sort()
 
         problems = _check_frontend(monkeypatch, baseline, actual)
 
-        assert_problem_contains(problems, "live configs", "identical", "38")
+        assert_problem_contains(problems, "live configs", "identical", "49")
         assert_problem_contains(problems, f"frontend.{second}.ids", "drift")
 
     def test_frontend_config_identities_retained(self, monkeypatch: pytest.MonkeyPatch):
@@ -1077,7 +1092,17 @@ class TestCollectedCounts:
             # the host fallbacks the close-host-exec pass removed.
             # The MCP-connectivity fix adds 7 non-parametrized package ids:
             # six in one new agent-server file, one in the compose file.
-            "packages": 10998,
+            # V30: 55 additional collected package cases since the v25 proposal.
+            # V38 adds 59 net collected PDF, review-capacity and provider-session cases.
+            # V48 adds the reader stage and local-extraction reach: seven new
+            # `packages/retrieval/tests` files — test_source_reading.py (+26),
+            # test_extraction_challenge_pages.py (+14),
+            # test_extraction_challenge_integration.py (+13),
+            # test_condition_carry.py (+7), test_text_match.py (+7),
+            # test_local_extraction_reach.py (+6), test_absence_claims.py (+5) —
+            # plus 3 in test_source_inspection.py and 2 in test_writer_evidence.py.
+            # 83 collected package ids added, 0 removed; TypeScript unchanged.
+            "packages": 12077,
             # 1288 from PKG-03-EDIT-EVIDENCE: +24 in the `harness` root, the
             # edit-evidence producer acceptance. The new ids land here and not
             # under `packages` because the producer is harness code; the
@@ -1153,7 +1178,8 @@ class TestCollectedCounts:
             # the native-copy and non-unique-resolution cases each expand twice.
             # V53 adds one controller/stack provenance boundary regression.
             # V56 adds two definitions plus two result-evidence mutation cases.
-            "harness": 1450,
+            # V30: discovery progress is measured separately from evidence admission.
+            "harness": 1571,
             # 1320 UNCHANGED at PKG-19-CONSTRAINT4-CONFIRMED-REPAIR: all 18 of that
             # seal's ids are product bytes under `packages`. The repair is at four
             # `disco.core.loop` emitting seams and the oracles were deliberately not
@@ -1203,11 +1229,11 @@ class TestCollectedCounts:
             # ids plus the F47 extension land under `packages`.
             # Fixture-line ownership adds one architecture fitness id. The
             # typed-field transition regression adds one more architecture id.
-            "tests": 396,
+            "tests": 424,
         }
         assert set(collected["roots"]) == set(test_inventory.PYTHON_ROOTS)
         assert collected["counts"] == expected
-        assert collected["total"] == 12853 == sum(expected.values())
+        assert collected["total"] == 14081 == sum(expected.values())
         for root in test_inventory.PYTHON_ROOTS:
             ids = collected["roots"][root]
             assert len(ids) == expected[root]
@@ -1223,7 +1249,7 @@ class TestCollectedCounts:
         problems: list[str] = []
         result = test_inventory._check_collected_ids(baseline, REPO_ROOT, problems)
         assert problems == []
-        assert result == {"collected_total": 12853}
+        assert result == {"collected_total": 14081}
 
         drifted = copy.deepcopy(baseline)
         drifted["collected"]["roots"]["tests"] = list(
@@ -1242,9 +1268,9 @@ class TestBaselineValidation:
         assert result == {
             "ok": True,
             "problems": [],
-            "python_static_ids": 10579,
-            "typescript_static_ids": 1263,
-            "collected_total": 12853,
+            "python_static_ids": 11547,
+            "typescript_static_ids": 1484,
+            "collected_total": 14081,
         }
 
         latest_identity = test_inventory.subprocess.check_output(
@@ -1843,6 +1869,10 @@ class TestDeselectionDetection:
             )
         assert authority.read_bytes() == before
 
+        # This synthetic case models the original PKG-02 bootstrap population.
+        from architecture.test_inventory_parts import _retirements
+
+        baseline = _retirements.authority(REPO_ROOT)[1]
         temp_authority = tmp_path / "development/architecture/test-inventory.json"
         regeneration_baseline = copy.deepcopy(baseline)
         regeneration_baseline["additive_transitions"] = []

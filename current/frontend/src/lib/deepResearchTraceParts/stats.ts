@@ -1,7 +1,7 @@
 /**
  * Live header-strip stats, split out of `deepResearchTrace.ts`
  * (PKG-12-C/TS-0052). v2 (gateless deep research): there is no plan and no
- * per-sub-question checklist — progress derives from the search / observation /
+ * checklist — progress derives from the search / observation /
  * phase / section_done events the engine actually emits. Elapsed time is REAL:
  * the span between the first and the latest event timestamps
  * (BaseEvent.timestamp), no longer a hardcoded null. Pre-v2 vocabularies
@@ -16,29 +16,48 @@ import type { DeepStats } from "@/lib/deepResearchTrace";
  *  stream — the DeepStats fields plus the timestamp extrema. */
 interface StatsAccumulator {
   searches: number;
+  refusals: number;
   sectionsDone: number;
-  activeSubq: { title: string } | null;
-  activeRound: { current: number; max: number } | null;
   sourcesDiscovered: number;
   phase: string | null;
   activeSection: { title: string } | null;
   lastThought: string | null;
+  lastThoughtLeg: "research" | "writer" | null;
+  /** Passages on the newest checkpoint that has not been resumed past yet. */
+  pendingCarry: number | null;
+  carriedSources: number | null;
   firstTs: number;
   lastTs: number;
 }
 
-function applySearchAction(
-  acc: StatsAccumulator,
-  args: Record<string, unknown>,
-): void {
-  acc.searches += 1;
-  const subq = String(args.subquestion ?? "");
-  if (subq) acc.activeSubq = { title: subq };
-  const cur = Number(args.round);
-  const max = Number(args.rounds_max);
-  if (Number.isFinite(cur) && Number.isFinite(max)) {
-    acc.activeRound = { current: cur, max };
+/**
+ * A resume carries the POOL, not the turn budget.
+ *
+ * The engine builds a fresh `_AgentState` for the continuation
+ * (`agent.py:1410`) whose `turns_charged` starts at zero
+ * (`_agent_state.py:68`), and every `turn` payload is derived from that
+ * counter (`agent.py:1316-1317` → `_progress_events.py:98`), so a resumed run
+ * genuinely opens at "Turn 1 of N". Its evidence pool is not fresh: the
+ * checkpoint's passages are rebuilt (`execute.py:274`) and admitted exempt
+ * from the new source budget (`agent.py:1413`). Only saying the first half is
+ * what made L29's `97-resumed-no-checkpoint.png` read as a miscount — "Turn 1
+ * of 8" over nine sources nobody had searched for yet.
+ */
+function applyResumeCarry(acc: StatsAccumulator, e: AgentEvent): void {
+  if (e.kind === "research_checkpoint") {
+    acc.pendingCarry = e.passages.length;
+  } else if (e.kind === "status" && e.status === "RUNNING" && acc.pendingCarry !== null) {
+    acc.carriedSources = acc.pendingCarry;
+    acc.pendingCarry = null;
   }
+}
+
+function applySearchAction(acc: StatsAccumulator): void {
+  acc.searches += 1;
+}
+
+function applyQueryRefusedAction(acc: StatsAccumulator): void {
+  acc.refusals += 1;
 }
 
 function applySynthesizeAction(
@@ -48,8 +67,6 @@ function applySynthesizeAction(
   // Pre-v2 replays: a per-section write heartbeat (v2 writes the report in
   // one pass and emits only section_done checkpoints at the end).
   acc.activeSection = { title: String(args.section ?? "") };
-  acc.activeSubq = null;
-  acc.activeRound = null; // rounds are a gather concept
 }
 
 function applySectionDoneAction(
@@ -60,6 +77,7 @@ function applySectionDoneAction(
   acc.sectionsDone += 1;
   if (acc.activeSection && acc.activeSection.title === title) acc.activeSection = null;
   acc.lastThought = `Finished “${title}”`;
+  acc.lastThoughtLeg = "writer";
 }
 
 function applyPhaseAction(
@@ -67,11 +85,6 @@ function applyPhaseAction(
   args: Record<string, unknown>,
 ): void {
   acc.phase = String(args.phase ?? "") || null;
-  if (acc.phase && acc.phase !== "gather") {
-    // Gather is over — a "Searching …" indicator would now be stale.
-    acc.activeSubq = null;
-    acc.activeRound = null;
-  }
 }
 
 function applyObservation(acc: StatsAccumulator, r: ToolResult): void {
@@ -82,7 +95,10 @@ function applyObservation(acc: StatsAccumulator, r: ToolResult): void {
     // Pre-v2 replays: the engine's between-rounds reasoning — what it found,
     // whether it's sufficient, what's still missing.
     const rationale = String(r.structured.rationale ?? "").trim();
-    if (rationale) acc.lastThought = rationale;
+    if (rationale) {
+      acc.lastThought = rationale;
+      acc.lastThoughtLeg = "research";
+    }
   }
 }
 
@@ -92,12 +108,15 @@ function applyEvent(acc: StatsAccumulator, e: AgentEvent): void {
   if (e.kind === "action" && e.tool_call) {
     const name = e.tool_call.tool_name;
     const args = e.tool_call.arguments;
-    if (name === "search") applySearchAction(acc, args);
+    if (name === "search") applySearchAction(acc);
+    else if (name === "query_refused") applyQueryRefusedAction(acc);
     else if (name === "synthesize_section") applySynthesizeAction(acc, args);
     else if (name === "section_done") applySectionDoneAction(acc, args);
     else if (name === "phase") applyPhaseAction(acc, args);
   } else if (e.kind === "observation" && (e as ObservationEvent).tool_result) {
     applyObservation(acc, (e as ObservationEvent).tool_result);
+  } else {
+    applyResumeCarry(acc, e);
   }
 }
 
@@ -106,13 +125,15 @@ function applyEvent(acc: StatsAccumulator, e: AgentEvent): void {
 export function computeStats(events: AgentEvent[]): DeepStats {
   const acc: StatsAccumulator = {
     searches: 0,
+    refusals: 0,
     sectionsDone: 0,
-    activeSubq: null,
-    activeRound: null,
     sourcesDiscovered: 0,
     phase: null,
     activeSection: null,
     lastThought: null,
+    lastThoughtLeg: null,
+    pendingCarry: null,
+    carriedSources: null,
     firstTs: Number.POSITIVE_INFINITY,
     lastTs: Number.NEGATIVE_INFINITY,
   };
@@ -136,13 +157,14 @@ export function computeStats(events: AgentEvent[]): DeepStats {
 
   return {
     searches: acc.searches,
+    refusals: acc.refusals,
     sectionsDone: acc.sectionsDone,
-    activeSubquestion: acc.activeSubq,
-    activeRound: acc.activeRound,
     sourcesDiscovered: acc.sourcesDiscovered,
     elapsedSeconds,
     phase: acc.phase,
     activeSection: acc.activeSection,
     lastThought: acc.lastThought,
+    lastThoughtLeg: acc.lastThoughtLeg,
+    carriedSources: acc.carriedSources,
   };
 }

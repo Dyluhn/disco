@@ -12,7 +12,16 @@ attributes exist; a top-level import here would be circular.
 
 from __future__ import annotations
 
+import logging
+import sqlite3
 from collections.abc import Callable, Mapping
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ._retrieval_cache import RetrievalCache
+
+_LOG = logging.getLogger(__name__)
 
 
 class ProviderConfigError(RuntimeError):
@@ -23,6 +32,41 @@ class ProviderConfigError(RuntimeError):
     provider the user did not choose."""
 
 
+# The origin each keyed/hosted search provider is trusted at. Bundled keyless
+# adapters (the composite and its legs, arxiv, news, wikipedia, site_scoped)
+# resolve to "" and so need no operator approval — the security fact is that a
+# keyless leg sends a QUERY and no secret, which is exactly the posture the
+# removed `ddgs` tier had, and requiring an approval click before a fresh
+# install can search at all would break the keyless first run this tier exists
+# to provide. The moment a secret_ref is attached to one of them (see
+# `_needs_origin_approval`) it stops being that thing and is approved like any
+# other credentialed origin.
+_SEARCH_TRUST_ORIGINS: dict[str, str] = {
+    "tavily": "https://api.tavily.com",
+    "brave": "https://api.search.brave.com",
+    "semantic_scholar": "https://api.semanticscholar.org",
+    "exa": "https://mcp.exa.ai",
+    "parallel": "https://search.parallel.ai",
+}
+
+# Providers whose origin is third-party but whose default use carries no
+# credential. Approval is required only once a key is configured for them.
+_KEYLESS_TRUST_PROVIDERS = frozenset({"exa", "parallel"})
+
+
+def search_trust_origin(provider: str, base_url: str) -> str:
+    """The origin a search provider must be approved at, or "" if none applies."""
+    pinned = _SEARCH_TRUST_ORIGINS.get(provider)
+    if pinned is None:
+        return base_url
+    return base_url or pinned
+
+
+def _needs_origin_approval(provider: str, secret_ref: str) -> bool:
+    """Whether this provider's origin must be operator-approved before use."""
+    return provider not in _KEYLESS_TRUST_PROVIDERS or bool(secret_ref.strip())
+
+
 def _resolve_search_wiring(
     search_provider: str,
     search_base_url: str,
@@ -31,21 +75,21 @@ def _resolve_search_wiring(
     e: Mapping[str, str],
     approved: Callable[[str, str, str | None], bool],
 ) -> tuple[str, str, str]:
-    # B2 — pluggable discovery. Bundled (ddgs) by default so a fresh install works
-    # keyless; searxng self-hosts (base_url, empty -> env default); tavily/brave/
-    # semantic_scholar are resolved against an approved trust origin.
+    # B2 — pluggable discovery. The bundled keyless composite is the default so a
+    # fresh install works with no keys; searxng self-hosts (base_url, empty -> env
+    # default); tavily/brave/semantic_scholar are resolved against an approved
+    # trust origin; exa/parallel are keyless third-party origins that need one
+    # only once a key is attached.
     from .live import _env_url
 
     search_url = search_base_url or (
         _env_url(e, "DISCO_SEARXNG_URL") if search_provider == "searxng" else ""
     )
-    search_trust_url = {
-        "tavily": "https://api.tavily.com",
-        "brave": search_url or "https://api.search.brave.com",
-        "semantic_scholar": search_url or "https://api.semanticscholar.org",
-    }.get(search_provider, search_url)
-    if search_trust_url and not approved(
-        search_trust_url, f"search:{search_provider}", search_secret_ref
+    search_trust_url = search_trust_origin(search_provider, search_url)
+    if (
+        search_trust_url
+        and _needs_origin_approval(search_provider, search_secret_ref)
+        and not approved(search_trust_url, f"search:{search_provider}", search_secret_ref)
     ):
         raise ProviderConfigError(
             f"search provider {search_provider!r} origin {search_trust_url!r} is not an "
@@ -84,8 +128,37 @@ def _resolve_extraction_wiring(
     return extraction_provider, extraction_url, extraction_api_key
 
 
+def build_retrieval_cache(data_dir: str) -> RetrievalCache | None:
+    """The shared retrieval cache for this data dir, or None when there isn't one.
+
+    A data dir is the only place the cache may live — it is what the container
+    entrypoint sets (``DISCO_DATA_DIR``, legacy ``PMX_DATA_DIR``) and the same
+    root the projects store uses. With none configured the providers run
+    uncached rather than inventing a directory in somebody's home, and an
+    unusable path degrades to uncached with a named warning rather than taking
+    the run down over a cache.
+    """
+    from ._retrieval_cache import CACHE_FILENAME, open_cache
+
+    if not data_dir.strip():
+        return None
+    path = Path(data_dir.strip()) / CACHE_FILENAME
+    try:
+        return open_cache(path)
+    except (OSError, sqlite3.Error) as exc:
+        _LOG.warning(
+            "retrieval cache unavailable at %s (%s: %s); running uncached",
+            path,
+            type(exc).__name__,
+            exc,
+        )
+        return None
+
+
 __all__ = [
     "ProviderConfigError",
     "_resolve_extraction_wiring",
     "_resolve_search_wiring",
+    "build_retrieval_cache",
+    "search_trust_origin",
 ]

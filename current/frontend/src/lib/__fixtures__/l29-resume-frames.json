@@ -1,0 +1,1645 @@
+{
+ "_provenance": "Verbatim events from the live L29 Stop-then-Resume proof (run 3), Firefox/Playwright on an isolated stack over a copy of the acceptance data dir. Nothing is hand-written or edited. The slice is seq 27..30 \u2014 the research_checkpoint, the PAUSED/'stopped' it lands with, the resume's own environment-reality message, and the RUNNING the resumed run opens with. Run 2's log carries the identical shape at seq 100/101/163 (live2/resume-events.json); its checkpoint is 339 KB, which is why the fixture is taken from the early-stopped run 3 instead.",
+ "captured_at": "2026-09-02T09:33Z",
+ "conversation_id": "conv_ba81a67608984d0d98db8fbdc48ab9c0",
+ "paused_seq": 28,
+ "observations_between_paused_and_running": 0,
+ "events": [
+  {
+   "id": "evt_b555f77b8a5748ad96d2a9dbb1afd18f",
+   "source": "agent",
+   "timestamp": "2026-09-02T09:33:21.023267Z",
+   "schema_version": 1,
+   "seq": 27,
+   "agent_view_id": null,
+   "meta": {},
+   "kind": "research_checkpoint",
+   "query": "What is the measured state of sodium-ion battery cycle life in 2026?",
+   "passages": [
+    {
+     "id": "6f2765_p0",
+     "source_url": "https://www.catl.com/en/news/6401.html",
+     "source_title": "Naxtra Battery Breakthrough & Dual-Power Architecture: CATL Pioneers the Multi-Power Era",
+     "text": "[ \u8fd4\u56de\u5217\u8868 ](https://www.catl.com/en/news/6401.html)\n# Naxtra Battery Breakthrough & Dual-Power Architecture: CATL Pioneers the Multi-Power Era\n2025-04-21\nOn April 21, 2025, CATL unveiled three groundbreaking EV battery products at its inaugural Super Tech Day: The Freevoy Dual-Power Battery, Naxtra - the world's first mass produced sodium-ion battery, and the second-generation Shenxing Superfast Charging Battery, as well as an integrated 24V start/stop Naxtra battery for heavy-duty trucks. These revolutionary innovations break through technological boundaries, and officially lead the industry into the \"Multi-Power Era\".\nThe Freevoy Dual-Power Battery introduces a pioneering cross-chemistry system design that transcends the limitations of single technology paths to meet customized user needs. Naxtra, the world's first mass-producible sodium-ion battery, breaks resource constraints and strengthens the foundation of the new energy industry. The second-generation Shenxing Superfast Charging Battery, with its peak 12C charging rate, sets a new global record for superfast charging technology.\n**Naxtra Battery: Breaking Performance Limits, Powering the Future of Energy**\nCATL's Naxtra Battery breaks through the performance boundaries of the material itself, achieving the mass production of sodium-ion batteries for the first time. With sodium's inherent safety and abundant reserves, it efficiently reduces dependence on lithium resources and strengthens the foundation of new energy technologies, while promoting energy utilization from \"single resource dependence\" to \"energy freedom\".\nThe Naxtra Battery product line includes two categories: the Naxtra passenger EV Battery and the Naxtra 24V Heavy-Duty Truck Integrated Start-Stop Battery. Both are capable of performing across the full temperature range from -40\u00b0C to +70\u00b0C, redefining the extreme temperature limitations of batteries. The Naxtra passenger EV Battery retains 90% usable power at -40\u00b0C. In an extremely low state of charge with only 10% SOC remaining, the Naxtra passenger EV Battery can still achieve no significant power degradation at a temperature of -40 \u2103.\nCATL's Naxtra passenger EV Battery achieves an energy density of 175Wh/kg, the highest among sodium-ion batteries worldwide, and comparable to LFP batteries. It offers a 500-kilometer range and can achieve over 10,000 cycles, which significantly reduces maintenance costs. In terms of safety, the Naxtra Battery eliminates combustion-supporting factors at the material level, thus achieving a transformative breakthrough from \"passive defense\" to \"intrinsic safety\".\nCATL's Naxtra 24V Heavy-Duty Truck Integrated Start-Stop Battery boasts over 8 years of service life. It reduces total lifecycle costs by 61% compared to traditional lead-acid batteries. This product offers unique advantages including deep discharge across the entire capacity, one-click starting at -40\u00b0C, and the ability to start after being idle for a year. Compared to lead-acid batteries, it is more efficient, eco-friendly, and economical, driving commercial vehicles into a lead-free era where vehicle and battery ages as one.\nThis significant breakthrough made by CATL in the performance of sodium-ion batteries has filled the gap in the application of batteries in extremely cold environments. The performance breakthrough of sodium-ion batteries is a key development in the full scenario application of batteries. Thus, CATL's Freevoy Dual-Power Battery has emerged.\n**Freevoy Dual-Power Battery: Ushering in the Multi-Power Era of Energy****Freedom**\nThe Freevoy Dual-Power is a breakthrough product that deeply integrates CATL's dual-power architecture and self-forming anode technology. The dual-power architecture means that the battery pack has two powerful \u201cindependent energy zones,\u201d which enables five dual functions: dual high-voltage, dual low-voltage, dual structure, dual thermal management, and dual thermal runaway safety protection, ensuring the continuity, stability and safety of power output. This dual-power design and innovative integration of software will provide a more stable and reliable power supply for vehicles in the upcoming L3 and L4 autonomous driving era.\nThe \"self-forming anode technology\" represents a disruptive breakthrough at the atomic level, meaning the volumetric energy density of the battery can increase by 60%, and the gravimetric energy density by 50%. This also means that more power can be engineered into the same battery pack space, supporting longer range. This technology can be flexibly paired with various material systems, and when combined with NCM systems, the energy density can be increased to over 1000Wh/L.\nThe \"dual-electric range extension\" technology pioneered by the Freevoy Dual-Power Battery can intuitively regulate the allocation strategy of two energy zones based on the vehicle's driving status and users' driving habits. The main energy zone of the dual-power battery can use different chemical systems of battery cells according to the users' driving habits and scenarios, meeting daily driving needs; The extended range energy zone can adopt high specific energy self-forming anode technology to provide greater capacity to meet users' long-distance travel needs.\nThree dual-power solutions across different chemical systems were released on site:\nSodium-LFP Dual-Power Battery - It combines Naxtra with a LFP self-forming anode battery, fully utilizing the low-temperature performance of sodium-ion technology to provide users with an exceptional experience that excels in cold conditions while delivering extended range.\nLFP-LFP Dual-Power Battery \u2013 It pairs the second-generation Shenxing Superfast Charging Battery with the LFP self-forming anode battery. It easily achieves 1,000 kilometers of pure electric range in sedans with a 3-meter wheelbase, reducing the commuting cost per kilometer to as low as 0.1 yuan.\nNCM-LFP/NCM-NCM Dual-Power Battery \u2013 It integrates an NCM battery with an LFP self-forming anode battery, achieving a peak charging rate of 12C for the NCM battery in the main energy zone, providing over 1 megawatt of power. Even when SOC drops to 20%, it can still output over 600KW of power. The upgraded version of the product, consisting of an NCM battery and an NCM self-forming anode battery enables a capacity of over 180 kWh in sedans with a 3-meter wheelbase, breaking through the 1,500-kilometer pure electric range barrier.\nCATL's Freevoy Dual-Power EV Battery puts users' needs at its center, enabling different chemical systems to \"collaborate and complement each other\" and overcoming the technical bottlenecks that prevent single chemical systems from adapting to all scenarios. This makes customized battery performance possible across different cost segments and application scenarios.\nThe innovative architecture from dual power to multi power will not be limited to the field of electric passenger vehicles, but will also be implemented in all fields such as electric buses, heavy-duty trucks, airplanes, ships, as well as industrial and commercial applications, accelerating the industrialization of renewable energy across all scenarios. At the same time, it will also accelerate the application process of cutting-edge technologies such as solid-state batteries.\n**Second-Generation Shenxing Superfast Charging Battery: Setting New Global Records**\nCATL launched its Shenxing 4C Superfast Charging Battery in 2023, ushering in the era of superfast charging. The release of CATL's second-generation Shenxing Battery once again pushes the limits of superfast charging performance and sets new world records for charging rates.\nCATL's second-generation Shenxing Superfast Charging Battery is the world's first LFP battery featuring both an 800 km range and a 12C peak charging rate. With a peak charging power of 1.3 MW, it achieves 2.5 kilometers of range per second of charging, virtually eliminating the frustration of waiting. In low-temperature environments of -10\u00b0C, the second-generation Shenxing Superfast Charging Battery can charge from 5% to 80% SOC in just 15 minutes, 100% faster than the industry's highest current charging level.\nAdditionally, CATL's second-generation Shenxing Superfast Charging Battery provides robust power across all temperature ranges and states of charge. Even in a low-charge state, it maintains an output power of 830kW. In the demanding environment of -10\u00b0C with low charge, it can still easily meet the power requirements for 0-100km/h acceleration.\nThe essence of multi-power batteries means bringing power batteries from the \"parameter driven\" stage to the \"demand driven\" stage. CATL is constantly exploring and breaking through the boundaries of technology, ushering in the multi-power era in the new energy industry - a truly user centric era.\n[ Return to list ](javascript:history.back\\(-1\\))\n[ Previous\uff1a CATL Launches 10 New Choco-Swap Models with Automakers ](https://www.catl.com/en/news/6404.html)\n[ Next\uff1a CATL and Moutai Group Forge Cross-Industry Partnership to Drive New Energy Transition ](https://www.catl.com/en/news/6403.html)\nBy clicking on the button \u201cI accept\u201d or by further usage of this website you express consent with usage of cookies as well as you grant us the permission to collect and process personal data about your activity on this website. Such information are used to determine personalised content and display of the relevant advertisement on social networks and other websites. More information about personal data processing can be found on this link.  [Read More](https://www.catl.com/en/privacy)\nI Accept",
+     "char_start": null,
+     "char_end": null,
+     "corpus_id": null,
+     "published_at": null
+    },
+    {
+     "id": "2964f5_p0",
+     "source_url": "https://www.reddit.com/r/electricvehicles/comments/1pbbrdl/the_strange_time_compression_of_sodiumion_battery/",
+     "source_title": "The Strange Time Compression of Sodium-Ion Battery Development : r/electricvehicles",
+     "text": "[ Skip to main content ](https://www.reddit.com/r/electricvehicles/comments/1pbbrdl/the_strange_time_compression_of_sodiumion_battery/#main-content)\nThe Strange Time Compression of Sodium-Ion Battery Development : r/electricvehicles\n[ Go to electricvehicles  ](https://www.reddit.com/r/electricvehicles/)\n\u2022 9mo ago\n#  The Strange Time Compression of Sodium-Ion Battery Development \n[ ](https://www.reddit.com/r/electricvehicles/?f=flair_name%3A%22News%22)\n[ cleantechnica.com  ](https://cleantechnica.com/2025/11/30/the-strange-time-compression-of-sodium-ion-battery-development/)\nUpvote  149 Downvote  Go to comments  Share \n[ LillyDirect](https://www.reddit.com/user/LillyDirect/) \u2022\nGet a free Oura Ring sizing kit when you join LillyDirect\u00ae today.\nLearn More\nlillydirect.lilly.com \nCollapse video player \nSort by: \nBest\nOpen comment sort options\n* * Controversial\n#  Comments Section \n\u2022 [ 9mo ago ](https://www.reddit.com/r/electricvehicles/comments/1pbbrdl/comment/nrph3i2/)\nTop 1% Commenter\nCertainly is interesting to see if the cost + gravimetric density is comparable with . I do want to point out the article kept saying $.04/kwh for LFP and sodium, but they rounded wrong. It\u2019s closer to $40/kwh or $.04/wh so I\u2019m guessing they just confused wh/kwh. Obviously if LFP was $.04/kwh that means 80-100 kWh packs would cost only $3-4 in batteries lol. \nYou have to wonder what\u2019s going on with the Stanford analysis. Obviously they have some great minds there and I would think they\u2019d be making an honest evaluation of the situation, but if companies are blowing past those numbers/timelines in reality, why? \nHas a university in China done a comparable analysis? I\u2019ve seen this before where China seems to make announcements on advancements in tech right after similar breakthroughs are announced in other countries. Quantum and AI for example. I\u2019ve seen it speculated that China is basically \u201cholding back\u201d their real status when it comes to various technologies in order to make it appear they\u2019re always a step behind so they don\u2019t encourage investment to catch up before they can lead. It\u2019s also possible the Chinese companies are overstating their status to inflate a new technology and attract investment first, or maybe they\u2019ve really just made rapid breakthroughs that scientists are not aware of? \nSodium ion is pretty exciting for grid storage, it\u2019ll be interesting to see if volumetric performance improves or if it\u2019s just always a barrier to bigger batteries in cars. \n\u2022 [ 9mo ago ](https://www.reddit.com/r/electricvehicles/comments/1pbbrdl/comment/nrpinhs/)\n> I\u2019ve seen it speculated that China is basically \u201cholding back\u201d their real status when it comes to various technologies in order to make it appear they\u2019re always a step behind so they don\u2019t encourage investment to catch up before they can lead. It\u2019s also possible the Chinese companies are overstating their status to inflate a new technology and attract investment first, or maybe they\u2019ve really just made rapid breakthroughs that scientists are not aware of? \nLittle of this, little of that. How many quantum satellites does USA have in orbit? \nThe main reason why China was holding back is because of the status quo. China makes things, The world buys those things. Everyone wins. Then USA voted Trump and Republicans again. China can't hold back or maintain status quo. They have to defend themselves. China was willing to play nice and keep the status quo. USA said no. \nChina is not holding back anymore and they know exactly how important SIB and EVs and green tech is. \nUSA : \"Solar and batteries and EVs and nuclear power plants are too expensive and not profitable.\" \nChina : \"USA are dicks. How can we become energy independent?\" \nEngineers : \"We could make solar and batteries and EVs and nuclear power plants affordable and profitable?\" \nChina : \"Ya'll know how to do that?\" \nEngineers : \"Fuck no. But we like building and fixing things and solving problems. It's kinda what we do.\" \nChina : \"Do you like money too?\" \nEngineers : \"Yeah sure.\" \nThe Energy Export Race Has a Clear Winner: China<https://www.bloomberg.com/news/newsletters/2025-10-06/green-daily-newsletter-china-s-winning-the-energy-exports-race>\n> The US, which has positioned itself as a major fossil fuel exporter, sold $80 billion in oil and gas abroad through July, the last month with data available. China exported $120 billion in green technology over the same period. \nOh and helium. That is why China was holding back. \n\u2022 [ 9mo ago ](https://www.reddit.com/r/electricvehicles/comments/1pbbrdl/comment/nrpr3yu/)\nSeriously, if it was 0.04/kwh, I would just keep buying batteries to power my house instead of playing for electricty. \n\u2022 [ 9mo ago ](https://www.reddit.com/r/electricvehicles/comments/1pbbrdl/comment/nrqbfi9/)\nYeah, exciting when that time comes, just buy enough solar panel, and massive capacity batteries, especially in these time of ever increasing electricity price, the return cost gonna be faster, you finally say goodbye to expensive bill and becoming energy independent. \n2 more replies \n2 more replies \n[ 2 more replies  ](https://www.reddit.com/r/electricvehicles/comments/1pbbrdl/comment/nrqbfi9/?force-legacy-sct=1)\n[ More replies  ](https://www.reddit.com/r/electricvehicles/comments/1pbbrdl/comment/nrpr3yu/?force-legacy-sct=1)\n\u2022 [ 9mo ago ](https://www.reddit.com/r/electricvehicles/comments/1pbbrdl/comment/nrpu3du/) \u2022 Edited  9mo ago\nTop 1% Commenter\nUnlikely China, in particular, is holding back because there _are_ other, big players in the battery market besides China (LG, Panasonic, Samsung, SK). \nIf anyone is holding back then it's _everyone._ The investments in lithium ion battery factories has been made and they want to see those paid off and not just undercut by sodium ion. There's already a glut of lithium ion cells on the market as is and massively increasing cell production (lithium or sodium) would just exacerbate this situation. \nThat said, lithium ion has economies of scale and sodium ion hasn't yet (and ist still quite a few years out until it has)...so lithium ion will still be competitive with sodium ion for some time to come for storage. \n\u2022 [ 9mo ago ](https://www.reddit.com/r/electricvehicles/comments/1pbbrdl/comment/nrpy9qs/)\n> The investments in lithium ion battery factories has been made and they want to see those paid off and not just undercut by sodium ion. \nI have seen the claim that SIB manufacturing processes are similar enough to LFP that factory conversion is straightforward and inexpensive. \n8 more replies \n8 more replies \n[ 8 more replies  ](https://www.reddit.com/r/electricvehicles/comments/1pbbrdl/comment/nrpy9qs/?force-legacy-sct=1)\n1 more reply \n1 more reply \n[ 1 more reply  ](https://www.reddit.com/r/electricvehicles/comments/1pbbrdl/comment/nrpu3du/?force-legacy-sct=1)\n\u2022 [ 9mo ago ](https://www.reddit.com/r/electricvehicles/comments/1pbbrdl/comment/nrquqxw/)\nReading the source article that OP's article referenced, I think that the $.04/kwh figure was about how much electricity could \"cost\" using that battery technology plus renewables. It's still a pretty approximate number since latitude, weather, wind/solar mix, installation costs and transmission all play a part. \nThanks for the $40/kwh figure, that's more tangible. \n1 more reply \n1 more reply \n[ 1 more reply  ](https://www.reddit.com/r/electricvehicles/comments/1pbbrdl/comment/nrquqxw/?force-legacy-sct=1)\n\u2022 [ 9mo ago ](https://www.reddit.com/r/electricvehicles/comments/1pbbrdl/comment/nrr09vf/)\nGood catch on the kWh/Wh pricing. As to the Stanford study either follow the ancient wisdom \"He who pays the piper calls the tune\" or the more modern Deep Throat dictum \"Follow the money!\". I get a whiff of FF fumes. \nSodium ion is great for cheaper storage at grid scale, great for home storage since it won't burn down the homestead, and more than good enough for urban commuter/errand running cars. \n2 more replies \n2 more replies \n[ 2 more replies  ](https://www.reddit.com/r/electricvehicles/comments/1pbbrdl/comment/nrr09vf/?force-legacy-sct=1)\n3 more replies \n3 more replies \n[ 3 more replies  ](https://www.reddit.com/r/electricvehicles/comments/1pbbrdl/comment/nrph3i2/?force-legacy-sct=1)\n\u2022 [ 9mo ago ](https://www.reddit.com/r/electricvehicles/comments/1pbbrdl/comment/nrpa8d1/) \u2022 Edited  9mo ago\nSome tidbits, \n> If you are not aware of Chinese battery technical leadership, it is probably time to take notice. \n> HiNa was founded in 2017, and produced sodium-ion batteries from its GWh class factory since November 29, 2022. \n> HiNa introduced sodium-ion to the utility storage market, providing product for the world\u2019s largest sodium-ion storage system (a 100 MWh system) in Nanning, Hubei, in July of 2024, the first stage of a planned 200 MWh system. \n> The two largest players are not standing still. BYD broke ground on construction of a 30 GWh sodium-ion factory in January of 2024 and announced sodium-ion products. BYD announced its  product, a containerized battery energy storage unit for the utility storage market. BYD has claimed that its system could reduce costs below the HiNa system costs of $ 40/kWh. CATL\u2019s first-generation sodium-ion battery was released in 2021, at 160 Wh/kg. Late this year, CATL announced the Naxtra battery, with 175 Wh/kg and 10,000 cycle life, with operation from -40\u00b0C to 70\u00b0C and 90% energy retention at -40\u00b0C, offering 500 km (310 miles) of range. \n> While the warnings of other social media overheated claims are real, CATL Naxtra SIB, BYD MC Cube-SIB, and HiNa Haixing commercial battery announcements seem to contradict the slower rollout expectations. \n> By some measures, those products meet parity with LFP. \n> The pressure of sodium ion advancement is starting to be felt globally. In Korea, the warning is that battery companies there could lose market share if they do not adopt sodium technology. LG Chem has partnered with Sinopec to develop sodium-ion batteries. Korean battery companies rely heavily on . The BYD Blade battery system showed that LFP can compete with NMC in EVs because it can fit more densely in battery packs, making up some of the difference with NMC. Because of this, LFP batteries are now appearing in some western cars like the Chevy Bolt, and recently were in entry-level Teslas. Now SIB are expected to further undercut LFP prices, spurring the two largest battery companies to advance SIB and LG Chem to develop SIBs. \n> At the very least, the word in China is that in 2027, the cost of SIB is expected to move toward $40/kWh prices typical of LFP. Given lower SIB material and production costs, when that happens, no one will want to be left behind as the inevitable shift to SIB becomes evident. \n> Because of the nature of development and application needs at threshold requirements, advancements tend to go unnoticed until threshold requirements are reached. So it was with solar as well, where for many years, it was always too expensive. Then suddenly it wasn\u2019t. \n> The signs that ICE (internal combustion engine) parity is reached are apparent, with the auto companies waving a white flag, pleading for tariffs building an artificial moat against change that will inevitably succumb to progress. Their calls for protectionism belie years of EV development neglect. The changes already happening with solar, wind, and EVs will quicken pace and the cycle will repeat as further market adoption leads to further investment in cleantech. The economic excuses are melting away as the losers clinging to fossil fuels get left behind. \n\u2022 [ 9mo ago ](https://www.reddit.com/r/electricvehicles/comments/1pbbrdl/comment/nrqa0pa/)\nThose arent \"tidbits\" thats practically the entire article \n\u2022 [ 9mo ago ](https://www.reddit.com/r/electricvehicles/comments/1pbbrdl/comment/nrqjye4/)\nThat's because it's a good article. \n[ More replies  ](https://www.reddit.com/r/electricvehicles/comments/1pbbrdl/comment/nrqa0pa/?force-legacy-sct=1)\n\u2022 [ 9mo ago ](https://www.reddit.com/r/electricvehicles/comments/1pbbrdl/comment/nrpcn6o/)\n> BYD has claimed that its system could reduce costs below the HiNa system costs of $ 0.03/kWh \nWhat do they mean by system cost? Just 3 cent/kWh \n\u2022 [ 9mo ago ](https://www.reddit.com/r/electricvehicles/comments/1pbbrdl/comment/nrpf8td/)\nThey mean typo. \n$40/kWh \n10 more replies \n10 more replies \n[ 10 more replies  ](https://www.reddit.com/r/electricvehicles/comments/1pbbrdl/comment/nrpf8td/?force-legacy-sct=1)\n\u2022 [ 9mo ago ](https://www.reddit.com/r/electricvehicles/comments/1pbbrdl/comment/nrperkv/)\nTop 1% Commenter\nPossible kWh stored over lifetime of the battery? 100 kWh over 1000 cycles would be 100,000 kWh? Just guessing. \n5 more replies \n5 more replies \n[ 5 more replies  ](https://www.reddit.com/r/electricvehicles/comments/1pbbrdl/comment/nrpcn6o/?force-legacy-sct=1)\n[ More replies  ](https://www.reddit.com/r/electricvehicles/comments/1pbbrdl/comment/nrpa8d1/?force-legacy-sct=1)\n\u2022 [ 9mo ago ](https://www.reddit.com/r/electricvehicles/comments/1pbbrdl/comment/nrpyso6/)\nDon't sodium ion batteries have poor ? LFP is 95% as far as I'm aware. \nThis alone makes it a non starter for me. \n\u2022 [ 9mo ago ](https://www.reddit.com/r/electricvehicles/comments/1pbbrdl/comment/nrqokge/)\nIt's around 92% depending on who you talk to. Not sure what we are seeing in real world EVs yet. \n\u2022 [ 9mo ago ](https://www.reddit.com/r/electricvehicles/comments/1pbbrdl/comment/nrrxt5q/)\nHydrogen storage is 40% rte. (Roughly) so if you need cheap grid storage SIB would be potentially great. $20/kwh vs $40/kwh with LFP or other chemistries. \nOf course, there is vanadium flow or other options, but SIB might be the the next go to until something better comes along. \n3 more replies \n3 more replies \n[ 3 more replies  ](https://www.reddit.com/r/electricvehicles/comments/1pbbrdl/comment/nrrxt5q/?force-legacy-sct=1)\n[ More replies  ](https://www.reddit.com/r/electricvehicles/comments/1pbbrdl/comment/nrqokge/?force-legacy-sct=1)\n\u2022 [ 9mo ago ](https://www.reddit.com/r/electricvehicles/comments/1pbbrdl/comment/nrqgeh3/)\nDensity is the main issue with sodium ion batteries. RTE can be very good due to less need for temperature regulation. \n\u2022 [ 9mo ago ](https://www.reddit.com/r/electricvehicles/comments/1pbbrdl/comment/nrqjoc0/)\nI think the  is in the low 90s for RTE. But that's at room temp. The selling feature, IMHO, is locations that get cold weather. Reportedly it stays in the 90s while other technologies have a significant decline in the freezing cold. Since those packs are going into real cars soon I look forward to hearing how it tests out with the automotive press. \n7 more replies \n7 more replies \n[ 7 more replies  ](https://www.reddit.com/r/electricvehicles/comments/1pbbrdl/comment/nrpyso6/?force-legacy-sct=1)\n[ u/illinoislottery](https://www.reddit.com/user/illinoislottery/) \u2022\nAre you craving some fun? The Illinois r/Lottery can help with that! Get fired up and play our latest game, HotWins\u00ae, with new draws every 4 minutes! Grab your friends and see if you can play it at a bar near you. \nLearn More\nillinoislottery.com \nCollapse video player \n\u2022 [ 9mo ago ](https://www.reddit.com/r/electricvehicles/comments/1pbbrdl/comment/nrpz9qd/)\nLast time this came up, there were many comments claiming SIB would never work in cars because the voltage range is greater than that used by current automobile electric motors. (There's a pun hiding in there somewhere...) \nPlausible? Or will engineers simply design SIB cars to use voltage converters or different electric motors? \n\u2022 [ 9mo ago ](https://www.reddit.com/r/electricvehicles/comments/1pbbrdl/comment/nrqlxz5/)\nNon issue for EV consumers I think. Also keep in mind that China has already made dual chem batteries. Half is SIB and the other half LFP. \nHere's the curves for NMC and LFP. Keep in mind that we managed OK with NMC.<https://assets-global.website-files.com/63af9bfd3fcbb0c45f45649d/64094dcc313f7e48d72cc530_blog_fig1.png>\nHere's another that includes SIB.<https://www.batterydesign.",
+     "char_start": null,
+     "char_end": null,
+     "corpus_id": null,
+     "published_at": null
+    },
+    {
+     "id": "c78122_p2",
+     "source_url": "https://newatlas.com/energy/natron-sodium-ion-battery-production-startt/",
+     "source_title": "Lithium-free sodium batteries exit the lab and enter US production",
+     "text": "Lithium-free sodium batteries exit the lab and enter US production \nBlue has become Natron Energy's signature color owing to the patented Prussian Blue electrons it uses for the fast, frequent transfer of sodium ions that underpin its claims of 10 times lithium-ion's cycling speeds and a 50,000-cycle lifespan \nNatron Energy\nView 3 Images\n1/3\nBlue has become Natron Energy's signature color owing to the patented Prussian Blue electrons it uses for the fast, frequent transfer of sodium ions that underpin its claims of 10 times lithium-ion's cycling speeds and a 50,000-cycle lifespan \nNatron Energy\n2/3\nNatron has begun production at its Holland, Michigan facility\nNatron Energy\n3/3\nNatron is targeting industrial backup power applications with. products like the BlueRack 250 battery cabinet, designed to scale from a kilowatt to multi megawatts \nNatron Energy\n[View gallery - 3 images](https://newatlas.com/energy/natron-sodium-ion-battery-production-startt/#gallery:1)\nTwo years ago, sodium-ion battery pioneer Natron Energy was busy [preparing its specially formulated sodium batteries](https://newatlas.com/energy/natron-sodium-ion-battery-production/?itm_source=newatlas&itm_medium=article-body) for mass production. The company slipped a little past its 2023 kickoff plans, but it didn't fall too far behind as far as mass battery production goes. It officially commenced production of its rapid-charging, long-life lithium-free sodium batteries this week, bringing to market an intriguing new alternative in the energy storage game. \nNot only is sodium somewhere between 500 to 1,000 times more abundant than lithium on the planet we call Earth, sourcing it doesn't necessitate the same type of earth-scarring extraction. Even moving beyond the sodium vs lithium surname comparison, Natron says its sodium-ion batteries are made entirely from abundantly available commodity materials that also include aluminum, iron and manganese. \nFurthermore, the materials for Natron's sodium-ion chemistry can be procured through a reliable US-based domestic supply chain free from geopolitical disruption. The same cannot be said for common lithium-ion materials like cobalt and nickel. \nSodium-ion tech has received heightened interest in recent years as a more reliable, potentially [cheaper](https://newatlas.com/sodium-ion-battery-cheaper-lithium/51682/?itm_source=newatlas&itm_medium=article-body) energy storage medium. While its energy density lags behind lithium-ion, advantages such as faster cycling, longer lifespan and safer, non-flammable end use have made sodium-ion an attractive alternative, especially for stationary uses like data center and EV charger backup storage. \nFounded in 2013, Natron has been one of the pioneers in this new wave of sodium-ion research and innovation. And while most sodium-ion designs remain in the laboratory, Natron has switched on one of the first major production operations globally. It celebrated the official production kick-off earlier this week with a ribbon-cutting ceremony at its Holland, Michigan manufacturing facility, calling it the first-ever commercial-scale production of sodium-ion batteries in the US. \n\"Sodium-ion batteries offer a unique alternative to lithium-ion, with higher power, faster recharge, longer lifecycle and a completely safe and stable chemistry,\" Natron founder and co-CEO Colin Wessells said at the event. \"The electrification of our economy is dependent on the development and production of new, innovative energy storage solutions. We at Natron are proud to deliver such a battery without the use of conflict minerals or materials with questionable environmental impacts.\" \nNatron has begun production at its Holland, Michigan facility\nNatron Energy\nNatron says its batteries charge and discharge at rates 10 times faster than lithium-ion, a level of immediate charge/discharge capability that makes the batteries a prime contender for the ups and downs of backup power storage. Also helping in that use case is an estimated lifespan of 50,000 cycles. \nWe haven't seen a weight-based energy density figure from Natron itself, but a 2022 article from put its sodium-ion batteries at 70 Wh/kg, around the very bottom of the sodium-ion energy density scale. That aligns well with the company's stationary-only business plan, as sodium-ion batteries being pursued for potential mobility use have more than double that density. CATL showed a [160 Wh/kg sodium-ion battery](https://newatlas.com/energy/chinese-giant-catl-commercial-salt-based-battery/?itm_source=newatlas&itm_medium=article-body) in 2021 and has plans to increase that density over 200 Wh/kg to better meet the needs of electric vehicles. \nNatron's plans call for the Holland facility to crank production up to 600 megawatts annually at full tilt, serving as a model for future gigawatt-scale facilities. In the two years since we last looked at Natron's plans, AI has grown a [whole lot more power-hungry](https://newatlas.com/technology/elon-musk-ai/?itm_source=newatlas&itm_medium=article-body) so it's not surprising the company's initial target is AI data storage centers, where it's fast-cycling batteries could become an essential power management tool. It plans to begin the first deliveries in June. \nNatron intends to expand its focus to other industrial power markets in the future, mentioning EV fast-charging and telecommunications as targets. \nSource: [Natron](https://natron.energy/company/news)\n[View gallery - 3 images](https://newatlas.com/energy/natron-sodium-ion-battery-production-startt/#gallery:1)\n## Tags\n[Energy](https://newatlas.com/energy/)[Sodium battery](https://newatlas.com/tag/sodium-battery/)[Battery Technology](https://newatlas.com/tag/battery-technology/)[Energy](https://newatlas.com/tag/energy/)[Batteries](https://newatlas.com/tag/batteries/)\n  * [ Facebook ](https://www.facebook.com/dialog/share?app_id=38456013908&display=popup&href=https%3A%2F%2Fnewatlas.com%2Fenergy%2Fnatron-sodium-ion-battery-production-startt%2F)\n  * [ Twitter ](https://twitter.com/intent/tweet?url=https%3A%2F%2Fnewatlas.com%2Fenergy%2Fnatron-sodium-ion-battery-production-startt%2F&text=Lithium-free%20sodium%20batteries%20exit%20the%20lab%20and%20enter%20US%20production%20)\n  * [ LinkedIn ](https://www.linkedin.com/shareArticle?url=https%3A%2F%2Fnewatlas.com%2Fenergy%2Fnatron-sodium-ion-battery-production-startt%2F&mini=true&title=Lithium-free%20sodium%20batteries%20exit%20the%20lab%20and%20enter%20US%20production%20&summary=Two%20years%20ago%2C%20sodium-ion%20battery%20pioneer%20Natron%20Energy%20was%20busy%20preparing%20its%20specially%20formulated%20sodium%20batteries%20for%20mass%20production.%20The%20company%20slipped%20a%20little%20past%20its%202023%20kickoff%20plans%2C%20but%20it%20didn%27t%20fall%20too%20far%20behind%20as%20far%20as%20mass%20battery%20production%20goes.%20It%20officially%20commenced%20production%20of%20its%20rapid-charging%2C%20long-life%20lithium-free%20sodium%20batteries%20this%20week%2C%20bringing%20to%20market%20an%20intriguing%20new%20alternative%20in%20the%20energy%20storage%20game.&source=New%20Atlas)\n  * [ Reddit ](https://www.reddit.com/submit?url=canonicalUrl=https%3A%2F%2Fnewatlas.com%2Fenergy%2Fnatron-sodium-ion-battery-production-startt%2F)\n  * [ Flipboard ](https://share.flipboard.com/bookmarklet/popout?v=2&title=Lithium-free%20sodium%20batteries%20exit%20the%20lab%20and%20enter%20US%20production%20&url=https%3A%2F%2Fnewatlas.com%2Fenergy%2Fnatron-sodium-ion-battery-production-startt%2F)\n  * Email",
+     "char_start": null,
+     "char_end": null,
+     "corpus_id": null,
+     "published_at": null
+    },
+    {
+     "id": "4e7fc1_p0",
+     "source_url": "https://www.energy-storage.news/natron-energy-starts-manufacturing-50000-cycle-life-sodium-ion-batteries-at-michigan-factory/",
+     "source_title": "Natron Energy starts commercial-scale sodium-ion manufacturing",
+     "text": "[Skip to content](https://www.energy-storage.news/natron-energy-starts-manufacturing-50000-cycle-life-sodium-ion-batteries-at-michigan-factory/#content)\nPremium\n# Natron Energy starts manufacturing \u201850,000+ cycle-life\u2019 sodium-ion batteries at Michigan factory\nApril 30, 2024\nLinkedIn \nTwitter \nReddit \nFacebook \nEmail \nThe Natron factory in Michigan, which formerly hosted lithium-ion production lines. Image: Businesswire\nNatron Energy has started commercial-scale operations at its sodium-ion battery manufacturing plant in Michigan, US, and elaborated on how its technology compares to lithium-ion in answers provided to _Energy-Storage.news._\nAt full capacity the facility will produce 600MW of Natron\u2019s \u2018Prussian Blue\u2019 electrode batteries primarily for the stationary energy storage system (ESS) market annually. At first it will mainly ship products to data centres starting in June, before expanding to industrial mobility, EV fast charging and [telecommunications](https://www.energy-storage.news/telecommunications-battery-storage-networks-use-case/), among others. \nThat is why it has given its production capacity as MW power figure and not the MWh capacity that battery manufacturers typically do, as it is primarily targeting power-intensive applications, a spokesperson said. \nThe Michigan facility was originally a lithium-ion factory belonging to technology firm Clarios but Natron Energy has refitted the site to manufacture its sodium-ion battery technology, following a [strategic partnership between the two companies in May 2022](https://www.energy-storage.news/sodium-ion-upstream-action-natron-and-altris-to-launch-new-manufacturing-facilities-in-2023/). \nThis article requires Premium SubscriptionBasic (FREE) Subscription\nAlready a subscriber? [Sign In](https://www.energy-storage.news/natron-energy-starts-manufacturing-50000-cycle-life-sodium-ion-batteries-at-michigan-factory/)\n## Try Premium for just $1\n  * Full premium access for the first month at only $1\n  * Converts to an annual rate after 30 days unless cancelled\n  * Cancel anytime during the trial period",
+     "char_start": null,
+     "char_end": null,
+     "corpus_id": null,
+     "published_at": null
+    },
+    {
+     "id": "fd9822_p2",
+     "source_url": "https://4xsolar.com/blogs/news/sodium-ion-batteries-the-next-big-thing-in-off-grid-power",
+     "source_title": "Sodium-Ion Batteries: The Next Big Thing in Off-Grid Power?\n \u2013 4XSolar",
+     "text": "CATL has also unveiled a **Freevoy Dual-Power architecture** that combines sodium-ion and LFP cells in a single pack \u2014 sodium handles cold-weather and cost-efficiency, lithium handles peak energy density. It's a smart hedge on both chemistries simultaneously.\n### HiNa Battery\n[HiNa Battery held a commercial-era launch event in October 2025](https://hinabattery.com/en/index.php?id=77), declaring four sodium-ion product lines in mass production and sales \u2014 including their Haixing commercial vehicle solution with:\n  * Energy density: **165+ Wh/kg**\n  * Full charge in **20\u201325 minutes**\n  * Cycle life with constant fast charging: **8,000+ cycles**\n  * Operating range: **\u221240\u00b0C to +45\u00b0C**",
+     "char_start": null,
+     "char_end": null,
+     "corpus_id": null,
+     "published_at": null
+    },
+    {
+     "id": "5d4303_p0",
+     "source_url": "https://www.businesswire.com/news/home/20241126958525/en/Sodium-ion-Batteries-Materials-Technologies-and-Global-Markets-to-2029-with-CATL-HiNa-Battery-Technology-Faradion-Tiamat-and-Natron-Energy-Dominating-the-%24838.5-Million-Industry---ResearchAndMarkets.com",
+     "source_title": "Sodium-ion Batteries Materials, Technologies and Global Markets to 2029 with CATL, HiNa Battery Technology, Faradion, Tiamat, and Natron Energy Dominating the $838.5 Million Industry - ResearchAndMarkets.com",
+     "text": "Nov 26, 2024 1:12 PM Eastern Standard Time\n# \nSodium-ion Batteries Materials, Technologies and Global Markets to 2029 with CATL, HiNa Battery Technology, Faradion, Tiamat, and Natron Energy Dominating the $838.5 Million Industry - ResearchAndMarkets.com\nShare\nDUBLIN--([BUSINESS WIRE](https://www.businesswire.com))--The [\"Sodium-ion Batteries: Materials, Technologies and Global Markets to 2029\"](https://www.researchandmarkets.com/reports/6008101/sodium-ion-batteries-materials-technologies?utm_source=BW&utm_medium=PressRelease&utm_code=49rwb2&utm_campaign=2013517+-+Sodium-ion+Batteries+Materials%2c+Technologies+and+Global+Markets+to+2029+with+CATL%2c+HiNa+Battery+Technology%2c+Faradion%2c+Tiamat%2c+and+Natron+Energy+Dominating+the+%24838.5+Million+Industry&utm_exec=chdomspi) report has been added to **ResearchAndMarkets.com's** offering.\nThe Sodium-ion Batteries Market was valued at USD 318 million in 2024, and is expected to reach USD 838.5 million by 2029, rising at a CAGR of 18.60%. \nSIBs are becoming an alternative to lithium-ion batteries (LIBs) due to lower prices and easy access to many raw materials. As sodium is the sixth most common element in the world, its use significantly lowers the supply chain risks and geopolitical concerns that come with lithium. During charging and discharging cycles, sodium-ions move back and forth between the anode and the cathode, making these batteries work like LIBs. \nSIBs work best for grid storage and other large-scale energy storage systems that need to be cost-effective and have a long cycle life. They can also be used in EVs as an alternative to LIBs due to their better safety features, like thermal runaway reactions. SIBs are still being studied to improve efficiency, cycle life, and energy density. As the technology improves, these batteries will be a big part of many end-user industries. \n**Market Dynamics and Growth Factors**\nPerhaps the main reason that the global SIB market is growing is environmental concerns. Sodium extraction has a lower environmental impact than lithium mining. The growing demand for energy storage solutions to support renewable energy integration drives interest in SIBs, which provide low-cost and long-lasting storage capabilities. \nAnother driving factor is the growing emphasis of automakers on increasing the driving range of EVs while achieving improved energy density. Many battery manufacturers are exploring innovative battery chemistries to reach these goals. The market is also growing because of government policies and incentives that encourage the use of renewable energy and creating a circular economy. \n**Report Scope**\nThe report analyzes the product types of sodium-ion batteries (SIBs), including sodium-sulfur batteries, sodium-salt batteries (zebra batteries), and sodium-oxygen (sodium-air) batteries. Components used in the manufacture of sodium-ion batteries include electrodes, electrolyte materials, encapsulation materials, packaging, separators, and other materials, such as binders, end plates and terminal assemblies. The electrodes include anodes and cathodes. Anodes may consist of hard carbon and metal/alloy-based materials or other materials, such as ceramic and Prussian blue analogs. Cathodes include inorganic compounds, metal-organic compounds, and organic compounds. \nThis study also covers end-uses for the global SIB market, including grid-level/battery storage, electric vehicles (EVs), commercial power backup, industrial power backup, and others, such as residential power backup, military and space, and portable devices. The report also analyzes market dynamics, emerging technologies and developments, upcoming trends and the competitive landscape, and look at patents related to SIBs. \nIt also includes a chapter of environmental, social and governance (ESG) initiatives and concludes by providing company profiles of the market leaders. The report also includes a regional analysis of North America, Europe, the Asia-Pacific, and the rest of the world (RoW) region, which in this report consists of South America, the Middle East and Africa. In this report, 2023 is considered as the base year, estimates are provided for 2024, and market values are forecast for five years until 2029. All market values are expressed in $ millions. \n**The report includes:**\n  * 61 data tables and 49 additional tables \n  * An analysis of the global markets for sodium-ion batteries, including materials and technologies \n  * Analyses of global market trends, with market revenue data from 2023, estimates for 2024, forecasts for 2025, and projected CAGRs through 2029 \n  * Estimate of the current market size and revenue prospects of the global market, along with a market share analysis by material type, technology, application, end user, and region \n  * Facts and figures pertaining to the market dynamics, technological advances, regulations, and the influence of macroeconomic factors driving future demand and innovation \n  * A Porter's Five Forces analysis, a global supply chain analysis and a SWOT analysis \n  * Overview of sustainability trends and ESG developments, with emphasis on consumer attitudes, ESG score analysis, and the ESG practices of leading companies \n  * A look at recent patent grants related to sodium-ion batteries \n  * Competitive intelligence, including company shares, strategic alliances, M&A activity and venture fundings outlook \n  * Company profiles of major players within the Sodium-ion Batteries industry, including Contemporary Amperex Technology Co. Ltd. (CATL), HiNa Battery Technology Co. Ltd., Faradion, Tiamat, and Natron Energy Inc.",
+     "char_start": null,
+     "char_end": null,
+     "corpus_id": null,
+     "published_at": null
+    },
+    {
+     "id": "feced5_p1",
+     "source_url": "https://www.zvepow.com/news/sodium-battery-cycle-life-warranty",
+     "source_title": "Sodium-Ion Battery Cycle Life: 6000 Cycles & 5-Year Warranty Explained",
+     "text": "# Sodium-Ion Battery Cycle Life: 8000 Cycles & 5-Year Warranty Explained\ntime\uff1a \n2026-08-18\ncategory\uff1a \n[ Company News ](https://www.zvepow.com/news/3.html)\nWhen evaluating battery storage investments, cycle life is the single most important metric for calculating return on investment. ZVEPOW sodium-ion batteries \u2014 built on 170Ah/2.85V polyanionic prismatic cells delivering 484.5Wh rated energy \u2014 are rated at**8,000+ cycles at 90% depth of discharge (DOD)****6,000+ cycles at 100% DOD** , with a 15-year design life and 5-year warranty. As a sodium[battery manufacturer](https://www.zvepow.com/news/sodium-ion-battery-manufacturers)\n## What 8,000 Cycles Really Means\nA \"cycle\" is one complete charge and discharge. The 8,000-cycle rating means a battery can be charged and discharged 8,000 times (at 90% DOD) before its capacity drops to**80% of the original rated capacity**\nFor a[commercial energy storage](https://www.zvepow.com/news/sodium-ion-battery-commercial-storage)**21.9 years of daily operation**. Even accounting for gradual degradation, the total energy delivered over this period far exceeds the initial investment when paired with[peak shaving or solar-plus-storage ROI](https://www.zvepow.com/news/commercial-energy-storage-roi)[lifecycle cost analysis](https://www.zvepow.com/news/energy-storage-lifecycle-cost)\n**ZVEPOW Dual Cycle Ratings:**\n  * **8,000 cycles @ 90% DOD**\n  * **6,000 cycles @ 100% DOD**",
+     "char_start": null,
+     "char_end": null,
+     "corpus_id": null,
+     "published_at": null
+    },
+    {
+     "id": "1afa9f_p1",
+     "source_url": "https://www.sciopen.com/article/10.1007/s12274-023-5793-9",
+     "source_title": "Insight into the influence of ether and ester electrolytes on the sodium-ion transportation kinetics for hard carbon",
+     "text": "Advanced Search\nArticle \nArticle Link\nCite\nCollect\nCollect\nShare\n[Submit Manuscript](https://mc03.manuscriptcentral.com/nanores)\nShow Outline \nOutline\nAbstract\nGraphical Abstract\nKeywords\nElectronic Supplementary Material\nReferences\nShow full outline \nHide outline \nResearch Article\n# Insight into the influence of ether and ester electrolytes on the sodium-ion transportation kinetics for hard carbon\nXiuping Yin, Zhaomin Wang, Yang Liu, Zhixiu Lu, Hongli Long, Tao Liu, Jiujun Zhang, \nCollege of Sciences & Institute for Sustainable Energy, Shanghai University, Shanghai 200444, China\nShow Author Information  Hide Author Information \n## Abstract\nThe electrochemical performance of hard carbon (HC) materials is closely related to the electrolyte used in the sodium ion batteries (SIBs). Conventional electrolytes carbonate (EC) demonstrates low initial Columbic efficiency (ICE) and poor rate performance, which is one of the main bottlenecks that limits the practical application of HCs. Ether electrolyte (diglyme) was reported to improve the rate performance of HCs. Nevertheless, the underlying mechanism for the excellent rate capability is still lack of in-depth study. In this work, the differences of sodium-ion diffusion between ether and carbonate-base electrolytes in HCs are analyzed layer by layer. Firstly, when sodium-ions are diffused in electrolyte, the diffusion coefficient of sodium-ion in ether electrolyte is about 2.5 times higher than that in ester electrolytes by molecular dynamics (MD) simulation and experimental characterization. Furthermore, when the solvated sodium-ions are diffused into the solid electrolyte interphase (SEI) interface and the HCs material, the enhanced charge transfer kinetics (thin SEI layer (4.6 vs. 12 nm) and low _R_ SEI (1.5 vs. 24 \u03a9)) at the SEI combined with low desolvation energy (0.248 eV) are responsible for high-rate performance and good cycling stability of HC in ether electrolyte. Therefore, high diffusion coefficient, low desolvation energy, and good interface are the intrinsic reasons for enhanced rate performance in ether electrolyte, which also has guiding significance for the design of other high-rate electrolytes.\n## Graphical Abstract\nView original image Download original image\nThe intrinsic mechanisms for the enhanced rate performance in ether-based electrolytes are systematically revealed through experiments and theoretical calculations. Significantly enhanced Na+ diffusion coefficient, thinner and lower impedance solid electrolyte interphase (SEI), and low desolvation energy in ether electrolytes ensure high rate capability for hard carbon (HC).\n## Keywords\nsodium-ion batterieshard carbon (HC)ether electrolytedesolvation energytransportation kinetics\nNo abstract is available for this article. Click the button above to view the PDF directly.\n## Electronic Supplementary Material\nDownload File(s)\n12274_2023_5793_MOESM1_ESM.pdf (1.1 MB)\n## References\n[1]\nWang, T. Y.; Su, D. W.; Shanmukaraj, D.; Rojo, T.; Armand, M.; Wang, G. X. Electrode materials for sodium-ion batteries: Considerations on crystal structures and sodium storage mechanisms. _Electrochem. Energy Rev._ **2018** , _1_ , 200\u2013237.\n[2]\nWang, X.; Roy, S.; Shi, Q. H.; Li, Y.; Zhao, Y. F.; Zhang, J. J. Progress in and application prospects of advanced and cost-effective iron (Fe)-based cathode materials for sodium-ion batteries. _J. Mater. Chem. A_ **2021** , _9_ , 1938\u20131969.\n[3]\nLi, Y.; Shi, Q. H.; Yin, X. P.; Wang, J.; Wang, J.; Zhao, Y. F.; Zhang, J. J. Construction nasicon-type NaTi2(PO4)3 nanoshell on the surface of P2-type Na0.67Co0.2Mn0.8O2 cathode for superior room/low-temperature sodium storage. _Chem. Eng. J._ **2020** , _402_ , 126181.\n[4]\nWang, X.; Yin, X. P.; Feng, X. C.; Li, Y.; Dong, X. P.; Shi, Q. H.; Zhao, Y. F.; Zhang, J. J. Rational design of Na0.67Ni0.2Co0.2Mn0.6O2 microsphere cathode material for stable and low temperature sodium ion storage. _Chem. Eng. J._ **2022** , _428_ , 130990.\n[5]\nYin, X. P.; Sarkar, S.; Shi, S. S.; Huang, Q. A.; Zhao, H. B.; Yan, L. M.; Zhao, Y. F.; Zhang, J. J. Recent progress in advanced organic electrode materials for sodium-ion batteries: Synthesis, mechanisms, challenges and perspectives. _Adv. Funct. Mater._ **2020** , _30_ , 1908445.\n[6]\nShen, L. Y.; Shi, S. S.; Roy, S.; Yin, X. P.; Liu, W. B.; Zhao, Y. F. Recent advances and optimization strategies on the electrolytes for hard carbon and p-based sodium-ion batteries. _Adv. Funct. Mater._ **2021** , _31_ , 2006066.\n[7]\nChen, D. Q.; Zhang, W.; Luo, K. Y.; Song, Y.; Zhong, Y. J.; Liu, Y. X.; Wang, G. K.; Zhong, B. H.; Wu, Z. G.; Guo, X. D. Hard carbon for sodium storage: Mechanism and optimization strategies toward commercialization. _Energy Environ. Sci._ **2021** , _14_ , 2244\u20132262.\n[8]\nBai, P. X.; He, Y. W.; Zou, X. X.; Zhao, X. X.; Xiong, P. X.; Xu, Y. H. Elucidation of the sodium-storage mechanism in hard carbons. _Adv. Energy Mater._ **2018** , _8_ , 1703217.\n[9]\nHuang, Y. X.; Zhao, L. Z.; Li, L.; Xie, M.; Wu, F.; Chen, R. J. Electrolytes and electrolyte/electrode interfaces in sodium-ion batteries: From scientific research to practical application. _Adv. Mater._ **2019** , _31_ , 1808393.\n[10]\nWang, P.; Guo, Y. J.; Chen, W. P.; Duan, H.; Ye, H.; Yao, H. R.; Yin, Y. X.; Cao, F. F. Self-supported hard carbon anode from fungus-treated basswood towards sodium-ion batteries. _Nano Res._ **2023** , _16_ , 3832\u20133838.\n[11]\nYin, B.; Liang, S. Q.; Yu, D. D.; Cheng, B. S.; Egun, I. L.; Lin, J. D.; Xie, X. F.; Shao, H. Z.; He, H. Y.; Pan, A. Q. Increasing accessible subsurface to improving rate capability and cycling stability of sodium-ion batteries. _Adv. Mater._ **2021** , _33_ , 2100808.\n[12]\nChen, X. Y.; Tian, J. Y.; Li, P.; Fang, Y. L.; Fang, Y. J.; Liang, X. M.; Feng, J, W.; Dong, J.; Ai, X. P.; Yang, H. Y.; Cao, Y. An overall understanding of sodium storage behaviors in hard carbons by an \u201cadsorption-intercalation/filling\u201d hybrid mechanism. _Adv. Energy Mater._ **2022** , _12_ , 2200886.\n[13]\nAu, H.; Alptekin, H.; Jensen, A. C. S.; Olsson, E.; O\u2019Keefe, C. A.; Smith, T.; Crespo-Ribadeneyra, M.; Headen, T. F.; Grey, C. P.; Cai, Q. et al. A revised mechanistic model for sodium insertion in hard carbons. _Energy Environ. Sci._ **2020** , _13_ , 3469\u20133479.\n[14]\nSun, F.; Wang, H.; Qu, Z. B.; Wang, K. F.; Wang, L. J.; Gao, J. H.; Gao, J. M.; Liu, S. Q.; Lu, Y. F. Carboxyl-dominant oxygen rich carbon for improved sodium ion storage: Synergistic enhancement of adsorption and intercalation mechanisms. _Adv. Energy Mater._ **2021** , _11_ , 2002981.\n[15]\nSong, M. H.; Song, Q.; Zhang, T.; Huo, X. M.; Lin, Z. Z.; Hu, Z. W.; Dong, L.; Jin, T.; Shen, C.; Xie, K. Y. Growing curly graphene layer boosts hard carbon with superior sodium-ion storage. _Nano_ _Res_., in press, https://doi.org/10.1007/s12274-023-5539-8.\n[16]\nKim, H.; Hong, J.; Yoon, G.; Kim, H.; Park, K. Y.; Park, M. S.; Yoon, W. S.; Kang, K. Sodium intercalation chemistry in graphite. _Energy Environ. Sci._ **2015** , _8_ , 2963\u20132969.\n[17]\nHe, Y. W.; Bai, P. X.; Gao, S. Y.; Xu, Y. H. Marriage of an ether-based electrolyte with hard carbon anodes creates superior sodium-ion batteries with high mass loading. _ACS Appl. Mater. Interfaces_ **2018** , _10_ , 41380\u201341388.\n[18]\nGong, D. C.; Wei, C. Y.; Liang, Z. W.; Tang, Y. B. Recent advances on sodium-ion batteries and sodium dual-ion batteries: State-of-the-art Na+ host anode materials. _Small Sci._ **2021** , _1_ , 2100014.\n[19]\nLi, K. K.; Zhang, J.; Lin, D. M.; Wang, D. W.; Li, B. H.; Lv, W.; Sun, S.; He, Y. B.; Kang, F. Y.; Yang, Q. H. et al. Evolution of the electrochemical interface in sodium ion batteries with ether electrolytes. _Nat. Commun._ **2019** , _10_ , 725.\n[20]\nZhang, J.; Han, J. W.; Yun, Q. B.; Li, Q.; Long, Y.; Ling, G. W.; Zhang, C.; Yang, Q. H. What is the right carbon for practical anode in alkali metal ion batteries. _Small Sci._ **2021** , _1_ , 2000063.\n[21]\nZhen, Y. C.; Sa, R. J.; Zhou, K. Q.; Ding, L. Y.; Chen, Y.; Mathur, S.; Hong, Z. S. Breaking the limitation of sodium-ion storage for nanostructured carbon anode by engineering desolvation barrier with neat electrolytes. _Nano Energy_ **2020** , _74_ , 104895.\n[22]\nDong, R. Q.; Zheng, L. M.; Bai, Y.; Ni, Q.; Li, Y.; Wu, F.; Ren, H. X.; Wu, C. Elucidating the mechanism of fast Na storage kinetics in ether electrolytes for hard carbon anodes. _Adv. Mater._ **2021** , _33_ , 2008810.\n[23]\nXia, J. L.; Yan, D.; Guo, L. P.; Dong, X. L.; Li, W. C.; Lu, A. H. Hard carbon nanosheets with uniform ultramicropores and accessible functional groups showing high realistic capacity and superior rate performance for sodium-ion storage. _Adv. Mater._ **2020** , _32_ , 2000447.\n[24]\nYin, X. P.; Zhao, Y. F.; Wang, X.; Feng, X. C.; Lu, Z. X.; Li, Y.; Long, H. L.; Wang, J.; Ning, J. Y.; Zhang, J. J. Modulating the graphitic domains of hard carbons derived from mixed pitch and resin to achieve high rate and stable sodium storage. _Small_ **2022** , _18_ , 2105568.\n[25]\nYin, X. P.; Lu, Z. X.; Wang, J.; Feng, X. C.; Roy, S.; Liu, X. S.; Yang, Y.; Zhao, Y. F.; Zhang, J. J. Enabling fast Na+ transfer kinetics in the whole-voltage-region of hard-carbon anodes for ultrahigh-rate sodium storage. _Adv. Mater._ **2022** , _34_ , 2109282.\n[26]\nDai, H. D.; Zeng, Z. Z.; Yang, X. P.; Jiang, M. J. H.; Wang, Y.; Huang, Q. H.; Liu, L. L.; Fu, L. J.; Zhang, P.; Wu, Y. P. Superior potassium storage behavior of hard carbon facilitated by ether-based electrolyte. _Carbon_ **2021** , _179_ , 60\u201367.\n[27]\nSeh, Z. W.; Sun, J.; Sun, Y. M.; Cui, Y. A highly reversible room-temperature sodium metal anode. _ACS Cent. Sci._ **2015** , _1_ , 449\u2013455.\n[28]\nMa, M. Y.; Cai, H. R.; Xu, C. L.; Huang, R. Z.; Wang, S. R.; Pan, H. L.; Hu, Y. S. Engineering solid electrolyte interface at nano-scale for high-performance hard carbon in sodium-ion batteries. _Adv. Funct. Mater._ **2021** , _31_ , 2100278.\n[29]\nPan, J.; Sun, Y. Y.; Yan, Y. H.; Feng, L.; Zhang, Y. F.; Lin, A. M.; Huang, F. Q.; Yang, J. Revisit electrolyte chemistry of hard carbon in ether for Na storage. _JACS Au_ **2021** , _1_ , 1208\u20131216.\n[30]\nPlimpton, S. Fast parallel algorithms for short-range molecular dynamic. _J. Comp. Phys._ **1995** , _117_ , 1\u201319.\n[31]\nDoherty, B.; Zhong, X.; Gathiaka, S.; Li, B.; Acevedo, O. Revisiting OPLS force field parameters for ionic liquid simulations. _J. Chem. Theory Comput._ **2017** , _13_ , 6131\u20136145.\n[32]\nSambasivarao, S. V.; Acevedo, O. Development of OPLS-AA force field parameters for 68 unique ionic liquids. _J. Chem. Theory Comput._ **2009** , _5_ , 1038\u20131050.\n[33]\nNos\u00e9, S. A unified formulation of the constant temperature molecular dynamics methods. _J. Chem. Phys._ **1984** , _81_ , 511\u2013519.\n[34]\nHoover, W. G. Canonical dynamics: Equilibrium phase-space distributions. _Phys. Rev. A_ **1985** , _31_ , 1695\u20131697.\n[35]\nWang, Z. J.; Wang, Y. Y.; Li, B. H.; Bouwer, J. C.; Davey, K.; Lu, J.; Guo, Z. P. Non-flammable ester electrolyte with boosted stability against Li for high-performance Li metal batteries. _Angew. Chem., Int. Ed._ **2022** , _61_ , e202206682.\n[36]\nWang, K. F.; Sun, F.; Wang, H.; Wu, D. Y.; Chao, Y. X.; Gao, J. H.; Zhao, G. B. Altering thermal transformation pathway to create closed pores in coal-derived hard carbon and boosting of Na+ plateau storage for high-performance sodium-ion battery and sodium-ion capacitor. _Adv. Funct. Mater._ **2022** , _32_ , 2203725.\n[37]\nZhang, J.; Wang, D. W.; Lv, W.; Zhang, S. W.; Liang, Q. H.; Zheng, D. Q.; Kang, F. Y.; Yang, Q. H. Achieving superb sodium storage performance on carbon anodes through an ether-derived solid electrolyte interphase. _Energy Environ. Sci._ **2017** , _10_ , 370\u2013376.\n[38]\nKang, M. L.; Wu, Y. Y.; Huang, X.; Zhou, K. Q.; Huang, Z. G.; Hong, Z. S. Engineering of a TiO2 anode toward a record high initial Coulombic efficiency enabling high-performance low-temperature Na-ion hybrid capacitors. _J. Mater. Chem. A_ **2018** , _6_ , 22840\u201322850.\n[39]\nPan, K. H.; Lu, H. Y.; Zhong, F. P.; Ai, X. P.; Yang, H. X.; Cao, Y. L. Understanding the electrochemical compatibility and reaction mechanism on Na metal and hard carbon anodes of PC-based electrolytes for sodium-ion batteries. _ACS Appl. Mater. Interfaces_ **2018** , _10_ , 39651\u201339660.\n[40]\nHuang, J. Q.; Guo, X. Y.; Du, X. Q.; Lin, X. Y.; Huang, J. Q.; Tan, H.; Zhu, Y.; Zhang, B. Nanostructures of solid electrolyte interphases and their consequences for microsized Sn anodes in sodium ion batteries. _Energy Environ. Sci._ **2019** , _12_ , 1550\u20131557.\n[41]\nZhang, W. G.; Zeng, F. H.; Huang, H. J.; Yu, Y.; Xu, M. Q.; Xing, L. D.; Li, W. S. Enhanced interphasial stability of hard carbon for sodium-ion battery via film-forming electrolyte additive. _Nano Res._ **2023** , _16_ , 3823\u20133831.\n[42]\nWu, Z. R.; Zou, J.; Shabanian, S.; Golovin, K.; Liu, J. The roles of electrolyte chemistry in hard carbon anode for potassium-ion batteries. _Chem. Eng. J._ **2022** , _427_ , 130972.\n[43]\nLee, M. E.; Lee, S. M.; Choi, J.; Jang, D.; Lee, S.; Jin, H. J.; Yun, Y. S. Electrolyte-dependent sodium ion transport behaviors in hard carbon anode. _Small_ **2020** , _16_ , 2001053.\n[44]\nGachot, G.; Grugeon, S.; Armand, M.; Pilard, S.; Guenot, P.; Tarascon, J. M.; Laruelle, S. Deciphering the multi-step degradation mechanisms of carbonate-based electrolyte in Li batteries. _J. Power Sources_ **2008** , _178_ , 409\u2013421.\n[45]\nEshetu, G. G.; Diemant, T.; Hekmatfar, M.; Grugeon, S.; Behm, R. J.; Laruelle, S.; Armand, M.; Passerini, S. Impact of the electrolyte salt anion on the solid electrolyte interphase formation in sodium ion batteries. _Nano Energy_ **2019** , _55_ , 327\u2013340.\n[46]\nLe, P. M. L.; Vo, T. D.; Pan, H. L.; Jin, Y.; He, Y.; Cao, X.; Nguyen, H. V.; Engelhard, M. H.; Wang, C. M.; Xiao, J. et al. Excellent cycling stability of sodium anode enabled by a stable solid electrolyte interphase formed in ether-based electrolytes. _Adv. Funct. Mater._ **2020** , _30_ , 2001151.\n[47]\nLi, K.; Galle Kankanamge, S. R.; Weldeghiorghis, T. K.; Jorn, R.; Kuroda, D. G.; Kumar, R. Predicting ion association in sodium electrolytes: A transferrable model for investigating glymes. _J. Phy. Chem. C_ **2018** , _122_ , 4747\u20134756.\n[Nano Research](https://www.sciopen.com/journal/1998-0124)\n[Volume 16 Issue 8,August 2023](https://www.sciopen.com/journal/join_journal/stage_page?stage=5&id=1400285564990251009&issueIndex=1681581963646418946&issn=1998-0124)\nPages 10922-10930\nDOI: [10.1007/s12274-023",
+     "char_start": null,
+     "char_end": null,
+     "corpus_id": null,
+     "published_at": null
+    },
+    {
+     "id": "fe27f6_p0",
+     "source_url": "https://www.preprints.org/manuscript/202605.1343",
+     "source_title": "Beyond Half-Cells: Interfaces, Operando Chemistry, and Failure Pathways in Practical Lithium- and Sodium-Ion Batteries[v1] | Preprints.org",
+     "text": "Download PDF \nVersion 1\nSubmitted:\n19 May 2026\nPosted: \n20 May 2026\nYou are already at the latest version \nSubscription\nNotify me about updates to this article or when a peer-reviewed version is published.\nPreprint\nReview\nThis version is not peer-reviewed.\n# \nBeyond Half-Cells: Interfaces, Operando Chemistry, and Failure Pathways in Practical Lithium- and Sodium-Ion Batteries\n* , *\n* , *\nShow more \nVersion 1\nSubmitted:\n19 May 2026\nPosted: \n20 May 2026\nYou are already at the latest version \n###### \nAbstract\nHalf-cell testing has long served as a convenient and informative platform for screening electrode materials in lithium-ion and sodium-ion batteries. However, the electrochemical performance obtained under such simplified conditions often fails to predict the behavior of practical full cells, where electrode balancing, mass loading, areal capacity, electrolyte amount, pressure, and interfacial instability impose much stricter constraints. In this review, we examine the limitations of half-cell-based assessment and discuss why moving beyond idealized configurations is essential for the realistic evaluation of advanced battery materials. Particular attention is given to the dynamic nature of interfacial chemistry, including the formation and evolution of the solid electrolyte interphase and cathode electrolyte interphase, as well as to the role of electrolyte decomposition, additives, binders, and electrode formulation in determining cell performance. We further analyze how operando and in situ characterization techniques, including X-ray-based methods, vibrational spectroscopies, microscopy, and electrochemical impedance analysis, are reshaping the understanding of structural evolution, interphase development, and degradation processes under realistic operating conditions. Major failure pathways in practical cells, such as capacity fade, impedance growth, mechanical degradation, electrolyte consumption, gas evolution, transition-metal dissolution, and surface reconstruction, are critically discussed for both lithium-ion and sodium-ion systems. Representative electrode chemistries are considered to illustrate how promising material-level properties do not always translate into practical-cell success. Finally, we address the metrics that matter for practical relevance, summarize current mitigation strategies, and highlight validation criteria and testing workflows that can better connect academic materials research with realistic battery development. By integrating interfacial chemistry, operando insight, and practical performance criteria, this review aims to provide a more translational framework for the design and assessment of next-generation lithium-ion and sodium-ion batteries.\n######  Keywords: \nlithium-ion batteries\n; \nsodium-ion batteries\n; \nhalf-cell testing\n; \nfull-cell validation\n; \ninterfacial chemistry\n; \noperando characterization\n; \ndegradation mechanisms\n; \npractical battery metrics\n###### \nSubject: \n[Chemistry and Materials Science](https://www.preprints.org/subject/browse/chemistry-and-materials-science)[Materials Science and Technology](https://www.preprints.org/subject/browse/chemistry-and-materials-science/materials-science-and-technology)\n##  1. Introduction\nRechargeable lithium-ion and sodium-ion batteries continue to attract intense research interest because of their central role in portable electronics, electric mobility, and stationary energy storage. Over the past decade, major efforts have focused on developing electrode materials with improved capacity, rate capability, and cycling stability. However, despite these advances, the electrochemical evaluation of new materials is still dominated by half-cell configurations, which often provide an incomplete picture of practical battery behavior [[1](https://www.preprints.org/manuscript/202605.1343#B1-preprints-214404),[2](https://www.preprints.org/manuscript/202605.1343#B2-preprints-214404),[3](https://www.preprints.org/manuscript/202605.1343#B3-preprints-214404),[4](https://www.preprints.org/manuscript/202605.1343#B4-preprints-214404)]. As the field moves toward more application-relevant metrics, increasing attention is being paid to the gap between half-cell results and full-cell performance, especially in relation to finite alkali inventory, electrode balancing, interfacial instability, and degradation under realistic operating conditions [[2](https://www.preprints.org/manuscript/202605.1343#B2-preprints-214404),[3](https://www.preprints.org/manuscript/202605.1343#B3-preprints-214404)]. In this context, a more critical and translational assessment of advanced electrode materials is needed, particularly for lithium-ion and sodium-ion systems, where differences in interphase formation, irreversible losses, and practical cell constraints strongly influence real device performance [[1](https://www.preprints.org/manuscript/202605.1343#B1-preprints-214404),[2](https://www.preprints.org/manuscript/202605.1343#B2-preprints-214404),[3](https://www.preprints.org/manuscript/202605.1343#B3-preprints-214404),[4](https://www.preprints.org/manuscript/202605.1343#B4-preprints-214404)].\n###  1.1. Half-Cells and Practical Batteries\nHalf-cells have long served as the standard platform for the early evaluation of electrode materials in rechargeable batteries. In lithium-ion research, the active material is commonly tested against metallic lithium, whereas in sodium-ion studies an analogous configuration is frequently assembled using metallic sodium. This approach remains highly valuable because it simplifies electrochemical analysis, facilitates rapid materials screening, and enables the identification of intrinsic redox behavior, reaction mechanisms, and preliminary rate trends [[2](https://www.preprints.org/manuscript/202605.1343#B2-preprints-214404),[3](https://www.preprints.org/manuscript/202605.1343#B3-preprints-214404)].\nNevertheless, the very features that make half-cells convenient also limit their predictive value for practical batteries. The use of an alkali-metal counter electrode provides an effectively unlimited ion reservoir and removes the need for realistic electrode balancing, thereby masking constraints that dominate full-cell performance, including finite cyclable ion inventory, irreversible capacity losses, N/P ratio, mass loading, areal capacity, and electrolyte availability [[2](https://www.preprints.org/manuscript/202605.1343#B2-preprints-214404)]. As a result, materials that exhibit excellent specific capacity or cycling stability in half-cells often perform much less favorably when transferred to practical full-cell configurations. Recent analyses of full-cell design parameters have underscored that many academic studies still overlook factors that are decisive at the device level, such as electrode loading, electrolyte amount, and balanced cell design [[2](https://www.preprints.org/manuscript/202605.1343#B2-preprints-214404)].\nThis discrepancy is further amplified by interfacial chemistry. In practical cells, the evolution of the solid electrolyte interphase and cathode electrolyte interphase, electrolyte decomposition, and electrode cross-talk occur in a dynamically coupled environment that is only partially reproduced in simplified half-cell architectures. For this reason, interfaces are increasingly recognized as central determinants of efficiency, degradation, and long-term stability, and recent perspectives have emphasized the need for operando characterization under realistic conditions rather than exclusive reliance on idealized model systems [[3](https://www.preprints.org/manuscript/202605.1343#B3-preprints-214404)].\nThese considerations are especially relevant for sodium-ion batteries. Although lithium-ion and sodium-ion systems share common electrochemical principles, they differ in ion size, solvation, interphase chemistry, and initial coulombic efficiency, all of which influence their behavior in practical cells [[1](https://www.preprints.org/manuscript/202605.1343#B1-preprints-214404),[4](https://www.preprints.org/manuscript/202605.1343#B4-preprints-214404)]. In particular, hard carbon has emerged as the leading anode candidate for sodium-ion batteries, but its practical implementation remains strongly affected by irreversible sodium consumption and the challenge of achieving high initial coulombic efficiency [[1](https://www.preprints.org/manuscript/202605.1343#B1-preprints-214404)]. At the same time, sodium-ion batteries are attracting growing attention as a lower-cost and more resource-abundant complement to lithium-ion technology, which further strengthens the need for realistic and comparable evaluation criteria [[4](https://www.preprints.org/manuscript/202605.1343#B4-preprints-214404)].\nAccordingly, a central premise of this review is that the transition from half-cells to practical batteries is not merely a matter of scale, but a shift in the governing electrochemical framework. Parameters that may appear secondary in proof-of-concept studies become decisive in full cells, where interfacial instability, limited ion inventory, electrolyte depletion, and degradation pathways directly determine performance, durability, and safety [[2](https://www.preprints.org/manuscript/202605.1343#B2-preprints-214404),[3](https://www.preprints.org/manuscript/202605.1343#B3-preprints-214404)]. A critical assessment of advanced battery materials must therefore move beyond half-cell data alone and incorporate practical metrics, realistic cell configurations, and operando insight [[2](https://www.preprints.org/manuscript/202605.1343#B2-preprints-214404),[3](https://www.preprints.org/manuscript/202605.1343#B3-preprints-214404)].\n###  1.2. Li-Ion and Na-Ion Systems\nLithium-ion and sodium-ion batteries share the same broad conceptual foundation as rechargeable rocking-chair systems in which alkali ions shuttle reversibly between the positive and negative electrodes during charge and discharge [[4](https://www.preprints.org/manuscript/202605.1343#B4-preprints-214404),[5](https://www.preprints.org/manuscript/202605.1343#B5-preprints-214404)]. In both cases, cell performance is governed by the coupled interplay among electrode chemistry, electrolyte formulation, interfacial stability, transport kinetics, and cell design. This common framework explains why many of the analytical tools, materials-design strategies, and failure-analysis approaches developed for lithium-ion batteries can also inform sodium-ion research. At the same time, direct extrapolation between both technologies is not always appropriate, because the physicochemical differences between Li+ and Na+ affect redox behavior, structural evolution, interphase formation, and practical cell engineering [[1](https://www.preprints.org/manuscript/202605.1343#B1-preprints-214404),[4](https://www.preprints.org/manuscript/202605.1343#B4-preprints-214404)].\nAmong the most important distinctions is the larger ionic radius and higher atomic mass of sodium relative to lithium, which generally translate into less favorable gravimetric energy density and, in many host structures, slower diffusion kinetics or more pronounced structural strain [[4](https://www.preprints.org/manuscript/202605.1343#B4-preprints-214404),[6](https://www.preprints.org/manuscript/202605.1343#B6-preprints-214404)]. These differences help explain why sodium-ion batteries, although highly attractive from the standpoint of elemental abundance and projected cost, are often considered more suitable for stationary storage and cost-sensitive applications than for high-energy mobile applications currently dominated by lithium-ion technology [[5](https://www.preprints.org/manuscript/202605.1343#B5-preprints-214404),[6](https://www.preprints.org/manuscript/202605.1343#B6-preprints-214404)]. Recent techno-economic analyses have nevertheless shown that sodium-ion batteries may become competitive in selected application spaces, particularly if energy density continues to improve and supply-chain volatility for lithium-based systems remains significant [[5](https://www.preprints.org/manuscript/202605.1343#B5-preprints-214404)].\nDespite these differences, sodium-ion batteries are not simply lower-energy analogues of lithium-ion systems. Rather, they constitute a distinct technology family with their own materials landscape, interfacial chemistry, and practical constraints. In lithium-ion batteries, graphite remains the dominant commercial anode because of its low operating potential, high reversibility, and mature manufacturing base. In contrast, graphite is generally unsuitable for conventional sodium-ion storage under standard electrolyte conditions, and hard carbon has consequently emerged as the leading anode candidate for sodium-ion batteries [[1](https://www.preprints.org/manuscript/202605.1343#B1-preprints-214404)]. This distinction alone has major implications for practical cell design, because the initial coulombic efficiency, interphase chemistry, and sodium inventory management of hard carbon-based cells differ substantially from those of graphite-based lithium-ion cells [[1](https://www.preprints.org/manuscript/202605.1343#B1-preprints-214404)].\nDifferences are also evident on the cathode side. Lithium-ion technology has reached a high level of maturity through layered oxides, olivine phosphates, and related compounds, whereas sodium-ion systems currently rely more heavily on layered oxides, polyanionic frameworks, and Prussian blue analogs, each with its own trade-offs in voltage, structural stability, defect chemistry, and moisture sensitivity [[4](https://www.preprints.org/manuscript/202605.1343#B4-preprints-214404),[6](https://www.preprints.org/manuscript/202605.1343#B6-preprints-214404)]. As a result, sodium-ion batteries must often be discussed not only in terms of lower raw-material cost and improved resource availability, but also in terms of different electrode-level limitations and degradation pathways that can alter the practical meaning of otherwise familiar metrics such as specific capacity, rate capability, or cycle retention [[4](https://www.preprints.org/manuscript/202605.1343#B4-preprints-214404),[6](https://www.preprints.org/manuscript/202605.1343#B6-preprints-214404)].\nAnother major difference concerns interfacial chemistry. Because sodium ions exhibit distinct solvation behavior and interact differently with carbonaceous and inorganic host structures, the composition, structure, and mechanical stability of the interphases formed in sodium-ion cells may differ significantly from those found in lithium-ion batteries [[4](https://www.preprints.org/manuscript/202605.1343#B4-preprints-214404)]. These differences are especially important in practical cells, where finite ion inventory and irreversible sodium consumption during early cycles can strongly penalize full-cell performance. For this reason, initial coulombic efficiency is often an even more critical descriptor in sodium-ion batteries than in conventional lithium-ion systems, particularly when hard carbon is used as the negative electrode [[1](https://www.preprints.org/manuscript/202605.1343#B1-preprints-214404)].\nA comparative discussion of lithium-ion and sodium-ion systems is therefore useful not because the two technologies are interchangeable, but because their similarities and differences sharpen the criteria for practical evaluation. Lithium-ion batteries provide the benchmark for mature rechargeable battery performance, manufacturing know-how, and practical testing protocols, whereas sodium-ion batteries offer an increasingly relevant platform for examining how cost, abundance, interphase chemistry, and realistic application targets reshape battery design priorities [[5](https://www.preprints.org/manuscript/202605.1343#B5-preprints-214404),[6](https://www.preprints.org/manuscript/202605.1343#B6-preprints-214404)]. In this review, both systems are considered in parallel to highlight where established lithium-ion evaluati",
+     "char_start": null,
+     "char_end": null,
+     "corpus_id": null,
+     "published_at": null
+    }
+   ],
+   "all_hits": [
+    {
+     "url": "https://www.catl.com/en/news/6401.html",
+     "title": "Naxtra Battery Breakthrough & Dual-Power Architecture: CATL ...",
+     "snippet": "CATL's Naxtra passenger EV Battery achieves an energy density of 175Wh/kg, the highest among sodium-ion batteries worldwide, and comparable to LFP batteries. It offers a 500-kilometer range and can achieve over 10,000 cycles, which significantly reduces maintenance costs.",
+     "source_engine": "yandex+google",
+     "rank": 0,
+     "published_at": null,
+     "status": "ok"
+    },
+    {
+     "url": "https://en.wikipedia.org/wiki/Sodium-ion_battery",
+     "title": "Sodium-ion battery - Wikipedia",
+     "snippet": "A sodium-ion battery (NIB, SIB, or Na-ion battery) is a rechargeable battery that uses sodium ions (Na+) as charge carriers.10Ah Sodium ion Pouch Cell from Rechargion. Rechargion Energy[7][8] has developed 10 Ah capacity cells and achieved 10,000-cycle life.",
+     "source_engine": "yandex+google",
+     "rank": 1,
+     "published_at": null,
+     "status": "ok"
+    },
+    {
+     "url": "https://discoveryalert.com.au/sodium-ion-battery-storage-2025-trends/",
+     "title": "CATL Sodium-Ion Battery Upgrade: Performance & Market",
+     "snippet": "Dec 29, 2025 \u00b7 The cycle life performance targeting 8,000-10,000 cycles with 80% capacity retention establishes sodium-ion as a legitimate competitor to ...",
+     "source_engine": "yandex+google",
+     "rank": 2,
+     "published_at": null,
+     "status": "error"
+    },
+    {
+     "url": "https://www.reddit.com/r/electricvehicles/comments/1pbbrdl/the_strange_time_compression_of_sodiumion_battery/",
+     "title": "The Strange Time Compression of Sodium-Ion Battery ... - Reddit",
+     "snippet": "Dec 1, 2025 \u00b7 CATL announced the Naxtra battery, with 175 Wh/kg and 10,000 cycle life, with operation from -40\u00b0C to 70\u00b0C and 90% energy retention at -40\u00b0C, ...",
+     "source_engine": "google",
+     "rank": 3,
+     "published_at": null,
+     "status": "ok"
+    },
+    {
+     "url": "https://cleantechnica.com/2025/11/30/the-strange-time-compression-of-sodium-ion-battery-development/",
+     "title": "The Strange Time Compression of Sodium-Ion Battery ...",
+     "snippet": "Nov 30, 2025 \u00b7 CATL announced the Naxtra battery, with 175 Wh/kg and 10,000 cycle life, with operation from -40\u00b0C to 70\u00b0C and 90% energy retention at -40\u00b0C, ...",
+     "source_engine": "google",
+     "rank": 4,
+     "published_at": null,
+     "status": null
+    },
+    {
+     "url": "https://www.facebook.com/groups/148932752281422/posts/2241646593010017/",
+     "title": "CATL has officially revealed detailed specs for its new sodium ...",
+     "snippet": "Dec 15, 2025 \u00b7 current sodium- ion battery cycle life stands at 3,000 cycles (80% capacity retention), still trailing LFP batteries (5,000+ cycles).",
+     "source_engine": "google",
+     "rank": 5,
+     "published_at": null,
+     "status": null
+    },
+    {
+     "url": "https://electrek.co/2026/07/16/catl-sodium-ion-15000-cycle-grid-storage/",
+     "title": "CATL's 30-year sodium-ion battery takes over grid storage",
+     "snippet": "Jul 16, 2026 \u00b7 The system is rated for 15,000 cycles, which CATL translates to a 25-to-30-year service life at a 70% state-of-health threshold. For comparison, ...",
+     "source_engine": "google",
+     "rank": 6,
+     "published_at": null,
+     "status": null
+    },
+    {
+     "url": "https://www.large-battery.com/blog/catl-sodium-ion-vs-lithium-ion-batteries/",
+     "title": "CATL Sodium-Ion vs Lithium-Ion Batteries in 2026",
+     "snippet": "CATL is accelerating sodium-ion deployment in 2026. Compare sodium-ion and lithium-ion batteries by cost, safety, energy density, low-temperature performance, BMS requirements and applications.",
+     "source_engine": "yandex",
+     "rank": 7,
+     "published_at": null,
+     "status": null
+    },
+    {
+     "url": "https://www.energy-storage.news/natron-energy-starts-manufacturing-50000-cycle-life-sodium-ion-batteries-at-michigan-factory/",
+     "title": "Natron Energy starts commercial-scale sodium-ion manufacturing",
+     "snippet": "Natron Energy starts manufacturing \u201850,000+ cycle-life\u2019 sodium-ion batteries at Michigan factory. By Cameron Murray. April 30, 2024.Natron Energy Michigan Gigafactory sodium-ion batteries. The Natron factory in Michigan, which formerly hosted lithium-ion production lines.",
+     "source_engine": "yandex+google",
+     "rank": 0,
+     "published_at": null,
+     "status": "ok"
+    },
+    {
+     "url": "https://newatlas.com/energy/natron-sodium-ion-battery-production-startt/",
+     "title": "Lithium-free sodium batteries exit the lab and enter US production",
+     "snippet": "Blue has become Natron Energy's signature color owing to the patented Prussian Blue electrons it uses for the fast, frequent transfer of sodium ions that underpin its claims of 10 times lithium-ion's cycling speeds and a 50,000-cycle lifespan.",
+     "source_engine": "yandex+google",
+     "rank": 1,
+     "published_at": null,
+     "status": "ok"
+    },
+    {
+     "url": "https://www.researchgate.net/publication/363516484_Assessment_of_the_first_commercial_Prussian_blue_based_sodium-ion_battery",
+     "title": "Assessment of the first commercial Prussian blue based ...",
+     "snippet": "Aug 8, 2026 \u00b7 Natron's sodium-ion battery cells possess performance characteristics between lithium-ion batteries and supercapacitors in terms of power ...",
+     "source_engine": "google",
+     "rank": 2,
+     "published_at": null,
+     "status": "blocked"
+    },
+    {
+     "url": "https://natron.energy/our-technology",
+     "title": "Prussian blue - Natron Energy",
+     "snippet": "",
+     "source_engine": "google",
+     "rank": 3,
+     "published_at": null,
+     "status": "error"
+    },
+    {
+     "url": "https://sodiumbatteryhub.com/2024/08/21/us-sodium-battery-50k-cycle-milestone/",
+     "title": "U.S. Sodium-Ion Battery Plant Hits 50,000 Cycle Breakthrough",
+     "snippet": "Aug 21, 2024 \u00b7 They use Prussian blue material for electrodes, They can sustain from 32 to 113 degrees Fahrenheit,",
+     "source_engine": "google",
+     "rank": 4,
+     "published_at": null,
+     "status": null
+    },
+    {
+     "url": "https://battery-tech.net/sodium-ion-battery-companies/",
+     "title": "Sodium-Ion Battery Companies - Battery-Tech Network",
+     "snippet": "Discover the leading sodium-ion battery companies. Learn about battery materials, performance challenges, and breakthrough developments powering grid support and electric mobility.",
+     "source_engine": "yandex",
+     "rank": 5,
+     "published_at": null,
+     "status": null
+    },
+    {
+     "url": "https://www.reddit.com/r/batteries/comments/1d1rgum/natron_begins_us_commercialscale_production_of/",
+     "title": "Natron begins US commercial-scale production of sodium-ion ...",
+     "snippet": "May 27, 2024 \u00b7 Sodium is a \"side grade\" to lithium, not a revolution. \u00b7 50,000 charge cycles \u00b7 Low energy density - about the same as lead-acid, suitable mainly ...",
+     "source_engine": "google",
+     "rank": 6,
+     "published_at": null,
+     "status": null
+    },
+    {
+     "url": "https://www.businesswire.com/news/home/20241126958525/en/Sodium-ion-Batteries-Materials-Technologies-and-Global-Markets-to-2029-with-CATL-HiNa-Battery-Technology-Faradion-Tiamat-and-Natron-Energy-Dominating-the-%24838.5-Million-Industry---ResearchAndMarkets.com",
+     "title": "Sodium-ion Batteries Materials, Technologies and Global Markets to...",
+     "snippet": "The Sodium-ion Batteries Market was valued at USD 318 million in 2024, and is expected to reach USD 838.5 million by 2029, rising at a CAGR of 18.60%.Market Restraints. Limited Cycle Life of Sodium-ion Batteries. Lower Energy Density than Lithium-ion Batteries.",
+     "source_engine": "yandex+google",
+     "rank": 0,
+     "published_at": null,
+     "status": "ok"
+    },
+    {
+     "url": "https://www.cell.com/cell-reports-physical-science/fulltext/S2666-3864(26)00229-8",
+     "title": "Cell teardown and characterization of a Hina commercial ...",
+     "snippet": "May 28, 2026 \u00b7 Table 1 provides an overview of the manufacturer's electrical specifications and selected postmortem analysis results for the sodium-ion cell.",
+     "source_engine": "google",
+     "rank": 1,
+     "published_at": null,
+     "status": "blocked"
+    },
+    {
+     "url": "https://4xsolar.com/blogs/news/sodium-ion-batteries-the-next-big-thing-in-off-grid-power",
+     "title": "Sodium-Ion Batteries: The Next Big Thing in Off-Grid Power? \u2013 4XSolar",
+     "snippet": "Sodium ions carry a +1 charge just like lithium, but they're physically larger \u2014 a sodium ion has an ionic radius of about 1.02 \u00c5 versus 0.76 \u00c5 for lithium, roughly 35% bigger. That size difference is the root cause of most of sodium-ion's tradeoffs.",
+     "source_engine": "yandex",
+     "rank": 2,
+     "published_at": null,
+     "status": "ok"
+    },
+    {
+     "url": "https://www.facebook.com/electrekco/posts/hinas-sodium-ion-battery-cells-showed-just-53-resistance-variation-across-120-un/1454425563389837/",
+     "title": "Hina's sodium-ion battery cells showed just 5.3% resistance ...",
+     "snippet": "Jun 22, 2026 \u00b7 The HiNa batteries had a cycle life of 4,500 cycles with 83% retention and a 2C charge rate, but even better sodium-ion batteries are on their ...",
+     "source_engine": "google",
+     "rank": 3,
+     "published_at": null,
+     "status": "ok"
+    },
+    {
+     "url": "https://sodiumbatteryhub.com/2025/04/10/top-6-sodium-ion-battery-companies-in-2025/",
+     "title": "Top 6 Sodium-Ion Battery Companies in 2025",
+     "snippet": "Apr 10, 2025 \u00b7 As of 2025, Faradion continues to advance its non-aqueous sodium-ion technology to meet the growing demand for sustainable energy storage ...",
+     "source_engine": "google",
+     "rank": 4,
+     "published_at": null,
+     "status": null
+    },
+    {
+     "url": "https://www.sciencedirect.com/science/article/pii/S2352484725005864",
+     "title": "Review Article Advancements in sodium-ion batteries technology",
+     "snippet": "Recent sodium-ion cathodes have achieved capacities of \u223c160 mAh g\u22121 and cycle lifetimes exceeding 1,000 cycles with > 90 % retention.",
+     "source_engine": "google",
+     "rank": 6,
+     "published_at": null,
+     "status": null
+    },
+    {
+     "url": "https://www.idtechex.com/en/research-report/sodium-ion-batteries-2025-2035-technology-players-markets-and-forecasts/1082",
+     "title": "Sodium-ion Batteries 2025-2035: Technology, Players, Markets ...",
+     "snippet": "In 2024, Na-ion batteries have advanced in both energy storage and EV applications, marked by several product launches and key operational milestones. HiNa ...",
+     "source_engine": "google",
+     "rank": 7,
+     "published_at": null,
+     "status": null
+    },
+    {
+     "url": "https://en.highstar.com/blog/sodium-ion-battery-life-cycles-scam-explained",
+     "title": "2,000 or 10,000 Cycles? The Sodium Ion Battery Life ... - Highstar",
+     "snippet": "Sodium Ion vs Lithium Ion: Cycle Life Comparison Let's put sodium ion cycle life in perspective by comparing it to lithium ion technology. This is where sodium ion batteries really start to shine, especially when you consider the cost factor.",
+     "source_engine": "yandex+google",
+     "rank": 0,
+     "published_at": null,
+     "status": "ok"
+    },
+    {
+     "url": "https://www.sciencedirect.com/science/article/pii/S1388248126000603",
+     "title": "Mechanism research of temperature and discharge rate effects ...",
+     "snippet": "This work studies the capacity capacity of \u2026 capacity retention rate of 89% maintained 80% capacity after 700 cycles in the assembled sodium-ion full battery",
+     "source_engine": "google",
+     "rank": 1,
+     "published_at": null,
+     "status": "blocked"
+    },
+    {
+     "url": "https://www.zvepow.com/news/sodium-battery-cycle-life-warranty",
+     "title": "Sodium-Ion Battery Cycle Life: 8000 Cycles & 5-Year Warranty ...",
+     "snippet": "Aug 18, 2026 \u00b7 Both ratings use 0.5P charge/discharge at 25\u00b0C with an end-of-life criterion of 80% capacity retention. At -20\u00b0C, capacity retention is \u226590% (\u2265 ...",
+     "source_engine": "google",
+     "rank": 2,
+     "published_at": null,
+     "status": "ok"
+    },
+    {
+     "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC9565332/",
+     "title": "Recent Progress and Perspective: Na Ion Batteries Used ... - PMC",
+     "snippet": "At \u221215 \u00b0C, with a high rate of 5 C, the system exhibited an 81% capacity retention after 1000 cycles. 84% retention capacity over 200 cycles at a 1 C rate.",
+     "source_engine": "google",
+     "rank": 3,
+     "published_at": null,
+     "status": "ok"
+    },
+    {
+     "url": "https://batteryruntime.com/en/guides/battery/sodium-ion-real-world/",
+     "title": "Na-ion in real life: lifespan, cold weather, and cost reality",
+     "snippet": "Manufacturers rate cycle life to 80% capacity retention.Cold weather. Battery capacity vs temperature comparison. At -20\u00b0C, Na-ion retains ~90% capacity while LFP drops to 60-70%.",
+     "source_engine": "yandex",
+     "rank": 4,
+     "published_at": null,
+     "status": null
+    },
+    {
+     "url": "https://www.batteryuniversity.com/article/bu-808-how-to-prolong-lithium-based-batteries/",
+     "title": "BU-808: How to Prolong Lithium-based Batteries",
+     "snippet": "Oct 11, 2023 \u00b7 Battery manufacturers often specify the cycle life of a battery with an 80 DoD. This is practical because batteries should retain some reserve ...",
+     "source_engine": "google",
+     "rank": 5,
+     "published_at": null,
+     "status": null
+    },
+    {
+     "url": "https://www.heavengreenenergy.com/glossary/cycle-life-battery",
+     "title": "Cycle Life Battery Meaning, Definition, Benefits & FAQs",
+     "snippet": "Jul 8, 2026 \u00b7 Temperature is maintained at 25\u00b0C plus or minus 2\u00b0C throughout the test. Cycle life ratings assume ideal 25\u00b0C conditions. Indian summer ...",
+     "source_engine": "google",
+     "rank": 6,
+     "published_at": null,
+     "status": null
+    },
+    {
+     "url": "https://www.hengda-engineering.com/news/ESS__Battery/Battery_Logic/How_to_read_battery_cycle_life_degradation_curves.html",
+     "title": "How to Read Battery Cycle Life Degradation Curves",
+     "snippet": "A battery cycle life degradation curve shows how battery performance changes as charge-discharge cycles accumulate. In most technical datasheets and test reports, the horizontal axis represents cycle count, while the vertical axis usually represents one of several key health indicators",
+     "source_engine": "yandex",
+     "rank": 7,
+     "published_at": null,
+     "status": null
+    },
+    {
+     "url": "https://pubs.rsc.org/sc/article/17/27/13423/1226324/Mechanistic-insights-into-interfacial-failure-of",
+     "title": "Mechanistic insights into interfacial failure of hard carbon ...",
+     "snippet": "May 21, 2026 \u00b7 Hard carbon degradation pathways at extreme temperatures are revealed mainly involving SEI aging, active material loss, sodium dendrite growth ...",
+     "source_engine": "google",
+     "rank": 0,
+     "published_at": null,
+     "status": "blocked"
+    },
+    {
+     "url": "https://academic.oup.com/nsr/advance-article/doi/10.1093/nsr/nwag025/8429798",
+     "title": "Polymer-induced solid\u2013electrolyte interphase on hard carbon ...",
+     "snippet": "Jan 19, 2026 \u00b7 SEI, a bridge between the electrolyte and the HC electrode, significantly determines the stability and kinetic behavior of SIBs.",
+     "source_engine": "google",
+     "rank": 1,
+     "published_at": null,
+     "status": "blocked"
+    },
+    {
+     "url": "https://www.preprints.org/manuscript/202605.1343",
+     "title": "Beyond Half-Cells: Interfaces, Operando Chemistry, and... | Preprints.org",
+     "snippet": "In sodium-ion batteries, however, hard carbon remains the dominant practical anode, and its interphase behavior is more strongly coupled to irreversible sodium loss, low first-cycle efficiency, and sodium-inventory limitations.",
+     "source_engine": "yandex",
+     "rank": 2,
+     "published_at": null,
+     "status": "ok"
+    },
+    {
+     "url": "https://www.sciopen.com/article/10.1007/s12274-023-5793-9",
+     "title": "Insight into the influence of ether and ester electrolytes on the ...",
+     "snippet": "Jun 29, 2023 \u00b7 The electrochemical performance of hard carbon (HC) materials is closely related to the electrolyte used in the sodium ion batteries (SIBs).",
+     "source_engine": "google",
+     "rank": 3,
+     "published_at": null,
+     "status": "ok"
+    },
+    {
+     "url": "https://www.szaspower.com/industry-news/sodium-battery-degradation-cause.html",
+     "title": "Source of degradation in sodium batteries - A&S Power",
+     "snippet": "Recent research has revealed that degradation in sodium batteries stems from complex interplays between electrode materials, electrolytes, and the interfaces ...",
+     "source_engine": "google",
+     "rank": 4,
+     "published_at": null,
+     "status": null
+    },
+    {
+     "url": "https://energy-solutions.co/open-ip-vault/assets/energy-storage/sodium-ion-pitch-carbon-anode-2026",
+     "title": "Sodium-Ion Battery Anode Hack: Pitch-Derived Hard Carbon with...",
+     "snippet": "Pitch-derived hard carbon for sodium-ion batteries: A review.Graphite anodes cannot intercalate sodium ions due to thermodynamic instability. Hard carbon anodes had low capacity and poor cycle life because of unstable SEI formation, leading to rapid capacity fade and low efficiency.",
+     "source_engine": "yandex",
+     "rank": 5,
+     "published_at": null,
+     "status": null
+    },
+    {
+     "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC8397355/",
+     "title": "Revisit Electrolyte Chemistry of Hard Carbon in Ether for Na ...",
+     "snippet": "The main obstacles of hard carbons in SIBs come from the poor rate capability, the short cycle life, and the low initial Coulombic efficiency (ICE).",
+     "source_engine": "google",
+     "rank": 6,
+     "published_at": null,
+     "status": null
+    },
+    {
+     "url": "https://www.eurekalert.org/news-releases/1088010",
+     "title": "Revolutionizing sodium-ion batteries with lithium salt additives",
+     "snippet": "Jun 18, 2025 \u00b7 Li-based SEI exhibits reduced solubility, effectively suppressing sodium-ion and electron leakage, and mitigating electrolyte decomposition on ...",
+     "source_engine": "google",
+     "rank": 7,
+     "published_at": null,
+     "status": null
+    }
+   ],
+   "trail": [
+    {
+     "kind": "brief",
+     "text": "Question asks for empirically measured (not projected) cycle life of sodium-ion batteries as of 2026. Must map across: definitions/testing conditions (capacity retention %, C-rate, DoD, temperature), chemistry families (layered oxide/hard carbon, Prussian White/Blue, polyanionic/NVPF), commercial product specs vs independent lab validation, leading manufacturers (CATL, BYD, HiNa, Faradion, Natron Energy), peer-reviewed measurements, and application context vs Li-ion. Need primary specs/papers over aggregator summaries."
+    },
+    {
+     "kind": "decision",
+     "turn": 0,
+     "text": "First turn is broad map. Targeting strongest primary sources for each major angle: commercial datasheets/specs, peer-reviewed 2025-2026 measurements by chemistry, and independent test data to establish measured state before drilling into specifics and counterevidence."
+    },
+    {
+     "kind": "coverage",
+     "turn": 0,
+     "coverage": {
+      "covered": [],
+      "open": [
+       "commercial product cycle life specs and measured validation (CATL, BYD, HiNa, Faradion, Natron)",
+       "peer-reviewed lab measured cycle life by chemistry (layered oxide, Prussian White/Blue, polyanionic) 2025-2026",
+       "testing definitions and conditions (80% retention threshold, C-rate, DoD, temperature)",
+       "independent/third-party verification vs manufacturer claims",
+       "degradation mechanisms limiting cycle life",
+       "comparative benchmarks vs Li-ion and application requirements",
+       "counterevidence / gaps between claims and real-world measurements"
+      ],
+      "contradictions_checked": []
+     }
+    },
+    {
+     "kind": "subquestion_ledger",
+     "turn": 0,
+     "unattributed_queries": 0,
+     "subquestions": [
+      {
+       "angle": "commercial product cycle life specs and measured validation (CATL, BYD, HiNa, Faradion, Natron)",
+       "declared": "open",
+       "state": "open",
+       "why": "",
+       "queries": 0,
+       "admitted": 0,
+       "domains": []
+      },
+      {
+       "angle": "peer-reviewed lab measured cycle life by chemistry (layered oxide, Prussian White/Blue, polyanionic) 2025-2026",
+       "declared": "open",
+       "state": "open",
+       "why": "",
+       "queries": 0,
+       "admitted": 0,
+       "domains": []
+      },
+      {
+       "angle": "testing definitions and conditions (80% retention threshold, C-rate, DoD, temperature)",
+       "declared": "open",
+       "state": "open",
+       "why": "",
+       "queries": 0,
+       "admitted": 0,
+       "domains": []
+      },
+      {
+       "angle": "independent/third-party verification vs manufacturer claims",
+       "declared": "open",
+       "state": "open",
+       "why": "",
+       "queries": 0,
+       "admitted": 0,
+       "domains": []
+      },
+      {
+       "angle": "degradation mechanisms limiting cycle life",
+       "declared": "open",
+       "state": "open",
+       "why": "",
+       "queries": 0,
+       "admitted": 0,
+       "domains": []
+      },
+      {
+       "angle": "comparative benchmarks vs Li-ion and application requirements",
+       "declared": "open",
+       "state": "open",
+       "why": "",
+       "queries": 0,
+       "admitted": 0,
+       "domains": []
+      },
+      {
+       "angle": "counterevidence / gaps between claims and real-world measurements",
+       "declared": "open",
+       "state": "open",
+       "why": "",
+       "queries": 0,
+       "admitted": 0,
+       "domains": []
+      }
+     ]
+    },
+    {
+     "kind": "search",
+     "turn": 0,
+     "query": "CATL sodium-ion battery cycle life specification datasheet capacity retention",
+     "origin": "model",
+     "admitted": 2,
+     "final_admitted_count": 2,
+     "result": "evidence",
+     "retrieval_trace": {
+      "planned_query": "CATL sodium-ion battery cycle life specification datasheet capacity retention",
+      "issued_queries": [
+       "CATL sodium-ion battery cycle life specification datasheet capacity retention"
+      ],
+      "provider": "searxng",
+      "provider_diagnostics": [
+       {
+        "status_code": 200,
+        "result_count": 44,
+        "latency_ms": 5766,
+        "unresponsive_engines": [
+         "['brave', 'too many requests']",
+         "['crossref', 'too many requests']",
+         "['google cse', 'Suspended: too many requests']",
+         "['google scholar', 'access denied']",
+         "['openalex', 'too many requests']",
+         "['pubmed', 'too many requests']"
+        ]
+       }
+      ],
+      "raw_discovered_hit_count": 8,
+      "queries": [
+       {
+        "planned_query": "CATL sodium-ion battery cycle life specification datasheet capacity retention",
+        "issued_query": "CATL sodium-ion battery cycle life specification datasheet capacity retention",
+        "raw_discovered_hit_count": 8,
+        "hits": [
+         {
+          "title": "Naxtra Battery Breakthrough & Dual-Power Architecture: CATL ...",
+          "url": "https://www.catl.com/en/news/6401.html",
+          "engine": "yandex+google",
+          "status": "ok",
+          "snippet": {
+           "text": "CATL's Naxtra passenger EV Battery achieves an energy density of 175Wh/kg, the highest among sodium-ion batteries worldwide, and comparable to LFP batteries. It offers a 500-kilometer range and can achieve over 10,000 cycles, which significantly reduces maintenance costs.",
+           "untrusted": true
+          }
+         },
+         {
+          "title": "Sodium-ion battery - Wikipedia",
+          "url": "https://en.wikipedia.org/wiki/Sodium-ion_battery",
+          "engine": "yandex+google",
+          "status": "ok",
+          "snippet": {
+           "text": "A sodium-ion battery (NIB, SIB, or Na-ion battery) is a rechargeable battery that uses sodium ions (Na+) as charge carriers.10Ah Sodium ion Pouch Cell from Rechargion. Rechargion Energy[7][8] has developed 10 Ah capacity cells and achieved 10,000-cycle life.",
+           "untrusted": true
+          }
+         },
+         {
+          "title": "CATL Sodium-Ion Battery Upgrade: Performance & Market",
+          "url": "https://discoveryalert.com.au/sodium-ion-battery-storage-2025-trends/",
+          "engine": "yandex+google",
+          "status": "error",
+          "snippet": {
+           "text": "Dec 29, 2025 \u00b7 The cycle life performance targeting 8,000-10,000 cycles with 80% capacity retention establishes sodium-ion as a legitimate competitor to ...",
+           "untrusted": true
+          }
+         },
+         {
+          "title": "The Strange Time Compression of Sodium-Ion Battery ... - Reddit",
+          "url": "https://www.reddit.com/r/electricvehicles/comments/1pbbrdl/the_strange_time_compression_of_sodiumion_battery/",
+          "engine": "google",
+          "status": "ok",
+          "snippet": {
+           "text": "Dec 1, 2025 \u00b7 CATL announced the Naxtra battery, with 175 Wh/kg and 10,000 cycle life, with operation from -40\u00b0C to 70\u00b0C and 90% energy retention at -40\u00b0C, ...",
+           "untrusted": true
+          }
+         },
+         {
+          "title": "The Strange Time Compression of Sodium-Ion Battery ...",
+          "url": "https://cleantechnica.com/2025/11/30/the-strange-time-compression-of-sodium-ion-battery-development/",
+          "engine": "google",
+          "status": null,
+          "snippet": {
+           "text": "Nov 30, 2025 \u00b7 CATL announced the Naxtra battery, with 175 Wh/kg and 10,000 cycle life, with operation from -40\u00b0C to 70\u00b0C and 90% energy retention at -40\u00b0C, ...",
+           "untrusted": true
+          }
+         },
+         {
+          "title": "CATL has officially revealed detailed specs for its new sodium ...",
+          "url": "https://www.facebook.com/groups/148932752281422/posts/2241646593010017/",
+          "engine": "google",
+          "status": null,
+          "snippet": {
+           "text": "Dec 15, 2025 \u00b7 current sodium- ion battery cycle life stands at 3,000 cycles (80% capacity retention), still trailing LFP batteries (5,000+ cycles).",
+           "untrusted": true
+          }
+         },
+         {
+          "title": "CATL's 30-year sodium-ion battery takes over grid storage",
+          "url": "https://electrek.co/2026/07/16/catl-sodium-ion-15000-cycle-grid-storage/",
+          "engine": "google",
+          "status": null,
+          "snippet": {
+           "text": "Jul 16, 2026 \u00b7 The system is rated for 15,000 cycles, which CATL translates to a 25-to-30-year service life at a 70% state-of-health threshold. For comparison, ...",
+           "untrusted": true
+          }
+         },
+         {
+          "title": "CATL Sodium-Ion vs Lithium-Ion Batteries in 2026",
+          "url": "https://www.large-battery.com/blog/catl-sodium-ion-vs-lithium-ion-batteries/",
+          "engine": "yandex",
+          "status": null,
+          "snippet": {
+           "text": "CATL is accelerating sodium-ion deployment in 2026. Compare sodium-ion and lithium-ion batteries by cost, safety, energy density, low-temperature performance, BMS requirements and applications.",
+           "untrusted": true
+          }
+         }
+        ],
+        "extraction": {
+         "attempted": 4,
+         "success": 3,
+         "failure": 1
+        },
+        "provider_diagnostic": {
+         "status_code": 200,
+         "result_count": 44,
+         "latency_ms": 5766,
+         "unresponsive_engines": [
+          "['brave', 'too many requests']",
+          "['crossref', 'too many requests']",
+          "['google cse', 'Suspended: too many requests']",
+          "['google scholar', 'access denied']",
+          "['openalex', 'too many requests']",
+          "['pubmed', 'too many requests']"
+         ]
+        }
+       }
+      ],
+      "extraction": {
+       "attempted": 4,
+       "success": 3,
+       "failure": 1,
+       "statuses": [
+        {
+         "url": "https://www.catl.com/en/news/6401.html",
+         "title": "Naxtra Battery Breakthrough & Dual-Power Architecture: CATL Pioneers the Multi-Power Era",
+         "status": "ok",
+         "fetched_ok": true
+        },
+        {
+         "url": "https://en.wikipedia.org/wiki/Sodium-ion_battery",
+         "title": "Sodium-ion battery - Wikipedia",
+         "status": "ok",
+         "fetched_ok": true
+        },
+        {
+         "url": "https://discoveryalert.com.au/sodium-ion-battery-storage-2025-trends/",
+         "title": "CATL Sodium-Ion Battery Upgrade: Performance & Market",
+         "status": "error",
+         "fetched_ok": false,
+         "error_class": "redirect/http_301"
+        },
+        {
+         "url": "https://www.reddit.com/r/electricvehicles/comments/1pbbrdl/the_strange_time_compression_of_sodiumion_battery/",
+         "title": "The Strange Time Compression of Sodium-Ion Battery Development : r/electricvehicles",
+         "status": "ok",
+         "fetched_ok": true
+        }
+       ]
+      },
+      "reranked_passage_count": 3
+     },
+     "admitted_domains": [
+      "www.catl.com",
+      "www.reddit.com"
+     ]
+    },
+    {
+     "kind": "search",
+     "turn": 0,
+     "query": "Natron Energy sodium-ion Prussian blue cycle life 50000 cycles measured specification",
+     "origin": "model",
+     "admitted": 2,
+     "final_admitted_count": 2,
+     "result": "evidence",
+     "retrieval_trace": {
+      "planned_query": "Natron Energy sodium-ion Prussian blue cycle life 50000 cycles measured specification",
+      "issued_queries": [
+       "Natron Energy sodium-ion Prussian blue cycle life 50000 cycles measured specification"
+      ],
+      "provider": "searxng",
+      "provider_diagnostics": [
+       {
+        "status_code": 200,
+        "result_count": 45,
+        "latency_ms": 6243,
+        "unresponsive_engines": [
+         "['brave', 'too many requests']",
+         "['crossref', 'too many requests']",
+         "['google cse', 'Suspended: too many requests']",
+         "['google scholar', 'access denied']",
+         "['mojeek', 'access denied']",
+         "['openalex', 'too many requests']",
+         "['pubmed', 'too many requests']"
+        ]
+       }
+      ],
+      "raw_discovered_hit_count": 8,
+      "queries": [
+       {
+        "planned_query": "Natron Energy sodium-ion Prussian blue cycle life 50000 cycles measured specification",
+        "issued_query": "Natron Energy sodium-ion Prussian blue cycle life 50000 cycles measured specification",
+        "raw_discovered_hit_count": 8,
+        "hits": [
+         {
+          "title": "Natron Energy starts commercial-scale sodium-ion manufacturing",
+          "url": "https://www.energy-storage.news/natron-energy-starts-manufacturing-50000-cycle-life-sodium-ion-batteries-at-michigan-factory/",
+          "engine": "yandex+google",
+          "status": "ok",
+          "snippet": {
+           "text": "Natron Energy starts manufacturing \u201850,000+ cycle-life\u2019 sodium-ion batteries at Michigan factory. By Cameron Murray. April 30, 2024.Natron Energy Michigan Gigafactory sodium-ion batteries. The Natron factory in Michigan, which formerly hosted lithium-ion production lines.",
+           "untrusted": true
+          }
+         },
+         {
+          "title": "Lithium-free sodium batteries exit the lab and enter US production",
+          "url": "https://newatlas.com/energy/natron-sodium-ion-battery-production-startt/",
+          "engine": "yandex+google",
+          "status": "ok",
+          "snippet": {
+           "text": "Blue has become Natron Energy's signature color owing to the patented Prussian Blue electrons it uses for the fast, frequent transfer of sodium ions that underpin its claims of 10 times lithium-ion's cycling speeds and a 50,000-cycle lifespan.",
+           "untrusted": true
+          }
+         },
+         {
+          "title": "Assessment of the first commercial Prussian blue based ...",
+          "url": "https://www.researchgate.net/publication/363516484_Assessment_of_the_first_commercial_Prussian_blue_based_sodium-ion_battery",
+          "engine": "google",
+          "status": "blocked",
+          "snippet": {
+           "text": "Aug 8, 2026 \u00b7 Natron's sodium-ion battery cells possess performance characteristics between lithium-ion batteries and supercapacitors in terms of power ...",
+           "untrusted": true
+          }
+         },
+         {
+          "title": "Prussian blue - Natron Energy",
+          "url": "https://natron.energy/our-technology",
+          "engine": "google",
+          "status": "error"
+         },
+         {
+          "title": "U.S. Sodium-Ion Battery Plant Hits 50,000 Cycle Breakthrough",
+          "url": "https://sodiumbatteryhub.com/2024/08/21/us-sodium-battery-50k-cycle-milestone/",
+          "engine": "google",
+          "status": null,
+          "snippet": {
+           "text": "Aug 21, 2024 \u00b7 They use Prussian blue material for electrodes, They can sustain from 32 to 113 degrees Fahrenheit,",
+           "untrusted": true
+          }
+         },
+         {
+          "title": "Sodium-Ion Battery Companies - Battery-Tech Network",
+          "url": "https://battery-tech.net/sodium-ion-battery-companies/",
+          "engine": "yandex",
+          "status": null,
+          "snippet": {
+           "text": "Discover the leading sodium-ion battery companies. Learn about battery materials, performance challenges, and breakthrough developments powering grid support and electric mobility.",
+           "untrusted": true
+          }
+         },
+         {
+          "title": "Natron begins US commercial-scale production of sodium-ion ...",
+          "url": "https://www.reddit.com/r/batteries/comments/1d1rgum/natron_begins_us_commercialscale_production_of/",
+          "engine": "google",
+          "status": null,
+          "snippet": {
+           "text": "May 27, 2024 \u00b7 Sodium is a \"side grade\" to lithium, not a revolution. \u00b7 50,000 charge cycles \u00b7 Low energy density - about the same as lead-acid, suitable mainly ...",
+           "untrusted": true
+          }
+         },
+         {
+          "title": "Sodium-ion battery - Wikipedia",
+          "url": "https://en.wikipedia.org/wiki/Sodium-ion_battery",
+          "engine": "google",
+          "status": null,
+          "snippet": {
+           "text": "The company's goals were increasing specific energy to 180-200 Wh/kg and the cycle life to 8,000-10,000 cycles. CATL and BYD also made similar statements ...",
+           "untrusted": true
+          }
+         }
+        ],
+        "extraction": {
+         "attempted": 4,
+         "success": 2,
+         "failure": 2
+        },
+        "provider_diagnostic": {
+         "status_code": 200,
+         "result_count": 45,
+         "latency_ms": 6243,
+         "unresponsive_engines": [
+          "['brave', 'too many requests']",
+          "['crossref', 'too many requests']",
+          "['google cse', 'Suspended: too many requests']",
+          "['google scholar', 'access denied']",
+          "['mojeek', 'access denied']",
+          "['openalex', 'too many requests']",
+          "['pubmed', 'too many requests']"
+         ]
+        }
+       }
+      ],
+      "extraction": {
+       "attempted": 4,
+       "success": 2,
+       "failure": 2,
+       "statuses": [
+        {
+         "url": "https://www.energy-storage.news/natron-energy-starts-manufacturing-50000-cycle-life-sodium-ion-batteries-at-michigan-factory/",
+         "title": "Natron Energy starts commercial-scale sodium-ion manufacturing",
+         "status": "ok",
+         "fetched_ok": true
+        },
+        {
+         "url": "https://newatlas.com/energy/natron-sodium-ion-battery-production-startt/",
+         "title": "Lithium-free sodium batteries exit the lab and enter US production",
+         "status": "ok",
+         "fetched_ok": true
+        },
+        {
+         "url": "https://www.researchgate.net/publication/363516484_Assessment_of_the_first_commercial_Prussian_blue_based_sodium-ion_battery",
+         "title": "Just a moment...",
+         "status": "blocked",
+         "fetched_ok": false,
+         "error_class": "anti_bot"
+        },
+        {
+         "url": "https://natron.energy/our-technology",
+         "title": "https://natron.energy/our-technology",
+         "status": "error",
+         "fetched_ok": false,
+         "error_class": "other"
+        }
+       ]
+      },
+      "reranked_passage_count": 4
+     },
+     "admitted_domains": [
+      "newatlas.com",
+      "www.energy-storage.news"
+     ]
+    },
+    {
+     "kind": "search",
+     "turn": 0,
+     "query": "HiNa Faradion sodium-ion battery measured cycle life test results 2024 2025",
+     "origin": "model",
+     "admitted": 2,
+     "final_admitted_count": 2,
+     "result": "evidence",
+     "retrieval_trace": {
+      "planned_query": "HiNa Faradion sodium-ion battery measured cycle life test results 2024 2025",
+      "issued_queries": [
+       "HiNa Faradion sodium-ion battery measured cycle life test results 2024 2025"
+      ],
+      "provider": "searxng",
+      "provider_diagnostics": [
+       {
+        "status_code": 200,
+        "result_count": 60,
+        "latency_ms": 4971,
+        "unresponsive_engines": [
+         "['brave', 'too many requests']",
+         "['google cse', 'Suspended: too many requests']",
+         "['google scholar', 'access denied']",
+         "['openalex', 'too many requests']",
+         "['pubmed', 'too many requests']"
+        ]
+       }
+      ],
+      "raw_discovered_hit_count": 8,
+      "queries": [
+       {
+        "planned_query": "HiNa Faradion sodium-ion battery measured cycle life test results 2024 2025",
+        "issued_query": "HiNa Faradion sodium-ion battery measured cycle life test results 2024 2025",
+        "raw_discovered_hit_count": 8,
+        "hits": [
+         {
+          "title": "Sodium-ion Batteries Materials, Technologies and Global Markets to...",
+          "url": "https://www.businesswire.com/news/home/20241126958525/en/Sodium-ion-Batteries-Materials-Technologies-and-Global-Markets-to-2029-with-CATL-HiNa-Battery-Technology-Faradion-Tiamat-and-Natron-Energy-Dominating-the-%24838.5-Million-Industry---ResearchAndMarkets.com",
+          "engine": "yandex+google",
+          "status": "ok",
+          "snippet": {
+           "text": "The Sodium-ion Batteries Market was valued at USD 318 million in 2024, and is expected to reach USD 838.5 million by 2029, rising at a CAGR of 18.60%.Market Restraints. Limited Cycle Life of Sodium-ion Batteries. Lower Energy Density than Lithium-ion Batteries.",
+           "untrusted": true
+          }
+         },
+         {
+          "title": "Cell teardown and characterization of a Hina commercial ...",
+          "url": "https://www.cell.com/cell-reports-physical-science/fulltext/S2666-3864(26)00229-8",
+          "engine": "google",
+          "status": "blocked",
+          "snippet": {
+           "text": "May 28, 2026 \u00b7 Table 1 provides an overview of the manufacturer's electrical specifications and selected postmortem analysis results for the sodium-ion cell.",
+           "untrusted": true
+          }
+         },
+         {
+          "title": "Sodium-Ion Batteries: The Next Big Thing in Off-Grid Power? \u2013 4XSolar",
+          "url": "https://4xsolar.com/blogs/news/sodium-ion-batteries-the-next-big-thing-in-off-grid-power",
+          "engine": "yandex",
+          "status": "ok",
+          "snippet": {
+           "text": "Sodium ions carry a +1 charge just like lithium, but they're physically larger \u2014 a sodium ion has an ionic radius of about 1.02 \u00c5 versus 0.76 \u00c5 for lithium, roughly 35% bigger. That size difference is the root cause of most of sodium-ion's tradeoffs.",
+           "untrusted": true
+          }
+         },
+         {
+          "title": "Hina's sodium-ion battery cells showed just 5.3% resistance ...",
+          "url": "https://www.facebook.com/electrekco/posts/hinas-sodium-ion-battery-cells-showed-just-53-resistance-variation-across-120-un/1454425563389837/",
+          "engine": "google",
+          "status": "ok",
+          "snippet": {
+           "text": "Jun 22, 2026 \u00b7 The HiNa batteries had a cycle life of 4,500 cycles with 83% retention and a 2C charge rate, but even better sodium-ion batteries are on their ...",
+           "untrusted": true
+          }
+         },
+         {
+          "title": "Top 6 Sodium-Ion Battery Companies in 2025",
+          "url": "https://sodiumbatteryhub.com/2025/04/10/top-6-sodium-ion-battery-companies-in-2025/",
+          "engine": "google",
+          "status": null,
+          "snippet": {
+           "text": "Apr 10, 2025 \u00b7 As of 2025, Faradion continues to advance its non-aqueous sodium-ion technology to meet the growing demand for sustainable energy storage ...",
+           "untrusted": true
+          }
+         },
+         {
+          "title": "Sodium-ion battery - Wikipedia",
+          "url": "https://en.wikipedia.org/wiki/Sodium-ion_battery",
+          "engine": "yandex",
+          "status": null,
+          "snippet": {
+           "text": "A sodium-ion battery (NIB, SIB, or Na-ion battery) is a rechargeable battery that uses sodium ions (Na+) as charge carriers. In some cases, its working principle and cell construction are similar to those of lithium-ion battery (LIB) types...",
+           "untrusted": true
+          }
+         },
+         {
+          "title": "Review Article Advancements in sodium-ion batteries technology",
+          "url": "https://www.sciencedirect.com/science/article/pii/S2352484725005864",
+          "engine": "google",
+          "status": null,
+          "snippet": {
+           "text": "Recent sodium-ion cathodes have achieved capacities of \u223c160 mAh g\u22121 and cycle lifetimes exceeding 1,000 cycles with > 90 % retention.",
+           "untrusted": true
+          }
+         },
+         {
+          "title": "Sodium-ion Batteries 2025-2035: Technology, Players, Markets ...",
+          "url": "https://www.idtechex.com/en/research-report/sodium-ion-batteries-2025-2035-technology-players-markets-and-forecasts/1082",
+          "engine": "google",
+          "status": null,
+          "snippet": {
+           "text": "In 2024, Na-ion batteries have advanced in both energy storage and EV applications, marked by several product launches and key operational milestones. HiNa ...",
+           "untrusted": true
+          }
+         }
+        ],
+        "extraction": {
+         "attempted": 4,
+         "success": 3,
+         "failure": 1
+        },
+        "provider_diagnostic": {
+         "status_code": 200,
+         "result_count": 60,
+         "latency_ms": 4971,
+         "unresponsive_engines": [
+          "['brave', 'too many requests']",
+          "['google cse', 'Suspended: too many requests']",
+          "['google scholar', 'access denied']",
+          "['openalex', 'too many requests']",
+          "['pubmed', 'too many requests']"
+         ]
+        }
+       }
+      ],
+      "extraction": {
+       "attempted": 4,
+       "success": 3,
+       "failure": 1,
+       "statuses": [
+        {
+         "url": "https://www.businesswire.com/news/home/20241126958525/en/Sodium-ion-Batteries-Materials-Technologies-and-Global-Markets-to-2029-with-CATL-HiNa-Battery-Technology-Faradion-Tiamat-and-Natron-Energy-Dominating-the-%24838.5-Million-Industry---ResearchAndMarkets.com",
+         "title": "Sodium-ion Batteries Materials, Technologies and Global Markets to 2029 with CATL, HiNa Battery Technology, Faradion, Tiamat, and Natron Energy Dominating the $838.5 Million Industry - ResearchAndMarkets.com",
+         "status": "ok",
+         "fetched_ok": true
+        },
+        {
+         "url": "https://www.cell.com/cell-reports-physical-science/fulltext/S2666-3864(26)00229-8",
+         "title": "Just a moment...",
+         "status": "blocked",
+         "fetched_ok": false,
+         "error_class": "anti_bot"
+        },
+        {
+         "url": "https://4xsolar.com/blogs/news/sodium-ion-batteries-the-next-big-thing-in-off-grid-power",
+         "title": "Sodium-Ion Batteries: The Next Big Thing in Off-Grid Power? \u2013 4XSolar",
+         "status": "ok",
+         "fetched_ok": true
+        },
+        {
+         "url": "https://www.facebook.com/electrekco/posts/hinas-sodium-ion-battery-cells-showed-just-53-resistance-variation-across-120-un/1454425563389837/",
+         "title": "Electrek.co - Hina's sodium-ion battery cells showed just... | Facebook",
+         "status": "ok",
+         "fetched_ok": true
+        }
+       ]
+      },
+      "reranked_passage_count": 4
+     },
+     "admitted_domains": [
+      "4xsolar.com",
+      "www.businesswire.com"
+     ]
+    },
+    {
+     "kind": "search_turn_summary",
+     "turn": 0,
+     "round": 1,
+     "origin": "model",
+     "queries": 3,
+     "new_admitted": 6,
+     "failed_queries": 0,
+     "yield_reasons": [],
+     "turn_counted": true,
+     "turn_counted_reason": "at least one query reached the world"
+    },
+    {
+     "kind": "turn_charge",
+     "turn": 0,
+     "turn_counted": true,
+     "turn_counted_reason": "at least one query reached the world"
+    },
+    {
+     "kind": "decision",
+     "turn": 1,
+     "text": "Next searches target three uncovered angles with strongest primary sources: formal testing definitions/conditions (retention %, C-rate, DoD, temp, IEC standards), independent third-party validation vs manufacturer claims, and peer-reviewed degradation mechanisms limiting sodium-ion cycle life. Will follow with comparative benchmarks and counterevidence check."
+    },
+    {
+     "kind": "coverage",
+     "turn": 1,
+     "coverage": {
+      "covered": [
+       {
+        "angle": "commercial product cycle life specs and measured validation (initial secondary sources - needs primary datasheet upgrade)",
+        "evidence_ids": []
+       },
+       {
+        "angle": "peer-reviewed lab measured cycle life by chemistry (initial Natron claims - needs peer-reviewed paper upgrade)",
+        "evidence_ids": []
+       }
+      ],
+      "open": [
+       "testing definitions and conditions (80% retention threshold, C-rate, DoD, temperature, IEC 62660)",
+       "independent/third-party verification vs manufacturer claims",
+       "degradation mechanisms limiting cycle life",
+       "comparative benchmarks vs Li-ion and application requirements",
+       "counterevidence / gaps between claims and real-world measurements"
+      ],
+      "contradictions_checked": []
+     }
+    },
+    {
+     "kind": "subquestion_ledger",
+     "turn": 1,
+     "unattributed_queries": 1,
+     "subquestions": [
+      {
+       "angle": "commercial product cycle life specs and measured validation (initial secondary sources - needs primary datasheet upgrade)",
+       "declared": "covered",
+       "state": "retired",
+       "why": "the pool holds 2 passages from 2 independent domains",
+       "queries": 1,
+       "admitted": 2,
+       "domains": [
+        "www.catl.com",
+        "www.reddit.com"
+       ]
+      },
+      {
+       "angle": "peer-reviewed lab measured cycle life by chemistry (initial Natron claims - needs peer-reviewed paper upgrade)",
+       "declared": "covered",
+       "state": "retired",
+       "why": "the pool holds 2 passages from 2 independent domains",
+       "queries": 1,
+       "admitted": 2,
+       "domains": [
+        "newatlas.com",
+        "www.energy-storage.news"
+       ]
+      },
+      {
+       "angle": "testing definitions and conditions (80% retention threshold, C-rate, DoD, temperature, IEC 62660)",
+       "declared": "open",
+       "state": "open",
+       "why": "",
+       "queries": 0,
+       "admitted": 0,
+       "domains": []
+      },
+      {
+       "angle": "independent/third-party verification vs manufacturer claims",
+       "declared": "open",
+       "state": "open",
+       "why": "",
+       "queries": 0,
+       "admitted": 0,
+       "domains": []
+      },
+      {
+       "angle": "degradation mechanisms limiting cycle life",
+       "declared": "open",
+       "state": "open",
+       "why": "",
+       "queries": 0,
+       "admitted": 0,
+       "domains": []
+      },
+      {
+       "angle": "comparative benchmarks vs Li-ion and application requirements",
+       "declared": "open",
+       "state": "open",
+       "why": "",
+       "queries": 0,
+       "admitted": 0,
+       "domains": []
+      },
+      {
+       "angle": "counterevidence / gaps between claims and real-world measurements",
+       "declared": "open",
+       "state": "open",
+       "why": "",
+       "queries": 0,
+       "admitted": 0,
+       "domains": []
+      }
+     ]
+    },
+    {
+     "kind": "query_rejected",
+     "turn": 1,
+     "query": "sodium-ion battery independent third party validation test measured cycle life CATL HiNa Faradion",
+     "rejected": "retired",
+     "retired_angle": "commercial product cycle life specs and measured validation (initial secondary sources - needs primary datasheet upgrade)",
+     "retired_why": "the pool holds 2 passages from 2 independent domains"
+    },
+    {
+     "kind": "search",
+     "turn": 1,
+     "query": "sodium-ion battery cycle life test conditions 80% capacity retention C-rate DoD temperature IEC 62660",
+     "origin": "model",
+     "admitted": 1,
+     "final_admitted_count": 1,
+     "result": "evidence",
+     "retrieval_trace": {
+      "planned_query": "sodium-ion battery cycle life test conditions 80% capacity retention C-rate DoD temperature IEC 62660",
+      "issued_queries": [
+       "sodium-ion battery cycle life test conditions 80 capacity retention C-rate DoD temperature"
+      ],
+      "provider": "searxng",
+      "provider_diagnostics": [
+       {
+        "status_code": 200,
+        "result_count": 49,
+        "latency_ms": 3427,
+        "unresponsive_engines": [
+         "['brave', 'Suspended: too many requests']",
+         "['google cse', 'Suspended: too many requests']",
+         "['google scholar', 'Suspended: access denied']",
+         "['openalex', 'Suspended: too many requests']",
+         "['pubmed', 'Suspended: too many requests']",
+         "['semantic scholar', 'parsing error']"
+        ]
+       }
+      ],
+      "raw_discovered_hit_count": 8,
+      "queries": [
+       {
+        "planned_query": "sodium-ion battery cycle life test conditions 80% capacity retention C-rate DoD temperature IEC 62660",
+        "issued_query": "sodium-ion battery cycle life test conditions 80 capacity retention C-rate DoD temperature",
+        "raw_discovered_hit_count": 8,
+        "hits": [
+         {
+          "title": "2,000 or 10,000 Cycles? The Sodium Ion Battery Life ... - Highstar",
+          "url": "https://en.highstar.com/blog/sodium-ion-battery-life-cycles-scam-explained",
+          "engine": "yandex+google",
+          "status": "ok",
+          "snippet": {
+           "text": "Sodium Ion vs Lithium Ion: Cycle Life Comparison Let's put sodium ion cycle life in perspective by comparing it to lithium ion technology. This is where sodium ion batteries really start to shine, especially when you consider the cost factor.",
+           "untrusted": true
+          }
+         },
+         {
+          "title": "Mechanism research of temperature and discharge rate effects ...",
+          "url": "https://www.sciencedirect.com/science/article/pii/S1388248126000603",
+          "engine": "google",
+          "status": "blocked",
+          "snippet": {
+           "text": "This work studies the capacity capacity of \u2026 capacity retention rate of 89% maintained 80% capacity after 700 cycles in the assembled sodium-ion full battery",
+           "untrusted": true
+          }
+         },
+         {
+          "title": "Sodium-Ion Battery Cycle Life: 8000 Cycles & 5-Year Warranty ...",
+          "url": "https://www.zvepow.com/news/sodium-battery-cycle-life-warranty",
+          "engine": "google",
+          "status": "ok",
+          "snippet": {
+           "text": "Aug 18, 2026 \u00b7 Both ratings use 0.5P charge/discharge at 25\u00b0C with an end-of-life criterion of 80% capacity retention. At -20\u00b0C, capacity retention is \u226590% (\u2265 ...",
+           "untrusted": true
+          }
+         },
+         {
+          "title": "Recent Progress and Perspective: Na Ion Batteries Used ... - PMC",
+          "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC9565332/",
+          "engine": "google",
+          "status": "ok",
+          "snippet": {
+           "text": "At \u221215 \u00b0C, with a high rate of 5 C, the system exhibited an 81% capacity retention after 1000 cycles. 84% retention capacity over 200 cycles at a 1 C rate.",
+           "untrusted": true
+          }
+         },
+         {
+          "title": "Na-ion in real life: lifespan, cold weather, and cost reality",
+          "url": "https://batteryruntime.com/en/guides/battery/sodium-ion-real-world/",
+          "engine": "yandex",
+          "status": null,
+          "snippet": {
+           "text": "Manufacturers rate cycle life to 80% capacity retention.Cold weather. Battery capacity vs temperature comparison. At -20\u00b0C, Na-ion retains ~90% capacity while LFP drops to 60-70%.",
+           "untrusted": true
+          }
+         },
+         {
+          "title": "BU-808: How to Prolong Lithium-based Batteries",
+          "url": "https://www.batteryuniversity.com/article/bu-808-how-to-prolong-lithium-based-batteries/",
+          "engine": "google",
+          "status": null,
+          "snippet": {
+           "text": "Oct 11, 2023 \u00b7 Battery manufacturers often specify the cycle life of a battery with an 80 DoD. This is practical because batteries should retain some reserve ...",
+           "untrusted": true
+          }
+         },
+         {
+          "title": "Cycle Life Battery Meaning, Definition, Benefits & FAQs",
+          "url": "https://www.heavengreenenergy.com/glossary/cycle-life-battery",
+          "engine": "google",
+          "status": null,
+          "snippet": {
+           "text": "Jul 8, 2026 \u00b7 Temperature is maintained at 25\u00b0C plus or minus 2\u00b0C throughout the test. Cycle life ratings assume ideal 25\u00b0C conditions. Indian summer ...",
+           "untrusted": true
+          }
+         },
+         {
+          "title": "How to Read Battery Cycle Life Degradation Curves",
+          "url": "https://www.hengda-engineering.com/news/ESS__Battery/Battery_Logic/How_to_read_battery_cycle_life_degradation_curves.html",
+          "engine": "yandex",
+          "status": null,
+          "snippet": {
+           "text": "A battery cycle life degradation curve shows how battery performance changes as charge-discharge cycles accumulate. In most technical datasheets and test reports, the horizontal axis represents cycle count, while the vertical axis usually represents one of several key health indicators",
+           "untrusted": true
+          }
+         }
+        ],
+        "extraction": {
+         "attempted": 4,
+         "success": 3,
+         "failure": 1
+        },
+        "provider_diagnostic": {
+         "status_code": 200,
+         "result_count": 49,
+         "latency_ms": 3427,
+         "unresponsive_engines": [
+          "['brave', 'Suspended: too many requests']",
+          "['google cse', 'Suspended: too many requests']",
+          "['google scholar', 'Suspended: access denied']",
+          "['openalex', 'Suspended: too many requests']",
+          "['pubmed', 'Suspended: too many requests']",
+          "['semantic scholar', 'parsing error']"
+         ]
+        }
+       }
+      ],
+      "extraction": {
+       "attempted": 4,
+       "success": 3,
+       "failure": 1,
+       "statuses": [
+        {
+         "url": "https://en.highstar.com/blog/sodium-ion-battery-life-cycles-scam-explained",
+         "title": "2,000 or 10,000 Cycles? The Sodium Ion Battery Life SCAM You Need to Know",
+         "status": "ok",
+         "fetched_ok": true
+        },
+        {
+         "url": "https://www.sciencedirect.com/science/article/pii/S1388248126000603",
+         "title": "Just a moment...",
+         "status": "blocked",
+         "fetched_ok": false,
+         "error_class": "anti_bot"
+        },
+        {
+         "url": "https://www.zvepow.com/news/sodium-battery-cycle-life-warranty",
+         "title": "Sodium-Ion Battery Cycle Life: 6000 Cycles & 5-Year Warranty Explained",
+         "status": "ok",
+         "fetched_ok": true
+        },
+        {
+         "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC9565332/",
+         "title": "Recent Progress and Perspective: Na Ion Batteries Used at Low Temperatures - PMC",
+         "status": "ok",
+         "fetched_ok": true
+        }
+       ]
+      },
+      "reranked_passage_count": 4
+     },
+     "admitted_domains": [
+      "www.zvepow.com"
+     ]
+    },
+    {
+     "kind": "search",
+     "turn": 1,
+     "query": "sodium-ion battery degradation mechanism hard carbon SEI electrolyte cycle fade peer reviewed 2025",
+     "origin": "model",
+     "admitted": 2,
+     "final_admitted_count": 2,
+     "result": "evidence",
+     "retrieval_trace": {
+      "planned_query": "sodium-ion battery degradation mechanism hard carbon SEI electrolyte cycle fade peer reviewed 2025",
+      "issued_queries": [
+       "sodium-ion battery degradation mechanism hard carbon SEI electrolyte cycle fade peer reviewed"
+      ],
+      "provider": "searxng",
+      "provider_diagnostics": [
+       {
+        "status_code": 200,
+        "result_count": 45,
+        "latency_ms": 1272,
+        "unresponsive_engines": [
+         "['brave', 'Suspended: too many requests']",
+         "['crossref', 'too many requests']",
+         "['google cse', 'Suspended: too many requests']",
+         "['google scholar', 'Suspended: access denied']",
+         "['openalex', 'Suspended: too many requests']",
+         "['pubmed', 'Suspended: too many requests']",
+         "['semantic scholar', 'parsing error']"
+        ]
+       }
+      ],
+      "raw_discovered_hit_count": 8,
+      "queries": [
+       {
+        "planned_query": "sodium-ion battery degradation mechanism hard carbon SEI electrolyte cycle fade peer reviewed 2025",
+        "issued_query": "sodium-ion battery degradation mechanism hard carbon SEI electrolyte cycle fade peer reviewed",
+        "raw_discovered_hit_count": 8,
+        "hits": [
+         {
+          "title": "Mechanistic insights into interfacial failure of hard carbon ...",
+          "url": "https://pubs.rsc.org/sc/article/17/27/13423/1226324/Mechanistic-insights-into-interfacial-failure-of",
+          "engine": "google",
+          "status": "blocked",
+          "snippet": {
+           "text": "May 21, 2026 \u00b7 Hard carbon degradation pathways at extreme temperatures are revealed mainly involving SEI aging, active material loss, sodium dendrite growth ...",
+           "untrusted": true
+          }
+         },
+         {
+          "title": "Polymer-induced solid\u2013electrolyte interphase on hard carbon ...",
+          "url": "https://academic.oup.com/nsr/advance-article/doi/10.1093/nsr/nwag025/8429798",
+          "engine": "google",
+          "status": "blocked",
+          "snippet": {
+           "text": "Jan 19, 2026 \u00b7 SEI, a bridge between the electrolyte and the HC electrode, significantly determines the stability and kinetic behavior of SIBs.",
+           "untrusted": true
+          }
+         },
+         {
+          "title": "Beyond Half-Cells: Interfaces, Operando Chemistry, and... | Preprints.org",
+          "url": "https://www.preprints.org/manuscript/202605.1343",
+          "engine": "yandex",
+          "status": "ok",
+          "snippet": {
+           "text": "In sodium-ion batteries, however, hard carbon remains the dominant practical anode, and its interphase behavior is more strongly coupled to irreversible sodium loss, low first-cycle efficiency, and sodium-inventory limitations.",
+           "untrusted": true
+          }
+         },
+         {
+          "title": "Insight into the influence of ether and ester electrolytes on the ...",
+          "url": "https://www.sciopen.com/article/10.1007/s12274-023-5793-9",
+          "engine": "google",
+          "status": "ok",
+          "snippet": {
+           "text": "Jun 29, 2023 \u00b7 The electrochemical performance of hard carbon (HC) materials is closely related to the electrolyte used in the sodium ion batteries (SIBs).",
+           "untrusted": true
+          }
+         },
+         {
+          "title": "Source of degradation in sodium batteries - A&S Power",
+          "url": "https://www.szaspower.com/industry-news/sodium-battery-degradation-cause.html",
+          "engine": "google",
+          "status": null,
+          "snippet": {
+           "text": "Recent research has revealed that degradation in sodium batteries stems from complex interplays between electrode materials, electrolytes, and the interfaces ...",
+           "untrusted": true
+          }
+         },
+         {
+          "title": "Sodium-Ion Battery Anode Hack: Pitch-Derived Hard Carbon with...",
+          "url": "https://energy-solutions.co/open-ip-vault/assets/energy-storage/sodium-ion-pitch-carbon-anode-2026",
+          "engine": "yandex",
+          "status": null,
+          "snippet": {
+           "text": "Pitch-derived hard carbon for sodium-ion batteries: A review.Graphite anodes cannot intercalate sodium ions due to thermodynamic instability. Hard carbon anodes had low capacity and poor cycle life because of unstable SEI formation, leading to rapid capacity fade and low efficiency.",
+           "untrusted": true
+          }
+         },
+         {
+          "title": "Revisit Electrolyte Chemistry of Hard Carbon in Ether for Na ...",
+          "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC8397355/",
+          "engine": "google",
+          "status": null,
+          "snippet": {
+           "text": "The main obstacles of hard carbons in SIBs come from the poor rate capability, the short cycle life, and the low initial Coulombic efficiency (ICE).",
+           "untrusted": true
+          }
+         },
+         {
+          "title": "Revolutionizing sodium-ion batteries with lithium salt additives",
+          "url": "https://www.eurekalert.org/news-releases/1088010",
+          "engine": "google",
+          "status": null,
+          "snippet": {
+           "text": "Jun 18, 2025 \u00b7 Li-based SEI exhibits reduced solubility, effectively suppressing sodium-ion and electron leakage, and mitigating electrolyte decomposition on ...",
+           "untrusted": true
+          }
+         }
+        ],
+        "extraction": {
+         "attempted": 4,
+         "success": 2,
+         "failure": 2
+        },
+        "provider_diagnostic": {
+         "status_code": 200,
+         "result_count": 45,
+         "latency_ms": 1272,
+         "unresponsive_engines": [
+          "['brave', 'Suspended: too many requests']",
+          "['crossref', 'too many requests']",
+          "['google cse', 'Suspended: too many requests']",
+          "['google scholar', 'Suspended: access denied']",
+          "['openalex', 'Suspended: too many requests']",
+          "['pubmed', 'Suspended: too many requests']",
+          "['semantic scholar', 'parsing error']"
+         ]
+        }
+       }
+      ],
+      "extraction": {
+       "attempted": 4,
+       "success": 2,
+       "failure": 2,
+       "statuses": [
+        {
+         "url": "https://pubs.rsc.org/sc/article/17/27/13423/1226324/Mechanistic-insights-into-interfacial-failure-of",
+         "title": "Just a moment...",
+         "status": "blocked",
+         "fetched_ok": false,
+         "error_class": "anti_bot"
+        },
+        {
+         "url": "https://academic.oup.com/nsr/advance-article/doi/10.1093/nsr/nwag025/8429798",
+         "title": "Just a moment...",
+         "status": "blocked",
+         "fetched_ok": false,
+         "error_class": "anti_bot"
+        },
+        {
+         "url": "https://www.preprints.org/manuscript/202605.1343",
+         "title": "Beyond Half-Cells: Interfaces, Operando Chemistry, and Failure Pathways in Practical Lithium- and Sodium-Ion Batteries[v1] | Preprints.org",
+         "status": "ok",
+         "fetched_ok": true
+        },
+        {
+         "url": "https://www.sciopen.com/article/10.1007/s12274-023-5793-9",
+         "title": "Insight into the influence of ether and ester electrolytes on the sodium-ion transportation kinetics for hard carbon",
+         "status": "ok",
+         "fetched_ok": true
+        }
+       ]
+      },
+      "reranked_passage_count": 3
+     },
+     "admitted_domains": [
+      "www.preprints.org",
+      "www.sciopen.com"
+     ]
+    },
+    {
+     "kind": "search_turn_summary",
+     "turn": 1,
+     "round": 2,
+     "origin": "model",
+     "queries": 2,
+     "new_admitted": 3,
+     "failed_queries": 0,
+     "yield_reasons": [],
+     "turn_counted": true,
+     "turn_counted_reason": "at least one query reached the world"
+    },
+    {
+     "kind": "turn_charge",
+     "turn": 1,
+     "turn_counted": true,
+     "turn_counted_reason": "at least one query reached the world"
+    }
+   ],
+   "completed_queries": [
+    "CATL sodium-ion battery cycle life specification datasheet capacity retention",
+    "Natron Energy sodium-ion Prussian blue cycle life 50000 cycles measured specification",
+    "HiNa Faradion sodium-ion battery measured cycle life test results 2024 2025",
+    "sodium-ion battery cycle life test conditions 80% capacity retention C-rate DoD temperature IEC 62660",
+    "sodium-ion battery degradation mechanism hard carbon SEI electrolyte cycle fade peer reviewed 2025"
+   ],
+   "depth_tier": "quick",
+   "recency_window": null
+  },
+  {
+   "id": "evt_502de1f79afa4b2cacbe5c21cec75e38",
+   "source": "system",
+   "timestamp": "2026-09-02T09:33:21.034503Z",
+   "schema_version": 1,
+   "seq": 28,
+   "agent_view_id": null,
+   "meta": {},
+   "kind": "status",
+   "status": "PAUSED",
+   "detail": "stopped",
+   "run_intent_id": null,
+   "host_mutation_id": null,
+   "plan_verification_transition": null,
+   "plan_verifier_failure": null,
+   "plan_verifier_pass": null,
+   "recovery_lease_transition": null
+  },
+  {
+   "id": "evt_a5f3703303684a608485f3652e100efe",
+   "source": "environment",
+   "timestamp": "2026-09-02T09:33:21.231327Z",
+   "schema_version": 1,
+   "seq": 29,
+   "agent_view_id": null,
+   "meta": {},
+   "kind": "message",
+   "message": {
+    "role": "user",
+    "content": "Resumed by user. Current environment reality after interruption:\n- The previous sandbox was reclaimed. A fresh sandbox is created on your next action and your saved workspace files are restored into it automatically.\n- No saved files \u2014 the workspace starts empty.\n- No shell sessions are running.",
+    "tool_calls": null,
+    "tool_call_id": null,
+    "images": null
+   },
+   "verification_requirements": null
+  },
+  {
+   "id": "evt_f16889157b304731b72952622528706a",
+   "source": "system",
+   "timestamp": "2026-09-02T09:33:24.106365Z",
+   "schema_version": 1,
+   "seq": 30,
+   "agent_view_id": null,
+   "meta": {},
+   "kind": "status",
+   "status": "RUNNING",
+   "detail": "research",
+   "run_intent_id": null,
+   "host_mutation_id": null,
+   "plan_verification_transition": null,
+   "plan_verifier_failure": null,
+   "plan_verifier_pass": null,
+   "recovery_lease_transition": null
+  }
+ ]
+}

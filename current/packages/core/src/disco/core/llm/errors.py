@@ -21,6 +21,14 @@ class LLMError(Exception):
         super().__init__(message)
         self.provider = provider
         self.model = model
+        # Inert diagnostic attribute (like LLMTransientError.http_status): the
+        # provider's OWN sanitized message for account/config failures — "requires
+        # a subscription", "requires explicit opt in: <url>", "weekly usage limit
+        # reached". `str(exc)` stays content-free so the host-claim and verifier
+        # gates keep matching their bounded forms; ONLY the operator-facing error
+        # surface reads this, so a misconfigured key or an unpaid plan is
+        # diagnosable instead of a bare status code.
+        self.provider_detail: str = ""
 
 
 class LLMTransientError(LLMError):

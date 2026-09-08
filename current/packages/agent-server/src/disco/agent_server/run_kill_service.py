@@ -10,9 +10,14 @@ from disco.core import (
     AgentErrorEvent,
     ConversationStatus,
     Event,
+    EventSource,
+    MessageEvent,
+    ReportEvent,
+    StatusEvent,
 )
 from disco.core.loop import signals
 from disco.core.store.sqlite import SqliteEventStore
+from disco.retrieval.deep_research import RESEARCH_TRACE_ACTIONS
 
 from .lifecycle_command_service import (
     LifecycleAuthority,
@@ -20,6 +25,29 @@ from .lifecycle_command_service import (
 )
 from .run_registry import LoopRegistry, RunRegistry, RunResourceRegistry, RunTask
 from .workspace_service import WorkspaceCoordinator
+
+
+def _completed_research_report(events: list[Event]) -> bool:
+    """A committed report wins over a late Kill for that same run.
+
+    Report and FINISHED commit together. A later user input or RUNNING status
+    belongs to new work and must remain killable, including before preflight.
+    """
+    index = next(
+        (i for i in range(len(events) - 1, -1, -1) if isinstance(events[i], StatusEvent)), None
+    )
+    if index is None or index == 0:
+        return False
+    status = events[index]
+    return (
+        isinstance(status, StatusEvent)
+        and status.status is ConversationStatus.FINISHED
+        and isinstance(events[index - 1], ReportEvent)
+        and not any(
+            isinstance(event, MessageEvent) and event.source is EventSource.USER
+            for event in events[index + 1 :]
+        )
+    )
 
 
 class RunKillService:
@@ -68,7 +96,18 @@ class RunKillService:
         conversation_id: str,
         authority: LifecycleAuthority | None = None,
     ) -> list[AgentErrorEvent]:
-        """Pair admitted open actions while both workspace fences are held."""
+        """Pair admitted open actions while both workspace fences are held.
+
+        "Admitted" means a tool call a model proposed and an executor ran, whose
+        result the kill interrupted — that pairing is what keeps the model's
+        next View from carrying an open call, and its sentence is about a
+        workspace or an external system whose state is now unknown. Deep
+        research's ActionEvents are none of those things: the server appends
+        them to narrate its own run (`RESEARCH_TRACE_ACTIONS`), nothing ever
+        pairs them, and no model reads them. Closing them produced one "its
+        outcome is UNKNOWN; re-verify the workspace" error per turn counter on
+        every killed research run.
+        """
 
         if not self._workspace.lock(conversation_id).locked():
             raise RuntimeError("kill action closure requires the workspace fence")
@@ -80,6 +119,8 @@ class RunKillService:
         errors: list[Event] = []
         for event in events:
             if not isinstance(event, ActionEvent) or event.id in paired:
+                continue
+            if event.tool_call.tool_name in RESEARCH_TRACE_ACTIONS:
                 continue
             if strict and (captured_view_id is None or event.agent_view_id != captured_view_id):
                 continue
@@ -128,7 +169,9 @@ class RunKillService:
         events = await self._store.get_events(conversation_id)
         if not self._lifecycle.authority_is_current_for_events(events, authority):
             return
-        if self._lifecycle.authority_already_killed(events, authority):
+        if self._lifecycle.authority_already_killed(
+            events, authority
+        ) or _completed_research_report(events):
             return
 
         await self._close_dangling_actions_locked(conversation_id, authority)
@@ -139,7 +182,9 @@ class RunKillService:
         events = await self._store.get_events(conversation_id)
         if not self._lifecycle.authority_is_current_for_events(events, authority):
             return
-        if self._lifecycle.authority_already_killed(events, authority):
+        if self._lifecycle.authority_already_killed(
+            events, authority
+        ) or _completed_research_report(events):
             return
         agent_view_id, run_intent_id, strict = authority
         await self._lifecycle.append_status_locked(

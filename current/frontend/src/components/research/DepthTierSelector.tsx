@@ -16,17 +16,17 @@ const TIERS: Array<{ id: Tier; label: string; note: string }> = [
   {
     id: "quick",
     label: "Quick",
-    note: "3 sub-questions · 1 round · ~90s · fast verification runs",
+    note: "Fast evidence pass",
   },
   {
     id: "standard_deep",
     label: "Standard",
-    note: "6 sub-questions · up to 4 rounds · ~5–10 min · the everyday tier",
+    note: "Balanced evidence and review",
   },
   {
     id: "exhaustive",
     label: "Thorough",
-    note: "12 sub-questions · 5 rounds · 15–30 min · long-form survey",
+    note: "Broad evidence and review",
   },
 ];
 

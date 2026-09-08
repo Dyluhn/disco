@@ -21,7 +21,7 @@ Two phases:
      may crash a trusted seam).
 
 Usage:
-    PYTHONPATH=. .venv/bin/python3 development/harness/tc_soak/live_soak.py \
+    .venv/bin/python3 development/harness/tc_soak/live_soak.py \
         --verify-iters 300 --live-rounds 12 --seed 1
 
 Exit 0 = all invariants held; 1 = a violation (details printed). Skips phase B

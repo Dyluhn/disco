@@ -1,0 +1,340 @@
+[
+  {
+    "agent_view_id": null,
+    "id": "evt_57cccf92d66b43c6b953ee180ae6c1d9",
+    "kind": "action",
+    "llm_response_id": null,
+    "meta": {},
+    "schema_version": 1,
+    "self_assessed_risk": "UNKNOWN",
+    "seq": 137,
+    "source": "agent",
+    "thought": "Deep Research: turn",
+    "timestamp": "2026-09-02T13:10:01.080774Z",
+    "tool_call": {
+      "arguments": {
+        "n": 12,
+        "of": 16,
+        "phase": "planning"
+      },
+      "call_id": "call_da0d37fa744142d088acc69f71f1ee10",
+      "tool_name": "turn"
+    }
+  },
+  {
+    "agent_view_id": null,
+    "id": "evt_db4cbcbcce46472e88c1f6f663ce29e4",
+    "kind": "action",
+    "llm_response_id": null,
+    "meta": {},
+    "schema_version": 1,
+    "self_assessed_risk": "UNKNOWN",
+    "seq": 138,
+    "source": "agent",
+    "thought": "Deep Research: query_refused",
+    "timestamp": "2026-09-02T13:10:01.083811Z",
+    "tool_call": {
+      "arguments": {
+        "duplicates": "China National Integrated Circuit Industry Investment Fund Big Fund III 2024 344 billion yuan",
+        "duplicates_turn": 1,
+        "query": "China Integrated Circuit Industry Investment Fund Big Fund III 344 billion yuan May 2024 Caixin registration",
+        "reason": "near_duplicate"
+      },
+      "call_id": "call_9440ab7cec6d4b22ae834eae82b9549a",
+      "tool_name": "query_refused"
+    }
+  },
+  {
+    "agent_view_id": null,
+    "id": "evt_0fdd2b8194c44baf9d4bd4673b3f63c5",
+    "kind": "action",
+    "llm_response_id": null,
+    "meta": {},
+    "schema_version": 1,
+    "self_assessed_risk": "UNKNOWN",
+    "seq": 139,
+    "source": "agent",
+    "thought": "Deep Research: query_refused",
+    "timestamp": "2026-09-02T13:10:01.086868Z",
+    "tool_call": {
+      "arguments": {
+        "duplicates": "TechInsights SemiAnalysis SMIC N+3 wafer cost economics quad patterning 50 percent penalty yield defect density independent",
+        "duplicates_turn": 8,
+        "query": "SemiAnalysis TechInsights SMIC N+3 N+2 wafer economics cost per wafer defect density yield quad patterning independent analysis",
+        "reason": "near_duplicate"
+      },
+      "call_id": "call_5c13aff9b81d40eda5697288284153a8",
+      "tool_name": "query_refused"
+    }
+  },
+  {
+    "agent_view_id": null,
+    "id": "evt_1e911acd9b6e480fb2cd8e43e5161c63",
+    "kind": "action",
+    "llm_response_id": null,
+    "meta": {},
+    "schema_version": 1,
+    "self_assessed_risk": "UNKNOWN",
+    "seq": 140,
+    "source": "agent",
+    "thought": "Deep Research: turn",
+    "timestamp": "2026-09-02T13:10:01.087992Z",
+    "tool_call": {
+      "arguments": {
+        "n": 12,
+        "of": 16,
+        "phase": "searching",
+        "subquestion": "TechInsights SemiAnalysis Huawei Ascend 910C 910B HBM bottleneck benchmark ve..."
+      },
+      "call_id": "call_9a818edba7534e0c90c31e99649c787a",
+      "tool_name": "turn"
+    }
+  },
+  {
+    "agent_view_id": null,
+    "id": "evt_2c38d4e893a045b0abd46ad58e133655",
+    "kind": "action",
+    "llm_response_id": null,
+    "meta": {},
+    "schema_version": 1,
+    "self_assessed_risk": "UNKNOWN",
+    "seq": 141,
+    "source": "agent",
+    "thought": "Deep Research: search",
+    "timestamp": "2026-09-02T13:10:01.094384Z",
+    "tool_call": {
+      "arguments": {
+        "origin": "model",
+        "query": "TechInsights SemiAnalysis Huawei Ascend 910C 910B HBM bottleneck benchmark versus Nvidia H100 independent teardown 2025",
+        "round": 12,
+        "subquestion": "TechInsights SemiAnalysis Huawei Ascend 910C 910B HBM bottleneck benchmark ve..."
+      },
+      "call_id": "call_6f783b76bd164ee493fb9e84c155d998",
+      "tool_name": "search"
+    }
+  },
+  {
+    "action_id": "evt_2c38d4e893a045b0abd46ad58e133655",
+    "agent_view_id": null,
+    "id": "evt_2b60e8e123194b588481903cab73f6f2",
+    "kind": "observation",
+    "meta": {},
+    "schema_version": 1,
+    "seq": 142,
+    "source": "environment",
+    "timestamp": "2026-09-02T13:10:17.191249Z",
+    "tool_result": {
+      "action_profile": null,
+      "call_id": "call_observation",
+      "content": "{'subquestion': 'TechInsights SemiAnalysis Huawei Ascend 910C 910B HBM bottleneck benchmark ve...', 'round': 12, 'origin': 'model', 'added': 1, 'total_for_subq': 74, 'remaining_budget': 16, 'retrieval_trace': {'planned_query': 'TechInsights SemiAnalysis Huawei Ascend 910C 910B HBM bottleneck benchmark versus Nvidia H100 independent teardown 2025', 'issued_queries': ['TechInsights SemiAnalysis Huawei \"Ascend 910C\" \"Ascend 910B\" Nvidia H100 HBM bottleneck benchmark independent teardown'], 'provider': 'searxng', 'provider_diagnostics': [{'status_code': 200, 'result_count': 63, 'latency_ms': 1458, 'unresponsive_engines': [\"['brave', 'Suspended: too many requests']\", \"['google cse', 'Suspended: too many requests']\", \"['google scholar', 'Suspended: access denied']\", \"['openairedatasets', 'HTTP error']\", \"['openairepublications', 'HTTP error']\", \"['openalex', 'Suspended: too many requests']\", \"['semantic scholar', 'parsing error']\"]}], 'raw_discovered_hit_count': 10, 'queries': [{'planned_query': 'TechInsights SemiAnalysis Huawei Ascend 910C 910B HBM bottleneck benchmark versus Nvidia H100 independent teardown 2025', 'issued_query': 'TechInsights SemiAnalysis Huawei \"Ascend 910C\" \"Ascend 910B\" Nvidia H100 HBM bottleneck benchmark independent teardown', 'raw_discovered_hit_count': 10, 'hits': [{'title': 'Huawei openPangu-2.0-Pro Trained on Ascend, Not... | Windows Forum', 'url': 'https://windowsforum.com/windows-news.4/huawei-openpangu-2-0-pro-trained-on-ascend-not-fully-domestic.441282/', 'engine': 'yandex+google', 'status': 'error', 'snippet': {'text': 'Huawei’s claim is straightforward: openPangu-2.0-Pro was trained on its Ascend platform, with Ascend 910B hardware in the training environment rather than Nvidia A100 or H100 GPUs.', 'untrusted': True}}, {'title': 'Huawei Ascend 950PR: The 1.56 PFLOP AI Chip vs Nvidia [2026]', 'url': 'https://tech-insider.org/huawei-ascend-950pr-ai-chip-nvidia-china-2026/', 'engine': 'google', 'status': 'ok', 'snippet': {'text': 'Apr 6, 2026 · ... Ascend 910B and 910C chips. Achieving this scale requires SMIC to ... Ascend 910C, 950PR, ByteDance, Alibaba, Baidu. Cambricon, $0.8-1B ...', 'untrusted': True}}, {'title': \"Huawei's Ascend 910C delivers 60% of Nvidia H100... | Hacker News\", 'url': 'https://news.ycombinator.com/item?id=42943906', 'engine': 'yandex+google', 'status': 'ok', 'snippet': {'text': \"- SMIC's Ascend 910B has a die size of 665.61mm², which is more than 6x larger. - The AI chiplet of Ascend 910 itself is already significantly larger than the whole Kirin 9000s die. There's no data on it from SMIC, but when TSMC produced it with equivalent N7+ process, it was 456.25mm²...\", 'untrusted': True}}, {'title': \"Huawei already has a new chip to rival Nvidia's AI GPUs\", 'url': 'https://www.tomshardware.com/tech-industry/artificial-intelligence/huawei-already-has-a-new-chip-to-rival-nvidia-ai-gpus', 'engine': 'google', 'status': 'ok', 'snippet': {'text': 'Aug 14, 2024 · ... Ascend 910B in 2024, less than about a million ... If Huawei can ramp up production of the Ascend 910C without further hindrances, Nvidia ...', 'untrusted': True}}, {'title': \"Huawei's Ascend 910D: Challenging Nvidia in China's AI Race\", 'url': 'https://kingy.ai/news/huaweis-ascend-910d-challenging-nvidia-in-chinas-ai-race/', 'engine': 'google', 'status': 'error', 'snippet': {'text': 'Apr 28, 2025 · Given that the Ascend 910C (a dual-chiplet design) ... (For perspective, Huawei reportedly expects to sell over 800,000 units of Ascend 910B ...', 'untrusted': True}}, {'title': \"Huawei AI CloudMatrix 384 – China's Answer to Nvidia GB200 NVL72\", 'url': 'https://newsletter.semianalysis.com/p/huawei-ai-cloudmatrix-384-chinas-answer-to-nvidia-gb200-nvl72', 'engine': 'yandex', 'status': 'ok', 'snippet': {'text': 'The CloudMatrix 384 consists of 384 Ascend 910C chips connected through an all-to-all topology. The tradeoff is simple: having five times as many Ascends more than offsets each GPU being only one-third the performance of an Nvidia Blackwell. Source: SemiAnalysis, Nvidia, Huawei.', 'untrusted': True}}, {'title': \"Huawei's Ascend 910C achieves 60% performance of Nvidia ...\", 'url': 'https://biz.chosun.com/en/en-it/2025/02/07/W2QL7KPWRZETHJXNAT6IOGGYBY/', 'engine': 'google', 'status': None, 'snippet': {'text': \"Feb 7, 2025 · Huawei's Ascend 910C achieves 60% performance of Nvidia H100 in DeepSeek AI model ... Both Huawei's Ascend 910B and 910C are reported to ...\", 'untrusted': True}}, {'title': 'Huawei Ascend 910B | AI Wiki', 'url': 'https://aiwiki.ai/wiki/huawei_ascend_910b', 'engine': 'yandex', 'status': None, 'snippet': {'text': \"The Huawei Ascend 910B is a data-center AI accelerator designed by Huawei's HiSilicon unit that became China's most widely deployed domestic alternative to restricted NVIDIA data-center GPUs across roughly 2023 and 2024.\", 'untrusted': True}}, {'title': \"News Posts matching 'Ascend' - TechPowerUp\", 'url': 'https://www.techpowerup.com/news-tags/Ascend', 'engine': 'google', 'status': None, 'snippet': {'text': \"Dec 13, 2025 · ... Ascend 910C reportedly delivering 60% of NVIDIA H100's performance. ... Ascend 910C processors, and 300,000 of the current-gen Ascend 910B chip.\", 'untrusted': True}}, {'title': 'YOLOv12 Remote Sensing Object Detection on Huawei Ascend 910B', 'url': 'https://ieeexplore.ieee.org/document/11327915/', 'engine': 'crossref', 'status': None}], 'extraction': {'attempted': 6, 'success': 4, 'failure': 2}, 'provider_diagnostic': {'status_code': 200, 'result_count': 63, 'latency_ms': 1458, 'unresponsive_engines': [\"['brave', 'Suspended: too many requests']\", \"['google cse', 'Suspended: too many requests']\", \"['google scholar', 'Suspended: access denied']\", \"['openairedatasets', 'HTTP error']\", \"['openairepublications', 'HTTP error']\", \"['openalex', 'Suspended: too many requests']\", \"['semantic scholar', 'parsing error']\"]}}], 'extraction': {'attempted': 6, 'success': 4, 'failure': 2, 'statuses': [{'url': 'https://windowsforum.com/windows-news.4/huawei-openpangu-2-0-pro-trained-on-ascend-not-fully-domestic.441282/', 'title': 'Just a moment...', 'status': 'error', 'fetched_ok': False, 'error_class': 'anti_bot'}, {'url': 'https://tech-insider.org/huawei-ascend-950pr-ai-chip-nvidia-china-2026/', 'title': 'Huawei Ascend 950PR: The 1.56 PFLOP AI Chip vs Nvidia [2026]', 'status': 'ok', 'fetched_ok': True}, {'url': 'https://news.ycombinator.com/item?id=42943906', 'title': \"Huawei's Ascend 910C delivers 60% of Nvidia H100 inference performance | Hacker News\", 'status': 'ok', 'fetched_ok': True}, {'url': 'https://www.tomshardware.com/tech-industry/artificial-intelligence/huawei-already-has-a-new-chip-to-rival-nvidia-ai-gpus', 'title': \"Huawei already has a new chip to rival Nvidia's AI GPUs — Ascend 910C aims to replace Nvidia's Blackwell in China | Tom's Hardware\", 'status': 'ok', 'fetched_ok': True}, {'url': 'https://kingy.ai/news/huaweis-ascend-910d-challenging-nvidia-in-chinas-ai-race/', 'title': 'Just a moment...', 'status': 'error', 'fetched_ok': False, 'error_class': 'anti_bot'}, {'url': 'https://newsletter.semianalysis.com/p/huawei-ai-cloudmatrix-384-chinas-answer-to-nvidia-gb200-nvl72', 'title': \"Huawei AI CloudMatrix 384 – China's Answer to Nvidia GB200 NVL72\", 'status': 'ok', 'fetched_ok': True}]}, 'reranked_passage_count': 6}}",
+      "effect_receipts": [],
+      "error": null,
+      "runtime_constraints": [],
+      "structured": {
+        "added": 1,
+        "ok": true,
+        "origin": "model",
+        "remaining_budget": 16,
+        "retrieval_trace": {
+          "extraction": {
+            "attempted": 6,
+            "failure": 2,
+            "statuses": [
+              {
+                "error_class": "anti_bot",
+                "fetched_ok": false,
+                "status": "error",
+                "title": "Just a moment...",
+                "url": "https://windowsforum.com/windows-news.4/huawei-openpangu-2-0-pro-trained-on-ascend-not-fully-domestic.441282/"
+              },
+              {
+                "fetched_ok": true,
+                "status": "ok",
+                "title": "Huawei Ascend 950PR: The 1.56 PFLOP AI Chip vs Nvidia [2026]",
+                "url": "https://tech-insider.org/huawei-ascend-950pr-ai-chip-nvidia-china-2026/"
+              },
+              {
+                "fetched_ok": true,
+                "status": "ok",
+                "title": "Huawei's Ascend 910C delivers 60% of Nvidia H100 inference performance | Hacker News",
+                "url": "https://news.ycombinator.com/item?id=42943906"
+              },
+              {
+                "fetched_ok": true,
+                "status": "ok",
+                "title": "Huawei already has a new chip to rival Nvidia's AI GPUs — Ascend 910C aims to replace Nvidia's Blackwell in China | Tom's Hardware",
+                "url": "https://www.tomshardware.com/tech-industry/artificial-intelligence/huawei-already-has-a-new-chip-to-rival-nvidia-ai-gpus"
+              },
+              {
+                "error_class": "anti_bot",
+                "fetched_ok": false,
+                "status": "error",
+                "title": "Just a moment...",
+                "url": "https://kingy.ai/news/huaweis-ascend-910d-challenging-nvidia-in-chinas-ai-race/"
+              },
+              {
+                "fetched_ok": true,
+                "status": "ok",
+                "title": "Huawei AI CloudMatrix 384 – China's Answer to Nvidia GB200 NVL72",
+                "url": "https://newsletter.semianalysis.com/p/huawei-ai-cloudmatrix-384-chinas-answer-to-nvidia-gb200-nvl72"
+              }
+            ],
+            "success": 4
+          },
+          "issued_queries": [
+            "TechInsights SemiAnalysis Huawei \"Ascend 910C\" \"Ascend 910B\" Nvidia H100 HBM bottleneck benchmark independent teardown"
+          ],
+          "planned_query": "TechInsights SemiAnalysis Huawei Ascend 910C 910B HBM bottleneck benchmark versus Nvidia H100 independent teardown 2025",
+          "provider": "searxng",
+          "provider_diagnostics": [
+            {
+              "latency_ms": 1458,
+              "result_count": 63,
+              "status_code": 200,
+              "unresponsive_engines": [
+                "['brave', 'Suspended: too many requests']",
+                "['google cse', 'Suspended: too many requests']",
+                "['google scholar', 'Suspended: access denied']",
+                "['openairedatasets', 'HTTP error']",
+                "['openairepublications', 'HTTP error']",
+                "['openalex', 'Suspended: too many requests']",
+                "['semantic scholar', 'parsing error']"
+              ]
+            }
+          ],
+          "queries": [
+            {
+              "extraction": {
+                "attempted": 6,
+                "failure": 2,
+                "success": 4
+              },
+              "hits": [
+                {
+                  "engine": "yandex+google",
+                  "snippet": {
+                    "text": "Huawei’s claim is straightforward: openPangu-2.0-Pro was trained on its Ascend platform, with Ascend 910B hardware in the training environment rather than Nvidia A100 or H100 GPUs.",
+                    "untrusted": true
+                  },
+                  "status": "error",
+                  "title": "Huawei openPangu-2.0-Pro Trained on Ascend, Not... | Windows Forum",
+                  "url": "https://windowsforum.com/windows-news.4/huawei-openpangu-2-0-pro-trained-on-ascend-not-fully-domestic.441282/"
+                },
+                {
+                  "engine": "google",
+                  "snippet": {
+                    "text": "Apr 6, 2026 · ... Ascend 910B and 910C chips. Achieving this scale requires SMIC to ... Ascend 910C, 950PR, ByteDance, Alibaba, Baidu. Cambricon, $0.8-1B ...",
+                    "untrusted": true
+                  },
+                  "status": "ok",
+                  "title": "Huawei Ascend 950PR: The 1.56 PFLOP AI Chip vs Nvidia [2026]",
+                  "url": "https://tech-insider.org/huawei-ascend-950pr-ai-chip-nvidia-china-2026/"
+                },
+                {
+                  "engine": "yandex+google",
+                  "snippet": {
+                    "text": "- SMIC's Ascend 910B has a die size of 665.61mm², which is more than 6x larger. - The AI chiplet of Ascend 910 itself is already significantly larger than the whole Kirin 9000s die. There's no data on it from SMIC, but when TSMC produced it with equivalent N7+ process, it was 456.25mm²...",
+                    "untrusted": true
+                  },
+                  "status": "ok",
+                  "title": "Huawei's Ascend 910C delivers 60% of Nvidia H100... | Hacker News",
+                  "url": "https://news.ycombinator.com/item?id=42943906"
+                },
+                {
+                  "engine": "google",
+                  "snippet": {
+                    "text": "Aug 14, 2024 · ... Ascend 910B in 2024, less than about a million ... If Huawei can ramp up production of the Ascend 910C without further hindrances, Nvidia ...",
+                    "untrusted": true
+                  },
+                  "status": "ok",
+                  "title": "Huawei already has a new chip to rival Nvidia's AI GPUs",
+                  "url": "https://www.tomshardware.com/tech-industry/artificial-intelligence/huawei-already-has-a-new-chip-to-rival-nvidia-ai-gpus"
+                },
+                {
+                  "engine": "google",
+                  "snippet": {
+                    "text": "Apr 28, 2025 · Given that the Ascend 910C (a dual-chiplet design) ... (For perspective, Huawei reportedly expects to sell over 800,000 units of Ascend 910B ...",
+                    "untrusted": true
+                  },
+                  "status": "error",
+                  "title": "Huawei's Ascend 910D: Challenging Nvidia in China's AI Race",
+                  "url": "https://kingy.ai/news/huaweis-ascend-910d-challenging-nvidia-in-chinas-ai-race/"
+                },
+                {
+                  "engine": "yandex",
+                  "snippet": {
+                    "text": "The CloudMatrix 384 consists of 384 Ascend 910C chips connected through an all-to-all topology. The tradeoff is simple: having five times as many Ascends more than offsets each GPU being only one-third the performance of an Nvidia Blackwell. Source: SemiAnalysis, Nvidia, Huawei.",
+                    "untrusted": true
+                  },
+                  "status": "ok",
+                  "title": "Huawei AI CloudMatrix 384 – China's Answer to Nvidia GB200 NVL72",
+                  "url": "https://newsletter.semianalysis.com/p/huawei-ai-cloudmatrix-384-chinas-answer-to-nvidia-gb200-nvl72"
+                },
+                {
+                  "engine": "google",
+                  "snippet": {
+                    "text": "Feb 7, 2025 · Huawei's Ascend 910C achieves 60% performance of Nvidia H100 in DeepSeek AI model ... Both Huawei's Ascend 910B and 910C are reported to ...",
+                    "untrusted": true
+                  },
+                  "status": null,
+                  "title": "Huawei's Ascend 910C achieves 60% performance of Nvidia ...",
+                  "url": "https://biz.chosun.com/en/en-it/2025/02/07/W2QL7KPWRZETHJXNAT6IOGGYBY/"
+                },
+                {
+                  "engine": "yandex",
+                  "snippet": {
+                    "text": "The Huawei Ascend 910B is a data-center AI accelerator designed by Huawei's HiSilicon unit that became China's most widely deployed domestic alternative to restricted NVIDIA data-center GPUs across roughly 2023 and 2024.",
+                    "untrusted": true
+                  },
+                  "status": null,
+                  "title": "Huawei Ascend 910B | AI Wiki",
+                  "url": "https://aiwiki.ai/wiki/huawei_ascend_910b"
+                },
+                {
+                  "engine": "google",
+                  "snippet": {
+                    "text": "Dec 13, 2025 · ... Ascend 910C reportedly delivering 60% of NVIDIA H100's performance. ... Ascend 910C processors, and 300,000 of the current-gen Ascend 910B chip.",
+                    "untrusted": true
+                  },
+                  "status": null,
+                  "title": "News Posts matching 'Ascend' - TechPowerUp",
+                  "url": "https://www.techpowerup.com/news-tags/Ascend"
+                },
+                {
+                  "engine": "crossref",
+                  "status": null,
+                  "title": "YOLOv12 Remote Sensing Object Detection on Huawei Ascend 910B",
+                  "url": "https://ieeexplore.ieee.org/document/11327915/"
+                }
+              ],
+              "issued_query": "TechInsights SemiAnalysis Huawei \"Ascend 910C\" \"Ascend 910B\" Nvidia H100 HBM bottleneck benchmark independent teardown",
+              "planned_query": "TechInsights SemiAnalysis Huawei Ascend 910C 910B HBM bottleneck benchmark versus Nvidia H100 independent teardown 2025",
+              "provider_diagnostic": {
+                "latency_ms": 1458,
+                "result_count": 63,
+                "status_code": 200,
+                "unresponsive_engines": [
+                  "['brave', 'Suspended: too many requests']",
+                  "['google cse', 'Suspended: too many requests']",
+                  "['google scholar', 'Suspended: access denied']",
+                  "['openairedatasets', 'HTTP error']",
+                  "['openairepublications', 'HTTP error']",
+                  "['openalex', 'Suspended: too many requests']",
+                  "['semantic scholar', 'parsing error']"
+                ]
+              },
+              "raw_discovered_hit_count": 10
+            }
+          ],
+          "raw_discovered_hit_count": 10,
+          "reranked_passage_count": 6
+        },
+        "round": 12,
+        "subquestion": "TechInsights SemiAnalysis Huawei Ascend 910C 910B HBM bottleneck benchmark ve...",
+        "total_for_subq": 74
+      },
+      "success": true,
+      "tool_name": "observation"
+    }
+  }
+]

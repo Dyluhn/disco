@@ -95,12 +95,15 @@ class ConfigSectionWriter:
     def save_search(self, search: SearchSettings) -> RouterConfig:
         """Persist the configured web-discovery provider over the config.
 
-        When the provider is the bundled in-process tier (ddgs), the persisted
+        When the provider is the bundled keyless composite, the persisted
         base_url is cleared so a stale self-host LAN URL (e.g. from a previous
         searxng selection) cannot silently re-engage if the user later switches
-        back to searxng without re-entering the URL."""
-        if search.provider == "ddgs":
+        back to searxng without re-entering the URL. `categories` is a SearXNG-only
+        field, so it is cleared for every other tier for the same reason."""
+        if search.provider == "bundled":
             search = search.model_copy(update={"base_url": ""})
+        if search.provider != "searxng":
+            search = search.model_copy(update={"categories": ""})
         cfg = self._document.load()
         return self._document.save(cfg.model_copy(update={"search": search}))
 

@@ -26,6 +26,7 @@ ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
     DISCO_ENCODER_TIER=${DISCO_ENCODER_TIER} \
     FASTEMBED_CACHE_PATH=/opt/disco-cache/fastembed \
+    DISCO_NLI_MODEL_DIR=/opt/disco-cache/nli \
     DISCO_TTS_DIR=/opt/disco-cache/tts
 
 WORKDIR /app
@@ -39,6 +40,8 @@ COPY current/packages/retrieval/pyproject.toml current/packages/retrieval/pyproj
 COPY current/packages/tools/pyproject.toml current/packages/tools/pyproject.toml
 COPY current/packages/agent-server/pyproject.toml current/packages/agent-server/pyproject.toml
 COPY current/packages/app-server/pyproject.toml current/packages/app-server/pyproject.toml
+# uv validates every declared member even when its distribution is excluded.
+COPY development/pyproject.toml development/pyproject.toml
 RUN uv sync --frozen --no-dev --all-packages --no-install-workspace
 
 # Baked runtime assets. Keep this after deps but before application source, or a
@@ -54,11 +57,12 @@ COPY current/packages/ ./current/packages/
 # Single incantation that lands all 5 members + the agent-server's bundled TTS
 # (kokoro-onnx, lameenc, numpy — now core deps) + weasyprint, and NOT the
 # browser extra:
-#   --all-packages : install every workspace member (core,tools,retrieval,
-#                    agent-server,app-server) into one venv
+#   --all-packages : install the runtime workspace members into one venv
+#   --no-install-package disco-harness : the observer is development-only;
+#                    its source is deliberately absent from the production image
 #   --frozen       : honour uv.lock exactly, never re-resolve
 #   --no-dev       : drop the shared dev toolchain (pytest/ruff/playwright/etc.)
-RUN uv sync --frozen --no-dev --all-packages
+RUN uv sync --frozen --no-dev --all-packages --no-install-package disco-harness
 
 # ---------------------------------------------------------------------------
 # Stage 1b — the JavaScript runtime that stdio MCP servers need.
@@ -145,6 +149,7 @@ ENV PATH=/app/.venv/bin:$PATH \
     PYTHONUNBUFFERED=1 \
     DISCO_ENCODER_TIER=${DISCO_ENCODER_TIER} \
     FASTEMBED_CACHE_PATH=/opt/disco-cache/fastembed \
+    DISCO_NLI_MODEL_DIR=/opt/disco-cache/nli \
     DISCO_TTS_DIR=/opt/disco-cache/tts
 
 # Both servers default to PMX_HOST/PMX_DB/… from the environment; compose

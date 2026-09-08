@@ -26,7 +26,13 @@ import { decideVerification } from "../src/lib/harness/verificationCapture";
 // port, so a hardcoded :8000 silently drives whatever happens to occupy that port on the host
 // — or nothing at all. The literal stays only as the split-origin dev default.
 const API = process.env.DISCO_RELIABILITY_AGENT_URL ?? "http://127.0.0.1:8000";
-const REPO_ROOT = process.env.PMX_REPO_ROOT ?? path.resolve(path.dirname(new URL(import.meta.url).pathname), "../..");
+// This file lives at `current/frontend/e2e-live/`, so the repo root is THREE
+// levels up; `../..` landed on `current/`, which made every PYTHONPATH entry
+// below point at a `current/current/...` that does not exist and the classifier
+// die with `ModuleNotFoundError`.
+const REPO_ROOT =
+  process.env.PMX_REPO_ROOT ??
+  path.resolve(path.dirname(new URL(import.meta.url).pathname), "../../..");
 // relay WRITES MINIMAX_RELAY_LOG (minimax_relay.py); primary, with PMX_RELAY_LOG legacy alias.
 // DISCO_PROVIDER_LEDGER is the GOVERNED runner's ledger var — without it a governed run reads
 // no ledger, skips as "relay down", and the provider-identity assertions never adjudicate.
@@ -331,7 +337,9 @@ test("one stability build → classify_dossier PASS (static_smoke_strict)", asyn
     timeout: 60_000,
     env: {
       ...process.env,
-      PYTHONPATH: ["current/packages/core/src", "current/packages/tools/src", "current/packages/agent-server/src", "."]
+      // `development` carries the `harness` package being run as `-m`; it is not
+      // an installed distribution, so nothing else puts it on the path.
+      PYTHONPATH: ["current/packages/core/src", "current/packages/tools/src", "current/packages/agent-server/src", "development", "."]
         .map((p) => path.join(REPO_ROOT, p))
         .join(":"),
     },

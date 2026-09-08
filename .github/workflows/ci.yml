@@ -172,12 +172,12 @@ jobs:
       # no lane at all. Widened to the whole tree to match `make harness`;
       # F6-b's `live` marker on the marathon phases keeps it hermetic.
       - name: Harness tests (contract/fuzz/eval — advisory)
-        run: PYTHONPATH=. uv run pytest harness
+        run: uv run pytest development/harness
 
       # PKG-19-CERT-STRUCTURAL finding F2: the `integrations` root carried 9
       # certified ids and was named by no Makefile target and no CI step.
       - name: Integrations tests (advisory)
-        run: PYTHONPATH=. uv run pytest integrations
+        run: uv run pytest current/integrations
 
       - name: Set up Node
         uses: actions/setup-node@v4

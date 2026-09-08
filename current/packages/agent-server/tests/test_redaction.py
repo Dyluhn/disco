@@ -93,6 +93,18 @@ def test_provider_prefixed_secrets_are_scrubbed(secret: str) -> None:
         assert sample not in out, f"scrubber left fragment in output: {out!r}"
 
 
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://example.com/ai-safety-report-global-risks-and-governance/",
+        "https://example.com/2026-ai-laws-update-key-regulations-and-guidance/",
+        "https://epoch.ai/publications/what-skills-does-swe-bench-verified-evaluate",
+    ],
+)
+def test_provider_secret_pattern_preserves_ordinary_url_slugs(url: str) -> None:
+    assert redact_text(url) == url
+
+
 # ---- 2. Bearer / Authorization headers -------------------------------------
 
 BEARER_CASES = [

@@ -1,0 +1,396 @@
+{
+  "artifacts": {
+    "cassette_jsonl": "/var/home/dylan/projects/disco/development/harness/runs/muse-live-smoke-2026-08-24/cassette.jsonl",
+    "events_jsonl": "/var/home/dylan/projects/disco/development/harness/runs/muse-live-smoke-2026-08-24/events.jsonl",
+    "inspect_json": "/var/home/dylan/projects/disco/development/harness/runs/muse-live-smoke-2026-08-24/inspect.json",
+    "model_io_jsonl": "/var/home/dylan/projects/disco/development/harness/runs/muse-live-smoke-2026-08-24/model_io.jsonl",
+    "report": "/var/home/dylan/projects/disco/development/harness/runs/muse-live-smoke-2026-08-24/report.md",
+    "report_json": "/var/home/dylan/projects/disco/development/harness/runs/muse-live-smoke-2026-08-24/report.json",
+    "summary_json": "/var/home/dylan/projects/disco/development/harness/runs/muse-live-smoke-2026-08-24/summary.json",
+    "summary_markdown": "/var/home/dylan/projects/disco/development/harness/runs/muse-live-smoke-2026-08-24/summary.md",
+    "thrash_json": "/var/home/dylan/projects/disco/development/harness/runs/muse-live-smoke-2026-08-24/thrash.json",
+    "timeline_markdown": "/var/home/dylan/projects/disco/development/harness/runs/muse-live-smoke-2026-08-24/timeline.md"
+  },
+  "batch_id": null,
+  "bounds": [],
+  "errors": [
+    "Driver 'prov-opencode-go-muse-spark-1-2-contributor' rejected the API key: provider prov-opencode-go-muse-spark-1-2-contributor returned HTTP 401 type=authentication_error \u2014 Unauthorized",
+    "ReportContractError: 1 validation error for ReportEvent\n  Value error, a finished report requires a non-empty executive summary [type=value_error, input_value={'kind': 'report', 'query...], 'pending_probes': []}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.13/v/value_error"
+  ],
+  "events": [
+    {
+      "elapsed_ms": 90,
+      "kind": "live",
+      "payload": {
+        "state": {
+          "active_agent_view_id": null,
+          "active_agent_view_seq": null,
+          "agent_view_pending": false,
+          "conversation_id": "conv_2c47ca8609bc4d678f50533d0c3fe89d",
+          "execution_status": "IDLE",
+          "extras": {
+            "assist": false,
+            "autonomous": true
+          },
+          "iteration": 0,
+          "last_seq": 0,
+          "max_iterations": 500,
+          "pending_action_id": null,
+          "pending_alternatives_id": null,
+          "pending_clarify_id": null,
+          "pending_plan_id": null,
+          "pending_question_id": null,
+          "pending_questions_v2_id": null,
+          "sandbox_backend": "podman"
+        },
+        "type": "state"
+      },
+      "phase": "planning",
+      "seq": 1
+    },
+    {
+      "elapsed_ms": 90,
+      "kind": "live",
+      "payload": {
+        "command": "send_message",
+        "type": "harness_control"
+      },
+      "phase": "lifecycle",
+      "seq": 2
+    },
+    {
+      "elapsed_ms": 97,
+      "kind": "live",
+      "payload": {
+        "error": null,
+        "event": {
+          "agent_view_id": null,
+          "id": "evt_701598eb4f914116b08dee2385738ee4",
+          "kind": "message",
+          "message": {
+            "content": "What are the latest innovations in AI as of August 2026, and which advances are most consequential?",
+            "images": null,
+            "role": "user",
+            "tool_call_id": null,
+            "tool_calls": null
+          },
+          "meta": {},
+          "schema_version": 1,
+          "seq": 1,
+          "source": "user",
+          "timestamp": "2026-08-25T02:25:46.235859Z",
+          "verification_requirements": null
+        },
+        "file_stream": null,
+        "mcp_approval": null,
+        "state": null,
+        "token": "[REDACTED]",
+        "token_for_event_id": "[REDACTED]",
+        "type": "event"
+      },
+      "phase": "extract",
+      "seq": 3
+    },
+    {
+      "elapsed_ms": 2807,
+      "kind": "live",
+      "payload": {
+        "error": null,
+        "event": {
+          "agent_view_id": null,
+          "code": "deep_research_preflight",
+          "detail": "Driver 'prov-opencode-go-muse-spark-1-2-contributor' rejected the API key: provider prov-opencode-go-muse-spark-1-2-contributor returned HTTP 401 type=authentication_error \u2014 Unauthorized",
+          "id": "evt_de71a6b86b314159932ac2ea43805165",
+          "kind": "error",
+          "meta": {},
+          "schema_version": 1,
+          "seq": 2,
+          "source": "system",
+          "timestamp": "2026-08-25T02:25:48.943337Z"
+        },
+        "file_stream": null,
+        "mcp_approval": null,
+        "state": null,
+        "token": "[REDACTED]",
+        "token_for_event_id": "[REDACTED]",
+        "type": "event"
+      },
+      "phase": "search",
+      "seq": 4
+    },
+    {
+      "elapsed_ms": 2807,
+      "kind": "live",
+      "payload": {
+        "error": null,
+        "event": {
+          "agent_view_id": null,
+          "detail": "Driver 'prov-opencode-go-muse-spark-1-2-contributor' rejected the API key: provider prov-opencode-go-muse-spark-1-2-contributor returned HTTP 401 type=authentication_error \u2014 Unauthorized",
+          "host_mutation_id": null,
+          "id": "evt_4038c055831d4437b18cd41ded321400",
+          "kind": "status",
+          "meta": {},
+          "plan_verification_transition": null,
+          "plan_verifier_failure": null,
+          "plan_verifier_pass": null,
+          "recovery_lease_transition": null,
+          "run_intent_id": null,
+          "schema_version": 1,
+          "seq": 3,
+          "source": "system",
+          "status": "ERROR",
+          "timestamp": "2026-08-25T02:25:48.948885Z"
+        },
+        "file_stream": null,
+        "mcp_approval": null,
+        "state": null,
+        "token": "[REDACTED]",
+        "token_for_event_id": "[REDACTED]",
+        "type": "event"
+      },
+      "phase": "extract",
+      "seq": 5
+    }
+  ],
+  "inspect_trace": {
+    "conversation_id": "conv_2c47ca8609bc4d678f50533d0c3fe89d",
+    "events": [
+      {
+        "agent_view_id": null,
+        "id": "evt_701598eb4f914116b08dee2385738ee4",
+        "kind": "message",
+        "message": {
+          "content": "What are the latest innovations in AI as of August 2026, and which advances are most consequential?",
+          "images": null,
+          "role": "user",
+          "tool_call_id": null,
+          "tool_calls": null
+        },
+        "meta": {},
+        "schema_version": 1,
+        "seq": 1,
+        "source": "user",
+        "timestamp": "2026-08-25T02:25:46.235859Z",
+        "verification_requirements": null
+      },
+      {
+        "agent_view_id": null,
+        "code": "deep_research_preflight",
+        "detail": "Driver 'prov-opencode-go-muse-spark-1-2-contributor' rejected the API key: provider prov-opencode-go-muse-spark-1-2-contributor returned HTTP 401 type=authentication_error \u2014 Unauthorized",
+        "id": "evt_de71a6b86b314159932ac2ea43805165",
+        "kind": "error",
+        "meta": {},
+        "schema_version": 1,
+        "seq": 2,
+        "source": "system",
+        "timestamp": "2026-08-25T02:25:48.943337Z"
+      },
+      {
+        "agent_view_id": null,
+        "detail": "Driver 'prov-opencode-go-muse-spark-1-2-contributor' rejected the API key: provider prov-opencode-go-muse-spark-1-2-contributor returned HTTP 401 type=authentication_error \u2014 Unauthorized",
+        "host_mutation_id": null,
+        "id": "evt_4038c055831d4437b18cd41ded321400",
+        "kind": "status",
+        "meta": {},
+        "plan_verification_transition": null,
+        "plan_verifier_failure": null,
+        "plan_verifier_pass": null,
+        "recovery_lease_transition": null,
+        "run_intent_id": null,
+        "schema_version": 1,
+        "seq": 3,
+        "source": "system",
+        "status": "ERROR",
+        "timestamp": "2026-08-25T02:25:48.948885Z"
+      }
+    ],
+    "inspect_trace": {
+      "conversation_id": "conv_2c47ca8609bc4d678f50533d0c3fe89d",
+      "dropped_event_count": 0,
+      "event_count": 2,
+      "events": [
+        {
+          "attempt": 1,
+          "chosen_model": "muse-spark-1.2-contributor",
+          "kind": "routing",
+          "overflow_triggers": [],
+          "path": "pinned",
+          "provider": "prov-opencode-go-muse-spark-1-2-contributor",
+          "reason": "terminal failure: LLMAuthError (config)",
+          "role": "rag_answerer",
+          "seq": 39
+        },
+        {
+          "attempt": 1,
+          "chosen_model": "muse-spark-1.2-contributor",
+          "kind": "routing",
+          "overflow_triggers": [
+            "driver_preflight"
+          ],
+          "path": "manual",
+          "provider": "prov-opencode-go-muse-spark-1-2-contributor",
+          "reason": "terminal failure: shared driver preflight",
+          "role": "rag_answerer",
+          "seq": 40
+        }
+      ],
+      "model_io": [],
+      "progress_shadows": [],
+      "routing_decisions": [
+        {
+          "attempt": 1,
+          "chosen_model": "muse-spark-1.2-contributor",
+          "overflow_triggers": [],
+          "path": "pinned",
+          "provider": "prov-opencode-go-muse-spark-1-2-contributor",
+          "reason": "terminal failure: LLMAuthError (config)",
+          "role": "rag_answerer"
+        },
+        {
+          "attempt": 1,
+          "chosen_model": "muse-spark-1.2-contributor",
+          "overflow_triggers": [
+            "driver_preflight"
+          ],
+          "path": "manual",
+          "provider": "prov-opencode-go-muse-spark-1-2-contributor",
+          "reason": "terminal failure: shared driver preflight",
+          "role": "rag_answerer"
+        }
+      ],
+      "spans": [],
+      "tool_scopes": []
+    },
+    "project_manifest": null,
+    "runtime": {
+      "live_session": false,
+      "mcp_retrieval_extractions": [],
+      "mcp_retrieval_searches": [],
+      "sandbox_backend": "podman",
+      "sandbox_instance_ids": [],
+      "sandbox_state": null
+    },
+    "state": {
+      "active_agent_view_id": null,
+      "active_agent_view_seq": null,
+      "agent_view_pending": false,
+      "conversation_id": "conv_2c47ca8609bc4d678f50533d0c3fe89d",
+      "execution_status": "ERROR",
+      "extras": {},
+      "iteration": 0,
+      "last_seq": 3,
+      "max_iterations": 500,
+      "pending_action_id": null,
+      "pending_alternatives_id": null,
+      "pending_clarify_id": null,
+      "pending_plan_id": null,
+      "pending_question_id": null,
+      "pending_questions_v2_id": null
+    }
+  },
+  "invariants": {
+    "bounds_and_errors_recorded": true,
+    "citations_resolve": false,
+    "depth_length_target": false,
+    "executive_summary_substantive": false,
+    "executive_summary_synthesizes_report": true,
+    "final_report_exists": false,
+    "heading_hierarchy_valid": false,
+    "inspect_trace_complete": false,
+    "no_diagnostic_or_research_process_language": true,
+    "no_empty_or_failure_sections": false,
+    "repetition_acceptable": false,
+    "section_citations_present": false,
+    "stopped_checkpoint_valid": true,
+    "substantive_section_bodies": false,
+    "thrash_clean": true
+  },
+  "model_io": [],
+  "ok": false,
+  "probes": [],
+  "report": {
+    "all_hits": [],
+    "bounded_by": null,
+    "cited_passage_ids": [],
+    "claims": [],
+    "completed_probes": [],
+    "depth_tier": "quick",
+    "kind": "report",
+    "passages": [],
+    "pending_probes": [],
+    "query": "What are the latest innovations in AI as of August 2026, and which advances are most consequential?",
+    "sections": [],
+    "summary": ""
+  },
+  "report_markdown": "",
+  "request": {
+    "auth_token": "[REDACTED]",
+    "base_url": "http://127.0.0.1:8000",
+    "capture_inspect": true,
+    "cassette": null,
+    "depth": "quick",
+    "model": "prov-opencode-go-muse-spark-1-2-contributor",
+    "provider": null,
+    "query": "What are the latest innovations in AI as of August 2026, and which advances are most consequential?",
+    "recency": null,
+    "surface": "deep_research",
+    "timeout_s": 600.0
+  },
+  "run_id": null,
+  "schema_version": 2,
+  "telemetry": {
+    "actual_models": [],
+    "actual_providers": [],
+    "batch_id": null,
+    "citation_count": 0,
+    "duration_ms": 3449,
+    "event_count": 5,
+    "model_io_count": 0,
+    "phase_counts": {
+      "extract": 2,
+      "gap": 0,
+      "lifecycle": 1,
+      "planning": 1,
+      "search": 1,
+      "synthesis": 0,
+      "verification": 0
+    },
+    "probe_count": 0,
+    "quality": {
+      "claim_count": 0,
+      "distinct_work_count": 0,
+      "dominant_work_claim_share": 0.0,
+      "hedge_phrase_count": 0,
+      "high_specificity_claims": 0,
+      "near_duplicate_body_paragraphs": 0,
+      "passage_count": 0,
+      "repeated_hedge_phrases": {},
+      "single_work_specific_claims": 0,
+      "source_concentration_flagged": false
+    },
+    "report_chars": 0,
+    "report_words": 0,
+    "requested_depth": "quick",
+    "requested_model": "prov-opencode-go-muse-spark-1-2-contributor",
+    "requested_provider": null,
+    "requested_recency": null,
+    "run_id": null,
+    "source_count": 0,
+    "trace_event_count": 3
+  },
+  "thrash": {
+    "findings": [],
+    "passed": true,
+    "signals": {
+      "malformed_turns": 0,
+      "max_no_progress_streak": 0,
+      "max_repeated_deficiency": 0,
+      "max_repeated_query": 0,
+      "max_repeated_query_streak": 0,
+      "model_io_count": 0,
+      "query_count": 0,
+      "retrieval_failure_turns": 0,
+      "unique_query_count": 0
+    }
+  }
+}

@@ -17,7 +17,9 @@ dependencies = []
 package = false
 
 [tool.uv.workspace]
-members = ["current/packages/*"]
+# `development` is the harness member (development-only, never published); it is
+# what makes `import harness` resolve without a PYTHONPATH. See development/pyproject.toml.
+members = ["current/packages/*", "development"]
 
 [dependency-groups]
 # Shared dev toolchain for every member package.

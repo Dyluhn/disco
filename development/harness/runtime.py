@@ -20,6 +20,7 @@ from .providers import (
     ReplayExtractionProvider,
     ReplaySearchProvider,
 )
+from .research_environment import attach_environment
 from .router import RecordingRouter, ReplayRouter
 from .sandbox import RecordingSandboxService, ReplaySandboxService
 
@@ -28,13 +29,14 @@ def _live_encoders() -> dict:
     """The real, deterministic fastembed encoders (reranker/embedder/nli)."""
     from disco.retrieval.live import build_live_retrieval
 
-    deps = build_live_retrieval()  # defaults: bundled encoders + ddgs/local (we override those)
+    deps = build_live_retrieval()  # defaults: bundled encoders + keyless search/local
     return {"reranker": deps["reranker"], "embedder": deps["embedder"], "nli": deps["nli"]}
 
 
 def build_replay_runtime(cassette: Cassette, store, *, config_store=None, secret_store=None):
     """A runtime whose LLM + search + extraction are served from the cassette
-    (encoders run live). Fully deterministic; safe to run anywhere."""
+    (encoders run live). Execute through replay_conversation, which enters the
+    scoped recorded policy environment and verifies all its reads were consumed."""
     providers = {
         "search": ReplaySearchProvider(cassette),
         "extraction": ReplayExtractionProvider(cassette),
@@ -44,7 +46,7 @@ def build_replay_runtime(cassette: Cassette, store, *, config_store=None, secret
     # source (`DriverRuntime.config_now`), so it must report the same document the
     # runtime's own config store holds, not a second one.
     cfg_store = config_store or ConfigStore(":memory:")
-    return ConversationRuntime(
+    runtime = ConversationRuntime(
         store,
         config_store=cfg_store,
         secret_store=secret_store or SecretStore(":memory:"),
@@ -55,6 +57,7 @@ def build_replay_runtime(cassette: Cassette, store, *, config_store=None, secret
         # runs never touch it, so this is harmless there).
         sandbox_service=ReplaySandboxService(cassette),
     )
+    return attach_environment(runtime, cassette, recording=False)
 
 
 def build_recording_runtime(
@@ -65,9 +68,12 @@ def build_recording_runtime(
     secret_store,
     model_pick="driver-local",
     record_sandbox=False,
+    enable_thinking=False,
 ):
     """A runtime backed by the REAL services, wrapped to record every LLM + search
-    + extraction call into `cassette`. Run a real flow through it, then `save()`.
+    + extraction call into `cassette`. Run a real flow inside
+    `research_environment.runtime_environment(runtime)`, then `save()`. The
+    scope also records policy cooldown and clock reads outside provider calls.
 
     `record_sandbox=True` additionally records the build sandbox (exec/read/list)
     by wrapping the host `process` backend — set it when capturing a BUILD demo
@@ -97,8 +103,8 @@ def build_recording_runtime(
     # Compose the recording router through the runtime's canonical injection seam.
     # Assigning the retired `ConversationRuntime._injected_router` attribute no
     # longer reaches DriverRuntime and silently produced an empty cassette.
-    base_router = live_rt._router_now(pick=model_pick)
-    return ConversationRuntime(
+    base_router = live_rt._router_now(pick=model_pick, enable_thinking=enable_thinking)
+    runtime = ConversationRuntime(
         store,
         config_store=config_store,
         secret_store=secret_store,
@@ -106,3 +112,4 @@ def build_recording_runtime(
         research_providers=providers,
         sandbox_service=sandbox,
     )
+    return attach_environment(runtime, cassette, recording=True)

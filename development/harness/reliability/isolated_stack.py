@@ -191,6 +191,7 @@ class StackManager:
                 # preview_target reserves both the conventional protected ports and
                 # these effective alternate ports for shared-host dev sandboxes.
                 "DISCO_AGENT_PORT": str(self.agent_port),
+                "DISCO_AGENT_BASE": self.agent_url,
                 "DISCO_APP_PORT": str(self.app_port),
                 "DISCO_UI_PORT": str(self.ui_port),
                 # Each disposable stack's agent port deterministically owns a
@@ -224,7 +225,7 @@ class StackManager:
     def _prepare_config(self) -> None:
         if not self.config_path.exists():
             subprocess.run(
-                [str(self.python), str(self.repo / "scripts" / "seed_config.py")],
+                [str(self.python), str(self.repo / "development" / "scripts" / "seed_config.py")],
                 cwd=self.repo,
                 env=self.env,
                 check=True,

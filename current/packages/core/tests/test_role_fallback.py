@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import pytest
 from disco.core import LLMMessage
+from disco.core.inspect import registry
 from disco.core.llm import (
+    CallContext,
     CapabilityProfile,
     CompletionRequest,
     LLMTransientError,
@@ -49,12 +51,32 @@ async def test_aux_role_transient_exhaustion_uses_role_fallback():
 
     assert resp.text == "fallback-ok"
     assert resp.model_used == "fallback-llama"
-    assert primary.calls == 5
+    assert primary.calls == 8
     assert fallback.calls == 1
     assert len(sink.decisions) == 1
     assert sink.decisions[0].path == "role_fallback"
     assert sink.decisions[0].reason == "role_fallback after local-driver-q4"
     assert sink.decisions[0].overflow_triggers == ["original_model:local-driver-q4"]
+
+
+async def test_inspect_call_ordinal_stays_monotonic_across_role_fallback(monkeypatch):
+    monkeypatch.setenv("DISCO_INSPECT", "1")
+    registry().clear()
+    local = FakeModelProvider("ollama", raises=LLMTransientError("hidden"))
+    router, sink, primary, fallback = _router_with_fallback(local=local)
+
+    response = await router.complete(
+        _req(ModelRole.SUMMARIZER),
+        context=CallContext(conversation_id="fallback-ordinal"),
+    )
+
+    assert response.routing is not None and response.routing.attempt == 1
+    assert sink.decisions[0].attempt == 1
+    assert primary.calls == 8 and fallback.calls == 1
+    rows = registry().snapshot("fallback-ordinal")["model_attempts"]
+    expected_ordinals = [ordinal for ordinal in range(1, 10) for _ in (0, 1)]
+    assert [row["call_ordinal"] for row in rows] == expected_ordinals
+    assert [row["attempt"] for row in rows][-2:] == [1, 1]
 
 
 async def test_driver_role_never_uses_role_fallback():
@@ -64,7 +86,7 @@ async def test_driver_role_never_uses_role_fallback():
     with pytest.raises(LLMTransientError):
         await router.complete(_req(ModelRole.AGENT_DRIVER))
 
-    assert primary.calls == 5
+    assert primary.calls == 8
     assert fallback.calls == 0
 
 
@@ -83,7 +105,7 @@ async def test_vision_verifier_never_falls_back_to_json_only_auxiliary_model():
     with pytest.raises(LLMTransientError):
         await router.complete(req)
 
-    assert primary.calls == 5
+    assert primary.calls == 8
     assert fallback.calls == 0
 
 
@@ -119,7 +141,7 @@ async def test_image_payload_itself_blocks_json_only_role_fallback():
     with pytest.raises(LLMTransientError):
         await router.complete(req)
 
-    assert local.calls == 5
+    assert local.calls == 8
     assert fallback.calls == 0
 
 
@@ -130,7 +152,7 @@ async def test_fallback_disabled_keeps_current_transient_behavior():
     with pytest.raises(LLMTransientError):
         await router.complete(_req(ModelRole.SUMMARIZER))
 
-    assert primary.calls == 5
+    assert primary.calls == 8
     assert fallback.calls == 0
 
 
@@ -144,7 +166,7 @@ async def test_stream_aux_role_falls_back_before_any_chunk_is_yielded():
     assert chunks[-1].final is not None
     assert chunks[-1].final.routing is not None
     assert chunks[-1].final.routing.path == "role_fallback"
-    assert primary.calls == 5
+    assert primary.calls == 8
     assert fallback.calls == 1
     assert sink.decisions[0].path == "role_fallback"
 

@@ -8,7 +8,7 @@ These differ from the per-package unit tests (`test_router_errors.py`,
 `SandboxService` boundaries the harness composition root uses — so a regression
 that wires AROUND resilience (swaps a provider, drops a check) is caught here.
 
-Run: PYTHONPATH=. uv run pytest development/harness/tests/test_faults.py
+Run: uv run pytest development/harness/tests/test_faults.py
 """
 
 from __future__ import annotations

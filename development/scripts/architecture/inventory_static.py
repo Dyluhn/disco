@@ -15,7 +15,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from .test_inventory_parts import _transitions
+from .test_inventory_parts import _retirements, _transitions
 
 _TS_FILE = re.compile(r"\.(?:test|spec)\.[cm]?[jt]sx?$")
 _TS_MARKER = re.compile(r"\b(?:describe|it|test)\.(skip|todo|only)\s*\(")
@@ -64,7 +64,7 @@ def _bucket_normalized(value: str) -> str:
     """Strip the top-level restructure bucket from a path or node ID."""
     for bucket in ("current/", "development/"):
         if value.startswith(bucket):
-            return value[len(bucket):]
+            return value[len(bucket) :]
     return value
 
 
@@ -442,11 +442,16 @@ def check_inventory_metadata(
     packages: set[str] = set()
     after_identities: set[str] = set()
     valid_rows: list[dict[str, Any]] = []
+    historical = _retirements.historical_inventory(root, baseline, problems)
+    historical_packages = (
+        {row["package"] for row in historical["additive_transitions"]} if historical else set()
+    )
     for index, row in enumerate(transitions):
+        authority = historical if row.get("package") in historical_packages else baseline
         checked = _check_transition_row(
             row,
             index,
-            baseline,
+            authority,
             root,
             cache,
             claims,
@@ -456,7 +461,7 @@ def check_inventory_metadata(
         )
         if checked is not None:
             valid_rows.append(checked)
-    _check_pkg02_transition(valid_rows, baseline, claims, problems)
+    _check_pkg02_transition(valid_rows, historical or baseline, claims, problems)
     _check_identity_chain(valid_rows, source, problems)
     return problems
 
@@ -507,7 +512,11 @@ def _python_files(tracked: list[str]) -> list[str]:
         rel
         for rel in tracked
         if rel.endswith(".py")
-        and ("/tests/" in rel or Path(rel).name.startswith("test_") or rel.startswith("development/tests/"))
+        and (
+            "/tests/" in rel
+            or Path(rel).name.startswith("test_")
+            or rel.startswith("development/tests/")
+        )
     ]
 
 

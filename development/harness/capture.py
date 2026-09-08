@@ -2,7 +2,7 @@
 byte-identical. This is the literal "pull a real sample first" step — the cassette
 is recorded from reality, never hand-written.
 
-Run:  PYTHONPATH=. uv run python -m harness.capture <out.jsonl>
+Run:  uv run python -m harness.capture <out.jsonl>
 """
 
 from __future__ import annotations
@@ -20,10 +20,8 @@ from disco.core.llm import (
     ModelRole,
     SecretStore,
 )
-from disco.retrieval.bundled_providers import (
-    DdgsSearchProvider,
-    LocalExtractionProvider,
-)
+from disco.retrieval.bundled_providers import LocalExtractionProvider
+from disco.retrieval.live import build_keyless_search
 
 from .cassette import Cassette
 from .providers import (
@@ -38,7 +36,7 @@ from .router import RecordingRouter, ReplayRouter
 async def capture(out_path: str) -> Cassette:
     cas = Cassette()
     # --- real retrieval seams, wrapped to record ---
-    search = RecordingSearchProvider(DdgsSearchProvider(), cas)
+    search = RecordingSearchProvider(build_keyless_search(), cas)
     extract = RecordingExtractionProvider(LocalExtractionProvider(), cas)
     hits = await search.search("what is the vcrpy library used for", limit=3)
     await extract.extract(hits[0].url)
@@ -72,7 +70,7 @@ async def verify_roundtrip(cas: Cassette) -> None:
     rrouter = ReplayRouter(cas)
 
     hits = await rsearch.search("what is the vcrpy library used for", limit=3)
-    assert hits and hits[0].source_engine == "ddgs", "replay search mismatch"
+    assert hits, "replay search mismatch"
     doc = await rextract.extract(hits[0].url)
     assert doc.fetched_ok and doc.passages, "replay extract mismatch"
     req = CompletionRequest(

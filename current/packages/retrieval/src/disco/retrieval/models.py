@@ -59,10 +59,13 @@ class ExtractedDoc(BaseModel):
 class RetrievalRequest(BaseModel):
     model_config = ConfigDict(frozen=True)
     query: str
+    discovery_only: bool = False
+    selected_hit: SearchHit | None = None
     corpus_ids: frozenset[str] = frozenset()  # empty => live web only
     use_web: bool = True
     depth: Literal["shallow", "standard", "deep"] = "standard"
     top_k: int = 8  # final passages to return
+    distinct_sources: bool = False  # web documents, while preserving individual corpus spans
     # Optional discovery/extraction bounds.  Ordinary Search keeps the engine
     # defaults; Deep Research supplies the selected tier's explicit limits.
     discover_limit: int | None = Field(default=None, ge=1)

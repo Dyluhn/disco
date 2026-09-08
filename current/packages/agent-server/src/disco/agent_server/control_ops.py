@@ -2,19 +2,33 @@
 
 from __future__ import annotations
 
+from typing import Protocol
+
 from disco.core import (
+    ActionEvent,
     ConversationStatus,
     EventSource,
     LLMMessage,
     MessageEvent,
+    ToolCall,
 )
 from disco.core.store.sqlite import SqliteEventStore
+from disco.retrieval.deep_research import (
+    STOP_REQUESTED_ACTION,
+    stop_requested_payload,
+)
 
 from .lifecycle_command_service import LifecycleCommandService
 from .run_controller import RunController
 from .run_kill_service import RunKillService
 from .run_registry import CancellationRegistry, LoopRegistry
 from .workspace_service import WorkspaceCoordinator
+
+
+class LiveDeepResearchRuns(Protocol):
+    """Whether the deep-research engine — not an `AgentLoop` — owns this run."""
+
+    def has_live_run(self, conversation_id: str) -> bool: ...
 
 # ---- F-3: conservative "stop, accept as-is" intent list ----------------------
 # Matched case-insensitively against the full (stripped) user text.
@@ -82,6 +96,7 @@ class ControlOps:
         cancellations: CancellationRegistry,
         controller: RunController,
         kills: RunKillService,
+        deep_research: LiveDeepResearchRuns,
     ) -> None:
         self._store = store
         self._workspace = workspace
@@ -89,6 +104,7 @@ class ControlOps:
         self._cancellations = cancellations
         self._controller = controller
         self._kills = kills
+        self._deep_research = deep_research
 
     async def confirm(self, conversation_id: str) -> None:
         """Approve the pending action: execute EXACTLY it (the loop's `confirm`), then
@@ -227,10 +243,36 @@ class ControlOps:
             await loop.pause()
 
     async def cancel(self, conversation_id: str) -> None:
-        """Cooperative stop (distinct from the hard kill): the loop winds down. For
-        Deep Research (engine, not an AgentLoop) this ALSO sets the cancel flag the
-        engine polls — without it, Stop was a no-op (the engine ran to completion)."""
+        """Cooperative stop (distinct from the hard kill): the run winds down.
+
+        Two runtimes own runs here, and the flag is set for both: an
+        `AgentLoop` (build/agent/research) and the deep-research ENGINE. For a
+        loop, `loop.cancel()` emits the terminal IDLE/"cancelled" — the loop
+        really has ended by the time it returns to its own checkpoint.
+
+        For a LIVE deep-research run that same call was a statement about
+        nothing. The conversation's loop exists but never ran the research
+        (`_compose_deep_research_loop`), so IDLE landed 29 ms after Stop while
+        the engine kept working for another eight minutes, and the terminal
+        status erased the run controls and the pending checkpoint with it. So
+        this branch emits no status at all: it appends ONE non-terminal marker
+        saying Stop was pressed and when, and the engine — which polls the flag
+        at every boundary it has — writes the run's real ending itself
+        (`research_checkpoint` → PAUSED/"stopped", resumable).
+        """
         self._cancellations.request(conversation_id)
+        if self._deep_research.has_live_run(conversation_id):
+            await self._store.append(
+                conversation_id,
+                ActionEvent(
+                    thought="Deep Research: stop_requested",
+                    tool_call=ToolCall(
+                        tool_name=STOP_REQUESTED_ACTION,
+                        arguments=stop_requested_payload(),
+                    ),
+                ),
+            )
+            return
         loop = self._loops.loop(conversation_id)
         if loop is not None:
             await loop.cancel()

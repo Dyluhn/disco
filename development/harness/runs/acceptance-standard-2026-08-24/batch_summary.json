@@ -1,0 +1,613 @@
+{
+  "aggregate": {
+    "duration_ms": {
+      "p50": 579084,
+      "p95": 671258
+    },
+    "model_io_calls": 92,
+    "quality": {
+      "distinct_works_p50": 48,
+      "max_dominant_work_claim_share": 0.2097,
+      "near_duplicate_body_paragraphs": 0,
+      "single_work_specific_claims": 180
+    },
+    "query_reliability": {
+      "AI coding agents in production: productivity, reliability, security, and evidence vs vendor claims": {
+        "failed": 0,
+        "pass_rate": 1.0,
+        "passed": 1,
+        "report_words": {
+          "max": 4840,
+          "min": 4840,
+          "p50": 4840,
+          "p95": 4840,
+          "variance": 0.0
+        },
+        "runs": 1,
+        "thrash_clean_rate": 1.0
+      },
+      "Can mechanistic interpretability predict dangerous AI behavior before deployment?": {
+        "failed": 1,
+        "pass_rate": 0.0,
+        "passed": 0,
+        "report_words": {
+          "max": 3982,
+          "min": 3982,
+          "p50": 3982,
+          "p95": 3982,
+          "variance": 0.0
+        },
+        "runs": 1,
+        "thrash_clean_rate": 1.0
+      },
+      "Causes of the Late Bronze Age Collapse: major theories and evidence": {
+        "failed": 0,
+        "pass_rate": 1.0,
+        "passed": 1,
+        "report_words": {
+          "max": 4666,
+          "min": 4666,
+          "p50": 4666,
+          "p95": 4666,
+          "variance": 0.0
+        },
+        "runs": 1,
+        "thrash_clean_rate": 0.0
+      },
+      "Solid-state batteries for EVs: commercialization pathways and mass-market readiness (2026)": {
+        "failed": 0,
+        "pass_rate": 1.0,
+        "passed": 1,
+        "report_words": {
+          "max": 4047,
+          "min": 4047,
+          "p50": 4047,
+          "p95": 4047,
+          "variance": 0.0
+        },
+        "runs": 1,
+        "thrash_clean_rate": 0.0
+      },
+      "What are the latest innovations in AI?": {
+        "failed": 0,
+        "pass_rate": 1.0,
+        "passed": 1,
+        "report_words": {
+          "max": 4294,
+          "min": 4294,
+          "p50": 4294,
+          "p95": 4294,
+          "variance": 0.0
+        },
+        "runs": 1,
+        "thrash_clean_rate": 0.0
+      }
+    },
+    "report_words": {
+      "p50": 4294,
+      "p95": 4666
+    },
+    "thrash_clean_rate": 0.4,
+    "thrash_findings": 3,
+    "trace_complete": 5
+  },
+  "batch_id": "372f6b2a97247777",
+  "concurrency": 2,
+  "ok": false,
+  "runs": [
+    {
+      "artifacts": {
+        "cassette_jsonl": "/var/home/dylan/projects/disco/development/harness/runs/acceptance-standard-2026-08-24/run-01/cassette.jsonl",
+        "events_jsonl": "/var/home/dylan/projects/disco/development/harness/runs/acceptance-standard-2026-08-24/run-01/events.jsonl",
+        "inspect_json": "/var/home/dylan/projects/disco/development/harness/runs/acceptance-standard-2026-08-24/run-01/inspect.json",
+        "model_io_jsonl": "/var/home/dylan/projects/disco/development/harness/runs/acceptance-standard-2026-08-24/run-01/model_io.jsonl",
+        "report": "/var/home/dylan/projects/disco/development/harness/runs/acceptance-standard-2026-08-24/run-01/report.md",
+        "report_json": "/var/home/dylan/projects/disco/development/harness/runs/acceptance-standard-2026-08-24/run-01/report.json",
+        "summary_json": "/var/home/dylan/projects/disco/development/harness/runs/acceptance-standard-2026-08-24/run-01/summary.json",
+        "summary_markdown": "/var/home/dylan/projects/disco/development/harness/runs/acceptance-standard-2026-08-24/run-01/summary.md",
+        "thrash_json": "/var/home/dylan/projects/disco/development/harness/runs/acceptance-standard-2026-08-24/run-01/thrash.json",
+        "timeline_markdown": "/var/home/dylan/projects/disco/development/harness/runs/acceptance-standard-2026-08-24/run-01/timeline.md"
+      },
+      "errors": [],
+      "index": 1,
+      "invariants": {
+        "bounds_and_errors_recorded": true,
+        "citations_resolve": true,
+        "depth_length_target": false,
+        "executive_summary_substantive": true,
+        "executive_summary_synthesizes_report": true,
+        "final_report_exists": true,
+        "heading_hierarchy_valid": true,
+        "inspect_trace_complete": true,
+        "no_diagnostic_or_research_process_language": true,
+        "no_empty_or_failure_sections": true,
+        "repetition_acceptable": true,
+        "section_citations_present": true,
+        "stopped_checkpoint_valid": true,
+        "substantive_section_bodies": true,
+        "thrash_clean": true
+      },
+      "ok": false,
+      "output_dir": "/var/home/dylan/projects/disco/development/harness/runs/acceptance-standard-2026-08-24/run-01",
+      "query": "Can mechanistic interpretability predict dangerous AI behavior before deployment?",
+      "telemetry": {
+        "actual_models": [
+          "muse-spark-1.2-contributor"
+        ],
+        "actual_providers": [
+          "prov-opencode-go-muse-spark-1-2-contributor"
+        ],
+        "batch_id": "372f6b2a97247777",
+        "citation_count": 47,
+        "duration_ms": 505411,
+        "event_count": 103,
+        "model_io_count": 17,
+        "phase_counts": {
+          "extract": 22,
+          "gap": 0,
+          "lifecycle": 1,
+          "planning": 1,
+          "search": 79,
+          "synthesis": 0,
+          "verification": 0
+        },
+        "probe_count": 38,
+        "quality": {
+          "claim_count": 142,
+          "distinct_work_count": 34,
+          "dominant_work_claim_share": 0.1197,
+          "hedge_phrase_count": 10,
+          "high_specificity_claims": 42,
+          "near_duplicate_body_paragraphs": 0,
+          "passage_count": 47,
+          "repeated_hedge_phrases": {
+            "may": 8
+          },
+          "single_work_specific_claims": 31,
+          "source_concentration_flagged": false
+        },
+        "report_chars": 35445,
+        "report_words": 3982,
+        "requested_depth": "standard_deep",
+        "requested_model": "prov-opencode-go-muse-spark-1-2-contributor",
+        "requested_provider": null,
+        "requested_recency": null,
+        "run_id": "run-01-0ff8f7c06d",
+        "source_count": 47,
+        "trace_event_count": 101
+      },
+      "thrash": {
+        "findings": [],
+        "passed": true,
+        "signals": {
+          "malformed_turns": 0,
+          "max_no_progress_streak": 2,
+          "max_repeated_deficiency": 0,
+          "max_repeated_query": 1,
+          "max_repeated_query_streak": 1,
+          "model_io_count": 17,
+          "query_count": 37,
+          "retrieval_failure_turns": 0,
+          "unique_query_count": 37
+        }
+      }
+    },
+    {
+      "artifacts": {
+        "cassette_jsonl": "/var/home/dylan/projects/disco/development/harness/runs/acceptance-standard-2026-08-24/run-02/cassette.jsonl",
+        "events_jsonl": "/var/home/dylan/projects/disco/development/harness/runs/acceptance-standard-2026-08-24/run-02/events.jsonl",
+        "inspect_json": "/var/home/dylan/projects/disco/development/harness/runs/acceptance-standard-2026-08-24/run-02/inspect.json",
+        "model_io_jsonl": "/var/home/dylan/projects/disco/development/harness/runs/acceptance-standard-2026-08-24/run-02/model_io.jsonl",
+        "report": "/var/home/dylan/projects/disco/development/harness/runs/acceptance-standard-2026-08-24/run-02/report.md",
+        "report_json": "/var/home/dylan/projects/disco/development/harness/runs/acceptance-standard-2026-08-24/run-02/report.json",
+        "summary_json": "/var/home/dylan/projects/disco/development/harness/runs/acceptance-standard-2026-08-24/run-02/summary.json",
+        "summary_markdown": "/var/home/dylan/projects/disco/development/harness/runs/acceptance-standard-2026-08-24/run-02/summary.md",
+        "thrash_json": "/var/home/dylan/projects/disco/development/harness/runs/acceptance-standard-2026-08-24/run-02/thrash.json",
+        "timeline_markdown": "/var/home/dylan/projects/disco/development/harness/runs/acceptance-standard-2026-08-24/run-02/timeline.md"
+      },
+      "errors": [],
+      "index": 2,
+      "invariants": {
+        "bounds_and_errors_recorded": true,
+        "citations_resolve": true,
+        "depth_length_target": true,
+        "executive_summary_substantive": true,
+        "executive_summary_synthesizes_report": true,
+        "final_report_exists": true,
+        "heading_hierarchy_valid": true,
+        "inspect_trace_complete": true,
+        "no_diagnostic_or_research_process_language": true,
+        "no_empty_or_failure_sections": true,
+        "repetition_acceptable": true,
+        "section_citations_present": true,
+        "stopped_checkpoint_valid": true,
+        "substantive_section_bodies": true,
+        "thrash_clean": true
+      },
+      "ok": true,
+      "output_dir": "/var/home/dylan/projects/disco/development/harness/runs/acceptance-standard-2026-08-24/run-02",
+      "query": "AI coding agents in production: productivity, reliability, security, and evidence vs vendor claims",
+      "telemetry": {
+        "actual_models": [
+          "muse-spark-1.2-contributor"
+        ],
+        "actual_providers": [
+          "prov-opencode-go-muse-spark-1-2-contributor"
+        ],
+        "batch_id": "372f6b2a97247777",
+        "citation_count": 60,
+        "duration_ms": 455487,
+        "event_count": 77,
+        "model_io_count": 13,
+        "phase_counts": {
+          "extract": 26,
+          "gap": 0,
+          "lifecycle": 1,
+          "planning": 1,
+          "search": 49,
+          "synthesis": 0,
+          "verification": 0
+        },
+        "probe_count": 26,
+        "quality": {
+          "claim_count": 133,
+          "distinct_work_count": 48,
+          "dominant_work_claim_share": 0.1278,
+          "hedge_phrase_count": 20,
+          "high_specificity_claims": 66,
+          "near_duplicate_body_paragraphs": 0,
+          "passage_count": 60,
+          "repeated_hedge_phrases": {
+            "likely": 4,
+            "may": 2,
+            "suggests that": 14
+          },
+          "single_work_specific_claims": 34,
+          "source_concentration_flagged": false
+        },
+        "report_chars": 42331,
+        "report_words": 4840,
+        "requested_depth": "standard_deep",
+        "requested_model": "prov-opencode-go-muse-spark-1-2-contributor",
+        "requested_provider": null,
+        "requested_recency": null,
+        "run_id": "run-02-c30030f68d",
+        "source_count": 60,
+        "trace_event_count": 75
+      },
+      "thrash": {
+        "findings": [],
+        "passed": true,
+        "signals": {
+          "malformed_turns": 0,
+          "max_no_progress_streak": 1,
+          "max_repeated_deficiency": 0,
+          "max_repeated_query": 2,
+          "max_repeated_query_streak": 1,
+          "model_io_count": 13,
+          "query_count": 27,
+          "retrieval_failure_turns": 0,
+          "unique_query_count": 25
+        }
+      }
+    },
+    {
+      "artifacts": {
+        "cassette_jsonl": "/var/home/dylan/projects/disco/development/harness/runs/acceptance-standard-2026-08-24/run-03/cassette.jsonl",
+        "events_jsonl": "/var/home/dylan/projects/disco/development/harness/runs/acceptance-standard-2026-08-24/run-03/events.jsonl",
+        "inspect_json": "/var/home/dylan/projects/disco/development/harness/runs/acceptance-standard-2026-08-24/run-03/inspect.json",
+        "model_io_jsonl": "/var/home/dylan/projects/disco/development/harness/runs/acceptance-standard-2026-08-24/run-03/model_io.jsonl",
+        "report": "/var/home/dylan/projects/disco/development/harness/runs/acceptance-standard-2026-08-24/run-03/report.md",
+        "report_json": "/var/home/dylan/projects/disco/development/harness/runs/acceptance-standard-2026-08-24/run-03/report.json",
+        "summary_json": "/var/home/dylan/projects/disco/development/harness/runs/acceptance-standard-2026-08-24/run-03/summary.json",
+        "summary_markdown": "/var/home/dylan/projects/disco/development/harness/runs/acceptance-standard-2026-08-24/run-03/summary.md",
+        "thrash_json": "/var/home/dylan/projects/disco/development/harness/runs/acceptance-standard-2026-08-24/run-03/thrash.json",
+        "timeline_markdown": "/var/home/dylan/projects/disco/development/harness/runs/acceptance-standard-2026-08-24/run-03/timeline.md"
+      },
+      "errors": [],
+      "index": 3,
+      "invariants": {
+        "bounds_and_errors_recorded": true,
+        "citations_resolve": true,
+        "depth_length_target": true,
+        "executive_summary_substantive": true,
+        "executive_summary_synthesizes_report": true,
+        "final_report_exists": true,
+        "heading_hierarchy_valid": true,
+        "inspect_trace_complete": true,
+        "no_diagnostic_or_research_process_language": true,
+        "no_empty_or_failure_sections": true,
+        "repetition_acceptable": true,
+        "section_citations_present": true,
+        "stopped_checkpoint_valid": true,
+        "substantive_section_bodies": true,
+        "thrash_clean": false
+      },
+      "ok": true,
+      "output_dir": "/var/home/dylan/projects/disco/development/harness/runs/acceptance-standard-2026-08-24/run-03",
+      "query": "Solid-state batteries for EVs: commercialization pathways and mass-market readiness (2026)",
+      "telemetry": {
+        "actual_models": [
+          "muse-spark-1.2-contributor"
+        ],
+        "actual_providers": [
+          "prov-opencode-go-muse-spark-1-2-contributor"
+        ],
+        "batch_id": "372f6b2a97247777",
+        "citation_count": 65,
+        "duration_ms": 682220,
+        "event_count": 135,
+        "model_io_count": 23,
+        "phase_counts": {
+          "extract": 32,
+          "gap": 0,
+          "lifecycle": 1,
+          "planning": 1,
+          "search": 101,
+          "synthesis": 0,
+          "verification": 0
+        },
+        "probe_count": 54,
+        "quality": {
+          "claim_count": 131,
+          "distinct_work_count": 53,
+          "dominant_work_claim_share": 0.1069,
+          "hedge_phrase_count": 9,
+          "high_specificity_claims": 90,
+          "near_duplicate_body_paragraphs": 0,
+          "passage_count": 65,
+          "repeated_hedge_phrases": {
+            "could": 4,
+            "likely": 2,
+            "may": 3
+          },
+          "single_work_specific_claims": 38,
+          "source_concentration_flagged": false
+        },
+        "report_chars": 39632,
+        "report_words": 4047,
+        "requested_depth": "standard_deep",
+        "requested_model": "prov-opencode-go-muse-spark-1-2-contributor",
+        "requested_provider": null,
+        "requested_recency": null,
+        "run_id": "run-03-3c8fc2e827",
+        "source_count": 65,
+        "trace_event_count": 133
+      },
+      "thrash": {
+        "findings": [
+          {
+            "code": "NO_PROGRESS",
+            "severity": "hard",
+            "streak": 3
+          }
+        ],
+        "passed": false,
+        "signals": {
+          "malformed_turns": 0,
+          "max_no_progress_streak": 3,
+          "max_repeated_deficiency": 0,
+          "max_repeated_query": 1,
+          "max_repeated_query_streak": 1,
+          "model_io_count": 23,
+          "query_count": 53,
+          "retrieval_failure_turns": 0,
+          "unique_query_count": 53
+        }
+      }
+    },
+    {
+      "artifacts": {
+        "cassette_jsonl": "/var/home/dylan/projects/disco/development/harness/runs/acceptance-standard-2026-08-24/run-04/cassette.jsonl",
+        "events_jsonl": "/var/home/dylan/projects/disco/development/harness/runs/acceptance-standard-2026-08-24/run-04/events.jsonl",
+        "inspect_json": "/var/home/dylan/projects/disco/development/harness/runs/acceptance-standard-2026-08-24/run-04/inspect.json",
+        "model_io_jsonl": "/var/home/dylan/projects/disco/development/harness/runs/acceptance-standard-2026-08-24/run-04/model_io.jsonl",
+        "report": "/var/home/dylan/projects/disco/development/harness/runs/acceptance-standard-2026-08-24/run-04/report.md",
+        "report_json": "/var/home/dylan/projects/disco/development/harness/runs/acceptance-standard-2026-08-24/run-04/report.json",
+        "summary_json": "/var/home/dylan/projects/disco/development/harness/runs/acceptance-standard-2026-08-24/run-04/summary.json",
+        "summary_markdown": "/var/home/dylan/projects/disco/development/harness/runs/acceptance-standard-2026-08-24/run-04/summary.md",
+        "thrash_json": "/var/home/dylan/projects/disco/development/harness/runs/acceptance-standard-2026-08-24/run-04/thrash.json",
+        "timeline_markdown": "/var/home/dylan/projects/disco/development/harness/runs/acceptance-standard-2026-08-24/run-04/timeline.md"
+      },
+      "errors": [],
+      "index": 4,
+      "invariants": {
+        "bounds_and_errors_recorded": true,
+        "citations_resolve": true,
+        "depth_length_target": true,
+        "executive_summary_substantive": true,
+        "executive_summary_synthesizes_report": true,
+        "final_report_exists": true,
+        "heading_hierarchy_valid": true,
+        "inspect_trace_complete": true,
+        "no_diagnostic_or_research_process_language": true,
+        "no_empty_or_failure_sections": true,
+        "repetition_acceptable": true,
+        "section_citations_present": true,
+        "stopped_checkpoint_valid": true,
+        "substantive_section_bodies": true,
+        "thrash_clean": false
+      },
+      "ok": true,
+      "output_dir": "/var/home/dylan/projects/disco/development/harness/runs/acceptance-standard-2026-08-24/run-04",
+      "query": "Causes of the Late Bronze Age Collapse: major theories and evidence",
+      "telemetry": {
+        "actual_models": [
+          "muse-spark-1.2-contributor"
+        ],
+        "actual_providers": [
+          "prov-opencode-go-muse-spark-1-2-contributor"
+        ],
+        "batch_id": "372f6b2a97247777",
+        "citation_count": 61,
+        "duration_ms": 671258,
+        "event_count": 137,
+        "model_io_count": 22,
+        "phase_counts": {
+          "extract": 24,
+          "gap": 0,
+          "lifecycle": 1,
+          "planning": 1,
+          "search": 111,
+          "synthesis": 0,
+          "verification": 0
+        },
+        "probe_count": 55,
+        "quality": {
+          "claim_count": 186,
+          "distinct_work_count": 47,
+          "dominant_work_claim_share": 0.2097,
+          "hedge_phrase_count": 12,
+          "high_specificity_claims": 46,
+          "near_duplicate_body_paragraphs": 0,
+          "passage_count": 61,
+          "repeated_hedge_phrases": {
+            "could": 6,
+            "likely": 2,
+            "may": 4
+          },
+          "single_work_specific_claims": 27,
+          "source_concentration_flagged": true
+        },
+        "report_chars": 43148,
+        "report_words": 4666,
+        "requested_depth": "standard_deep",
+        "requested_model": "prov-opencode-go-muse-spark-1-2-contributor",
+        "requested_provider": null,
+        "requested_recency": null,
+        "run_id": "run-04-14253bb30b",
+        "source_count": 61,
+        "trace_event_count": 135
+      },
+      "thrash": {
+        "findings": [
+          {
+            "code": "NO_PROGRESS",
+            "severity": "hard",
+            "streak": 3
+          }
+        ],
+        "passed": false,
+        "signals": {
+          "malformed_turns": 0,
+          "max_no_progress_streak": 3,
+          "max_repeated_deficiency": 0,
+          "max_repeated_query": 1,
+          "max_repeated_query_streak": 1,
+          "model_io_count": 22,
+          "query_count": 54,
+          "retrieval_failure_turns": 0,
+          "unique_query_count": 54
+        }
+      }
+    },
+    {
+      "artifacts": {
+        "cassette_jsonl": "/var/home/dylan/projects/disco/development/harness/runs/acceptance-standard-2026-08-24/run-05/cassette.jsonl",
+        "events_jsonl": "/var/home/dylan/projects/disco/development/harness/runs/acceptance-standard-2026-08-24/run-05/events.jsonl",
+        "inspect_json": "/var/home/dylan/projects/disco/development/harness/runs/acceptance-standard-2026-08-24/run-05/inspect.json",
+        "model_io_jsonl": "/var/home/dylan/projects/disco/development/harness/runs/acceptance-standard-2026-08-24/run-05/model_io.jsonl",
+        "report": "/var/home/dylan/projects/disco/development/harness/runs/acceptance-standard-2026-08-24/run-05/report.md",
+        "report_json": "/var/home/dylan/projects/disco/development/harness/runs/acceptance-standard-2026-08-24/run-05/report.json",
+        "summary_json": "/var/home/dylan/projects/disco/development/harness/runs/acceptance-standard-2026-08-24/run-05/summary.json",
+        "summary_markdown": "/var/home/dylan/projects/disco/development/harness/runs/acceptance-standard-2026-08-24/run-05/summary.md",
+        "thrash_json": "/var/home/dylan/projects/disco/development/harness/runs/acceptance-standard-2026-08-24/run-05/thrash.json",
+        "timeline_markdown": "/var/home/dylan/projects/disco/development/harness/runs/acceptance-standard-2026-08-24/run-05/timeline.md"
+      },
+      "errors": [],
+      "index": 5,
+      "invariants": {
+        "bounds_and_errors_recorded": true,
+        "citations_resolve": true,
+        "depth_length_target": true,
+        "executive_summary_substantive": true,
+        "executive_summary_synthesizes_report": true,
+        "final_report_exists": true,
+        "heading_hierarchy_valid": true,
+        "inspect_trace_complete": true,
+        "no_diagnostic_or_research_process_language": true,
+        "no_empty_or_failure_sections": true,
+        "repetition_acceptable": true,
+        "section_citations_present": true,
+        "stopped_checkpoint_valid": true,
+        "substantive_section_bodies": true,
+        "thrash_clean": false
+      },
+      "ok": true,
+      "output_dir": "/var/home/dylan/projects/disco/development/harness/runs/acceptance-standard-2026-08-24/run-05",
+      "query": "What are the latest innovations in AI?",
+      "telemetry": {
+        "actual_models": [
+          "muse-spark-1.2-contributor"
+        ],
+        "actual_providers": [
+          "prov-opencode-go-muse-spark-1-2-contributor"
+        ],
+        "batch_id": "372f6b2a97247777",
+        "citation_count": 74,
+        "duration_ms": 579084,
+        "event_count": 95,
+        "model_io_count": 17,
+        "phase_counts": {
+          "extract": 22,
+          "gap": 0,
+          "lifecycle": 1,
+          "planning": 1,
+          "search": 71,
+          "synthesis": 0,
+          "verification": 0
+        },
+        "probe_count": 34,
+        "quality": {
+          "claim_count": 148,
+          "distinct_work_count": 59,
+          "dominant_work_claim_share": 0.1149,
+          "hedge_phrase_count": 12,
+          "high_specificity_claims": 84,
+          "near_duplicate_body_paragraphs": 0,
+          "passage_count": 74,
+          "repeated_hedge_phrases": {
+            "may": 8,
+            "suggests that": 3
+          },
+          "single_work_specific_claims": 50,
+          "source_concentration_flagged": false
+        },
+        "report_chars": 40053,
+        "report_words": 4294,
+        "requested_depth": "standard_deep",
+        "requested_model": "prov-opencode-go-muse-spark-1-2-contributor",
+        "requested_provider": null,
+        "requested_recency": null,
+        "run_id": "run-05-b304f0ac3c",
+        "source_count": 74,
+        "trace_event_count": 93
+      },
+      "thrash": {
+        "findings": [
+          {
+            "code": "MALFORMED_TURN",
+            "count": 1,
+            "severity": "hard"
+          }
+        ],
+        "passed": false,
+        "signals": {
+          "malformed_turns": 1,
+          "max_no_progress_streak": 2,
+          "max_repeated_deficiency": 0,
+          "max_repeated_query": 1,
+          "max_repeated_query_streak": 1,
+          "model_io_count": 17,
+          "query_count": 33,
+          "retrieval_failure_turns": 0,
+          "unique_query_count": 33
+        }
+      }
+    }
+  ],
+  "runs_failed": 1,
+  "runs_passed": 4,
+  "runs_total": 5,
+  "schema_version": 2
+}

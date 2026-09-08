@@ -25,14 +25,17 @@ from .inventory_static import (
     scan_mapping_static,
 )
 from .policy import REPO_ROOT, load_json
-from .test_inventory_parts import _splits
+from .test_inventory_parts import _retirements, _splits
 from .test_inventory_parts._rows import (
     LIVE_CONFIGS,
     PLAYWRIGHT_CONFIGS,
     PLAYWRIGHT_TEST_DIRS,
     PYTHON_ROOTS,
-    ROOT_DIRS,
     locate_root,
+    logical_node_id,
+)
+from .test_inventory_parts._rows import (
+    ROOT_DIRS as ROOT_DIRS,
 )
 from .test_inventory_parts._rows import canonical_row as _canonical_row
 from .test_inventory_parts._rows import check_count as _check_count
@@ -104,14 +107,7 @@ def _collect_pytest_ids(
         detail = "; ".join((result.stderr or result.stdout).strip().splitlines()[-3:])
         return [], f"collection failed for {root_dir}: exit {result.returncode}: {detail}"
     ids = sorted(line.strip() for line in result.stdout.splitlines() if "::" in line.strip())
-    # Re-express node IDs under the logical label so the stored inventory is
-    # independent of where the root sits on disk.
-    if disk_dir != root_dir:
-        prefix = disk_dir + "/"
-        ids = sorted(
-            root_dir + "/" + node[len(prefix):] if node.startswith(prefix) else node
-            for node in ids
-        )
+    ids = sorted(logical_node_id(node) for node in ids)
     if len(ids) != len(set(ids)):
         return [], f"collection failed for {root_dir}: duplicate node IDs"
     return ids, ""
@@ -390,9 +386,22 @@ def _check_frontend_collection(
     live_a = playwright[LIVE_CONFIGS[0]]
     live_b = playwright[LIVE_CONFIGS[1]]
     same_live = live_a["ids"] == live_b["ids"] and live_a["files"] == live_b["files"]
-    if not same_live or live_a["id_count"] != 38 or live_a["file_count"] != 36:
-        problems.append("live configs must select identical 38 IDs in 36 files")
-    if frontend.get("live_configs_select_same_38_source_ids") is not True:
+    live_authority = _retirements.live_authority(root, baseline.get("additive_transitions", []))
+    expected_counts = tuple(map(len, live_authority)) if live_authority else (38, 36)
+    if not same_live or (live_a["id_count"], live_a["file_count"]) != expected_counts:
+        problems.append(
+            f"live configs must select identical {expected_counts[0]} IDs "
+            f"in {expected_counts[1]} files"
+        )
+    if live_authority and (live_a["ids"], live_a["files"]) != live_authority:
+        problems.append("live configs differ from the exact closeout source authority")
+    if (
+        frontend.get(
+            "live_configs_select_same_source_ids",
+            frontend.get("live_configs_select_same_38_source_ids"),
+        )
+        is not True
+    ):
         problems.append("stored live-config equality authority must be true")
     identities = frontend.get("config_identities")
     if identities != _config_identities(root):
@@ -474,8 +483,7 @@ def _assert_no_deletions(
     deleted = [
         item
         for item in previous
-        if _canonical_row(item) not in current_rows
-        and _canonical_row(item) not in allowed
+        if _canonical_row(item) not in current_rows and _canonical_row(item) not in allowed
     ]
     if deleted:
         raise RuntimeError(f"unexplained deletion in {label}: {deleted}")
@@ -484,7 +492,11 @@ def _assert_no_deletions(
 
 
 def _collected_row(
-    previous: list[str], current: list[str], added: list[str], relocated: int,
+    previous: list[str],
+    current: list[str],
+    added: list[str],
+    relocated: int,
+    retired: int = 0,
 ) -> dict[str, Any]:
     """Build one collected_roots transition row.
 
@@ -499,6 +511,8 @@ def _collected_row(
     }
     if relocated:
         row["relocated_count"] = relocated
+    if retired:
+        row["retired_count"] = retired
     return row
 
 
@@ -512,12 +526,8 @@ def _split_authorizations(
 ) -> tuple[dict[str, set[str]], list[dict[str, Any]], Any]:
     """Validate the effective module-split records and derive what they allow."""
     problems: list[str] = []
-    records = _splits.split_authority(
-        {"module_split_transitions": split_rows}, root, problems
-    )
-    problems += _splits.path_disposition_problems(
-        records, current_mapping["python_test_files"]
-    )
+    records = _splits.split_authority({"module_split_transitions": split_rows}, root, problems)
+    problems += _splits.path_disposition_problems(records, current_mapping["python_test_files"])
     if problems:
         raise RuntimeError(f"module split transitions are invalid: {problems}")
     authorized, accounted, ledger = _splits.build_authorizations(
@@ -607,12 +617,18 @@ def regenerate_inventory(
     if error:
         raise RuntimeError(error)
     live = playwright[LIVE_CONFIGS[0]]
+    live_authority = _retirements.live_authority(resolved_root, transitions, package)
+    expected_counts = tuple(map(len, live_authority)) if live_authority else (38, 36)
+    if live_authority and (live["ids"], live["files"]) != live_authority:
+        raise RuntimeError("live configs differ from the exact closeout source authority")
     if (
         live["ids"] != playwright[LIVE_CONFIGS[1]]["ids"]
         or live["files"] != playwright[LIVE_CONFIGS[1]]["files"]
-        or (live["id_count"], live["file_count"]) != (38, 36)
+        or (live["id_count"], live["file_count"]) != expected_counts
     ):
-        raise RuntimeError("live configs do not select identical 38/36 source authority")
+        raise RuntimeError(
+            f"live configs do not select identical {expected_counts} source authority"
+        )
 
     split_rows = (
         load_test_inventory(resolved_root).get("module_split_transitions", [])
@@ -620,15 +636,26 @@ def regenerate_inventory(
         else module_split_transitions
     )
     authorized, accounted_markers, ledger = _split_authorizations(
-        resolved_root, split_rows, previous_roots, current_roots,
-        previous_mapping, current_mapping,
+        resolved_root,
+        split_rows,
+        previous_roots,
+        current_roots,
+        previous_mapping,
+        current_mapping,
     )
+    retired = _retirements.regeneration_authorizations(
+        resolved_root, previous_identity, package, current_roots, current_mapping, authorized
+    )
+    explained = {
+        key: authorized.get(key, set()) | retired.get(key, set())
+        for key in authorized.keys() | retired.keys()
+    }
     added_by_root = {
         name: _assert_no_deletions(
             f"collected.{name}",
             previous_roots[name],
             current_roots[name],
-            authorized=authorized.get(f"collected.{name}"),
+            authorized=explained.get(f"collected.{name}"),
         )
         for name in PYTHON_ROOTS
     }
@@ -637,7 +664,7 @@ def regenerate_inventory(
             f"mapping_static.{key}",
             previous_mapping[key],
             current_mapping[key],
-            authorized=authorized.get(f"mapping_static.{key}"),
+            authorized=explained.get(f"mapping_static.{key}"),
         )
         for key in (
             "python_test_files",
@@ -656,16 +683,19 @@ def regenerate_inventory(
         "mapping_static.markers",
         previous_mapping["markers"],
         current_mapping["markers"],
-        authorized=authorized.get("mapping_static.markers"),
+        authorized=explained.get("mapping_static.markers"),
     )
-    marker_growth = _splits.unaccounted_marker_growth(marker_added, accounted_markers)
-    if marker_growth:
+    marker_growth = _splits.unaccounted_marker_growth(marker_added, accounted_markers, ledger)
+    permitted_markers = _retirements.marker_additions(resolved_root, previous_identity, package)
+    if sorted(marker_growth, key=_canonical_row) != sorted(permitted_markers, key=_canonical_row):
         raise RuntimeError(f"skip/xfail/todo/only marker growth is forbidden: {marker_growth}")
     count_problems = ledger.count_problems()
     if count_problems:
         raise RuntimeError(f"module split transition counts are not exact: {count_problems}")
 
-    changed_roots = [name for name, added in added_by_root.items() if added]
+    changed_roots = [
+        name for name, added in added_by_root.items() if added or explained.get(f"collected.{name}")
+    ]
     owns_addition = bool(changed_roots or any(static_added.values()))
     transition = {
         "package": package,
@@ -678,13 +708,12 @@ def regenerate_inventory(
                 current_roots[name],
                 added_by_root[name],
                 len(authorized.get(f"collected.{name}", ())),
+                len(retired.get(f"collected.{name}", ())),
             )
             for name in PYTHON_ROOTS
             # A null advance pins EVERY root, so the row asserts the counts it
             # claims rather than asserting nothing; see _transitions.
-            if not owns_addition
-            or added_by_root[name]
-            or authorized.get(f"collected.{name}")
+            if not owns_addition or added_by_root[name] or explained.get(f"collected.{name}")
         },
         "mapping_static_additions": static_added,
     }
@@ -730,7 +759,7 @@ def regenerate_inventory(
         ),
         "full_harness_ids": playwright["e2e-full/full.config.ts"]["id_count"],
         "full_harness_files": playwright["e2e-full/full.config.ts"]["file_count"],
-        "live_configs_select_same_38_source_ids": True,
+        "live_configs_select_same_source_ids": True,
         "config_identities": _config_identities(resolved_root),
     }
     mapping = {
@@ -761,9 +790,7 @@ def regenerate_inventory(
             "module_splits_require_an_exact_transition_record": True,
         },
         "additive_transitions": sorted(transitions, key=lambda item: _canonical_row(item)),
-        "module_split_transitions": sorted(
-            split_rows, key=lambda item: item["old_path"]
-        ),
+        "module_split_transitions": sorted(split_rows, key=lambda item: item["old_path"]),
     }
     inventory_static.validate_regenerated_inventory(inventory, resolved_root)
     output = resolved_root / "development" / "architecture" / "test-inventory.json"

@@ -1,37 +1,54 @@
 /**
- * DeepProgressStrip — the live-progress treatment during a Deep Research
- * run. Three components inside the strip:
+ * DeepProgressStrip — the live-progress treatment during a Deep Research run.
  *
- *   ┌─────────────────────────────────────────────────────────────┐
- *   │ 12 searches  ·  30 sources  ·  round 2/4  ·  4m       [ ▾ ]  │  ← collapsible header
- *   ├─────────────────────────────────────────────────────────────┤
- *   │ Searching: "SK On pilot production timeline"                │  ← heartbeat
- *   ├─────────────────────────────────────────────────────────────┤
- *   │ The brief: how the model read the question and the angles   │  ← the brief
- *   │ it intends to chase.                                        │
- *   ├─────────────────────────────────────────────────────────────┤
- *   │ Searching: "SK On pilot production timeline"                │
- *   │   Round 2: +6 sources (12 total for this sub-question)      │  ← ActivityFeed
- *   │ Framed the question                                          │     (the live trace)
- *   └─────────────────────────────────────────────────────────────┘
+ *   ┌──────────────────────────────────────────────────────────────────┐
+ *   │ 12 searches · 30 sources · Turn 7 of 16 · 4m elapsed · ● Live    │  ← StatsRow
+ *   ├──────────────────────────────────────────────────────────────────┤
+ *   │ Searching: "SK On pilot production timeline" · 8 s               │  ← Heartbeat:
+ *   │ Turn 7 of 16 · searching                                         │    the newest
+ *   │ on "pilot line capacity in Georgia"                               │    reported fact
+ *   │ found X, still missing Y                                          │    + its age
+ *   ├──────────────────────────────────────────────────────────────────┤
+ *   │ Research brief — how the model read the question                 │  ← the brief
+ *   ├──────────────────────────────────────────────────────────────────┤
+ *   │ Searching: "SK On pilot production timeline"                     │
+ *   │   Added 6 sources (12 admitted so far)                           │  ← ActivityFeed
+ *   │ Framed the question                                              │    (the live trace)
+ *   └──────────────────────────────────────────────────────────────────┘
  *
- * v2 (gateless deep research): there is no plan, so the strip no longer
- * renders a sub-question checklist — a checklist of steps the run never
- * promised was the dishonest part of the old treatment. What replaces it is
- * the model's own brief plus the real event counts.
+ * Every line above is the latest EVENT of its kind plus its age. Nothing is
+ * inferred from `status`: the old "⟳ Working" spinner span on `RUNNING` alone
+ * and the heartbeat showed a phase label emitted once before the loop started,
+ * so a run that had said nothing for ten minutes looked identical to one
+ * mid-search. `ActivitySignal` now ages off the newest event instead (Live /
+ * quiet for 35 s / no signal for 1:12), and when the loop is holding on the
+ * search pool the heartbeat carries the hold's own live countdown. Past a full
+ * minute of silence the heartbeat also attaches the next action (Stop, and what
+ * it keeps) — a state with no way out is a wall, not a status.
  *
  * When the run finishes the strip collapses to a single line: "How it
  * researched · 12 searches · 30 sources · [ ▸ Expand ]". Click to re-open the
  * full trace (transparency preserved, not discarded).
  */
 
-import { ChevronDown, ChevronRight, Loader2 } from "lucide-react";
+import { ChevronDown, ChevronRight } from "lucide-react";
 import { useState } from "react";
 import { ActivityFeed } from "@/components/build/ActivityFeed";
+import { useNowMs } from "@/hooks/useNowMs";
 import { cn } from "@/lib/cn";
 import type { ActivityItem } from "@/lib/buildTrace";
-import type { DeepStats } from "@/lib/deepResearchTrace";
+import {
+  formatDuration,
+  heartbeatReading,
+  modelIsBuffered,
+  researchPhaseLabel,
+  signalReading,
+  writerLegLeads,
+} from "@/lib/deepResearchHeartbeat";
+import type { ActiveHold, DeepActivity, DeepStats } from "@/lib/deepResearchTrace";
 import type { ConversationStatus } from "@/types/agent";
+import { ActivitySignal } from "./ActivitySignal";
+import { DeepResearchHoldLine } from "./DeepResearchHoldPanel";
 
 interface Props {
   /** The model's opening brief — the first visible output of a gateless run. */
@@ -39,9 +56,16 @@ interface Props {
   trace: ActivityItem[];
   stats: DeepStats;
   status: ConversationStatus;
+  /** The latest reported fact of each kind, with the instant it was reported. */
+  activity: DeepActivity;
   /** Separate follow-up phase signal. When "follow_up", a follow-up answer is
    *  generating and the RUN loaders must stay calm. */
   followUpStatus: "follow_up" | "follow_up_complete" | null;
+  /** Set once the user has chosen "Continue waiting" on an active hold — the
+   *  decision panel collapses into the heartbeat's one-line form. */
+  collapsedHold?: ActiveHold | null;
+  /** Stop from the collapsed hold line (the same cancel the top bar sends). */
+  onStopHold?: () => void;
 }
 
 /** Whole minutes once past a minute, seconds below that. Only ever rendered
@@ -56,14 +80,27 @@ function StatsRow({
   stats,
   status,
   runActive,
+  activity,
+  nowMs,
 }: {
   stats: DeepStats;
   status: ConversationStatus;
   /** True only when the RUN itself is working — false during a follow-up so
-   *  the "Working" spinner doesn't re-flash on the strip. */
+   *  the activity signal doesn't re-flash on the strip. */
   runActive: boolean;
+  activity: DeepActivity;
+  nowMs: number;
 }) {
   const isFinished = status === "FINISHED";
+  // The turn counter is the budget the model itself is spending, so it beats a
+  // phase label that the engine emits once. The label stays as the fallback for
+  // runs (and replays) that carry no `turn` events.
+  const turn = activity.turn;
+  const progress = turn
+    ? `Turn ${turn.payload.n} of ${turn.payload.of}`
+    : stats.phase
+      ? researchPhaseLabel(stats.phase)
+      : null;
   return (
     <div className="flex flex-wrap items-center gap-body font-mono text-[0.78rem] text-text-muted">
       <span>
@@ -72,19 +109,41 @@ function StatsRow({
           {stats.searches === 1 ? " search" : " searches"}
         </span>
       </span>
+      {/* Queries the host refused before they reached an engine. Named beside
+          the searches because a turn can propose three and fire none: without
+          this the strip's "0 searches" is the only thing a reader sees while
+          the run is working normally. */}
+      {stats.refusals > 0 && (
+        <>
+          <span className="text-text-faint">·</span>
+          <span data-dr-refusals="">
+            <span className="text-text">{stats.refusals}</span>
+            <span className="text-text-faint"> not searched</span>
+          </span>
+        </>
+      )}
       <span className="text-text-faint">·</span>
       <span>
         <span className="text-text">{stats.sourcesDiscovered}</span>
         <span className="text-text-faint"> sources</span>
       </span>
-      {stats.activeRound && !isFinished && (
+      {/* A resumed run gets its OWN full turn budget but keeps the pool it
+          stopped with, so the turn counter honestly restarts at 1 over sources
+          nobody has searched for yet. Naming the carried part is the only thing
+          that makes both numbers readable at once. */}
+      {stats.carriedSources !== null && (
         <>
           <span className="text-text-faint">·</span>
-          <span>
-            <span className="text-text-faint">round </span>
-            <span className="text-text">{stats.activeRound.current}</span>
-            <span className="text-text-faint">/{stats.activeRound.max}</span>
+          <span data-dr-carried="">
+            <span className="text-text">{stats.carriedSources}</span>
+            <span className="text-text-faint"> retained from earlier research</span>
           </span>
+        </>
+      )}
+      {progress && !isFinished && (
+        <>
+          <span className="text-text-faint">·</span>
+          <span className="text-text">{progress}</span>
         </>
       )}
       {stats.elapsedSeconds !== null && stats.elapsedSeconds > 0 && (
@@ -96,65 +155,147 @@ function StatsRow({
           </span>
         </>
       )}
-      {runActive && (
+      {/* No event has a timestamp → no honest age exists → no indicator. */}
+      {runActive && activity.lastEventAt !== null && (
         <>
           <span className="text-text-faint">·</span>
-          <span className="flex items-center gap-hair text-accent">
-            <Loader2 className="size-3 animate-spin" aria-hidden />
-            <span className="font-ui">Working</span>
-          </span>
+          <ActivitySignal
+            signal={signalReading(
+              activity.lastEventAt,
+              nowMs,
+              activity.lastEventAt,
+              // The heartbeat line beside this chip already reads the same fact
+              // off the same event. Without it the chip warned "no signal for
+              // 2:00" next to "Waiting for model reply (this driver does not report
+              // progress while it works) · 2:00".
+              modelIsBuffered(activity),
+            )}
+            className="text-[0.78rem]"
+          />
         </>
       )}
     </div>
   );
 }
 
-/** The "now" line — what the engine is doing RIGHT NOW, so a long quiet stretch
- * (a 30-60s write on a local model) reads as work, not a hang. */
-function Heartbeat({
-  stats,
-  runActive,
+/**
+ * Past a full minute of silence the indicator chip alone isn't enough: the
+ * state needs a next action attached to it. This says where the run stands and
+ * what the user can do about it, and appears nowhere else — during a hold the
+ * hold line already owns that job, and on a buffered driver so does its
+ * "does not report progress while it works".
+ */
+function QuietNote({
+  activity,
+  nowMs,
+  holdLine,
 }: {
-  stats: DeepStats;
-  /** True only during the main run — suppressed during follow-up. */
-  runActive: boolean;
+  activity: DeepActivity;
+  nowMs: number;
+  /** The collapsed hold line, when one is up and already explains the quiet. */
+  holdLine: ActiveHold | null;
 }) {
-  if (!runActive) return null;
-  let now: string | null = null;
-  if (stats.activeSection) {
-    now = `Writing “${stats.activeSection.title}”`;
-  } else if (stats.phase === "coherence") {
-    now = "Cross-checking the report for coherence…";
-  } else if (stats.phase === "synthesize") {
-    now = "Writing the report…";
-  } else if (stats.activeSubquestion) {
-    now = `Searching: “${stats.activeSubquestion.title}”`;
-  }
-  if (!now && !stats.lastThought) return null;
+  if (holdLine !== null || modelIsBuffered(activity)) return null;
+  const lastEventAt = activity.lastEventAt;
+  if (lastEventAt === null) return null;
+  const signal = signalReading(lastEventAt, nowMs, lastEventAt);
+  if (signal.level !== "silent") return null;
   return (
-    <div className="border-b border-hairline px-body py-inline">
-      {now && (
-        <div className="flex items-center gap-hair font-ui text-[0.8rem] text-text">
-          <Loader2 className="size-3 shrink-0 animate-spin text-accent" aria-hidden />
-          <span className="truncate">{now}</span>
-        </div>
-      )}
-      {stats.lastThought && (
-        <div className="mt-hair truncate font-reading text-[0.78rem] italic text-text-muted">
-          {stats.lastThought}
-        </div>
-      )}
+    <div className="mt-hair font-ui text-[0.78rem] leading-snug text-warn">
+      Nothing reported for {formatDuration(signal.ageSeconds)}. The run may still be
+      working — Stop ends it and keeps the sources it has.
     </div>
   );
 }
 
-export function DeepProgressStrip({ brief, trace, stats, status, followUpStatus }: Props) {
+/**
+ * The engine's latest thought, unless it describes searching while a writer-leg
+ * fact leads.
+ *
+ * Same rule the heartbeat reading applies to the turn line and the subquestion:
+ * once the writer leads, nothing on the strip may still describe searching. A
+ * gap rationale is research-leg reasoning; a finished section is the writer's
+ * own and stays.
+ */
+function legSafeThought(stats: DeepStats, activity: DeepActivity): string | null {
+  if (stats.lastThoughtLeg === "research" && writerLegLeads(activity)) return null;
+  return stats.lastThought;
+}
+
+/** The "now" line — what the engine last REPORTED and how long ago, so a long
+ *  quiet stretch reads as what it is instead of as either work or a hang. */
+function Heartbeat({
+  activity,
+  nowMs,
+  runActive,
+  stats,
+  collapsedHold,
+  onStopHold,
+}: {
+  activity: DeepActivity;
+  nowMs: number;
+  /** True only during the main run — suppressed during follow-up. */
+  runActive: boolean;
+  stats: DeepStats;
+  collapsedHold: ActiveHold | null;
+  onStopHold?: () => void;
+}) {
+  if (!runActive) return null;
+  const holdLine = collapsedHold && onStopHold ? collapsedHold : null;
+  const reading = heartbeatReading(activity, nowMs);
+  // Pre-v2 replays have no `turn`/`model_activity` events; their per-section
+  // write heartbeat is the only "now" they carry, so it fills in when the v2
+  // vocabulary says nothing. It can never outrank a real v2 event.
+  const now =
+    reading.now ?? (stats.activeSection ? `Writing “${stats.activeSection.title}”` : null);
+  const lastThought = legSafeThought(stats, activity);
+  if (!holdLine && !now && !lastThought) return null;
+  return (
+    <div className="border-b border-hairline px-body py-inline">
+      {holdLine && onStopHold ? (
+        <DeepResearchHoldLine hold={holdLine} nowMs={nowMs} onStop={onStopHold} />
+      ) : (
+        now && <div className="truncate font-ui text-[0.8rem] text-text">{now}</div>
+      )}
+      {reading.turn && (
+        <div className="mt-hair truncate font-mono text-[0.75rem] text-text-faint">
+          {reading.turn}
+        </div>
+      )}
+      {reading.subquestion && (
+        <div className="mt-hair truncate font-reading text-[0.78rem] italic text-text-muted">
+          on “{reading.subquestion}”
+        </div>
+      )}
+      {lastThought && (
+        <div className="mt-hair truncate font-reading text-[0.78rem] italic text-text-muted">
+          {lastThought}
+        </div>
+      )}
+      <QuietNote activity={activity} nowMs={nowMs} holdLine={holdLine} />
+    </div>
+  );
+}
+
+export function DeepProgressStrip({
+  brief,
+  trace,
+  stats,
+  status,
+  activity,
+  followUpStatus,
+  collapsedHold = null,
+  onStopHold,
+}: Props) {
   const isFinished = status === "FINISHED" || status === "IDLE";
   // runActive: the research run itself is working (not a follow-up answer).
   // When followUpStatus === "follow_up", the loop re-entered for a follow-up
   // but this strip must stay calm — only the follow-up indicator (WALK-12,
   // separate lane) shows activity.
   const runActive = status === "RUNNING" && followUpStatus !== "follow_up";
+  // The ages and countdowns have to move while nothing arrives — that is the
+  // whole point. Only while the run is live; a finished report holds no timer.
+  const nowMs = useNowMs(runActive);
   const [expandedWhenFinished, setExpandedWhenFinished] = useState(false);
   // Finished reports begin compact. A user can expand the trace explicitly;
   // active runs stay expanded regardless of the finished-view preference.
@@ -173,7 +314,13 @@ export function DeepProgressStrip({ brief, trace, stats, status, followUpStatus 
             How it researched
           </span>
           <span className="ml-auto">
-            <StatsRow stats={stats} status={status} runActive={runActive} />
+            <StatsRow
+              stats={stats}
+              status={status}
+              runActive={runActive}
+              activity={activity}
+              nowMs={nowMs}
+            />
           </span>
         </button>
       </section>
@@ -193,11 +340,24 @@ export function DeepProgressStrip({ brief, trace, stats, status, followUpStatus 
             <ChevronDown className="size-3.5" aria-hidden />
           </button>
         )}
-        <StatsRow stats={stats} status={status} runActive={runActive} />
+        <StatsRow
+          stats={stats}
+          status={status}
+          runActive={runActive}
+          activity={activity}
+          nowMs={nowMs}
+        />
       </header>
 
-      {/* The heartbeat — what's happening RIGHT NOW + the engine's latest thought. */}
-      <Heartbeat stats={stats} runActive={runActive} />
+      {/* The heartbeat — the newest thing the engine REPORTED, plus its age. */}
+      <Heartbeat
+        activity={activity}
+        nowMs={nowMs}
+        runActive={runActive}
+        stats={stats}
+        collapsedHold={collapsedHold}
+        onStopHold={onStopHold}
+      />
 
       {/* The brief — the model's own read of the question. First visible
           output of a gateless run, so it leads the strip's body. */}

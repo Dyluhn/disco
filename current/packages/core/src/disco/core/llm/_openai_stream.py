@@ -3,6 +3,15 @@
 Extracted from ``openai_provider.py`` so the provider class stays a thin facade.
 This module owns the SSE stream-decoding, tool-call fragment accumulation, and
 weak-model recovery for the streaming path. Never restarts after yielded bytes.
+
+Both provider entry points ride this path: ``stream_complete`` yields chunks to
+the caller, and ``complete`` drives the same accumulation and returns only the
+final buffered result. Timeouts are progress-based (see ``_openai_timeouts``) —
+there is no total wall-clock ceiling on a streamed generation.
+
+This is also the only layer that can see a model still producing, so it is where
+the progress heartbeat is published (``stream_progress``). Chunks that arrive
+report; a quiet stream reports nothing.
 """
 
 from __future__ import annotations
@@ -12,8 +21,10 @@ from collections.abc import AsyncIterator, Callable
 
 import httpx
 
+from ._openai_timeouts import ProviderTimeouts, iter_with_progress_timeout
 from ._request_assembly import FinishReason
 from .errors import LLMTransientError
+from .stream_progress import reporter_for
 from .types import (
     CompletionRequest,
     CompletionResponse,
@@ -28,6 +39,9 @@ _ToolCallsFn = Callable[
     [list | None, list[ToolSpec] | None],
     list[ProposedToolCall],
 ]
+
+# Immutable, so one shared instance is safe as the signature default.
+_DEFAULT_TIMEOUTS = ProviderTimeouts()
 
 
 def _resolve_slot_index(
@@ -186,6 +200,56 @@ def _build_stream_final_response(
     )
 
 
+def _buffered_body_as_stream_line(body: bytes) -> str | None:
+    """Re-shape a whole buffered chat-completions body as one SSE data line.
+
+    Some OpenAI-compatible servers accept ``stream: true`` and answer with a
+    single ``application/json`` object anyway. Parsing that as SSE finds no
+    ``data:`` lines and yields an EMPTY answer — an infrastructure failure
+    wearing a model failure's clothes, which is exactly what this adapter
+    exists to prevent. Converting ``message`` to ``delta`` puts the body
+    through the same accumulators, so the caller cannot tell the difference.
+
+    Returns None when the body is not a decodable chat-completions object, so
+    the caller falls back to normal SSE handling rather than inventing content.
+    """
+    try:
+        data = json.loads(body.decode("utf-8", "replace"))
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(data, dict) or not isinstance(data.get("choices"), list):
+        return None
+    choices: list = data["choices"]
+    choice = choices[0] if choices and isinstance(choices[0], dict) else {}
+    message = choice.get("message")
+    message = message if isinstance(message, dict) else {}
+    raw_tool_calls = message.get("tool_calls")
+    delta: dict = {
+        "content": message.get("content"),
+        "reasoning_content": message.get("reasoning_content"),
+    }
+    if isinstance(raw_tool_calls, list):
+        delta["tool_calls"] = [
+            {**tc, "index": tc.get("index", position)}
+            for position, tc in enumerate(raw_tool_calls)
+            if isinstance(tc, dict)
+        ]
+    reshaped: dict = {
+        "choices": [{"delta": delta, "finish_reason": choice.get("finish_reason")}],
+        "usage": data.get("usage") or {},
+    }
+    if isinstance(data.get("model"), str):
+        # Absent stays absent: an explicit null would overwrite the caller's
+        # model id with None on the way to the response.
+        reshaped["model"] = data["model"]
+    return f"data: {json.dumps(reshaped)}"
+
+
+def _is_buffered_json(resp: httpx.Response) -> bool:
+    """Whether the server answered a streamed request with a whole JSON body."""
+    return "application/json" in resp.headers.get("content-type", "").lower()
+
+
 async def _iter_stream_chunks(
     *,
     client_factory: Callable[[], httpx.AsyncClient],
@@ -193,11 +257,14 @@ async def _iter_stream_chunks(
     payload: dict,
     headers: dict[str, str],
     raise_typed_fn: Callable[[int, str], None],
+    provider_name: str,
+    timeouts: ProviderTimeouts,
 ) -> AsyncIterator[str]:
     """Open the streaming connection and yield raw SSE lines.
 
-    Yields ``(line_str, resp)`` pairs. The caller is responsible for parsing
-    each line. Raises typed errors for non-2xx responses.
+    The non-2xx classification happens BEFORE any line is read, so a server that
+    refuses the streamed request is always an immediate, un-yielded failure.
+    Line delivery is then bounded by progress, never by total duration.
     """
     async with client_factory() as client:
         async with client.stream(
@@ -209,7 +276,20 @@ async def _iter_stream_chunks(
             if resp.status_code >= 400:
                 body = await resp.aread()
                 raise_typed_fn(resp.status_code, body.decode("utf-8", "replace"))
-            async for line in resp.aiter_lines():
+            if _is_buffered_json(resp):
+                reshaped = _buffered_body_as_stream_line(await resp.aread())
+                if reshaped is not None:
+                    yield reshaped
+                    # A complete buffered JSON envelope supplies the transport
+                    # boundary even when its optional finish metadata is absent.
+                    yield "data: [DONE]"
+                    return
+            async for line in iter_with_progress_timeout(
+                resp.aiter_lines(),
+                provider_name=provider_name,
+                first_chunk_s=timeouts.first_chunk_s,
+                idle_s=timeouts.idle_s,
+            ):
                 yield line
 
 
@@ -258,6 +338,14 @@ def _process_delta(
     return new_last_idx, chunks, finish
 
 
+def _require_stream_terminal(finish: str | None, saw_done: bool, provider_name: str) -> None:
+    """Reject an unmarked EOF before reporting a successful completion."""
+    if finish is None and not saw_done:
+        raise LLMTransientError(
+            "stream ended without a finish reason or completion marker", provider=provider_name
+        )
+
+
 async def stream_complete(
     *,
     provider_name: str,
@@ -273,6 +361,7 @@ async def stream_complete(
     cached_tokens_fn: Callable[[dict], int],
     metadata_fn: Callable[..., dict],
     map_finish_fn: Callable[[str | None], FinishReason],
+    timeouts: ProviderTimeouts = _DEFAULT_TIMEOUTS,
 ) -> AsyncIterator[StreamChunk]:
     """Stream chat-completions, assembling tool calls and yielding chunks.
 
@@ -285,8 +374,14 @@ async def stream_complete(
     last_idx: int | None = None
     id_to_idx: dict[str, int] = {}
     finish: str | None = None
+    saw_done = False
     usage: dict = {}
     model_used = model
+    # Progress reporting starts BEFORE the connection opens, so the first
+    # report's `seconds` includes the prefill the caller actually waited out.
+    # None whenever nobody installed an observer, which is every ordinary
+    # completion in the product.
+    reporter = reporter_for(req.metadata)
     try:
         async for line in _iter_stream_chunks(
             client_factory=client_factory,
@@ -294,12 +389,15 @@ async def stream_complete(
             payload=payload,
             headers=headers,
             raise_typed_fn=raise_typed_fn,
+            provider_name=provider_name,
+            timeouts=timeouts,
         ):
             line_stripped = line.strip()
             if not line_stripped.startswith("data:"):
                 continue
             data_str = line_stripped[len("data:") :].strip()
             if data_str == "[DONE]":
+                saw_done = True
                 break
             try:
                 chunk = json.loads(data_str)
@@ -311,6 +409,7 @@ async def stream_complete(
             choices = chunk.get("choices") or []
             if not choices:
                 continue
+            seen = (len(content), len(reasoning_buf))
             last_idx, delta_chunks, delta_finish = _process_delta(
                 choices[0],
                 content=content,
@@ -321,6 +420,14 @@ async def stream_complete(
             )
             for dc in delta_chunks:
                 yield dc
+            if reporter is not None:
+                await reporter.observed(len(content) - seen[0], len(reasoning_buf) - seen[1])
+            # The LAST chunk carrying a NON-NULL finish_reason wins — not the
+            # last chunk. llama.cpp sends the finish on the second-to-last data
+            # chunk and then a usage-only chunk with no choices, so reading
+            # "the final chunk" would drop it. A stream that never sends one
+            # stays None here and needs a separate [DONE] boundary. EOF
+            # alone does not establish that the generation completed.
             if delta_finish:
                 finish = delta_finish
     except httpx.TimeoutException as exc:
@@ -332,11 +439,16 @@ async def stream_complete(
             f"connection error ({type(exc).__name__})", provider=provider_name
         ) from exc
 
-    accumulated_text = "".join(content)
-    reasoning_content = "".join(reasoning_buf)
+    _require_stream_terminal(finish, saw_done, provider_name)
+
+    # The close report is deliberately NOT in a `finally`: a stream that died
+    # mid-flight becomes a typed error the router handles, and the last
+    # heartbeat's silence is the honest account of what the host saw.
+    if reporter is not None:
+        await reporter.close()
     final = _build_stream_final_response(
-        accumulated_text=accumulated_text,
-        reasoning_content=reasoning_content,
+        accumulated_text="".join(content),
+        reasoning_content="".join(reasoning_buf),
         tool_buf=tool_buf,
         usage=usage,
         finish=finish,

@@ -54,10 +54,21 @@ def collection_env(root: Path) -> dict[str, str]:
     # Bind collection to the requested checkout. A shared multi-worktree venv
     # may contain editable .pth files for another checkout; the explicit src
     # roots must win rather than silently collecting foreign package code.
-    package_srcs = sorted(str(path) for path in locate_root(root, "packages").glob("*/src") if path.is_dir())
+    package_srcs = sorted(
+        str(path) for path in locate_root(root, "packages").glob("*/src") if path.is_dir()
+    )
     env["PYTHONPATH"] = os.pathsep.join([*package_srcs, str(root)])
     env["PYTEST_ADDOPTS"] = ""
     return env
+
+
+def logical_node_id(node: str) -> str:
+    """Use the same stable root label for inventory and execution collectors."""
+    for label, disk in ROOT_DIRS.items():
+        prefix = disk + "/"
+        if node.startswith(prefix):
+            return label + "/" + node[len(prefix) :]
+    return node
 
 
 def collector_commands() -> dict[str, Any]:
@@ -182,5 +193,5 @@ def frontend_relative(root: Path, raw_path: str) -> str:
         raise ValueError(f"collector path escapes repository: {raw_path}") from exc
     bucket = ROOT_DIRS.get("frontend", "frontend") + "/"
     if rel.startswith(bucket):
-        rel = "frontend/" + rel[len(bucket):]
+        rel = "frontend/" + rel[len(bucket) :]
     return rel

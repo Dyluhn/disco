@@ -1,0 +1,15 @@
+{
+  "findings": [],
+  "passed": true,
+  "signals": {
+    "malformed_turns": 0,
+    "max_no_progress_streak": 2,
+    "max_repeated_deficiency": 0,
+    "max_repeated_query": 1,
+    "max_repeated_query_streak": 1,
+    "model_io_count": 17,
+    "query_count": 37,
+    "retrieval_failure_turns": 0,
+    "unique_query_count": 37
+  }
+}

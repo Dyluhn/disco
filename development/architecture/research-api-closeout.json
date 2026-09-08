@@ -1,0 +1,168 @@
+{
+  "package": "PKG-35-DEEP-RESEARCH-CLOSEOUT",
+  "baseline_public_api_sha256": "1f5b01ad99a86b7cc41414d0626404d141e34cb1d721e1324d52a7aed3b5015c",
+  "retired_targets": [
+    [
+      "frontend",
+      "frontend/src/fixtures/deepResearchTrace.ts",
+      "fixturePlan",
+      "a7f46f33e5defdaf99ba34c997b49264e9f03e7c7008ba2e2f67b80a0174cc7c"
+    ],
+    [
+      "frontend",
+      "frontend/src/lib/deepResearchTrace.ts",
+      "DeepPlanView",
+      "1d4eb45f7a38d67f6d4f2516f415d6bc10affd4d605a854d29918efd9f7c1585"
+    ],
+    [
+      "frontend",
+      "frontend/src/lib/deepResearchTrace.ts",
+      "StepState",
+      "99036ff22edeec4aaa9b7a27ca15bbc0fd4e4f5cebb8421e079e40cbdb11038b"
+    ],
+    [
+      "frontend",
+      "frontend/src/lib/deepResearchTrace.ts",
+      "derivePlan",
+      "487604f67ee23cf4e4f95c5a0e30e856337aaa9402047e6e2700ab61e9257528"
+    ],
+    [
+      "frontend",
+      "frontend/src/lib/deepResearchTrace.ts",
+      "derivePlanProgress",
+      "8dd65285fb33a4b98a22f30d5364c6d17bff0c1b7639b0fa617b7d0ce2cd4581"
+    ]
+  ],
+  "retired_dispositions": [
+    {
+      "key": [
+        "frontend",
+        "frontend/src/fixtures/deepResearchTrace.ts",
+        "fixturePlan",
+        "a7f46f33e5defdaf99ba34c997b49264e9f03e7c7008ba2e2f67b80a0174cc7c"
+      ],
+      "declaration": {
+        "surface": "frontend",
+        "path": "frontend/src/fixtures/deepResearchTrace.ts",
+        "public_name": "fixturePlan",
+        "declaration": {
+          "kind": "variable",
+          "name": "fixturePlan",
+          "signature": "export const fixturePlan: PlanEvent = { id: \"evt_plan\", kind: \"plan\", source: \"agent\", seq: 3, timestamp: NOW, summary: \"Multi-section research report on the current state of solid-state battery commercialization. Will gather sources across 6 sub-questions (tier: standard_deep; cap: 40 sources, 4 rounds/subq).\", steps: [ { title: \"Which solid-state battery products are in mass or pilot production today?\" }, { title: \"What are the primary technical and manufacturing bottlenecks?\" }, { title: \"How do projected costs per kWh compare to lithium-ion?\" }, { title: \"Which OEMs have confirmed near-term integration timelines?\" }, { title: \"What is the competitive landscape (Toyota, QuantumScape, Solid Power, CATL)?\" }, { title: \"What policy, supply chain, and regulatory headwinds exist?\" }, ], revision: 1, context: \"## Approach\\n\\nDecomposed query into 6 sub-questions prioritized by relevance — products, bottlenecks, and economics first; competitive landscape and policy last (background context).\", };"
+        },
+        "occurrence": 1
+      },
+      "reason": "Retired model-leg plan projection/fixture. Current research is gateless; checkpoint, coverage and evidence projections replace this UI contract. This is an explicit retirement, not equivalent API compatibility."
+    },
+    {
+      "key": [
+        "frontend",
+        "frontend/src/lib/deepResearchTrace.ts",
+        "DeepPlanView",
+        "1d4eb45f7a38d67f6d4f2516f415d6bc10affd4d605a854d29918efd9f7c1585"
+      ],
+      "declaration": {
+        "surface": "frontend",
+        "path": "frontend/src/lib/deepResearchTrace.ts",
+        "public_name": "DeepPlanView",
+        "declaration": {
+          "kind": "InterfaceDeclaration",
+          "name": "DeepPlanView",
+          "signature": "export interface DeepPlanView { id: string; summary: string; steps: PlanStep[]; revision: number; context: string; }"
+        },
+        "occurrence": 1
+      },
+      "reason": "Retired model-leg plan projection/fixture. Current research is gateless; checkpoint, coverage and evidence projections replace this UI contract. This is an explicit retirement, not equivalent API compatibility."
+    },
+    {
+      "key": [
+        "frontend",
+        "frontend/src/lib/deepResearchTrace.ts",
+        "StepState",
+        "99036ff22edeec4aaa9b7a27ca15bbc0fd4e4f5cebb8421e079e40cbdb11038b"
+      ],
+      "declaration": {
+        "surface": "frontend",
+        "path": "frontend/src/lib/deepResearchTrace.ts",
+        "public_name": "StepState",
+        "declaration": {
+          "kind": "TypeAliasDeclaration",
+          "name": "StepState",
+          "signature": "export type StepState = \"pending\" | \"active\" | \"done\";"
+        },
+        "occurrence": 1
+      },
+      "reason": "Retired model-leg plan projection/fixture. Current research is gateless; checkpoint, coverage and evidence projections replace this UI contract. This is an explicit retirement, not equivalent API compatibility."
+    },
+    {
+      "key": [
+        "frontend",
+        "frontend/src/lib/deepResearchTrace.ts",
+        "derivePlan",
+        "487604f67ee23cf4e4f95c5a0e30e856337aaa9402047e6e2700ab61e9257528"
+      ],
+      "declaration": {
+        "surface": "frontend",
+        "path": "frontend/src/lib/deepResearchTrace.ts",
+        "public_name": "derivePlan",
+        "declaration": {
+          "kind": "function",
+          "name": "derivePlan",
+          "signature": "export function derivePlan(events: AgentEvent[]): DeepPlanView | null"
+        },
+        "occurrence": 1
+      },
+      "reason": "Retired model-leg plan projection/fixture. Current research is gateless; checkpoint, coverage and evidence projections replace this UI contract. This is an explicit retirement, not equivalent API compatibility."
+    },
+    {
+      "key": [
+        "frontend",
+        "frontend/src/lib/deepResearchTrace.ts",
+        "derivePlanProgress",
+        "8dd65285fb33a4b98a22f30d5364c6d17bff0c1b7639b0fa617b7d0ce2cd4581"
+      ],
+      "declaration": {
+        "surface": "frontend",
+        "path": "frontend/src/lib/deepResearchTrace.ts",
+        "public_name": "derivePlanProgress",
+        "declaration": {
+          "kind": "function",
+          "name": "derivePlanProgress",
+          "signature": "export function derivePlanProgress( events: AgentEvent[], plan: DeepPlanView | null, ): Map<number, StepState>"
+        },
+        "occurrence": 1
+      },
+      "reason": "Retired model-leg plan projection/fixture. Current research is gateless; checkpoint, coverage and evidence projections replace this UI contract. This is an explicit retirement, not equivalent API compatibility."
+    }
+  ],
+  "contract_transitions": [
+    {
+      "before": {
+        "path": "current/docs/contracts/retrieval-grounding-contract.md",
+        "sha256": "5056ba93e3f485162a736ac7916b65000bb615fe48d97e6ab47c9b182d18fa41",
+        "bytes": 31876
+      },
+      "after": {
+        "path": "current/docs/contracts/retrieval-grounding-contract.md",
+        "sha256": "51c3fbafffa4b919f584aa59ab6491938182fe366c79d680f9c26aeacf386061",
+        "bytes": 32864
+      }
+    },
+    {
+      "before": {
+        "path": "current/packages/retrieval/pyproject.toml",
+        "sha256": "0107f9ef7d2ac2f425ba7d2f8dabcf94c8063cde940c94eaeba1f8b7c558d2f5",
+        "bytes": 799
+      },
+      "after": {
+        "path": "current/packages/retrieval/pyproject.toml",
+        "sha256": "92d0e969852251b2b5d67d4ff0e34413f8a95da7fcc8632a830cf9ea5373bb48",
+        "bytes": 898
+      }
+    }
+  ],
+  "contract_reasons": {
+    "current/docs/contracts/retrieval-grounding-contract.md": "Issue the model-owned query once and preserve its operators; breadth is result count rather than hidden paraphrase fan-out.",
+    "current/packages/retrieval/pyproject.toml": "Declare the actual packaged offline NLI dependencies, retire ddgs in favor of configured bundled discovery, and include pypdf>=6.17,<7 for bounded primary-PDF extraction; the resolved lock is 6.17.0 and the offline package/PDF controls pass."
+  }
+}

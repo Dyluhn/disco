@@ -13,7 +13,7 @@ at. A regression that wires AROUND the resilience (swaps a provider, drops a
 cancel check) is caught here, where the unit tests structurally can't see it.
 
 Self-contained (only the public package API) so it imports from `development/harness/tests`
-under `PYTHONPATH=.` without the per-package test fakes.
+without the per-package test fakes.
 """
 
 from __future__ import annotations

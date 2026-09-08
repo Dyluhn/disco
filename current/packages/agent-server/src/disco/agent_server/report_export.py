@@ -30,7 +30,7 @@ import html as _html
 import json
 import logging
 import re
-from typing import Any, Literal, cast
+from typing import Literal, cast
 
 import markdown as _md
 from disco.core import ReportEvent, ReportSection
@@ -63,8 +63,34 @@ from ._report_normalize import (
     _normalized_report,
     _split_table_row,
 )
+from .title_service import fallback_title
 
 logger = logging.getLogger(__name__)
+
+
+def _display_title(report: ReportEvent, title: str | None) -> str:
+    """W-10: the H1 / cover title is the real generated title, falling back to
+    the raw question when no title is available.
+
+    A stored title that is exactly ``fallback_title(report.query)`` is not one.
+    That string is the question's first eight words — the same question the next
+    line prints in full — and the titler stores it whenever its model call fails
+    OR never runs: ``TitleService._run`` is idempotent, so a conversation created
+    with a seeded title is never titled at all. 194 of the 195 saved reports in
+    the 2026-08-30 acceptance corpus carry one, which is why a live export's H1
+    read ``# Across the US, UK, and EU, how have``. It is a serviceable History
+    label and a broken document heading, so the heading falls through to the
+    question exactly as it does for an untitled conversation.
+
+    The TypeScript twin takes no title at all and always writes ``report.query``,
+    so this rule is Python-only by construction and the byte-parity fixture (a
+    title-less call) is untouched.
+    """
+    generated = (title or "").strip()
+    if not generated or generated == fallback_title(report.query):
+        return report.query
+    return generated
+
 
 # ---- Markdown serializer (ported verbatim from deepResearch.ts:88-127) ----
 
@@ -88,18 +114,29 @@ def serialize_markdown(
     (backwards-compatible — the byte-parity test still passes).
 
     ``title`` — W-10: a real generated conversation title for the H1 title
-    line, instead of echoing the raw user question. When ``None``/empty it
-    falls back to ``report.query`` (byte-identical to the baseline — the
-    byte-parity test passes ``title=None``).
+    line, instead of echoing the raw user question. When it is ``None``/empty,
+    or is only the question's first eight words, the H1 is ``report.query`` —
+    see :func:`_display_title`.
+
+    The line under the H1 carries the question VERBATIM, always. A report that
+    does not say what was asked is not a report, and once the H1 became a
+    generated title the question had nowhere left to live. It is unconditional
+    rather than "only when the title differs" so that the question is always on
+    the same line for whoever (or whatever) reads the export back, and so that
+    this serializer and its TypeScript twin stay one rule with no branch that
+    only one of them can reach. The cost is one repeated line on the untitled
+    fallback.
     """
     report = _normalized_report(report)
     # One numbering, everywhere: the UI's [n] assignment (first-seen source
     # order over report.passages) is the canonical presentation — inline
     # markers and the sources footer never show a raw passage id.
     numbers = _citation_numbers(report.passages)
-    display_title = (title or "").strip() or report.query
+    display_title = _display_title(report, title)
     lines: list[str] = []
-    lines.append(f"# Deep Research: {display_title}")
+    lines.append(f"# {display_title}")
+    lines.append("")
+    lines.append(f"> Question: {report.query}")
     lines.append("")
     lines.append("## Executive Summary")
     lines.append("")
@@ -200,13 +237,27 @@ def _sub_citation_markers(text: str, numbers: dict[str, int]) -> str:
 
     Unknown ids degrade to ``[?]`` (never leak the raw hash). Shared by the
     markdown serializer for the summary, section bodies, disputed notes and
-    follow-up answers; the mirror lives in deepResearch.ts."""
-
-    def _one(m: re.Match[str]) -> str:
-        n = numbers.get(m.group(1).strip())
-        return f"[{n}]" if n is not None else "[?]"
-
-    return _CITE_RE.sub(_one, text)
+    follow-up answers; adjacent markers sharing a source number collapse to one
+    display marker; the mirror lives in deepResearch.ts."""
+    parts: list[str] = []
+    last = 0
+    previous_number: int | None = None
+    for match in _CITE_RE.finditer(text):
+        between = text[last : match.start()]
+        number = numbers.get(match.group(1).strip())
+        duplicate = (
+            previous_number is not None
+            and number is not None
+            and number == previous_number
+            and not between.strip()
+        )
+        if not duplicate:
+            parts.append(between)
+            parts.append(f"[{number}]" if number is not None else "[?]")
+        previous_number = number
+        last = match.end()
+    parts.append(text[last:])
+    return "".join(parts)
 
 
 def _cite_chip(raw_id: str, cite_map: dict[str, int] | None) -> str:
@@ -379,17 +430,16 @@ def _cover_meta_html(report: ReportEvent, n_sources: int) -> str:
     return "".join(items)
 
 
-def _pdf_display_title(report: ReportEvent, title: str | None) -> str:
-    """W-10: the cover title page uses the real generated title, falling back
-    to the raw question only when no title is available."""
-    return (title or "").strip() or report.query
-
-
 def _pdf_cover_html(
     report: ReportEvent, title_escaped: str, theme: Theme, n_sources: int
 ) -> str:
-    """Cover page: dropcap title, subtitle, meta row, and the disco definition
-    mark (only when ``theme.branded``)."""
+    """Cover page: dropcap title, question, subtitle, meta row, and the disco
+    definition mark (only when ``theme.branded``).
+
+    The question line is the PDF's half of the same rule the markdown
+    serializer applies: the H1/cover title is a generated title, so the cover
+    carries the question verbatim or the document never says what was asked.
+    """
     if title_escaped:
         first_char = title_escaped[0]
         rest_title = title_escaped[1:]
@@ -404,6 +454,7 @@ def _pdf_cover_html(
         '<div class="cover-page">'
         '<div class="cover-rule"></div>'
         f'<div class="cover-title">{title_html}</div>'
+        f'<div class="cover-question">Question: {_html.escape(report.query)}</div>'
         f'<div class="cover-subtitle">{_html.escape(_cover_subtitle_text(report.summary))}</div>'
         '<div class="cover-meta">'
         f"{cover_meta}"
@@ -565,7 +616,7 @@ def _build_pdf_html(
     )
 
     # ---- cover ----
-    display_title = _pdf_display_title(report, title)
+    display_title = _display_title(report, title)
     title_escaped = _html.escape(display_title)
     cover_html = _pdf_cover_html(report, title_escaped, theme, n_sources)
 

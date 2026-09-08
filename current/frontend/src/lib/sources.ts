@@ -1,8 +1,18 @@
 import type { ExtractStatus, GroundedAnswer, Passage, Verdict } from "@/types/grounded";
 
-const TRACKING_QUERY_KEYS = new Set(["fbclid", "gclid", "mc_cid", "mc_eid"]);
+const TRACKING_QUERY_KEYS = new Set([
+  "fbclid",
+  "gclid",
+  "mc_cid",
+  "mc_eid",
+  "msclkid",
+  "msockid",
+]);
+const DOI_RE = /(?:https?:\/\/(?:dx\.)?doi\.org\/|doi:\s*)?(10\.\d{4,9}\/[^\s<>"']+)/i;
+const ARXIV_RE = /(?:arxiv(?::|\.org\/(?:abs\/|pdf\/|html\/))|\/(?:abs|pdf|html)\/)([a-z-]+(?:\.[A-Z]{2})?\/\d{7}|\d{4}\.\d{4,5})(?:v\d+)?(?:\.pdf)?(?:$|[/?#])/i;
+const PMID_RE = /(?:pubmed\.ncbi\.nlm\.nih\.gov\/|ncbi\.nlm\.nih\.gov\/pubmed\/|pmid[:/])([0-9]+)/i;
 
-/** Conservative source identity shared by citation numbering and source tiers.
+/** Conservative URL identity used by canonicalWorkKey's fallback.
  * Original URLs remain untouched for display and navigation. */
 export function sourceUrlKey(raw: string): string {
   const value = raw.trim();
@@ -42,6 +52,28 @@ export function sourceUrlKey(raw: string): string {
   }
 }
 
+/** Stable work identity for grouping passages while retaining their URLs.
+ * Strong identifiers are preferred; URL identity is the conservative fallback.
+ * Titles are deliberately ignored so similar works never merge. */
+export function canonicalWorkKey(raw: string): string {
+  let value: string;
+  try {
+    value = decodeURIComponent(raw.trim());
+  } catch {
+    value = raw.trim();
+  }
+  if (!value) return "url:";
+  const doi = value.match(DOI_RE);
+  if (doi) {
+    return `doi:${doi[1].split("?", 1)[0].split("#", 1)[0].replace(/[.,;:)}\]]+$/, "").toLowerCase()}`;
+  }
+  const arxiv = value.match(ARXIV_RE);
+  if (arxiv) return `arxiv:${arxiv[1].toLowerCase()}`;
+  const pmid = value.match(PMID_RE);
+  if (pmid) return `pmid:${pmid[1]}`;
+  return `url:${sourceUrlKey(value)}`;
+}
+
 /** Human-readable domain (no scheme, no www, no path) for source cards. */
 export function cleanDomain(url: string): string {
   try {
@@ -58,10 +90,11 @@ export function monogram(url: string): string {
   return cleanDomain(url).charAt(0).toUpperCase() || "•";
 }
 
-/** 1-based citation numeral for a passage = the position of its SOURCE in
- * first-seen `source_url` order — NOT the passage's raw index. One source often
- * contributes several passages, and the Sources panel (deriveSourceTiers) shows
- * ONE row per source in the same first-seen order; numbering chips by raw
+/** 1-based citation numeral for a passage = the position of its WORK in
+ * first-seen `source_url` order — NOT the passage's raw index. One work often
+ * contributes several passages or mirror URLs, and the Sources panel
+ * (deriveSourceTiers) shows ONE row per work in the same first-seen order;
+ * numbering chips by raw
  * passage index drifted +1 after every duplicate (found live 2026-07-09: the
  * chip said [5] where the sources list said [4]). Passages from the same source
  * now share that source's number, matching the panel row they deep-link to.
@@ -71,7 +104,7 @@ export function citationNumbers(answer: GroundedAnswer): Map<string, number> {
   const bySource = new Map<string, number>();
   const m = new Map<string, number>();
   for (const p of answer.passages) {
-    const key = p.source_url ? sourceUrlKey(p.source_url) : `#${p.id}`;
+    const key = p.source_url ? canonicalWorkKey(p.source_url) : `#${p.id}`;
     let n = bySource.get(key);
     if (n === undefined) {
       n = bySource.size + 1;

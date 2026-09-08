@@ -8,7 +8,7 @@ A research task (evals/research/*.yaml):
     min_faithfulness: 0.6        # gate: supported/total claims
     must_cite_domains: [...]     # at least one cited source from each
 
-Run:  PYTHONPATH=. uv run python -m harness.eval_runner --replay
+Run:  uv run python -m harness.eval_runner --replay
 """
 
 from __future__ import annotations
@@ -23,7 +23,6 @@ from typing import Any
 from disco.retrieval.engine import DefaultRetrievalEngine
 from disco.retrieval.evaluation import grounding_metrics
 from disco.retrieval.grounding import GroundingPipeline
-from disco.retrieval.ranking import RouterQueryRewriter
 from disco.retrieval.wiring import research_answer
 
 from .cassette import Cassette
@@ -48,7 +47,6 @@ def _pipeline(search, extraction, reranker, embedder, nli, router):
         extraction=extraction,
         reranker=reranker,
         embedder=embedder,
-        rewriter=RouterQueryRewriter(router),
     )
     grounding = GroundingPipeline(router, nli)
     return engine, grounding
@@ -93,12 +91,10 @@ def _encoders() -> dict:
 
 
 async def capture_research(query: str, cassette: Cassette, router_real, depth="standard") -> None:
-    from disco.retrieval.bundled_providers import (
-        DdgsSearchProvider,
-        LocalExtractionProvider,
-    )
+    from disco.retrieval.bundled_providers import LocalExtractionProvider
+    from disco.retrieval.live import build_keyless_search
 
-    search = RecordingSearchProvider(DdgsSearchProvider(), cassette)
+    search = RecordingSearchProvider(build_keyless_search(), cassette)
     extraction = RecordingExtractionProvider(LocalExtractionProvider(), cassette)
     router = RecordingRouter(router_real, cassette)
     await run_research(query, search, extraction, _encoders(), router, depth=depth)
@@ -120,17 +116,15 @@ def _real_search_extract_router(model_pick: str):
     from disco.agent_server import ConversationRuntime
     from disco.core import SqliteEventStore
     from disco.core.llm import ConfigStore, SecretStore
-    from disco.retrieval.bundled_providers import (
-        DdgsSearchProvider,
-        LocalExtractionProvider,
-    )
+    from disco.retrieval.bundled_providers import LocalExtractionProvider
+    from disco.retrieval.live import build_keyless_search
 
     rt = ConversationRuntime(
         SqliteEventStore(":memory:"),
         config_store=ConfigStore(os.environ.get("PMX_CONFIG", "/tmp/pmx-live-config.json")),
         secret_store=SecretStore(os.environ.get("PMX_SECRETS", "/tmp/pmx-live-secrets.json")),
     )
-    return DdgsSearchProvider(), LocalExtractionProvider(), rt._router_now(pick=model_pick)
+    return build_keyless_search(), LocalExtractionProvider(), rt._router_now(pick=model_pick)
 
 
 async def run_eval(*, replay: bool, cassette_path: str | None, model_pick="driver-local") -> dict:

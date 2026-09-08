@@ -14,6 +14,21 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from ._router_attempts import (
+    Attempt,
+    _notify_success,
+    begin_attempt,
+    end_attempt,
+    end_stream_attempt,
+    finish_complete,
+)
+from ._router_backoff import _RETRY_BACKOFF_BASE_S, sleep_before_retry
+from ._router_stream_retry import (
+    handle_stream_auth,
+    handle_stream_terminal,
+    handle_stream_transient,
+)
+from .empty_completion import completion_outcome
 from .errors import (
     LLMAuthError,
     LLMContentFiltered,
@@ -31,7 +46,11 @@ from .types import (
 
 _LOG = logging.getLogger(__name__)
 
-_MAX_ATTEMPTS = 5
+# Eight, not five: a research run that died after 40 s of provider 400s
+# (2026-09-04, a ~2-minute burst) lost an hour of research to a blip the next
+# minute would have ridden out. With the 45 s cap the ladder waits ~2.5 min
+# in total, still bounded, still only for transient errors.
+_MAX_ATTEMPTS = 8
 _ROLE_FALLBACK_MAX_ATTEMPTS = 2
 _AUTH_RETRY_DELAY_S = 2.0
 
@@ -43,20 +62,11 @@ def _route(path: Path, reason: str, model_id: str, provider_name: str) -> _Failu
     return path, reason, model_id, provider_name
 
 
-def _notify_success(router: Any, model_key: str, decision: RoutingDecision, ctx: Any) -> None:
-    observer = router._on_success
-    if observer is None:
-        return
-    try:
-        observer(model_key, decision, ctx)
-    except Exception:  # noqa: BLE001 — passive observation cannot fail a completed call
-        _LOG.exception("LLM success observer failed")
-
-
 @dataclass
 class _StreamAttemptState:
     yielded_any: bool = False
     recorded: bool = False
+    attempt: Attempt | None = None
 
 
 async def _yield_stream_attempt(
@@ -64,16 +74,29 @@ async def _yield_stream_attempt(
     *,
     model_key: str,
     provider: Any,
+    provider_name: str,
     exec_req: CompletionRequest,
     model_id: str,
     decision: RoutingDecision,
     ctx: Any,
     state: _StreamAttemptState,
+    call_ordinal: int,
 ) -> AsyncIterator[StreamChunk]:
+    state.attempt = begin_attempt(
+        exec_req, model_id, provider_name, decision.attempt, call_ordinal, ctx
+    )
     async for chunk in provider.stream_complete(exec_req, model=model_id):
         if chunk.done and chunk.final is not None:
             final = chunk.final.model_copy(update={"routing": decision})
             if not state.recorded:
+                outcome, error_class = completion_outcome(final)
+                end_stream_attempt(
+                    state.attempt,
+                    recorded=state.recorded,
+                    outcome=outcome,
+                    error_class=error_class,
+                    retry_scheduled=False,
+                )
                 router._sink.record(decision)
                 router._cost.add(final.usage.cost_usd, ctx.conversation_id)
                 _notify_success(router, model_key, decision, ctx)
@@ -83,6 +106,12 @@ async def _yield_stream_attempt(
         else:
             state.yielded_any = True
             yield chunk
+    end_stream_attempt(
+        state.attempt,
+        recorded=state.recorded,
+        outcome="incomplete",
+        retry_scheduled=False,
+    )
 
 
 def _role_fallback_target(
@@ -208,31 +237,43 @@ async def execute_complete(
     max_attempts: int = _MAX_ATTEMPTS,
     fallback_max_attempts: int = _ROLE_FALLBACK_MAX_ATTEMPTS,
     auth_retry_delay_s: float = _AUTH_RETRY_DELAY_S,
+    backoff_base_s: float = _RETRY_BACKOFF_BASE_S,
 ) -> CompletionResponse:
     """Run the same-model retry loop for a non-streaming completion."""
     used_fallback = False
     auth_retry_used = False
     attempt = 1
+    call_ordinal = 0
     while True:
+        call_ordinal += 1
+        attempt_context = begin_attempt(
+            exec_req, model_id, provider_name, attempt, call_ordinal, ctx
+        )
         try:
             resp = await provider.complete(exec_req, model=model_id)
+        except asyncio.CancelledError as exc:
+            end_attempt(attempt_context, outcome="cancelled", error=exc, retry_scheduled=False)
+            raise
         except LLMAuthError as exc:
             if not auth_retry_used:
+                end_attempt(attempt_context, outcome="error", error=exc, retry_scheduled=True)
                 auth_retry_used = True
                 _LOG.warning("transient auth failure, retrying once: %s", exc)
                 await asyncio.sleep(auth_retry_delay_s)
                 attempt += 1
                 continue
+            end_attempt(attempt_context, outcome="error", error=exc, retry_scheduled=False)
             _fail(
                 router, req, entry, _route(active_path, active_reason, model_id, provider_name), exc
             )
             raise
         except (LLMContextWindowExceeded, LLMContentFiltered) as exc:
+            end_attempt(attempt_context, outcome="error", error=exc, retry_scheduled=False)
             _fail(
                 router, req, entry, _route(active_path, active_reason, model_id, provider_name), exc
             )
             raise
-        except LLMTransientError:
+        except LLMTransientError as exc:
             if attempt >= max_attempts:
                 fb = _try_role_fallback(
                     router,
@@ -242,6 +283,7 @@ async def execute_complete(
                     fallback_max_attempts,
                 )
                 if fb is not None:
+                    end_attempt(attempt_context, outcome="error", error=exc, retry_scheduled=True)
                     (
                         provider,
                         model_id,
@@ -254,6 +296,7 @@ async def execute_complete(
                     active_path = "role_fallback"
                     attempt = 1
                     continue
+                end_attempt(attempt_context, outcome="error", error=exc, retry_scheduled=False)
                 _fail(
                     router,
                     req,
@@ -262,22 +305,18 @@ async def execute_complete(
                     None,
                 )
                 raise
+            end_attempt(attempt_context, outcome="error", error=exc, retry_scheduled=True)
+            await sleep_before_retry(attempt, backoff_base_s)
             attempt += 1
             continue
+        except Exception as exc:  # noqa: BLE001 — preserve provider error behavior
+            end_attempt(attempt_context, outcome="error", error=exc, retry_scheduled=False)
+            raise
         else:
-            decision = RoutingDecision(
-                profile=req.profile,
-                chosen_model=model_id,
-                provider=provider_name,
-                path=active_path,
-                reason=active_reason,
-                overflow_triggers=active_triggers,
-                attempt=attempt,
+            return finish_complete(
+                router, model_key, req, ctx, resp, model_id, provider_name,
+                active_path, active_reason, active_triggers, attempt, attempt_context,
             )
-            router._sink.record(decision)
-            router._cost.add(resp.usage.cost_usd, ctx.conversation_id)
-            _notify_success(router, model_key, decision, ctx)
-            return resp.model_copy(update={"routing": decision})
 
 
 async def execute_stream_complete(
@@ -294,11 +333,14 @@ async def execute_stream_complete(
     max_attempts: int = _MAX_ATTEMPTS,
     fallback_max_attempts: int = _ROLE_FALLBACK_MAX_ATTEMPTS,
     auth_retry_delay_s: float = _AUTH_RETRY_DELAY_S,
+    backoff_base_s: float = _RETRY_BACKOFF_BASE_S,
 ) -> AsyncIterator[StreamChunk]:
     used_fallback = False
     auth_retry_used = False
     attempt = 1
+    call_ordinal = 0
     while True:
+        call_ordinal += 1
         decision = RoutingDecision(
             profile=req.profile,
             chosen_model=model_id,
@@ -312,68 +354,59 @@ async def execute_stream_complete(
         try:
             async for chunk in _yield_stream_attempt(
                 router, model_key=model_key, provider=provider,
+                provider_name=provider_name,
                 exec_req=exec_req,
                 model_id=model_id,
                 decision=decision,
                 ctx=ctx,
                 state=state,
+                call_ordinal=call_ordinal,
             ):
                 yield chunk
             return  # stream completed cleanly
+        except asyncio.CancelledError as exc:
+            end_stream_attempt(
+                state.attempt, recorded=state.recorded,
+                outcome="cancelled", error=exc, retry_scheduled=False,
+            )
+            raise
         except LLMAuthError as exc:
-            if not state.yielded_any and not auth_retry_used:
+            if await handle_stream_auth(
+                router, req, entry, state, exc, auth_retry_used, auth_retry_delay_s,
+                _route(active_path, active_reason, model_id, provider_name), _fail,
+            ):
                 auth_retry_used = True
-                _LOG.warning("transient auth failure, retrying once: %s", exc)
-                await asyncio.sleep(auth_retry_delay_s)
                 attempt += 1
                 continue
-            _fail(
-                router, req, entry, _route(active_path, active_reason, model_id, provider_name), exc
-            )
-            raise
         except (LLMContextWindowExceeded, LLMContentFiltered) as exc:
-            _fail(
-                router, req, entry, _route(active_path, active_reason, model_id, provider_name), exc
+            handle_stream_terminal(
+                router, req, entry, state, exc,
+                _route(active_path, active_reason, model_id, provider_name), _fail,
             )
-            raise
-        except LLMTransientError:
-            if state.yielded_any:
-                _fail(
-                    router,
-                    req,
-                    entry,
-                    _route(active_path, active_reason, model_id, provider_name),
-                    None,
-                )
-                raise
-            if attempt >= max_attempts:
-                fb = _try_role_fallback(
-                    router,
-                    req,
-                    entry,
+        except LLMTransientError as exc:
+            fallback = await handle_stream_transient(
+                router, req, entry, state, exc, attempt, max_attempts,
+                used_fallback, fallback_max_attempts, active_path, active_reason,
+                model_id, provider_name, backoff_base_s, _try_role_fallback, _fail,
+            )
+            if fallback is not None:
+                (
+                    provider,
+                    model_id,
+                    provider_name,
+                    active_reason,
+                    active_triggers,
+                    max_attempts,
                     used_fallback,
-                    fallback_max_attempts,
-                )
-                if fb is not None:
-                    (
-                        provider,
-                        model_id,
-                        provider_name,
-                        active_reason,
-                        active_triggers,
-                        max_attempts,
-                        used_fallback,
-                    ) = fb
-                    active_path = "role_fallback"
-                    attempt = 1
-                    continue
-                _fail(
-                    router,
-                    req,
-                    entry,
-                    _route(active_path, active_reason, model_id, provider_name),
-                    None,
-                )
-                raise
+                ) = fallback
+                active_path = "role_fallback"
+                attempt = 1
+                continue
             attempt += 1
             continue
+        except Exception as exc:  # noqa: BLE001 — preserve provider error behavior
+            end_stream_attempt(
+                state.attempt, recorded=state.recorded,
+                outcome="error", error=exc, retry_scheduled=False,
+            )
+            raise

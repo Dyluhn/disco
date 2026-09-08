@@ -9,7 +9,14 @@
 import { ChevronDown, ChevronRight, ExternalLink } from "lucide-react";
 import { useState } from "react";
 import { cn } from "@/lib/cn";
-import type { Passage, VerifiedClaim, Verdict } from "@/types/grounded";
+import type { Passage, VerifiedClaim, Verdict, VerificationStatus } from "@/types/grounded";
+
+const CHECK_LABEL: Record<VerificationStatus, string> = {
+  supported: "Supported",
+  contradicted: "Possible contradiction",
+  unresolved: "Unresolved",
+  unavailable: "Not checked",
+};
 
 const VERDICT_LABEL: Record<Verdict, string> = {
   supported: "Supported",
@@ -31,6 +38,13 @@ function sortClaims(claims: VerifiedClaim[]): VerifiedClaim[] {
 interface ClaimVerdictsProps {
   claims: VerifiedClaim[];
   passages: Passage[];
+}
+
+function evidenceDetail(claim: VerifiedClaim): string {
+  if (claim.verification_status === "unavailable") return "The evidence check could not run.";
+  if (claim.verification_reason === "missing_evidence") return "Cited evidence is missing.";
+  if (claim.verification_reason === "conflicting_evidence") return "Cited passages disagree.";
+  return `${claim.verification_status ? "Support estimate" : "Score"} ${(claim.entailment_score * 100).toFixed(0)}%`;
 }
 
 export function ClaimVerdicts({ claims, passages }: ClaimVerdictsProps) {
@@ -83,14 +97,16 @@ export function ClaimVerdicts({ claims, passages }: ClaimVerdictsProps) {
                   VERDICT_COLOR[vc.verdict],
                 )}
               >
-                {VERDICT_LABEL[vc.verdict]}
+                {vc.verification_status
+                  ? CHECK_LABEL[vc.verification_status]
+                  : VERDICT_LABEL[vc.verdict]}
               </span>
               <div className="min-w-0 flex-1">
                 <p className="font-ui text-[0.82rem] leading-snug text-text">
                   {vc.claim.text}
                 </p>
                 <span className="font-ui text-[0.72rem] text-text-faint">
-                  Score {(vc.entailment_score * 100).toFixed(0)}%
+                  {evidenceDetail(vc)}
                   {bestPassage && (
                     <>
                       {" · "}

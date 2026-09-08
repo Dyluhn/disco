@@ -321,6 +321,7 @@ def _data_sources_from(
         search_provider=s.provider,
         search_base_url=s.base_url,
         search_api_key_env=s.api_key_env,
+        search_categories=s.categories,
         extraction_provider=x.provider,
         extraction_base_url=x.base_url,
         extraction_api_key_env=x.api_key_env,

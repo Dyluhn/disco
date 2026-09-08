@@ -13,7 +13,13 @@ import {
   requireReliabilityStack,
 } from "./reliability-helpers";
 
-const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+// This file lives at `current/frontend/e2e-live/`, so the repo root is THREE
+// levels up. `../..` landed on `current/`, which made `PYTHON` resolve to a
+// `current/.venv/bin/python3` that does not exist — `execFileSync` then failed
+// with a spawn ENOENT that carries no status, no signal and empty stdout/stderr,
+// which is why the oracle step reported nothing at all. Fallout from the
+// archive/current/development restructure moving the frontend down a level.
+const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const PYTHON = process.env.PMX_VENV_PY ?? path.join(REPO, ".venv/bin/python3");
 const QUESTION =
   "Compare the practical security and portability tradeoffs of WebAssembly runtimes " +
@@ -34,11 +40,38 @@ function validateReport(report: Record<string, unknown>, input: string, output: 
         "--output",
         output,
       ],
-      { cwd: REPO, encoding: "utf-8", timeout: 240_000 },
+      {
+        cwd: REPO,
+        encoding: "utf-8",
+        timeout: 240_000,
+      },
     );
   } catch (error) {
-    const failure = error as { stdout?: string; stderr?: string };
-    throw new Error(`report oracle failed:\n${failure.stdout ?? ""}\n${failure.stderr ?? ""}`);
+    // A killed child (the 240 s cap) reports empty stdout AND stderr, so the
+    // status/signal have to be in the message or the failure says nothing at
+    // all — which is exactly what it used to say.
+    const failure = error as {
+      code?: string | null;
+      message?: string | null;
+      status?: number | null;
+      signal?: string | null;
+      stdout?: string | null;
+      stderr?: string | null;
+    };
+    // A spawn-level failure (ENOENT, EACCES) and a maxBuffer overrun both carry
+    // NEITHER status nor signal, so `code` and `message` have to be in here too
+    // — without them this wall reports "unknown" and the reader is no better off
+    // than with the empty string it used to print.
+    const how =
+      failure.signal != null
+        ? `killed by ${failure.signal} (the ${240_000} ms cap)`
+        : failure.status != null
+          ? `exit status ${failure.status}`
+          : `no exit status — spawn/buffer failure, code=${failure.code ?? "none"}`;
+    throw new Error(
+      `report oracle failed — ${how}\n${failure.message ?? ""}\n` +
+        `stdout:\n${failure.stdout ?? ""}\nstderr:\n${failure.stderr ?? ""}`,
+    );
   }
 }
 
@@ -56,12 +89,19 @@ test("Deep Research report is grounded, resumes, answers a follow-up, and export
   });
 
   try {
+    // The composer is a RADIOGROUP ("Search" / "Deep Research") with the depth
+    // tier behind the `dr.options` disclosure. The old flow here clicked a
+    // `scope:` button into a menu that no longer exists, so this spec's FIRST
+    // action failed on every nightly run. Same selectors the S1 evidence specs
+    // drive.
     await page.goto("/");
-    await page.getByRole("button", { name: /^scope:/i }).click();
-    await page.getByRole("menuitem", { name: /deep research/i }).click();
-    await page.locator('[data-disco-control="dr.depth-tier"]').click();
-    await page.getByRole("menuitem", { name: /quick/i }).click();
+    await page.getByRole("radio", { name: /deep research/i }).click();
     const input = page.getByPlaceholder(/ask a research question/i);
+    await input.waitFor({ state: "visible", timeout: 30_000 });
+    await page.locator('[data-disco-control="dr.options"]').click();
+    await page.locator('[data-disco-control="dr.depth-tier"]').click();
+    await page.getByRole("menuitem", { name: /^Quick/ }).click();
+    await page.keyboard.press("Escape");
     await input.fill(QUESTION);
     await input.press("Enter");
     // v2 is gateless: submitting starts the research. The model's brief is the
@@ -93,12 +133,16 @@ test("Deep Research report is grounded, resumes, answers a follow-up, and export
 
     const reportSeq = Number(report.seq ?? -1);
     await page.getByRole("button", { name: "Ask a Follow-Up" }).click();
-    await page.getByLabel("Follow-up question").fill(FOLLOW_UP);
+    // The textarea, not the form that wraps it: `getByLabel` matches a substring,
+    // and the form's accessible name is "Ask a follow-up question about the
+    // report", so the bare label resolved to two elements and failed strict mode.
+    await page.getByRole("textbox", { name: "Follow-up question" }).fill(FOLLOW_UP);
     await page.locator('[data-disco-control="dr.follow-up"]').click();
 
     const followUpDeadline = Date.now() + 600_000;
     let answer = "";
     let followUpSeq = -1;
+    let ledger: Record<string, unknown> | null = null;
     while (Date.now() < followUpDeadline) {
       events = await allEvents(request, cid);
       const afterReport = events.filter((event) => Number(event.seq ?? -1) > reportSeq);
@@ -107,16 +151,41 @@ test("Deep Research report is grounded, resumes, answers a follow-up, and export
       );
       if (questionIndex >= 0) {
         followUpSeq = Number(afterReport[questionIndex].seq ?? -1);
-        const response = afterReport
-          .slice(questionIndex + 1)
-          .find((event) => event.kind === "message" && event.message?.role === "assistant");
+        const afterQuestion = afterReport.slice(questionIndex + 1);
+        const response = afterQuestion.find(
+          (event) => event.kind === "message" && event.message?.role === "assistant",
+        );
         answer = response?.message?.content ?? "";
+        // The grounding ledger the server appends immediately before the answer.
+        ledger =
+          (afterQuestion.find(
+            (event) =>
+              event.kind === "action" &&
+              (event as { tool_call?: { tool_name?: string } }).tool_call?.tool_name ===
+                "follow_up_grounding",
+          ) as { tool_call?: { arguments?: Record<string, unknown> } } | undefined)
+            ?.tool_call?.arguments ?? null;
         if (answer) break;
       }
       await page.waitForTimeout(1_000);
     }
+    // A length check cannot tell an answer from a refusal: the old
+    // `answer.length > 80` passed on a 128-character refusal that had replaced
+    // the whole answer, and the citation assertion below then failed with no
+    // hint of why. The ledger is the server's own count, so assert on that.
+    expect(ledger, "follow-up answer carried no grounding ledger").not.toBeNull();
+    expect(ledger?.refused, "follow-up was refused, not answered").toBe(false);
+    expect(
+      Number(ledger?.supported ?? 0) + Number(ledger?.weak ?? 0),
+      "no statement of the follow-up answer survived grounding",
+    ).toBeGreaterThan(0);
+    expect(answer, "the answer is the source-coverage refusal").not.toContain(
+      "may not cover the question",
+    );
     expect(answer.length, "follow-up produced no persisted assistant answer").toBeGreaterThan(80);
-    await expect(page.getByText(FOLLOW_UP, { exact: true })).toBeVisible({ timeout: 60_000 });
+    // The report view renders the question as `<span>Follow-up: </span>{question}`,
+    // so the paragraph's full text is "Follow-up: …" and `exact` never matched.
+    await expect(page.getByText(FOLLOW_UP).first()).toBeVisible({ timeout: 60_000 });
 
     const passageIds = new Set(
       ((report.passages as Array<{ id?: string }>) ?? [])
@@ -153,7 +222,10 @@ test("Deep Research report is grounded, resumes, answers a follow-up, and export
     expect(pdf.subarray(0, 5).toString("ascii")).toBe("%PDF-");
 
     const trace = await inspectTrace(request, cid);
-    assertNoThrash(events, trace);
+    // Deep Research drives its own loop (retrieval/deep_research/agent.py), not
+    // core's AgentLoop, so the trace carries routing decisions but never an
+    // `agent.step` span — same as the audio spec.
+    assertNoThrash(events, trace, { requireCompletedAgentStep: false });
     fs.writeFileSync(
       testInfo.outputPath("deep-research-evidence.json"),
       JSON.stringify({ cid, reportSeq, followUpSeq, answer, events, trace }, null, 2),

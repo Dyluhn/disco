@@ -8,10 +8,13 @@ exact origin is trusted in RouterConfig.
 
 from __future__ import annotations
 
+import gzip
 import http.client
+import io
 import ipaddress
 import socket
 import ssl
+import zlib
 from collections.abc import Mapping
 from dataclasses import dataclass
 from urllib.parse import urljoin, urlparse
@@ -175,6 +178,8 @@ def _single_request(
             "User-Agent": "disco-host-egress/1.0",
             **headers,
         }
+        if not any(key.lower() == "accept-encoding" for key in request_headers):
+            request_headers["Accept-Encoding"] = "gzip, deflate"
         payload = body or b""
         if payload:
             request_headers["Content-Length"] = str(len(payload))
@@ -183,20 +188,55 @@ def _single_request(
         sock.sendall(("\r\n".join(wire) + "\r\n\r\n").encode("latin1") + payload)
         resp = http.client.HTTPResponse(sock)
         resp.begin()
-        data = resp.read(max_bytes + 1)
-        if len(data) > max_bytes:
-            raise EgressDenied("response exceeded host fetch byte limit")
-        return GuardedResponse(
-            url=url,
-            status_code=int(resp.status),
-            headers={k.lower(): v for k, v in resp.getheaders()},
-            content=data,
-        )
+        return _read_response(url, method, resp, max_bytes)
     finally:
         try:
             sock.close()
         except OSError:
             pass
+
+
+def _read_response(
+    url: str, method: str, resp: http.client.HTTPResponse, max_bytes: int
+) -> GuardedResponse:
+    """Read and decode the response while preserving one total representation limit."""
+    data = resp.read(max_bytes + 1)
+    if len(data) > max_bytes:
+        raise EgressDenied("response exceeded host fetch byte limit")
+    response_headers = {k.lower(): v for k, v in resp.getheaders()}
+    if method.upper() != "HEAD" and resp.status not in {204, 304}:
+        data = _decode_content(data, response_headers.get("content-encoding", ""), max_bytes)
+    return GuardedResponse(
+        url=url,
+        status_code=int(resp.status),
+        headers=response_headers,
+        content=data,
+    )
+
+
+def _decode_content(data: bytes, encoding: str, max_bytes: int) -> bytes:
+    """Decode HTTP content codings within the existing wire and expanded byte limit."""
+    codings = [part.strip().lower() for part in encoding.split(",") if part.strip()]
+    for coding in reversed(codings):
+        try:
+            if coding in {"gzip", "x-gzip"}:
+                with gzip.GzipFile(fileobj=io.BytesIO(data), mode="rb") as stream:
+                    decoded = stream.read(max_bytes + 1)
+            elif coding == "deflate":
+                decoder = zlib.decompressobj()
+                decoded = decoder.decompress(data, max_bytes + 1)
+                if len(decoded) <= max_bytes and (not decoder.eof or decoder.unused_data):
+                    raise OSError("incomplete or trailing HTTP deflate data")
+            elif coding == "identity":
+                continue
+            else:
+                raise OSError(f"unsupported HTTP content encoding: {coding}")
+        except (EOFError, zlib.error) as exc:
+            raise OSError(f"invalid HTTP {coding} content encoding") from exc
+        if len(decoded) > max_bytes:
+            raise EgressDenied("decoded response exceeded host fetch byte limit")
+        data = decoded
+    return data
 
 
 def _parse_http_url(url: str):

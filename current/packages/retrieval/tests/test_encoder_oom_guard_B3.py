@@ -174,7 +174,7 @@ async def test_nli_verifier_propagates_encoder_unavailable(monkeypatch):
     def _raise_unavailable():
         raise EncoderUnavailable("encoder load aborted")
 
-    monkeypatch.setattr(le, "_reranker", _raise_unavailable)
+    monkeypatch.setattr(le, "_nli_backend", _raise_unavailable)
 
     nli = FastEmbedNLIVerifier()
 

@@ -9,16 +9,10 @@ import type { SelectionRef } from "@/lib/selectionBridge";
 import type { VerifiedClaim } from "@/types/grounded";
 
 export type ConversationStatus =
-  | "IDLE"
-  | "RUNNING"
-  | "PAUSED"
-  | "STUCK"
-  | "WAITING_FOR_CONFIRMATION"
-  | "AWAITING_PLAN_APPROVAL"
-  | "AWAITING_USER_DECISION"
-  | "AWAITING_USER_QUESTION"
-  | "FINISHED"
-  | "ERROR";
+  | "IDLE" | "RUNNING" | "PAUSED" | "STUCK"
+  | "WAITING_FOR_CONFIRMATION" | "AWAITING_PLAN_APPROVAL"
+  | "AWAITING_USER_DECISION" | "AWAITING_USER_QUESTION"
+  | "FINISHED" | "ERROR";
 
 export type SecurityRisk = "UNKNOWN" | "LOW" | "MEDIUM" | "HIGH";
 export type EventSource = "user" | "agent" | "environment" | "system";
@@ -163,10 +157,37 @@ export interface PlanEvent extends EventBase {
   /** Optional markdown rationale + exploration findings (the WHY behind the WHAT). */
   context?: string;
 }
+/** Which boundary failed. Closed set, mirrored from `core.RunFailureClass`;
+ *  every member is produced by a real code path that raised — never inferred
+ *  from an error string. */
+export type RunFailureClass =
+  | "search_infrastructure"
+  | "extraction_infrastructure"
+  | "no_usable_evidence"
+  | "host_circuit_breaker"
+  | "model_protocol"
+  | "model_provider"
+  | "preflight"
+  | "internal_error";
+
+/** A terminal run failure as fields rather than prose: why it happened, what
+ *  state the run is in now, the exact next action, and what remains available.
+ *  `ErrorEvent.detail` still carries the identical sentence. */
+export interface RunFailure {
+  failure_class: RunFailureClass;
+  why: string;
+  state: string;
+  next: string;
+  allowed: string;
+}
+
 export interface ErrorEvent extends EventBase {
   kind: "error";
   code?: string;
   detail?: string | null;
+  /** Present when the producing code path could name its own failure; absent
+   *  on every event written before this field existed. */
+  failure?: RunFailure | null;
 }
 
 /** One section of a Deep Research report — body is markdown with [[passage_id]]
@@ -182,12 +203,8 @@ export interface ReportSection {
   unsupported_count: number;
 }
 
-/** The finished Deep Research report — multi-section, grounded synthesis. The
- * `bounded_by` field is the load-bearing honesty surface: when set, it names
- * which depth cap stopped the run (sources / rounds / wall_clock / subquestions).
- * `passages` and `all_hits` carry the cited subset + full discovery set for the
- * source panel; existing Passage/SearchHit shapes are the row contract, kept
- * `unknown` here to avoid the import cycle (the UI casts at render time). */
+/** The finished Deep Research report — multi-section, grounded synthesis. A
+ * report is never a placeholder: the backend requires a summary and sections. */
 export interface ReportEvent extends EventBase {
   kind: "report";
   query: string;
@@ -197,6 +214,11 @@ export interface ReportEvent extends EventBase {
   reviewed_passages?: Array<Record<string, unknown>>;
   all_hits: Array<Record<string, unknown>>;
   unsupported_count: number;
+  /** Which hard budget closed research: "turns" (the work budget), "sources",
+   *  "stopped", or the depth-only "rounds". Conversations persisted before the
+   *  budget became work-denominated carry the legacy "wall_clock"; it is still
+   *  accepted and rendered, but no new run emits it. Left open (`string`)
+   *  because the backend owns the vocabulary and stored events outlive it. */
   bounded_by: string | null;
   depth_tier: string | null;
   /** Optional per-claim verification verdicts. Absent on base-engine reports
@@ -204,6 +226,194 @@ export interface ReportEvent extends EventBase {
    *  present when a verification overlay / the demo fixture supplies them, and
    *  rendered by the report's claim-verdicts surface when set. */
   claims?: VerifiedClaim[];
+  /** `meta.report_evidence_compacted` / `.reviewed_passages_total` /
+   *  `.all_hits_total` ride the inherited free-form `meta`, read with a runtime
+   *  check (`deepResearchTrace.discoveryNotKept`) as `meta.turn_accounting` is.
+   *  Undeclared: this module is at its 500-line cap (F7). */
+}
+
+/** Resumable evidence state emitted when research pauses before writing a
+ * report. This is deliberately a separate event kind so the UI cannot render
+ * an empty report as if it were a finished artifact. */
+export interface ResearchCheckpointEvent extends EventBase {
+  kind: "research_checkpoint";
+  query: string;
+  passages: Array<Record<string, unknown>>;
+  all_hits: Array<Record<string, unknown>>;
+  trail: Array<Record<string, unknown>>;
+  completed_queries: string[];
+  depth_tier: string | null;
+  recency_window: "week" | "month" | null;
+}
+
+/* ---- Deep Research progress payloads (L23/L24 event contract) --------------
+ *
+ * These are NOT event kinds. Every one arrives as an ordinary ActionEvent
+ * (`kind: "action"`) whose `tool_call.tool_name` is the action name below and
+ * whose `tool_call.arguments` is the payload. The wire is untyped
+ * (`Record<string, unknown>`), so these interfaces are the SHAPE CONTRACT the
+ * parsers in `lib/deepResearchTraceParts/activity.ts` validate against — a
+ * payload that doesn't match is dropped, never half-rendered.
+ *
+ * The rule this contract exists to enforce: the run UI reports what the engine
+ * said and when it said it. It never infers activity from `status`.
+ */
+
+/** Which part of a research turn the loop is in (`turn` action). */
+export type ResearchTurnPhase = "planning" | "searching" | "extracting" | "thinking";
+
+/** `turn` — emitted at each research-turn phase change. `n`/`of` is the same
+ *  work-denominated turn budget the model itself sees. */
+export interface ResearchTurnPayload {
+  n: number;
+  of: number;
+  phase: ResearchTurnPhase;
+  /** The subquestion this turn is working, when the loop named one. */
+  subquestion?: string | null;
+}
+
+/** Which model call a `model_activity` heartbeat belongs to. Mirrors
+ *  `retrieval.deep_research._progress_events.ModelActivityStage`. `follow_up`
+ *  is a follow-up ANSWER call on a finished report — not part of the run, so
+ *  only the follow-up indicator reads it (see `MODEL_STAGES` in
+ *  `lib/deepResearchTraceParts/activity.ts`). */
+export type ModelActivityStage =
+  | "brief" | "research_turn" | "draft" | "review" | "rework"
+  | "continuation" | "follow_up";
+
+/** `model_activity` — emitted at most every ~5 s while a provider stream is
+ *  open, plus once on close. This is the ONLY signal that distinguishes "the
+ *  model is streaming slowly" from "nothing is happening". May be absent
+ *  (a driver that streams without chunk visibility emits none); the UI renders
+ *  it when present and never fabricates it. */
+export interface ModelActivityPayload {
+  stage: ModelActivityStage;
+  tokens_streamed: number;
+  /** Seconds since the CALL WAS MADE, measured by the backend at emit —
+   *  prefill included (`core.llm.stream_progress.StreamProgress.seconds`). Not
+   *  since the first chunk: on a slow local model that would report a
+   *  four-minute call as a two-second one. */
+  seconds: number;
+  call_ordinal: number;
+  /** The reasoning-channel share of `tokens_streamed`, when the provider
+   *  exposed a separate reasoning channel. Absent otherwise (the backend omits
+   *  the key at 0). Equal to `tokens_streamed` means the model is producing and
+   *  none of it is visible output yet. */
+  reasoning_tokens?: number;
+  /** False on the ONE heartbeat a BUFFERED transport emits, at call start with
+   *  nothing delivered (`core.llm.stream_progress.buffered_start`). The whole
+   *  answer arrives in a single response, so no further heartbeat is coming and
+   *  the silence after this one belongs to the transport, not the model. Absent
+   *  on a streamed call (the backend omits the key when true). */
+  streams?: boolean;
+}
+
+/** Why the loop is holding instead of searching. Both are infrastructure
+ *  states, never failures. */
+export type ResearchHoldReason = "search_pool_cooling" | "search_rate_starved";
+
+export interface ResearchHoldEngine {
+  name: string;
+  /** ISO-8601 instant this engine's cooldown expires. */
+  resume_at: string;
+}
+
+/** `hold` — the loop stopped issuing searches because every usable engine is
+ *  cooling. It resumes itself; the user's choice is only whether to keep
+ *  waiting or stop with what has been gathered. Re-emitted as the estimate
+ *  is re-synced, so the newest one wins. */
+export interface ResearchHoldPayload {
+  reason: ResearchHoldReason;
+  engines: ResearchHoldEngine[];
+  /** ISO-8601 instant the loop will next probe the pool. */
+  resume_at: string;
+  sources_retained: number;
+  turn: { n: number; of: number };
+  /** The queries the loop is holding ON — the work it will issue the moment the
+   *  pool comes back, verbatim, in the order it queued them. The producer
+   *  (`_progress_events.emit_hold`) has always sent the query STRINGS; this
+   *  mirror declared `number` and the parser coerced them to 0, which silently
+   *  removed the whole "N queries waiting to run" clause from the hold panel. */
+  queued_queries: string[];
+}
+
+/** `hold_resumed` — the pool came back and the loop is working again. */
+export interface ResearchHoldResumedPayload {
+  waited_s: number;
+  engines_live: string[];
+}
+
+/** `review` / `rework` / `continuation` — round k of a bounded writer loop. */
+export interface ResearchRoundPayload {
+  k: number;
+  of: number;
+}
+
+/** `stop_requested` — the user pressed Stop and the server set the run's cancel
+ *  flag. Deliberately NON-terminal: the run is still working, and it writes its
+ *  own ending (a `research_checkpoint` + PAUSED) when it reaches the next
+ *  boundary that can honour the flag. The only fields are the two the server
+ *  truthfully has; everything the wall says about the run's state comes from
+ *  the run's own events, so the two can never disagree. */
+export interface ResearchStopRequestedPayload {
+  /** ISO-8601 instant the server recorded the request. */
+  requested_at: string;
+}
+
+/** `follow_up_grounding` — what grounding did to ONE follow-up answer, appended
+ *  immediately before the assistant message it describes. It exists so a reader
+ *  can tell an answer from a refusal without matching refusal prose: `refused`
+ *  is the server's own verdict, and `statements === supported + weak + removed`
+ *  by construction. */
+export interface ResearchFollowUpGroundingPayload {
+  statements: number;
+  supported: number;
+  weak: number;
+  /** Statements retention took out: unsupported by the report's own sources. */
+  removed: number;
+  /** True when nothing survived and the message that follows is a wall. */
+  refused: boolean;
+}
+
+/** `phase` — the pre-existing writer/loop phase marker. Writer phases may
+ *  carry the running word count of the stream that is producing the report. */
+export interface ResearchPhasePayload {
+  phase: string;
+  words_streamed?: number;
+}
+
+/** `search` has no interface here — payload `{query, subquestion, round,
+ *  origin}` plus, on a query the freshness wall matched and issued anyway,
+ *  `narrowed_from` + `narrowing`. Undeclared for the same cap reason; read in
+ *  `deepResearchTraceParts/liveTrace.ts::narrowsClause` and pinned to the real
+ *  producer by `lib/__fixtures__/narrowed-search-action.json`. */
+
+/** Why the host did not send one proposed query to the world. The audit row's
+ *  own word, because the event is built FROM that row — the trail and the
+ *  event can never disagree. `empty` carries no detail; the two duplicate
+ *  classes name what they matched; `exhausted` is the only one that names an
+ *  angle. */
+export type QueryRefusedReason =
+  | "repeat" | "near_duplicate" | "queued" | "retry_budget_spent"
+  | "exhausted" | "empty";
+
+/** `query_refused` — one query the model proposed that never reached a search
+ *  engine, emitted in proposal order BEFORE that turn's `search` events. A turn
+ *  can lose all three of its proposals, which is exactly the state the run view
+ *  used to render as "searching" and then silence. Optional keys are absent,
+ *  never null, when the reason's class does not have them. */
+export interface QueryRefusedPayload {
+  /** The proposed query, verbatim. Empty string when the proposal was blank. */
+  query: string;
+  reason: QueryRefusedReason;
+  /** The query this one matched — a duplicate wall or the re-issue queue. */
+  duplicates?: string;
+  /** The turn the matched query ran on (duplicate wall only). */
+  duplicates_turn?: number;
+  /** The angle the host closed (`exhausted` only). */
+  angle?: string;
+  /** The host's own sentence for closing it (`exhausted` only). */
+  why?: string;
 }
 
 /** One concrete next-step option proposed by the agent after repeated failures.
@@ -399,6 +609,7 @@ export type AgentEvent =
   | AppKitEjectionEvent
   | PlanEvent
   | ReportEvent
+  | ResearchCheckpointEvent
   | AlternativesEvent
   | ClarifyEvent
   | QuestionsV2Event
@@ -457,7 +668,7 @@ export interface McpApprovalPayload {
 
 /** Frames the BACKEND actually sends. This is the mirror of `core/wire.py`'s
  *  `WSServerFrame.type` literal and is held to it byte-for-byte by
- *  `current/packages/core/tests/test_frontend_contract_parity.py` — adding a variant
+ *  `development/tests/architecture/test_frontend_contract_parity.py` — adding a variant
  *  here that the backend does not declare, or omitting one it does, fails CI.
  *
  *  `token` is declared because the backend declares it. No model emits token

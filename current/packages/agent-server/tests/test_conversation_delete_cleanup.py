@@ -111,6 +111,12 @@ async def test_agent_delete_route_clears_pin_rows_and_audio_cache(
     audio_dir = tmp_path / "cache" / "tts" / CID
     audio_dir.mkdir(parents=True)
     (audio_dir / "audio_overview_single_deadbeef.mp3").write_bytes(b"generated")
+    recovery_dir = tmp_path / "research-recovery" / CID / "passages"
+    recovery_dir.mkdir(parents=True)
+    (recovery_dir / "private.json").write_text("private source")
+    pools = tmp_path / "pools"
+    pools.mkdir()
+    (pools / f"{CID}.json").write_text("full evidence")
     await store.append(CID, _user("build it"))
     await store.append(CID, StatusEvent(status=ConversationStatus.FINISHED))
 
@@ -124,29 +130,47 @@ async def test_agent_delete_route_clears_pin_rows_and_audio_cache(
     assert rt._kernel_pin_store.current(CID) is None  # runtime state released on delete
     assert await store.list_conversations(owner_id="local") == []  # rows gone
     assert not audio_dir.exists()  # generated report audio cannot leak after deletion
+    assert not recovery_dir.parent.exists()
+    assert not (pools / f"{CID}.json").exists()
 
 
-# ---- app-server best-effort notify ------------------------------------------
+# ---- app-server runtime-owned deletion -------------------------------------
+
+
+def _delete_request():
+    from starlette.requests import Request
+
+    return Request(
+        {
+            "type": "http",
+            "headers": [
+                (b"cookie", b"disco_session=test-session"),
+                (b"x-disco-csrf", b"test-csrf"),
+            ],
+        }
+    )
 
 
 async def test_app_delete_notifies_agent_when_configured(monkeypatch: pytest.MonkeyPatch) -> None:
-    """With `DISCO_AGENT_BASE` set, the app-server delete fires a best-effort DELETE at
-    the agent-server so it releases the runtime state for the deleted cid."""
+    """Configured deletion carries the session proof to the runtime owner."""
     from disco.app_server.routes import conversations as appconv
 
     monkeypatch.setenv("DISCO_AGENT_BASE", "http://agent.test")
     seen: dict[str, str] = {}
 
-    async def _fake_delete(self, url, *, params=None):  # noqa: ANN001
+    async def _fake_delete(self, url, *, headers=None):  # noqa: ANN001
         seen["url"] = url
-        seen["owner"] = (params or {}).get("owner_id", "")
-        return httpx.Response(200)
+        seen.update(headers or {})
+        return httpx.Response(
+            200, json={"id": CID, "deleted": True}, request=httpx.Request("DELETE", url)
+        )
 
     monkeypatch.setattr(httpx.AsyncClient, "delete", _fake_delete)
-    await appconv._notify_agent_delete(CID, "local")
+    assert await appconv._delete_via_agent(CID, _delete_request()) is True
 
     assert seen["url"] == f"http://agent.test/conversations/{CID}"
-    assert seen["owner"] == "local"
+    assert seen["Cookie"] == "disco_session=test-session"
+    assert seen["X-Disco-CSRF"] == "test-csrf"
 
 
 async def test_app_delete_notify_is_noop_without_config(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -163,13 +187,17 @@ async def test_app_delete_notify_is_noop_without_config(monkeypatch: pytest.Monk
         return httpx.Response(200)
 
     monkeypatch.setattr(httpx.AsyncClient, "delete", _boom)
-    await appconv._notify_agent_delete(CID, "local")
+    assert await appconv._delete_via_agent(CID, _delete_request()) is False
     assert called is False  # no agent URL → never reaches the network
 
 
 async def test_app_delete_notify_swallows_errors(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A notify failure must NEVER propagate (the DB rows are already deleted)."""
+    """Historical test ID retained: a failed owner call must now refuse deletion.
+
+    The former error swallowing removed rows before cleanup authorization.
+    """
     from disco.app_server.routes import conversations as appconv
+    from fastapi import HTTPException
 
     monkeypatch.setenv("DISCO_AGENT_BASE", "http://agent.test")
 
@@ -177,4 +205,7 @@ async def test_app_delete_notify_swallows_errors(monkeypatch: pytest.MonkeyPatch
         raise httpx.ConnectError("agent down")
 
     monkeypatch.setattr(httpx.AsyncClient, "delete", _raise)
-    await appconv._notify_agent_delete(CID, "local")  # must not raise
+    with pytest.raises(HTTPException) as refused:
+        await appconv._delete_via_agent(CID, _delete_request())
+    assert refused.value.status_code == 503
+    assert refused.value.detail["reason"] == "runtime_delete_unconfirmed"

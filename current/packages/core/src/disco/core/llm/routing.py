@@ -44,6 +44,7 @@ from ..events import LLMMessage
 from ._router_execution import (
     _AUTH_RETRY_DELAY_S,
     _MAX_ATTEMPTS,
+    _RETRY_BACKOFF_BASE_S,
     _ROLE_FALLBACK_MAX_ATTEMPTS,
 )
 from ._router_execution import (
@@ -454,6 +455,7 @@ class DefaultLLMRouter:
             max_attempts=_MAX_ATTEMPTS,
             fallback_max_attempts=_ROLE_FALLBACK_MAX_ATTEMPTS,
             auth_retry_delay_s=_AUTH_RETRY_DELAY_S,
+            backoff_base_s=_RETRY_BACKOFF_BASE_S,
         )
 
     # -- stream (§3.2) — single resolved route, no mid-stream escalation ------
@@ -482,6 +484,7 @@ class DefaultLLMRouter:
             max_attempts=_MAX_ATTEMPTS,
             fallback_max_attempts=_ROLE_FALLBACK_MAX_ATTEMPTS,
             auth_retry_delay_s=_AUTH_RETRY_DELAY_S,
+            backoff_base_s=_RETRY_BACKOFF_BASE_S,
         ):
             yield chunk
 

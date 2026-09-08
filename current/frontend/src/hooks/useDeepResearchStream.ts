@@ -15,13 +15,16 @@
 import { useEffect, useMemo, useReducer, useRef } from "react";
 import { subscribeConversation, type AgentHandle } from "@/api/agent";
 import {
+  deriveActivity,
   deriveAssemblingSections,
   deriveBrief,
   deriveLiveTrace,
   deriveReport,
+  deriveResearchCheckpoint,
   deriveSourceTiers,
   deriveStats,
   type AssemblingSection,
+  type DeepActivity,
   type DeepStats,
   type SourceTiers,
 } from "@/lib/deepResearchTrace";
@@ -30,6 +33,8 @@ import type {
   AgentEvent,
   ConversationStatus,
   ReportEvent,
+  ResearchCheckpointEvent,
+  RunFailure,
   WSServerFrame,
 } from "@/types/agent";
 
@@ -46,6 +51,10 @@ export interface DeepResearchSession {
 
 interface RawState {
   status: ConversationStatus;
+  /** The newest status event's `detail`. The status alone cannot tell a fresh
+   *  IDLE conversation from a run a person killed, and a killed run owes the
+   *  user a sentence saying so. */
+  statusDetail: string | null;
   /** Tracks the current follow-up phase without overwriting the main status.
    *  "follow_up" = a follow-up answer is being generated (loop re-entered);
    *  "follow_up_complete" = the last follow-up finished;
@@ -53,13 +62,20 @@ interface RawState {
   followUpStatus: "follow_up" | "follow_up_complete" | null;
   events: AgentEvent[];
   error: string | null;
+  /** The terminal failure AS FIELDS, when the producing code path named its own
+   *  boundary (`ErrorEvent.failure`, L26). `error` carries the same sentence the
+   *  backend renders FROM these fields, and stays the fallback for events —
+   *  and for transport errors — that carry no `failure`. */
+  failure: RunFailure | null;
 }
 
 export const initial: RawState = {
   status: "IDLE",
+  statusDetail: null,
   followUpStatus: null,
   events: [],
   error: null,
+  failure: null,
 };
 
 function upsert(events: AgentEvent[], event: AgentEvent): AgentEvent[] {
@@ -77,6 +93,18 @@ export function reducer(state: RawState, action: Action): RawState {
   if (action.type === "reset") return initial;
   const f = action.frame;
   if (f.type === "state") {
+    // The snapshot is a projection of EVERY status event, the follow-up's own
+    // RUNNING included, and it carries no detail to tell them apart — so
+    // mid-follow-up it reads RUNNING. `status` here is the MAIN run's status;
+    // follow-up phases live in `followUpStatus` (below). Letting the snapshot
+    // speak for `status` breaks that split: the live socket reconnects on its
+    // own 45 s stale-frame watchdog, the grounding pass is silent far longer
+    // than that, and the snapshot the reconnect opens with flipped a finished
+    // report back into the run view — where it STAYED, because the follow-up's
+    // closing FINISHED is routed to `followUpStatus` and never restores it.
+    // Skipping the snapshot loses nothing: every status it could carry is
+    // replayed as an event immediately after it, on the same socket.
+    if (state.followUpStatus === "follow_up") return state;
     return { ...state, status: f.state.execution_status };
   }
   if (f.type === "event") {
@@ -91,7 +119,13 @@ export function reducer(state: RawState, action: Action): RawState {
       if (detail === "follow_up" || detail === "follow_up_complete") {
         return { ...state, events, followUpStatus: detail };
       }
-      return { ...state, events, status: f.event.status, followUpStatus: null };
+      return {
+        ...state,
+        events,
+        status: f.event.status,
+        statusDetail: detail,
+        followUpStatus: null,
+      };
     }
     if (f.event.kind === "error") {
       return {
@@ -99,36 +133,66 @@ export function reducer(state: RawState, action: Action): RawState {
         events,
         status: "ERROR",
         error: f.event.detail ?? "conversation error",
+        // Kept as FIELDS, not re-read out of the sentence: the error wall
+        // renders why / state / next / allowed as four parts.
+        failure: f.event.failure ?? null,
       };
     }
     return { ...state, events };
   }
   if (f.type === "error") {
-    return { ...state, status: "ERROR", error: f.error.detail ?? "stream error" };
+    // A steer can race the writing phase. The run is still healthy; its phase
+    // closes the control and explains that follow-ups become available on finish.
+    if (f.error.detail === "research_steering_closed") return state;
+    // A TRANSPORT error — no run named a boundary, so there are no four parts
+    // to show and any stale ones from a previous run must not stand in.
+    return {
+      ...state,
+      status: "ERROR",
+      error: f.error.detail ?? "stream error",
+      failure: null,
+    };
   }
   return state;
 }
 
 export interface DeepResearchStream {
   status: ConversationStatus;
+  /** The newest status event's detail — "killed", "stopped", "research", … —
+   *  or null. Read for the ONE distinction the status cannot carry: a run a
+   *  person killed versus a conversation that is merely idle. */
+  statusDetail: string | null;
   /** Separate from `status` so the plan-progress UI can stay calm while a
    *  follow-up answer is generating. null when idle; "follow_up" during
    *  generation; "follow_up_complete" after the answer lands. */
   followUpStatus: "follow_up" | "follow_up_complete" | null;
   events: AgentEvent[];
   error: string | null;
+  /** The terminal failure as fields (why / state / next / allowed + the class
+   *  that raised), when the backend named its own boundary. Null for transport
+   *  errors and for events written before `ErrorEvent.failure` existed —
+   *  `error` is the fallback then. */
+  failure: RunFailure | null;
   /** The model's opening brief — how it read the question and the angles it
    *  will chase. The FIRST visible output of a gateless run (v2); null until
    *  it lands. */
   brief: string | null;
   /** Live counts for the mono stats strip. */
   stats: DeepStats;
+  /** The latest REPORTED fact of each kind (turn / model_activity / search /
+   *  observation / phase / review round / hold), each with the instant the
+   *  engine reported it. The run UI's honesty rule lives on this: a field is
+   *  null because no event set it, and `lastEventAt` is how "working" is told
+   *  apart from "silent" without inferring anything from `status`. */
+  activity: DeepActivity;
   /** The activity feed items (reuses ActivityFeed verbatim). */
   trace: ActivityItem[];
   /** Section placeholders + finalized sections (the assembling report view). */
   assembling: AssemblingSection[];
   /** The final ReportEvent — null until the engine emits it. */
   report: ReportEvent | null;
+  /** Paused evidence state, kept separate from the finished report. */
+  checkpoint: ResearchCheckpointEvent | null;
   /** Three-tier source split (cited / reviewed / discovered). */
   sources: SourceTiers;
   /** Send WS frames to the conversation. */
@@ -225,6 +289,7 @@ export function useDeepResearchStream(
 
   const brief = useMemo(() => deriveBrief(state.events), [state.events]);
   const stats = useMemo(() => deriveStats(state.events), [state.events]);
+  const activity = useMemo(() => deriveActivity(state.events), [state.events]);
   const trace = useMemo(
     () => deriveLiveTrace(state.events, state.status),
     [state.events, state.status],
@@ -234,18 +299,26 @@ export function useDeepResearchStream(
     [state.events],
   );
   const report = useMemo(() => deriveReport(state.events), [state.events]);
+  const checkpoint = useMemo(
+    () => deriveResearchCheckpoint(state.events),
+    [state.events],
+  );
   const sources = useMemo(() => deriveSourceTiers(report), [report]);
 
   return {
     status: state.status,
+    statusDetail: state.statusDetail,
     followUpStatus: state.followUpStatus,
     events: state.events,
     error: state.error,
+    failure: state.failure,
     brief,
     stats,
+    activity,
     trace,
     assembling,
     report,
+    checkpoint,
     sources,
     cancel,
     resume,

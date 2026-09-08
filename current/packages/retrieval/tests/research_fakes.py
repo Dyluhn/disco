@@ -59,16 +59,6 @@ class FakeExtractionProvider:
         return [await self.extract(u) for u in urls]
 
 
-class FakeRewriter:
-    """Returns configured paraphrases (truncated to n)."""
-
-    def __init__(self, paraphrases: list[str]) -> None:
-        self._paraphrases = paraphrases
-
-    async def rewrite(self, query: str, *, n: int) -> list[str]:
-        return ([query] + self._paraphrases)[:n] if n > 1 else [self._paraphrases[0]]
-
-
 class FakeRouter:
     """An LLMRouter double: returns scripted text and counts complete() calls
     (to prove verification is NOT the LLM path)."""

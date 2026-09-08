@@ -36,6 +36,38 @@ interface Props {
   handleTopBarIncludeConfirm: (seqs: number[]) => void;
 }
 
+/**
+ * Stop, and what replaces it once Stop has been asked for.
+ *
+ * Presence implies affordance: while the run is winding down a second press
+ * does nothing, so a live Stop button would promise an action that no longer
+ * exists. The stopping state is read from the run's own `stop_requested`
+ * marker — which clears on the next status the run writes — rather than from a
+ * local flag that could drift from what the server actually did.
+ */
+function StopControl({ r }: { r: ReturnType<typeof useDeepResearch> }) {
+  if (r.activity.stopRequested !== null) {
+    return (
+      <button
+        type="button"
+        disabled
+        aria-disabled
+        data-disco-control="dr.stopping"
+        className={PENDING_BTN}
+      >
+        <Square className="size-3" aria-hidden />
+        Stopping…
+      </button>
+    );
+  }
+  return (
+    <button type="button" onClick={r.stop} data-disco-control="dr.stop" className={CTRL_BTN}>
+      <Square className="size-3" aria-hidden />
+      Stop
+    </button>
+  );
+}
+
 export function DeepResearchTopBar({
   r,
   onStandardSearch,
@@ -90,10 +122,7 @@ export function DeepResearchTopBar({
                 <Bell className="size-3.5" aria-hidden />
                 Notify me when done
               </button>
-              <button type="button" onClick={r.stop} data-disco-control="dr.stop" className={CTRL_BTN}>
-                <Square className="size-3" aria-hidden />
-                Stop
-              </button>
+              <StopControl r={r} />
               <button type="button" onClick={r.kill} data-disco-control="dr.kill" className={KILL_BTN}>
                 <Ban className="size-3.5" aria-hidden />
                 Kill

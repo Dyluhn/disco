@@ -116,6 +116,15 @@ def _make_rt(store: SqliteEventStore, tmp_path: Path) -> _Runtime:
     return _Runtime(store, ProjectStore(str(tmp_path / "projects")))
 
 
+class _NoLiveDeepResearch:
+    """These are BUILD conversations: no deep-research run is ever live, so
+    `cancel` keeps the loop branch it has always taken."""
+
+    def has_live_run(self, conversation_id: str) -> bool:
+        del conversation_id
+        return False
+
+
 def _make_ops(runtime: _Runtime) -> ControlOps:
     controller = MagicMock()
     controller.kick = runtime.run_controller.kick
@@ -127,6 +136,7 @@ def _make_ops(runtime: _Runtime) -> ControlOps:
         CancellationRegistry(),
         controller,
         MagicMock(),
+        _NoLiveDeepResearch(),
     )
 
 

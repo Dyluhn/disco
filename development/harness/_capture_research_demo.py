@@ -1,6 +1,6 @@
 """One-time: capture a real research run into development/harness/cassettes/research_demo.jsonl
 so the --replay eval + the replay test are deterministic. Heavy (cold fastembed +
-LLM); run once. PYTHONPATH=. uv run python -m harness._capture_research_demo
+LLM); run once. uv run python -m harness._capture_research_demo
 """
 
 from __future__ import annotations

@@ -70,7 +70,7 @@ def _sandbox_service():
 def main() -> None:
     # Surface app-logger output (providers, the loop) alongside uvicorn's access log —
     # uvicorn configures only its own loggers, so without this the disco.*
-    # INFO traces (e.g. "ddgs search …", "local extract …") are silently dropped.
+    # INFO traces (e.g. "exa search …", "local extract …") are silently dropped.
     import logging
 
     log_level = disco_env("LOG_LEVEL", "INFO")

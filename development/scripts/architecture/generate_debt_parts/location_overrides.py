@@ -17,6 +17,13 @@ LOCATION_OVERRIDES = {
     "DM-001": (
         "current/packages/agent-server/src/disco/agent_server/runtime.py:ConversationRuntime:810-5369"
     ),
+    # The citation helpers were consolidated into the writer before this
+    # campaign; keep the active observation anchored to the files that now own
+    # the duplicated grammar/coupling concern.
+    "DM-008": (
+        "current/packages/retrieval/src/disco/retrieval/streaming.py + "
+        "current/packages/retrieval/src/disco/retrieval/deep_research/writer.py"
+    ),
     "DM-012": (
         "current/packages/agent-server/src/disco/agent_server/preview_service.py:"
         "_sealed_runtime_contract:194-213 + "
@@ -26,16 +33,16 @@ LOCATION_OVERRIDES = {
     # Re-anchored 2026-08-02 (Epic 12-A). The TS anchors moved when Amendment
     # A3's contract-parity gate landed: three event interfaces were added ahead
     # of the AgentEvent union, and WSServerFrame became an alias over
-    # WSWireServerFrame | WSClientSynthesizedFrame. Location only — DM-017 stays
-    # ACTIVE and owned by PKG-12-FE-SHELL. Its concern ("three event kinds and
-    # token frame absent from TS; connection is UI-local") is now discharged in
-    # substance and enforced fail-closed by
-    # current/packages/core/tests/test_frontend_contract_parity.py, but resolving the
+    # WSWireServerFrame | WSClientSynthesizedFrame. Location only — DM-017 is
+    # resolved by PKG-12-FE-SHELL. Its concern ("three event kinds and token
+    # frame absent from TS; connection is UI-local") is discharged in substance
+    # and enforced fail-closed by
+    # development/tests/architecture/test_frontend_contract_parity.py, but resolving the
     # observation belongs to its named owner, not to this gate boundary.
     "DM-017": (
         "current/packages/core/src/disco/core/events.py:Event:187-217 + "
         "current/packages/core/src/disco/core/wire.py:WSServerFrame:39-65 + "
-        "current/frontend/src/types/agent.ts:AgentEvent/WSServerFrame:388-489"
+        "current/frontend/src/types/agent.ts:AgentEvent/WSServerFrame:598-700"
     ),
     "PY-0189": (
         "current/packages/agent-server/src/disco/agent_server/build_kernel/disco_kernel.py:"

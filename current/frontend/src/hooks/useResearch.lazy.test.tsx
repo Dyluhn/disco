@@ -68,7 +68,7 @@ describe("useResearch — BW-08 twin lazy pre-create", () => {
 
     await act(async () => {
       await result.current.submit("what is the speed of light", {
-        sources: ["arxiv", "ddgs"],
+        sources: ["arxiv", "web"],
       });
     });
 
@@ -80,7 +80,7 @@ describe("useResearch — BW-08 twin lazy pre-create", () => {
     expect(requestResearch).toHaveBeenCalledWith(
       expect.objectContaining({
         conversation_id: "conv_created",
-        sources: ["arxiv", "ddgs"],
+        sources: ["arxiv", "web"],
       }),
     );
   });

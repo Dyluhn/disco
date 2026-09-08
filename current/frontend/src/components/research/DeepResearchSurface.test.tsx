@@ -10,7 +10,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useParams } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ModeProvider } from "@/shell/ModeProvider";
 import {
@@ -27,6 +27,12 @@ import {
 } from "@/fixtures/deepResearchTrace";
 import { DeepResearchSurface } from "./DeepResearchSurface";
 
+/** App.tsx's `/deep/:cid` route: the surface pinned to one conversation. */
+function ResumeRoute() {
+  const { cid } = useParams<{ cid: string }>();
+  return <DeepResearchSurface resumeCid={cid ?? null} />;
+}
+
 function renderSurface(onScopeChange?: (next: "standard" | "deep_research") => void) {
   const qc = new QueryClient({
     defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } },
@@ -37,6 +43,11 @@ function renderSurface(onScopeChange?: (next: "standard" | "deep_research") => v
         <ModeProvider>
           <Routes>
             <Route path="/" element={<DeepResearchSurface onScopeChange={onScopeChange} />} />
+            {/* Submitting puts the run in the URL, so both of App.tsx's routes
+                have to exist here or a started run renders nothing. The resume
+                route passes no scope handler, exactly as `ResumeDeepResearch`
+                does. */}
+            <Route path="/deep/:cid" element={<ResumeRoute />} />
           </Routes>
         </ModeProvider>
       </MemoryRouter>
@@ -144,8 +155,6 @@ describe("Deep Research surface — full lifecycle", () => {
       { timeout: 5000 },
     );
     expect(brief).toHaveTextContent(/path from lab to production line/i);
-    await user.click(screen.getByRole("button", { name: /Standard Search/i }));
-    expect(onScopeChange).toHaveBeenCalledWith("standard");
 
     // Nothing to approve or revise: the gate is gone, not merely hidden.
     expect(
@@ -158,6 +167,15 @@ describe("Deep Research surface — full lifecycle", () => {
     // (the steer transport exists but has no control on this surface).
     expect(screen.getByRole("button", { name: /^Stop$/ })).toBeEnabled();
     expect(screen.getByRole("button", { name: /^Kill$/ })).toBeEnabled();
+
+    // Last, because it leaves the run: submitting put the run at its own URL,
+    // so the parent that owned the scope handler is gone and Standard Search
+    // navigates to the main surface instead of flipping the scope in place.
+    await user.click(screen.getByRole("button", { name: /Standard Search/i }));
+    await waitFor(() =>
+      expect(screen.getByPlaceholderText(/ask a research question/i)).toBeInTheDocument(),
+    );
+    expect(onScopeChange).not.toHaveBeenCalled();
   });
 
   it("after submit, streams the progress + assembles the report without a false rounds notice", async () => {

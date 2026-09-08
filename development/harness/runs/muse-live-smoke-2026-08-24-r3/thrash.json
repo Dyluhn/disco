@@ -1,0 +1,21 @@
+{
+  "findings": [
+    {
+      "code": "MALFORMED_TURN",
+      "count": 2,
+      "severity": "hard"
+    }
+  ],
+  "passed": false,
+  "signals": {
+    "malformed_turns": 2,
+    "max_no_progress_streak": 0,
+    "max_repeated_deficiency": 0,
+    "max_repeated_query": 1,
+    "max_repeated_query_streak": 1,
+    "model_io_count": 12,
+    "query_count": 11,
+    "retrieval_failure_turns": 0,
+    "unique_query_count": 11
+  }
+}

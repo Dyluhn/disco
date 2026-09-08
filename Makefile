@@ -27,8 +27,8 @@ help:
 	@echo "  make capture     record the real research cassette (HEAVY: cold fastembed + LLM)"
 	@echo "  make canary      live probe of $(BASE): /health + a real grounded research query"
 	@echo "  make canary-health  live /health probe only (no model call)"
-	@echo "  make replay      event-log deterministic replay (needs loop_demo fixture — 'make capture-loop')"
-	@echo "  make capture-loop  record a real deep-research conversation (event-log + cassette) — HEAVY"
+	@echo "  make replay      current gateless event-log replay (needs loop_demo fixture — 'make capture-loop')"
+	@echo "  make capture-loop  record a current gateless Deep Research report (event-log + cassette) — HEAVY"
 	@echo "  make e2e         frontend Playwright E2E + visual regression (fixture mode)"
 
 # ---- hermetic (fast, offline) ----------------------------------------------
@@ -48,19 +48,19 @@ unit:
 # the marathon phases `live` (development/harness/marathon/conftest.py) — they need a real
 # agent-server, and now say so contractually instead of ERRORing at setup.
 harness:
-	PYTHONPATH=. uv run pytest development/harness
+	uv run pytest development/harness
 
 integrations:
-	PYTHONPATH=. uv run pytest current/integrations
+	uv run pytest current/integrations
 
 contract:
-	PYTHONPATH=. uv run pytest development/harness/tests/test_contract.py
+	uv run pytest development/harness/tests/test_contract.py
 
 fuzz:
-	PYTHONPATH=. uv run pytest development/harness/tests/test_fuzz.py
+	uv run pytest development/harness/tests/test_fuzz.py
 
 fault:
-	PYTHONPATH=. uv run pytest development/harness/tests/test_faults.py
+	uv run pytest development/harness/tests/test_faults.py
 
 lint:
 	uv run ruff check packages harness
@@ -72,10 +72,10 @@ fmt:
 
 eval:
 	@test -f $(CASSETTE) || { echo "missing $(CASSETTE) — run 'make capture' first"; exit 1; }
-	PYTHONPATH=. uv run python -m harness.eval_runner --replay --cassette $(CASSETTE)
+	uv run python -m harness.eval_runner --replay --cassette $(CASSETTE)
 
 eval-real:
-	PYTHONPATH=. uv run python -m harness.eval_runner
+	uv run python -m harness.eval_runner
 
 # `disco verify` — the user-facing setup check: does YOUR configured model drive the
 # loop? (config + completion + tool-calling + grounding, pass/fail). --quick skips
@@ -86,25 +86,25 @@ verify:
 # Heavy: cold fastembed + a real LLM + the grounding self-correction loop. Detached
 # (setsid) so an interactive-session timeout can't SIGKILL it before fastembed loads.
 capture:
-	PYTHONPATH=. setsid uv run python -m harness._capture_research_demo
+	setsid uv run python -m harness._capture_research_demo
 
 # Heavy: a real deep-research conversation through the agent loop → the (event-log +
 # cassette) pair the Phase 3 replay reproduces. Detached for the same reason.
 capture-loop:
-	PYTHONPATH=. setsid uv run python -m harness._capture_loop_demo
+	setsid uv run python -m harness._capture_loop_demo
 
 # ---- live probes (drive the deployed instance) -----------------------------
 
 canary:
-	PYTHONPATH=. uv run python -m harness.canary --base $(BASE)
+	uv run python -m harness.canary --base $(BASE)
 
 canary-health:
-	PYTHONPATH=. uv run python -m harness.canary --base $(BASE) --no-research
+	uv run python -m harness.canary --base $(BASE) --no-research
 
 # ---- event-log deterministic replay (Phase 3) ------------------------------
 
 replay:
-	PYTHONPATH=. uv run python -m harness.replay_runner
+	uv run python -m harness.replay_runner
 
 # ---- Phase 7 — frontend E2E + visual regression (fixture mode, no backend) --
 

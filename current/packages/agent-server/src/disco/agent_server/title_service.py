@@ -170,7 +170,10 @@ class TitleService:
         try:
             await self._run(cid)
         except Exception:  # auto-title is best-effort; never surface to the user
-            _LOG.debug("auto-title failed for %s", cid, exc_info=True)
+            # Best-effort to the user, not to the log: the title this conversation
+            # ends up with is permanent (see _run's idempotence), so a failure
+            # here has to be findable afterwards.
+            _LOG.warning("auto-title failed for %s", cid, exc_info=True)
         finally:
             # Clear in-flight LAST. If the first message wasn't present yet, a later
             # kick retries (the title is still unset).
@@ -198,7 +201,13 @@ class TitleService:
         <think> — sanitize_title strips that to "", and the fallback clamp then
         gets stored PERMANENTLY (idempotence blocks retitling). So on an empty
         first pass, retry ONCE with room for the reasoning to finish AND emit
-        the title (same shape as the synthesis empty-retry)."""
+        the title (same shape as the synthesis empty-retry).
+
+        Both failure shapes are logged at WARNING with their reason. This is not
+        a fallback anybody sees: the caller stores a truncated snippet as the
+        conversation's permanent title and nothing revisits it, so a silent ''
+        here is a defect that leaves no trace at all."""
+        model = ""
         try:
             router = self._router_now()
             for max_tokens in (24, 384):
@@ -212,12 +221,22 @@ class TitleService:
                         max_tokens=max_tokens,
                     )
                 )
+                model = str(getattr(resp, "model_used", "") or "")
                 title = sanitize_title(getattr(resp, "text", "") or "")
                 if title:
                     return title
+            _LOG.warning(
+                "auto-title: summarizer %r produced no usable title in two passes; "
+                "storing the first-words fallback",
+                model,
+            )
             return ""
-        except Exception:
-            _LOG.debug("title summarization call failed", exc_info=True)
+        except Exception as exc:
+            _LOG.warning(
+                "auto-title: summarizer call failed (%s: %s); storing the first-words fallback",
+                type(exc).__name__,
+                exc,
+            )
             return ""
 
     async def backfill(

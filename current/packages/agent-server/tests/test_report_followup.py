@@ -7,6 +7,8 @@ appear in the follow-up's grounding context.
 
 from __future__ import annotations
 
+import re
+
 from disco.core import (
     ConversationStatus,
     EventSource,
@@ -155,7 +157,7 @@ def test_followup_context_preserves_head_and_tail_of_long_evidence():
         source=EventSource.AGENT,
         query="What changed?",
         summary="A change occurred.",
-        sections=[],
+        sections=[ReportSection(id="s0", title="Findings", markdown="A change occurred.")],
         passages=[passage],
         all_hits=[],
     )
@@ -167,9 +169,52 @@ def test_followup_context_preserves_head_and_tail_of_long_evidence():
     assert "[excerpt middle omitted]" in prompt
 
 
-def test_followup_context_names_the_full_saved_source_corpus():
-    """The model sees the corpus size and every passage identity even at scale."""
-    from disco.agent_server.deep_research_service import _build_follow_up_prompt
+def _scaled_report(passages: list[dict[str, object]]) -> ReportEvent:
+    return ReportEvent(
+        source=EventSource.AGENT,
+        query="Which models shipped?",
+        summary="Several releases were found.",
+        sections=[
+            ReportSection(
+                id="s0", title="Findings", markdown="Several releases were found."
+            )
+        ],
+        passages=passages,
+        all_hits=[],
+    )
+
+
+def _quoted(prompt: str) -> dict[str, int]:
+    """{quoted passage id: characters of its OWN text in the block}, in order.
+
+    Each entry starts at a line-initial ``[[id]]`` label and runs to the next
+    one; the body is what follows the label line, minus the closing separator.
+    """
+    head = prompt.index("--- SOURCE PASSAGES ---\n")
+    block = prompt[head : prompt.index("\n--- END SOURCES ---", head)]
+    marks = list(re.finditer(r"^\[\[([^\]\n]+)\]\]", block, re.MULTILINE))
+    entries: dict[str, int] = {}
+    for index, mark in enumerate(marks):
+        end = marks[index + 1].start() if index + 1 < len(marks) else len(block)
+        body = block[mark.start() : end].split("\n", 1)[1]
+        entries[mark.group(1)] = len(body.removesuffix("---\n").rstrip())
+    return entries
+
+
+def test_followup_quotes_a_selection_with_real_text_instead_of_every_id():
+    """Regression: the block named every source and quoted none of them.
+
+    The 12,000-char budget was apportioned across the WHOLE saved corpus, so on
+    a real report (90-152 passages) each entry was a truncated label plus 3-47
+    characters of body — measured at 3 characters each on the largest saved
+    report, whose answer then cited 47 ids it had never been shown the text of.
+    The budget now buys a paragraph of each passage the question reaches for,
+    and the header still names the corpus it was drawn from.
+    """
+    from disco.agent_server.deep_research_service import (
+        _FOLLOW_UP_SOURCE_PASSAGES,
+        _build_follow_up_prompt,
+    )
 
     passages = [
         {
@@ -179,19 +224,92 @@ def test_followup_context_names_the_full_saved_source_corpus():
         }
         for index in range(40)
     ]
-    report = ReportEvent(
-        source=EventSource.AGENT,
-        query="Which models shipped?",
-        summary="Several releases were found.",
-        sections=[],
-        passages=passages,
-        all_hits=[],
+
+    prompt = _build_follow_up_prompt(
+        _scaled_report(passages), passages, "List the releases."
     )
 
-    prompt = _build_follow_up_prompt(report, passages, "List the releases.")
-
+    quoted = _quoted(prompt)
+    assert len(quoted) == _FOLLOW_UP_SOURCE_PASSAGES
     assert "Saved source corpus: 40 passages." in prompt
-    assert all(f"[[source-{index}]]" in prompt for index in range(40))
+    # Every quoted passage carries a readable excerpt rather than a label and a
+    # fragment: 300 characters is several sentences of its own text.
+    assert min(quoted.values()) >= 300
+
+
+def test_followup_selection_prefers_the_passages_the_question_is_about():
+    """The selection is by word overlap with the follow-up question."""
+    from disco.agent_server.deep_research_service import _build_follow_up_prompt
+
+    passages: list[dict[str, object]] = [
+        {"id": f"filler-{index}", "source_title": "Filler", "text": "Unrelated. " * 200}
+        for index in range(40)
+    ]
+    passages.append(
+        {
+            "id": "quantization",
+            "source_title": "Quantization notes",
+            "text": "Quantization to Q4 halves the memory footprint. " * 40,
+        }
+    )
+
+    prompt = _build_follow_up_prompt(
+        _scaled_report(passages), passages, "What did it say about quantization?"
+    )
+
+    assert next(iter(_quoted(prompt))) == "quantization"
+
+
+def test_followup_selection_keeps_a_passage_the_question_names_by_id():
+    """A reader who asks about [[id]] is given that passage, wherever it ranks.
+
+    The named passage shares no word with the question and sits last in the
+    corpus, so nothing but the pin puts it in the block.
+    """
+    from disco.agent_server.deep_research_service import _build_follow_up_prompt
+
+    passages: list[dict[str, object]] = [
+        {"id": f"filler-{index}", "source_title": "Filler", "text": "Latency budget. " * 200}
+        for index in range(40)
+    ]
+    passages.append(
+        {"id": "buried", "source_title": "Buried", "text": "Unrelated evidence. " * 200}
+    )
+
+    prompt = _build_follow_up_prompt(
+        _scaled_report(passages), passages, "What does [[buried]] say about latency?"
+    )
+
+    assert next(iter(_quoted(prompt))) == "buried"
+
+
+def test_followup_selection_falls_back_to_corpus_order_when_nothing_overlaps():
+    """A "summarise this" follow-up matches no passage, and must still get some.
+
+    The selection is a stable sort rather than a filter, so every score being
+    zero leaves the corpus's own order — which is cited-passages-first. The
+    empty-corpus wall exists for a corpus that IS empty, never for a selector
+    that found nothing.
+    """
+    from disco.agent_server.deep_research_service import (
+        _FOLLOW_UP_SOURCE_PASSAGES,
+        _build_follow_up_prompt,
+    )
+
+    passages = [
+        {
+            "id": f"source-{index}",
+            "source_title": f"Release source {index}",
+            "text": (f"Evidence numbered {index}. " * 300),
+        }
+        for index in range(40)
+    ]
+
+    prompt = _build_follow_up_prompt(_scaled_report(passages), passages, "Summarise.")
+
+    assert list(_quoted(prompt)) == [
+        f"source-{index}" for index in range(_FOLLOW_UP_SOURCE_PASSAGES)
+    ]
 
 
 async def test_followup_requires_existing_report():

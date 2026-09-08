@@ -1,5 +1,6 @@
 import { ChevronDown, SlidersHorizontal, Square } from "lucide-react";
 import { useCallback, useState } from "react";
+import { useLocation } from "react-router-dom";
 import { cn } from "@/lib/cn";
 import { useResearch } from "@/hooks/useResearch";
 import { useLastSelectedModel } from "@/hooks/useDriverModels";
@@ -67,7 +68,12 @@ export function ResearchSurface() {
   // standard ↔ deep-research mount swap below (the standard input unmounts when
   // we render DeepResearchSurface, and DR has its OWN QueryInput). Both inputs
   // read/write this one string, so toggling scope preserves what the user typed.
-  const [draft, setDraft] = useState("");
+  // A deep-research run lives at its own URL, so "Standard Search" on the run
+  // leaves this surface entirely rather than flipping the scope in place. It
+  // sends the question along in the navigation state, and this is where the
+  // standard box picks it up — the same thing the in-place flip preserved.
+  const seedQuery = (useLocation().state as { seedQuery?: string } | null)?.seedQuery;
+  const [draft, setDraft] = useState(seedQuery ?? "");
   // The click-to-expand options disclosure under the composer (sources,
   // recency-style extras, uploads). The slider + driver notice live in the box;
   // the detail controls stay behind this toggle.

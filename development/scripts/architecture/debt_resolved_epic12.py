@@ -85,12 +85,16 @@ PKG12_FE_PREVIEW_RESOLVED_IDS = frozenset(
 
 # --- 12-D: PKG-12-FE-SETTINGS + PKG-12-FE-SHELL -----------------------------
 # All 12 rows the ledger assigns `owner_package: PKG-12-FE-SETTINGS` and all 9
-# it assigns `PKG-12-FE-SHELL`, across 17 files: 15
+# executable rows it assigns `PKG-12-FE-SHELL`, across 17 files: 15
 # `typescript_callable_ast_mccabe_gt_15`, 3 `typescript_module_logical_gt_500`,
 # 3 `react_component_logical_gt_250`.
 #
 # **This is the boundary that takes the active ledger to ZERO** — the first
 # time in the campaign. EXPECTED_ACTIVE_DEBT_ROWS 21 -> 0.
+#
+# DM-017 is included in the shell set below after its fail-closed
+# cross-language parity gate landed; it is a distributed observation, not
+# executable debt, so it does not change the count above.
 #
 # Relocating a callable does not reduce its cyclomatic complexity, so every
 # mccabe row was cleared by genuine branch reduction, including the campaign's
@@ -128,7 +132,7 @@ PKG12_FE_SETTINGS_RESOLVED_IDS = frozenset(
 PKG12_FE_SHELL_RESOLVED_IDS = frozenset(
     {
         "TS-0001", "TS-0054", "TS-0055", "TS-0056", "TS-0057",
-        "TS-0058", "TS-0059", "TS-0060", "TS-0061"
+        "TS-0058", "TS-0059", "TS-0060", "TS-0061", "DM-017"
     }
 )
 

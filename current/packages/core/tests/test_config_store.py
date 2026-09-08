@@ -176,23 +176,29 @@ def test_stale_keys_in_overlay_are_dropped_not_crashed(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_save_search_ddgs_clears_stale_base_url(tmp_path):
-    """Switching to the bundled ddgs tier must zero out any persisted base_url
+def test_save_search_bundled_clears_stale_base_url(tmp_path):
+    """Switching to the bundled keyless tier must zero out any persisted base_url
     so a stale searxng LAN address cannot silently re-engage later."""
     store = _store(tmp_path)
     # Simulate a prior searxng selection with a LAN URL
     store.sections.save_search(
-        SearchSettings(provider="searxng", base_url="http://192.168.1.202:8888")
+        SearchSettings(
+            provider="searxng", base_url="http://192.168.1.202:8888", categories="general"
+        )
     )
     assert store.load().search.base_url == "http://192.168.1.202:8888"
 
-    # Flip to bundled — even if the caller passes the old URL it must be cleared
+    # Flip to bundled — even if the caller passes the old URL it must be cleared,
+    # and `categories` is searxng-only so it goes with it.
     store.sections.save_search(
-        SearchSettings(provider="ddgs", base_url="http://192.168.1.202:8888")
+        SearchSettings(
+            provider="bundled", base_url="http://192.168.1.202:8888", categories="general"
+        )
     )
     cfg = store.load()
-    assert cfg.search.provider == "ddgs"
+    assert cfg.search.provider == "bundled"
     assert cfg.search.base_url == ""
+    assert cfg.search.categories == ""
 
 
 def test_save_search_selfhost_preserves_base_url(tmp_path):
@@ -323,3 +329,39 @@ def test_full_config_save_normalizes_legacy_build_kernel(tmp_path):
     written = json.loads((tmp_path / "cfg.json").read_text())
     assert written["build_kernel"] == "disco"
     assert store.load().build_kernel == "disco"
+
+
+# ---------------------------------------------------------------------------
+# L21 — a persisted config that still names the REMOVED `ddgs` search tier
+# ---------------------------------------------------------------------------
+
+
+def test_a_persisted_ddgs_config_loads_as_bundled_without_losing_the_catalogue(tmp_path, caplog):
+    """The failure mode this prevents: `ddgs` is no longer in the provider
+    Literal, so a raw validate raises — and `ConfigStore.load()` answers a raise
+    by falling back to the SEED, silently deleting the user's whole model
+    catalogue and every role assignment. The migration keeps the file loadable,
+    so nothing but the dead provider name changes."""
+    import logging
+
+    store = _store(tmp_path)
+    saved = store.save(
+        store.load().model_copy(
+            update={"models": {"mine": _entry(model_id="mine.gguf")}, "default_model": "mine"}
+        )
+    )
+    assert saved.default_model == "mine"
+
+    # Rewrite the persisted document the way an older install left it.
+    raw = json.loads(store.path.read_text())
+    raw["search"] = {"provider": "ddgs", "base_url": "http://192.168.1.202:8888"}
+    store.path.write_text(json.dumps(raw))
+
+    with caplog.at_level(logging.WARNING, logger="disco.config"):
+        cfg = ConfigStore(store.path).load()
+
+    assert cfg.search.provider == "bundled"
+    assert cfg.search.base_url == ""
+    # The catalogue survived — this is the whole point.
+    assert set(cfg.models) == {"mine"} and cfg.default_model == "mine"
+    assert [r for r in caplog.records if "ddgs" in r.getMessage()]

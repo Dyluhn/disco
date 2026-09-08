@@ -1,7 +1,7 @@
 """Structured observability (core.obs) + the trace-capture helper (harness.logcap)
 — the substrate the eval/fault/replay harnesses assert against.
 
-Run: PYTHONPATH=. uv run pytest development/harness/tests/test_obs.py
+Run: uv run pytest development/harness/tests/test_obs.py
 """
 
 from __future__ import annotations

@@ -1,151 +1,45 @@
 # Current State
 
-**Status: MUTABLE.** Concise, evidence-linked description of where this
-repository actually is. For the running operational ledger see
-[`CAMPAIGN-STATUS.md`](./CAMPAIGN-STATUS.md); for release readiness see
-[`LAUNCH-CHECKLIST.md`](./LAUNCH-CHECKLIST.md).
+Updated 2026-09-08. **Deep Research V48 is landed on main under the owner's written merge authorization.** Report-quality measurement continues by rate; landing did not close it.
 
-Last updated: **2026-08-19 04:26 CDT / 2026-08-19T09:26:52Z**
+## Landed state and preservation
 
-## Checkout
+Main now carries **V48**, landed from candidate commit 71535d280fa0a364601b31353bbca7fd7d97aaeb on astra/disco-local-extraction-v48-20260908. V48 is the V47 reader stage, plus local-extraction hardening, plus the measurement that adopted it. The V47 reader stage is commit 4287a219c9a05992d324af8b1084da837bb890ce on astra/disco-source-reader-v47-20260907, based on V43 commit cd820a9e9d658eb901d5c413a60b816eb0af7330, adopted by owner instruction on 2026-09-07. It adds a source-reading stage: every admitted source over 8,000 characters gets one full-text model call of its own, chunked at 100,000 characters, returning JSON notes whose verbatim quotes and the condition each number's source stated are validated against the source text before acceptance, with rejects counted. Those notes are rendered ahead of the keyword windows inside that source's existing share of the evidence pool, are persisted on the writer checkpoint with every read recorded in the trail, and a reader failure degrades to the previous windows. Measured on three frozen pools with the same providers, pooled material findings fall from 2.01 to 1.37 per 100 claims and S1 findings from 2.01 to 1.10; the four reviewer walls layered on top of the reader stage measured no effect on these pools, and walls 1 and 3 ship unproven. Report quality is now measured by material findings per 100 claims with S1/S2/S3 severity tiers and readability kept separate, not by pass/fail per report; the numbers are in /var/home/dylan/AI-Work/disco-gap-closure-2026-09-05/MEASUREMENT.md. Local-extraction hardening answers the three gaps the keyless-tier measurement named: the bundled reader now sends browser request headers, reads report PDFs up to 25 MB instead of denying them at 5 MB, and re-reads anti-bot refusals out of the web archive — the fallback that only the crawl4ai path had. Its reach is covered by current/packages/retrieval/tests/test_local_extraction_reach.py. The V38 runtime at 91a6db896ebb0b661da7ef56b239a9d605b4cfbd remains frozen in /var/home/dylan/projects/worktrees/disco-pdf-provenance-astra while its original evaluation cohort completes. No older original receives replacement credit from a correction. Commands, receipts, failures and accounting are indexed in /var/home/dylan/AI-Work/disco-gap-closure-2026-09-05/CLOSEOUT-RECORD.json.
 
-There is exactly one canonical checkout:
+The canonical checkout is /var/home/dylan/projects/disco. Before landing it sat at 39117e8e2f094a0d5a3be502766fa0d5b48863a4 with substantial uncommitted work; all 4,144 original files were fingerprinted, committed to the branch main-dirty-snapshot-2026-09-08 and archived to /var/home/dylan/Archives/recovered/disco-main-dirty-2026-09-08. That work carries no content the landed chain had not already absorbed and evolved past, so nothing was re-applied on top of the landing; f5-pids.txt stays local scratch. The working tree itself was never reset, stashed or cleaned.
 
-```text
-/var/home/dylan/projects/disco
-```
+The common Deep Research loop uses identical research tools, evidence semantics and finite budgets across configured providers. Adapters translate wire protocols. No individual model or provider account is a product dependency.
 
-| Fact | Value |
-|------|-------|
-| Branch | `main` |
-| Committed HEAD | `f724188aba2c2d591a273d6a1c13ae3bb43e5d0d` |
-| `origin/main` | `f724188a` (identical) |
-| Working tree | Clean |
-| Clean candidate | **`main` itself** — every landed package is a source/candidate sibling pair |
+## Resulting behavior
 
-The repository was renamed **disclaude → disco** and restructured on
-2026-08-17. The old `projects/build-platform-core-v1/disclaude` checkout and
-the `disclaude/build-platform-core-v1` branch no longer exist. Historical
-branches (~495) were archived to `refs/archive/*` on origin, not deleted;
-recover one with
-`git fetch origin 'refs/archive/<name>:refs/heads/<local>'`.
-Dated `prep/*` worktree branches may carry in-flight work; only `main` is
-authoritative.
+Search discovers unread source leads. The researcher chooses URLs to read; extracted source text or genuine corpus content enters the evidence pool. Discovery spends decisions without consuming admitted-source slots. Admission retains extracted documents and provenance. Phrase and offset inspection uses immutable retained text and survives recovery. Revised briefs, accepted guidance and the original UTC reference date reach research, writing and review.
 
-## Three-bucket layout
+The reading boundary rejects corrupt crawler/cache content, decodes compressed HTTP under its byte limit and performs a bounded PDF fallback after eligible extraction failures. PDF reading retains parser warnings and rejects unusable or encrypted documents; it does not perform OCR. Table geometry can remain ambiguous in text extraction. A layout-mode investigation clarified an actual NEEP table but also demonstrated silent form-text loss, so a wholesale extraction-mode change was not adopted. Short sources remain visible within the shared evidence allowance; section-aware lookup locates qualifications beyond introductions.
 
-Since the 2026-08-17 restructure (source `67ef47be`, candidate `6a8cf723`) the
-top level is three buckets:
+Writing is followed by bounded review and one scoped repair. Valid negative assessments remain available despite a contradictory aggregate verdict. Explicit length cutoffs are rejected. The repair boundary permits at most two calls to obtain every requested part together: a cited prefix that omits requested parts cannot replace any of the draft. Missing or invalid parts receive precise feedback; exhaustion retains the original and discloses unresolved repair. Stream EOF without a finish reason or completion marker produces a typed transport failure. Explicit finish metadata, separate usage chunks and complete buffered JSON retain compatibility. These checks cannot certify semantic correctness or detect every falsely terminated response.
 
-| Bucket | Contents | Rule |
-|--------|----------|------|
-| `archive/` | Historical material, explicitly superseded. | Never current authority; never touch. |
-| `current/` | Shipped code + docs: `packages/`, `frontend/`, `docs/`, `sec-work-remaining/`. | The product. |
-| `development/` | Harness, tests, scripts, architecture authorities. | The machinery around the product. |
+V40 corrects a demonstrated conflict in editorial repair. Mentioning an evidence pool is no longer sufficient to classify a sentence or heading as prohibited process narration. Other process-language feedback explicitly preserves material limitations, including the difference between what the retained sources do not establish and what does not exist. A live original had lost that distinction after deterministic feedback ordered removal of valid scope disclosures. The fix removes that instruction conflict; it does not retroactively pass the report.
 
-The public-API authority could not carry across the directory move (its
-immutability rule reads a move as rename+delete), so it is **re-pinned at
-`c2760f2a`** — the last accepted pre-move candidate — and surface comparison
-now keys on the bucket-normalised path. Consequence: pre-restructure
-certificates (V40C/V41) no longer verify from the repo bytes; the continuity
-receipt lives in the external campaign ledger.
+Review handles identify complete statements and retained source ranges. Prior judgments survive repair only for unchanged text, section and citations. Local NLI disagreement remains advisory. Range validation establishes the identity of retained text, not the correctness of the review judgment. Unavailable reviews are disclosed; the live grades show that a completed passing model verdict can still accept unsupported or overbroad claims.
 
-## The launch line — PKG-21 … PKG-25
+Stop, interruption, Resume and authenticated deletion preserve execution ownership, evidence and terminal-state truth. OpenCode requests retain a stable client session across retries without changing selected models or work allowances.
 
-Five owner packages landed after the restructure, each as a source commit plus
-a derived-authority sibling candidate. The candidate is what `main` carries.
+## Verification and quality acceptance
 
-- **PKG-21-PUBLIC-RELEASE-PREP** (source `a2248195`, candidate `532343de`,
-  2026-08-17). Made the repo survivable for a stranger and removed the
-  maintainer's home directory from everything that executes. The quickstart was
-  unrunnable (`cd disclaude` into a directory the rename retired) — it now
-  clones the real URL and cds into `disco`; the Docker opt-in documents both
-  socket paths, rootless first, with the root-equivalence of
-  `/var/run/docker.sock` called out. Three live-e2e gauntlet specs, the
-  offline Projects fixtures, two package suites, three harness scripts and
-  `trace_conversation.py` stopped hard-coding absolute home paths (silently
-  broken since the rename); what remains absolute is deliberate — hash-pinned
-  acceptance bytes and prose records. Community health added: issue forms
-  (model in use is a required field), PR template, Contributor Covenant 2.1,
-  root `SECURITY.md` routing to private advisories. Null architecture advance.
+V40 passes 11,890 backend tests (2 skipped, 108 deselected), architecture and types. Its 105 focused scope/findings/repair tests are a subset; three evidence-scope counterexamples fail on V39 and pass here. V39’s stream and repair corrections had already passed their independent counterexamples and full suite. The frontend remains byte-identical to retained 1,423-test, type-check and production-build evidence.
 
-- **PKG-22-DOCKER-QUICKSTART-DOCS** (source `140d211b`, candidate `90cb29e4`,
-  2026-08-17). A real install on clean Ubuntu 24.04 with rootless Docker found
-  the Quickstart block was entirely Podman — a Docker user hit three
-  consecutive failures. Both quickstart docs now carry a copy-pasteable Docker
-  block beside the Podman one, and no Linux user is told to run `open`. Two
-  Docker behaviours that look like failures are documented as benign (registry
-  pull-before-build noise; rootless DNS needing explicit resolvers). Image
-  sizes now carry both columns — disco-server is 7.88 GB under Docker vs
-  4.69 GB under Podman. Measured: 4m35s from `up --build` to three healthy
-  services. Documentation-only; null architecture advance.
+V40 package verification checks 1,142 runtime source files and four metadata files, two original PDF controls and three real NLI controls with networking disabled. Four native HTTP/WS/SQLite/UI lifecycle cases pass using deterministic model and retrieval seams. V39’s complete capture replays on V40 with zero differences under the existing normalization. Fresh V40 capture exposed an unrecorded external-state seam: changing search cooldown feedback made strict replay diverge. That failed raw capture remains preserved. Harness commit 8d1b9145697a26348d6a1541602002f9ba88145b records ordered policy cooldown, availability and clock reads at their actual boundaries, including extraction-only turns and infrastructure holds. It does not change the live registry or any of the 1,791 product runtime files. All 187 harness tests, types, architecture and lint pass. Fresh V41 capture completed in 470.38 seconds with 227 raw events and 147 recorded interactions, including 101 environment reads. Strict replay has zero differences under the existing normalization; the exact raw fixture is installed and its 13 repository replay tests pass. Known-credential scanning found no matches. Exact receipts identify which source each check covers.
 
-- **PKG-23-PRELAUNCH-FIXES** (source `e5ecc3b8`, candidate `330c622e`,
-  2026-08-18). Five pre-launch findings, four from driving the product. MCP
-  was unusable out of the box: the stdio config stuffed a whole command line
-  into one argv token — the DTO now carries an optional `args` list, a pasted
-  command is shlex-split (stdio only, never a URL, execution stays argv-list,
-  approval gates untouched), and stdio failures report the same
-  `{code, attempts, exception_type}` diagnostics as streamable_http
-  (`McpPool.server_diagnostics()` is new public surface). The Settings "Test"
-  buttons lied — Brave/Tavily/Firecrawl probes now call their real endpoints in
-  their real auth shape and 401/403 reports as unauthorized; image generation
-  stops sending `response_format` to gpt-image-1. The deprecated Assist
-  control is hidden on Build and Agent — the `assist` prop and reducer state
-  are retained for API stability, only rendering is gone. Two mobile layout
-  bugs (fixed-width inspector, snap-toggle overlap) are `lg:`-scoped. Also
-  fixed: a global gitignore `build/` rule was silently swallowing new files in
-  `current/frontend/src/components/build/`.
+The frozen 12-question by three-profile matrix collects 36 originals, at most two concurrently. The live accounting snapshot records every original launch, native terminal state, observer result and grade. The hash-verified quality distribution links each completed original to its sealed assessment and records readability separately from material correctness. See the external closeout index for current counts. Failures remain failures; collection completion cannot establish quality acceptance by itself.
 
-- **PKG-24-MOBILE-AND-RUNTIME-HONESTY** (source `05b2484c`, candidate
-  `23dc6784`, 2026-08-18). Two efforts, one a security fix. **Sandbox runtime
-  honesty:** on the documented rootless-Podman default,
-  `DISCO_LOCAL_RUNTIME=runsc` was parsed and never used — the compose line
-  advertising gVisor produced an ordinary crun container with no error
-  (verified on a fresh Fedora VM: host kernel visible inside the "sandbox").
-  The runtime is now requested AND the assigned runtime is inspected
-  afterwards; a mismatch is a typed refusal. Docs stop advertising gVisor on
-  this path and point at rootful Docker. **Mobile:** below-`lg:` is mobile,
-  44px minimum targets, one scroll dimension, desktop pixel-identical. Search
-  pins its composer to the viewport bottom; Build/Agent moves the inspector
-  into a full-screen sheet; the plan-approval card no longer paints its badge
-  over its heading (bounding-box Playwright test, proven by revert). Shared
-  primitives `tapTarget`, `useScrollFade`, `ScrollFade` are new public
-  surface. Known remaining: ~25 secondary Settings forms and some Build panels
-  still carry sub-44px controls — see the checklist.
+Q3 GLM exposed the partial-repair defect corrected in V39. Q3 DeepSeek exposed the evidence-scope deletion corrected in V40, plus table misinterpretation and overgeneralized simulation results. DNS reports demonstrate lost authentication conditions despite correct qualifications elsewhere in the draft. Q3 Qwen passes the material-quality bar with disclosed nonmaterial review notes. Q1 GLM finished after its observer timed out; the original timeout and same-original terminal export both remain. The collection controller now pauses admissions during bounded read-only observation of a failed observer’s original execution; it never starts, resumes or reruns that research.
 
-- **PKG-25-VERIFY-SECRET-RESOLUTION** (source `ffc1b6b2`, candidate
-  `f724188a`, 2026-08-19). The documented verification step
-  (`compose exec agent-server disco-verify --quick`) failed every check on a
-  working install: `compose exec` skips the entrypoint that loads the app
-  secret, so the CLI ran with no master key. Naively resolving the secret
-  would have been worse — the entrypoint bootstraps `$DATA/.secret_key` while
-  the library default is `$DATA/secret-key`, so the CLI would have minted a
-  rival second key. Both halves fixed: `ensure_process_secret_key` adopts the
-  entrypoint's key file when its own canonical path is absent, and
-  `disco-verify` resolves the secret the way the servers do. Explicit path,
-  operator env var and canonical file all still win. Four tests pin it,
-  including no-rival-key-minted; verified against a live stack. No public
-  surface moved.
+Claude Fable 5.1 completed five exact-model reviews. Astra accepted its trace-based judgment critique and corrected the Q1 DeepSeek explanation: the whole-home inference was wrongly accepted first and then inherited. A prior narrowed-context diagnostic is closed inconclusive. Fable’s negative-only summary/conclusion consistency hypothesis failed its predeclared opening cell: two valid responses missed the real target and flagged a clean control; a third hit its output limit. The trial stopped after three calls, leaving nine unlaunched. No production consistency stage or provider expansion was adopted. The fifth review upheld the S1 DeepSeek failure while correcting overstatements in Astra’s grade; the initial grade and attestation remain preserved. The GLM S1 original repeats the explicit price-population error and drops a safety criterion; Qwen keeps those price populations distinct but misattributes a battery chemistry in its deployment and fire examples. The cross-provider failure table links to sealed grades and retains positive controls. This demonstrates unresolved judgment failures, not impossibility for every model or evidence that adding another review stage will fix them. Final report-quality and final-source evaluation acceptance remain required.
 
-## Fingerprints
+## Governance and landing
 
-Computed with `development/scripts/source_fingerprint.py` on a clean checkout
-of `f724188a` (reads worktree contents; never stages, stashes, or writes).
+The finite retirement and API authority is landed, not merely proposed. It retains the same exact retirement and API scope it was verified with. Its exact source and proposal commits, test-identity delta, validation receipts, review patch and forward/inverse landing proof are indexed in /var/home/dylan/AI-Work/disco-gap-closure-2026-09-05/CLOSEOUT-RECORD.json. Each proof names its source; older versions remain historical evidence. The landing rehearsal verifies all 4,144 preserved original files and checks application to main without modifying it.
 
-| Digest | Value | Scope |
-|--------|-------|-------|
-| source | `sha256:0238f4f958b301e0b09f8f7f72816fa565dd102fb5954e645699cf889174bc9f` | `current/packages/ current/frontend/ development/harness/ development/scripts/` + build config (3068 files) |
-| tree | `sha256:803f7085de401b6f9d33a82f41762eac4151887cf792e92ffcf472030972e394` | every tracked/untracked non-ignored file (3710 files) |
+The explicit owner instruction required by [the rebaseline procedure](README.md#owner-only-rebaseline-procedure) was given in writing on 2026-09-08: *"after that, you are authorized to merge."* On that instruction the protected seal was rebaselined and V48 was landed on main. The two sealed standards, ENGINEERING-STANDARDS.md and ARCHITECTURE-BOUNDARIES.md, are byte-identical across the rebaseline; only the machinery around them was re-sealed.
 
-## Known limitations, honestly stated
-
-1. **Release readiness is not uniform.** The DONE / PARTIAL / OPEN state per
-   item — including everything that still needs the owner — is recorded in
-   [`LAUNCH-CHECKLIST.md`](./LAUNCH-CHECKLIST.md). Do not infer readiness from
-   this file.
-2. **Pre-restructure certificates do not verify from the repo.** The
-   public-API authority re-pin (above) is why. This is recorded, not broken.
-3. **The mobile tap-target sweep is partial** (first-run paths done; dense
-   secondary forms remain). The gap is described in the checklist as of
-   `main`; parallel work may be closing it but has not landed.
+Report-quality measurement by rate and complete final-source evaluation continue. Engineering verification and this landing do not close them. Release preparation — portability verification on a clean machine — is the next work, and no deployment or public release has been made.

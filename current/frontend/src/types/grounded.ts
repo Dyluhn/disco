@@ -7,6 +7,7 @@
 
 export type ExtractStatus = "ok" | "paywalled" | "blocked" | "not_found" | "error";
 export type Verdict = "supported" | "weak" | "unsupported";
+export type VerificationStatus = "supported" | "contradicted" | "unresolved" | "unavailable";
 
 export interface SearchHit {
   url: string;
@@ -41,6 +42,10 @@ export interface VerifiedClaim {
   verdict: Verdict;
   best_passage_id: string | null;
   entailment_score: number;
+  /** Automated assessment; absent on historical report events. */
+  verification_status?: VerificationStatus;
+  verification_reason?: string;
+  borrowed_passage_ids?: string[];
 }
 
 /** One chart data point. All fields optional because the meaningful set varies

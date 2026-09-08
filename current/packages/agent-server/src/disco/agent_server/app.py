@@ -56,6 +56,7 @@ from .routes import (
     make_projects_router,
     make_release_router,
     make_report_router,
+    make_research_pool_router,
     make_sandbox_router,
     make_schedules_router,
     make_sessions_router,
@@ -343,6 +344,7 @@ def _include_routers(
     app.include_router(make_ws_router(store, runtime))
     app.include_router(make_export_router(store, runtime))
     app.include_router(make_report_router(store, runtime))
+    app.include_router(make_research_pool_router(store, runtime))
     app.include_router(make_share_router(store, runtime))
     app.include_router(make_debug_router(store, runtime))
     app.include_router(make_probes_router(store))
