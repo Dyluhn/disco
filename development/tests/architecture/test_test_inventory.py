@@ -676,8 +676,12 @@ class TestMappingStatic:
             # test_local_extraction_reach.py (+6), test_absence_claims.py (+5) —
             # plus 3 in test_source_inspection.py and 2 in test_writer_evidence.py.
             # 83 collected package ids added, 0 removed; TypeScript unchanged.
-            "python_test_file_count": 940,
-            "python_static_test_id_count": 11547,
+            # V49 adds the portability regression file
+            # `packages/core/tests/test_compose_interpolation_portability.py`:
+            # +4 collected package ids and +1 python test file, 0 removed.
+            # TypeScript, harness, integrations and tests roots are unchanged.
+            "python_test_file_count": 941,
+            "python_static_test_id_count": 11551,
             "typescript_test_file_count": 287,
             "typescript_static_test_id_count": 1484,
         }
@@ -1102,7 +1106,11 @@ class TestCollectedCounts:
             # test_local_extraction_reach.py (+6), test_absence_claims.py (+5) —
             # plus 3 in test_source_inspection.py and 2 in test_writer_evidence.py.
             # 83 collected package ids added, 0 removed; TypeScript unchanged.
-            "packages": 12077,
+            # V49 adds the portability regression file
+            # `packages/core/tests/test_compose_interpolation_portability.py`:
+            # +4 collected package ids and +1 python test file, 0 removed.
+            # TypeScript, harness, integrations and tests roots are unchanged.
+            "packages": 12081,
             # 1288 from PKG-03-EDIT-EVIDENCE: +24 in the `harness` root, the
             # edit-evidence producer acceptance. The new ids land here and not
             # under `packages` because the producer is harness code; the
@@ -1233,7 +1241,7 @@ class TestCollectedCounts:
         }
         assert set(collected["roots"]) == set(test_inventory.PYTHON_ROOTS)
         assert collected["counts"] == expected
-        assert collected["total"] == 14081 == sum(expected.values())
+        assert collected["total"] == 14085 == sum(expected.values())
         for root in test_inventory.PYTHON_ROOTS:
             ids = collected["roots"][root]
             assert len(ids) == expected[root]
@@ -1249,7 +1257,7 @@ class TestCollectedCounts:
         problems: list[str] = []
         result = test_inventory._check_collected_ids(baseline, REPO_ROOT, problems)
         assert problems == []
-        assert result == {"collected_total": 14081}
+        assert result == {"collected_total": 14085}
 
         drifted = copy.deepcopy(baseline)
         drifted["collected"]["roots"]["tests"] = list(
@@ -1268,9 +1276,9 @@ class TestBaselineValidation:
         assert result == {
             "ok": True,
             "problems": [],
-            "python_static_ids": 11547,
+            "python_static_ids": 11551,
             "typescript_static_ids": 1484,
-            "collected_total": 14081,
+            "collected_total": 14085,
         }
 
         latest_identity = test_inventory.subprocess.check_output(
