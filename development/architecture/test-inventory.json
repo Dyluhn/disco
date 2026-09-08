@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "e0be83fb37b47d0e8e4cbdf9958c5c9c102564bb",
+  "source_identity": "e08483ac782031c791f230892c4e5fb6b9c78fe4",
   "collected": {
     "counts": {
-      "packages": 12077,
+      "packages": 12081,
       "harness": 1571,
       "integrations": 9,
       "tests": 424
     },
-    "total": 14081,
+    "total": 14085,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -4663,6 +4663,10 @@
         "packages/core/tests/test_cluster9_errors.py::test_planning_prompt_unaffected_by_file_rules_block",
         "packages/core/tests/test_cluster9_errors.py::test_router_agent_defaults_to_nonzero_temperature",
         "packages/core/tests/test_cluster9_errors.py::test_router_agent_temperature_is_overridable",
+        "packages/core/tests/test_compose_interpolation_portability.py::test_compose_build_dockerfiles_use_qualified_base_images",
+        "packages/core/tests/test_compose_interpolation_portability.py::test_compose_file_exists",
+        "packages/core/tests/test_compose_interpolation_portability.py::test_healthcheck_arguments_have_no_shell_metacharacters",
+        "packages/core/tests/test_compose_interpolation_portability.py::test_no_nested_variable_interpolation",
         "packages/core/tests/test_condenser.py::test_c10_agent_error_obs_pairs_like_a_turn_observation",
         "packages/core/tests/test_condenser.py::test_c10_boundary_never_splits_action_from_observation",
         "packages/core/tests/test_condenser.py::test_c10_keep_recent_counts_complete_turns_not_raw_events",
@@ -14102,9 +14106,9 @@
     }
   },
   "mapping_static": {
-    "identity": "e0be83fb37b47d0e8e4cbdf9958c5c9c102564bb",
-    "python_test_file_count": 940,
-    "python_static_test_id_count": 11547,
+    "identity": "e08483ac782031c791f230892c4e5fb6b9c78fe4",
+    "python_test_file_count": 941,
+    "python_static_test_id_count": 11551,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -14531,6 +14535,7 @@
       "packages/core/tests/test_cluster7_knowledge.py",
       "packages/core/tests/test_cluster8_kvcache.py",
       "packages/core/tests/test_cluster9_errors.py",
+      "packages/core/tests/test_compose_interpolation_portability.py",
       "packages/core/tests/test_condenser.py",
       "packages/core/tests/test_config_store.py",
       "packages/core/tests/test_context_budget.py",
@@ -20093,6 +20098,10 @@
       "packages/core/tests/test_cluster9_errors.py::test_planning_prompt_unaffected_by_file_rules_block",
       "packages/core/tests/test_cluster9_errors.py::test_router_agent_defaults_to_nonzero_temperature",
       "packages/core/tests/test_cluster9_errors.py::test_router_agent_temperature_is_overridable",
+      "packages/core/tests/test_compose_interpolation_portability.py::test_compose_build_dockerfiles_use_qualified_base_images",
+      "packages/core/tests/test_compose_interpolation_portability.py::test_compose_file_exists",
+      "packages/core/tests/test_compose_interpolation_portability.py::test_healthcheck_arguments_have_no_shell_metacharacters",
+      "packages/core/tests/test_compose_interpolation_portability.py::test_no_nested_variable_interpolation",
       "packages/core/tests/test_condenser.py::test_c10_agent_error_obs_pairs_like_a_turn_observation",
       "packages/core/tests/test_condenser.py::test_c10_boundary_never_splits_action_from_observation",
       "packages/core/tests/test_condenser.py::test_c10_keep_recent_counts_complete_turns_not_raw_events",
@@ -41029,6 +41038,38 @@
         "python_static_test_ids": [
           "packages/core/tests/test_build_platform_vercel_contract.py::test_deployment_request_has_no_source_or_secret_channel",
           "packages/core/tests/test_build_platform_vercel_contract.py::test_documented_prebuilt_contract_preserves_artifact_and_scopes"
+        ],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-36-PORTABILITY-V49",
+      "root": "packages",
+      "source_identity_before": "e0be83fb37b47d0e8e4cbdf9958c5c9c102564bb",
+      "source_identity_after": "e08483ac782031c791f230892c4e5fb6b9c78fe4",
+      "collected_roots": {
+        "packages": {
+          "before_count": 12077,
+          "after_count": 12081,
+          "added_ids": [
+            "packages/core/tests/test_compose_interpolation_portability.py::test_compose_build_dockerfiles_use_qualified_base_images",
+            "packages/core/tests/test_compose_interpolation_portability.py::test_compose_file_exists",
+            "packages/core/tests/test_compose_interpolation_portability.py::test_healthcheck_arguments_have_no_shell_metacharacters",
+            "packages/core/tests/test_compose_interpolation_portability.py::test_no_nested_variable_interpolation"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [
+          "packages/core/tests/test_compose_interpolation_portability.py"
+        ],
+        "python_static_test_ids": [
+          "packages/core/tests/test_compose_interpolation_portability.py::test_compose_build_dockerfiles_use_qualified_base_images",
+          "packages/core/tests/test_compose_interpolation_portability.py::test_compose_file_exists",
+          "packages/core/tests/test_compose_interpolation_portability.py::test_healthcheck_arguments_have_no_shell_metacharacters",
+          "packages/core/tests/test_compose_interpolation_portability.py::test_no_nested_variable_interpolation"
         ],
         "typescript_test_files": [],
         "typescript_static_test_ids": [],
