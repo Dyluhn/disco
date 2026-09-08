@@ -225,7 +225,7 @@ Confirm all four services before going further — a compose provider can report
 success while one image failed to build:
 
 ```bash
-podman compose ps
+podman compose ps      # or: docker compose ps
 ```
 
 Expect four rows: `app-server`, `agent-server` and `frontend` **Up (healthy)**,
