@@ -89,8 +89,10 @@ except ImportError:
 # immediately rather than hiding under an allowance. PKG-19-CERT-SIGNOFF also
 # resolves observation DM-019 after implementing and proving its fixed
 # secret-rotation policy; executable debt remains 0 and observations fall 12 -> 11.
+# PKG-12-FE-SHELL now also resolves DM-017 after the fail-closed frontend
+# contract-parity gate landed; observations fall 11 -> 10.
 EXPECTED_ACTIVE_DEBT_ROWS = 0
-EXPECTED_OBSERVATIONS = 11
+EXPECTED_OBSERVATIONS = 10
 
 # The source identity the disposition rows were sealed against.
 SOURCE_IDENTITY = "1cf00dbe194a2a276ea1fd17ab74589355f2e0dc"

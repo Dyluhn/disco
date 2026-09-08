@@ -219,9 +219,16 @@ class _RuntimeSurfaceSettings:
 class _RuntimeModeSettings:
     """Own transient artifact/AppKit identity caches and research source pins."""
 
+    # The per-run source ids the picker may pin. `ddgs` stays accepted as a
+    # MIGRATION alias only — a conversation pinned before the 2026-09-02 removal
+    # still resolves (to `web`, in `_search_wiring.LEGACY_SOURCE_IDS`); it appears
+    # in no settings list and in no prompt.
     _VALID_RESEARCH_SOURCES = frozenset(
         {
-            "ddgs",
+            "web",
+            "exa",
+            "parallel",
+            "wikipedia",
             "arxiv",
             "news",
             "semantic_scholar",
@@ -229,6 +236,7 @@ class _RuntimeModeSettings:
             "tavily",
             "brave",
             "site_scoped",
+            "ddgs",
         }
     )
 

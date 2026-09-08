@@ -86,8 +86,7 @@ def _commit_resolves(root: Path, value: str) -> bool:
 
 def _valid_scalars(row: dict[str, Any]) -> bool:
     """Obligation 1: every scalar present, non-empty and well-formed."""
-    scalars = ("old_path", "disposition", "owner_package", "accepting_commit",
-               "accepting_receipt")
+    scalars = ("old_path", "disposition", "owner_package", "accepting_commit", "accepting_receipt")
     if not all(isinstance(row.get(key), str) and row[key] for key in scalars):
         return False
     return (
@@ -100,9 +99,7 @@ def _valid_scalars(row: dict[str, Any]) -> bool:
 def _valid_counts(row: dict[str, Any]) -> bool:
     """Obligation 6: four non-negative pins, at least one of them load-bearing."""
     if not all(
-        isinstance(row.get(key), int)
-        and not isinstance(row[key], bool)
-        and row[key] >= 0
+        isinstance(row.get(key), int) and not isinstance(row[key], bool) and row[key] >= 0
         for key in _COUNT_FIELDS
     ):
         return False
@@ -112,9 +109,7 @@ def _valid_counts(row: dict[str, Any]) -> bool:
 def _valid_new_paths(row: dict[str, Any]) -> bool:
     """Obligation 4: a sorted, unique, non-empty destination list."""
     paths = row.get("new_paths")
-    if not isinstance(paths, list) or not all(
-        isinstance(item, str) and item for item in paths
-    ):
+    if not isinstance(paths, list) or not all(isinstance(item, str) and item for item in paths):
         return False
     if not paths or paths != sorted(paths) or len(paths) != len(set(paths)):
         return False
@@ -131,13 +126,13 @@ def _valid_split_row(row: Any, root: Path) -> bool:
 
 
 def split_authority(
-    baseline: dict[str, Any], root: Path, problems: list[str],
+    baseline: dict[str, Any],
+    root: Path,
+    problems: list[str],
 ) -> dict[str, dict[str, Any]]:
     """Return the validated ``module_split_transitions`` map by old path."""
     rows = baseline.get("module_split_transitions", [])
-    if not isinstance(rows, list) or not all(
-        _valid_split_row(row, root) for row in rows
-    ):
+    if not isinstance(rows, list) or not all(_valid_split_row(row, root) for row in rows):
         problems.append("module_split_transitions has invalid explicit metadata")
         return {}
     ordered = sorted(rows, key=lambda item: item["old_path"])
@@ -161,7 +156,8 @@ def _same_path_rows(rows: list[dict[str, Any]], path: str) -> list[dict[str, Any
 
 
 def line_drift_pairs(
-    previous: list[dict[str, Any]], current: list[dict[str, Any]],
+    previous: list[dict[str, Any]],
+    current: list[dict[str, Any]],
     fields: tuple[str, ...],
 ) -> list[dict[str, Any]]:
     """Return previous rows that merely changed ``line`` within the same path.
@@ -171,9 +167,7 @@ def line_drift_pairs(
     identical row. Nothing about the row other than its line may differ.
     """
     available: dict[tuple[Any, ...], int] = {}
-    current_keys = {
-        tuple(sorted(row.items())) for row in current
-    }
+    current_keys = {tuple(sorted(row.items())) for row in current}
     for row in current:
         key = (row.get("path"), *_identity(row, fields))
         available[key] = available.get(key, 0) + 1
@@ -216,8 +210,10 @@ def unaccounted_fixture_line_drift(
 
 
 def _relocated_rows(
-    deleted: list[dict[str, Any]], current: list[dict[str, Any]],
-    record: dict[str, Any], fields: tuple[str, ...],
+    deleted: list[dict[str, Any]],
+    current: list[dict[str, Any]],
+    record: dict[str, Any],
+    fields: tuple[str, ...],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Split ``deleted`` into rows relocated under ``record`` and the rest."""
     available: dict[tuple[Any, ...], int] = {}
@@ -238,7 +234,9 @@ def _relocated_rows(
 
 
 def _relocated_ids(
-    deleted: list[str], current: list[str], record: dict[str, Any],
+    deleted: list[str],
+    current: list[str],
+    record: dict[str, Any],
 ) -> tuple[list[str], list[str]]:
     """Obligation 5 for node IDs: the exact test name must survive."""
     by_name: dict[str, int] = {}
@@ -273,8 +271,9 @@ class SplitLedger:
         key = (old_path, field)
         self._observed[key] = self._observed.get(key, 0) + amount
 
-    def authorized_ids(self, deleted: list[str], current: list[str], field: str
-                       ) -> tuple[set[str], list[str]]:
+    def authorized_ids(
+        self, deleted: list[str], current: list[str], field: str
+    ) -> tuple[set[str], list[str]]:
         """Return relocated IDs and the deletions no record explains."""
         authorized: set[str] = set()
         unexplained: list[str] = []
@@ -293,8 +292,11 @@ class SplitLedger:
         return authorized, unexplained
 
     def authorized_rows(
-        self, deleted: list[dict[str, Any]], current: list[dict[str, Any]],
-        fields: tuple[str, ...], field: str,
+        self,
+        deleted: list[dict[str, Any]],
+        current: list[dict[str, Any]],
+        fields: tuple[str, ...],
+        field: str,
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         """Return relocated rows and the deletions no record explains."""
         authorized: list[dict[str, Any]] = []
@@ -335,7 +337,8 @@ class SplitLedger:
 
 
 def path_disposition_problems(
-    records: dict[str, dict[str, Any]], current_files: list[str],
+    records: dict[str, dict[str, Any]],
+    current_files: list[str],
 ) -> list[str]:
     """Obligations 3 and 4 against the live file inventory."""
     problems: list[str] = []
@@ -344,19 +347,16 @@ def path_disposition_problems(
         gone = old_path not in present
         if record["disposition"] == "replaced" and not gone:
             problems.append(
-                f"module split {old_path}: disposition 'replaced' but the "
-                "path still exists"
+                f"module split {old_path}: disposition 'replaced' but the path still exists"
             )
         if record["disposition"] == "extracted" and gone:
             problems.append(
-                f"module split {old_path}: disposition 'extracted' but the "
-                "path no longer exists"
+                f"module split {old_path}: disposition 'extracted' but the path no longer exists"
             )
         missing = sorted(set(record["new_paths"]) - present)
         if missing:
             problems.append(
-                f"module split {old_path}: new_paths absent from the "
-                f"inventory: {missing}"
+                f"module split {old_path}: new_paths absent from the inventory: {missing}"
             )
     return problems
 
@@ -375,32 +375,36 @@ def _deleted_strings(previous: list[str], current: list[str]) -> list[str]:
 
 
 def _deleted_rows(
-    previous: list[dict[str, Any]], current: list[dict[str, Any]],
+    previous: list[dict[str, Any]],
+    current: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     live = {_canonical(row) for row in current}
     return [row for row in previous if _canonical(row) not in live]
 
 
 def _authorize_row_field(
-    ledger: SplitLedger, previous: list[dict[str, Any]],
-    current: list[dict[str, Any]], fields: tuple[str, ...], count_field: str,
+    ledger: SplitLedger,
+    previous: list[dict[str, Any]],
+    current: list[dict[str, Any]],
+    fields: tuple[str, ...],
+    count_field: str,
 ) -> tuple[set[str], list[dict[str, Any]], list[dict[str, Any]]]:
     """Return (authorized canonical rows, relocated rows, drifted rows)."""
     deleted = _deleted_rows(previous, current)
     drifted = line_drift_pairs(deleted, current, fields)
     drifted_keys = {_canonical(row) for row in drifted}
     remaining = [row for row in deleted if _canonical(row) not in drifted_keys]
-    relocated, unexplained = ledger.authorized_rows(
-        remaining, current, fields, count_field
-    )
+    relocated, unexplained = ledger.authorized_rows(remaining, current, fields, count_field)
     authorized = {_canonical(row) for row in relocated} | drifted_keys
     return authorized, relocated, drifted
 
 
 def build_authorizations(
     records: dict[str, dict[str, Any]],
-    previous_mapping: dict[str, Any], current_mapping: dict[str, Any],
-    previous_roots: dict[str, list[str]], current_roots: dict[str, list[str]],
+    previous_mapping: dict[str, Any],
+    current_mapping: dict[str, Any],
+    previous_roots: dict[str, list[str]],
+    current_roots: dict[str, list[str]],
 ) -> tuple[dict[str, set[str]], list[dict[str, Any]], SplitLedger]:
     """Return per-label authorized deletions and the accounted marker rows.
 
@@ -413,15 +417,14 @@ def build_authorizations(
     for name, previous in previous_roots.items():
         current = current_roots[name]
         relocated, _ = ledger.authorized_ids(
-            _deleted_strings(previous, current), current,
+            _deleted_strings(previous, current),
+            current,
             "relocated_collected_id_count",
         )
         authorized[f"collected.{name}"] = {_canonical(item) for item in relocated}
 
     replaced = {
-        old_path
-        for old_path, record in records.items()
-        if record["disposition"] == "replaced"
+        old_path for old_path, record in records.items() if record["disposition"] == "replaced"
     }
     authorized["mapping_static.python_test_files"] = {
         _canonical(path)
@@ -445,21 +448,29 @@ def build_authorizations(
     }
 
     fixture_rows, _, _ = _authorize_row_field(
-        ledger, previous_mapping["fixtures"], current_mapping["fixtures"],
-        _FIXTURE_IDENTITY, "relocated_fixture_count",
+        ledger,
+        previous_mapping["fixtures"],
+        current_mapping["fixtures"],
+        _FIXTURE_IDENTITY,
+        "relocated_fixture_count",
     )
     authorized["mapping_static.fixtures"] = fixture_rows
 
     marker_rows, marker_relocated, marker_drifted = _authorize_row_field(
-        ledger, previous_mapping["markers"], current_mapping["markers"],
-        _MARKER_IDENTITY, "relocated_marker_count",
+        ledger,
+        previous_mapping["markers"],
+        current_mapping["markers"],
+        _MARKER_IDENTITY,
+        "relocated_marker_count",
     )
     authorized["mapping_static.markers"] = marker_rows
     return authorized, marker_relocated + marker_drifted, ledger
 
 
 def unaccounted_marker_growth(
-    additions: list[dict[str, Any]], accounted: list[dict[str, Any]],
+    additions: list[dict[str, Any]],
+    accounted: list[dict[str, Any]],
+    ledger: SplitLedger | None = None,
 ) -> list[dict[str, Any]]:
     """Return marker additions that no relocation or line drift explains.
 
@@ -467,15 +478,14 @@ def unaccounted_marker_growth(
     home — or at a new line in the same file — is not growth, and is matched
     off against the deletion that explains it, one for one.
     """
-    budget: dict[tuple[Any, ...], int] = {}
-    for row in accounted:
-        key = _identity(row, _MARKER_IDENTITY)
-        budget[key] = budget.get(key, 0) + 1
-    growth: list[dict[str, Any]] = []
-    for row in additions:
-        key = _identity(row, _MARKER_IDENTITY)
-        if budget.get(key, 0) > 0:
-            budget[key] -= 1
-            continue
-        growth.append(row)
+    growth = list(additions)
+    for previous in accounted:
+        record = ledger.record_for(str(previous.get("path"))) if ledger else None
+        paths = set(record["new_paths"]) if record else {previous.get("path")}
+        for index, current in enumerate(growth):
+            if current.get("path") in paths and _identity(current, _MARKER_IDENTITY) == _identity(
+                previous, _MARKER_IDENTITY
+            ):
+                growth.pop(index)
+                break
     return growth

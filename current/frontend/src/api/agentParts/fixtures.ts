@@ -182,25 +182,36 @@ export function subscribeFixture(cid: string, onFrame: (f: WSServerFrame) => voi
 
 export function subscribeDeepFixture(onFrame: (f: WSServerFrame) => void): AgentHandle {
   let cancelled = false;
+  let started = false;
 
   /** v2 (gateless deep research): sending the question STARTS the research.
    *  There is no plan proposal, no approval pause and nothing to revise — the
    *  stream runs straight through brief → gather → write → report. Steering
    *  and cancel stay live for the whole run. */
   async function streamRunAndReport() {
+    if (started) return;
+    started = true;
     onFrame({ type: "state", state: fixtureInitialState });
     for (const event of fixtureRunningEvents) {
       if (cancelled) return;
       await fixtureDelay(80);
+      if (cancelled) return;
       onFrame({ type: "event", event });
     }
     if (cancelled) return;
     await fixtureDelay(150);
+    if (cancelled) return;
     onFrame({ type: "event", event: fixtureReport });
     if (cancelled) return;
     onFrame({ type: "event", event: fixtureFinishedEvent });
     onFrame({ type: "state", state: fixtureFinishedState });
   }
+
+  // A real conversation replays its log to every subscriber, which is how the
+  // run's own URL re-attaches after a reload. The offline fixture only ever
+  // streamed on `send_message`, so a re-subscribe reached a conversation that
+  // had forgotten it existed — the run view went permanently blank.
+  void streamRunAndReport();
 
   return {
     send: (f) => {

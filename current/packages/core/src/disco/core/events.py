@@ -95,6 +95,8 @@ from ._event_interaction import (
     ErrorEvent,
     MessageEvent,
     ObservationEvent,
+    RunFailure,
+    RunFailureClass,
 )
 
 # ---- output events ----------------------------------------------------------
@@ -105,6 +107,7 @@ from ._event_outputs import (
     KnowledgeEvent,
     PlanEvent,
     ReportEvent,
+    ResearchCheckpointEvent,
     RuntimeConstraintEvent,
 )
 
@@ -212,7 +215,8 @@ Event = Annotated[
     | ClarifyEvent
     | QuestionsV2Event
     | ContextResolvedEvent
-    | ContextSummaryEvent,
+    | ContextSummaryEvent
+    | ResearchCheckpointEvent,
     Field(discriminator="kind"),
 ]
 

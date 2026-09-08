@@ -31,8 +31,12 @@ from disco.core.llm import (
 from disco.core.llm.openai_provider import OpenAIProvider
 from disco.core.llm.prompts import DriverPrompts
 
-_PLANNING_SHA256 = "e409bbb816fda1ca5e45771363d9530ecabb2696009d75292b1f5bae00097be0"
-_RESUME_SHA256 = "86e2dc191eaea6fbff48d546a7af91312c599ceb00ef9cbbb2bbf4a987a8d2d9"
+# Re-accepted 2026-08-30: `complete` now rides the STREAMED transport so its
+# timeouts can measure progress instead of total duration. The only wire change
+# is `stream: true` plus the `stream_options` the assembler already attaches to
+# every streamed request; message/tool bytes are byte-for-byte unchanged.
+_PLANNING_SHA256 = "0fa09032cf4cbe60d414e46019864dbfcce6f93d3326a22e64ee47183899221e"
+_RESUME_SHA256 = "428da614881302da35c5cbeb383e0c1081f6058351a1751128a80beac3c94b3e"
 _EXPECTED_KEYS = (
     "model",
     "messages",
@@ -40,6 +44,7 @@ _EXPECTED_KEYS = (
     "stream",
     "max_tokens",
     "tools",
+    "stream_options",
     "prompt_cache_key",
 )
 
@@ -152,7 +157,8 @@ def _assert_request(
     assert payload["model"] == "qwen-driver"
     assert payload["max_tokens"] == max_tokens
     assert payload["temperature"] == 0.0
-    assert payload["stream"] is False
+    assert payload["stream"] is True
+    assert payload["stream_options"] == {"include_usage": True}
     assert [message["role"] for message in payload["messages"]] == roles
     assert [tool["function"]["name"] for tool in payload["tools"]] == [
         "read_state",

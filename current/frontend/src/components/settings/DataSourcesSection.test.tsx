@@ -1,6 +1,11 @@
 /**
- * DataSourcesSection — WALK-05 (E4): the bundled search option must label itself
- * "Bundled — ddgs" (not "Bundled — DuckDuckGo", which names a trademark).
+ * DataSourcesSection — the search-provider surface.
+ *
+ * Two things this pins down. WALK-05 (E4): the bundled option must not name a
+ * trademark ("DuckDuckGo"). L21: the keyless tier must state its real capacity
+ * where it is chosen — a user planning a day of reports on a free tier that
+ * starts refusing after a handful is a wall with no angle, and the notice is
+ * the angle.
  *
  * Drives the REAL data path: DataSourcesSection → useDataSourcesConfig →
  * @/api/... → fetch(...). Only the network boundary is stubbed (vi.stubGlobal
@@ -44,7 +49,8 @@ function installFetch() {
     const method = (init?.method ?? "GET").toUpperCase();
     if (method === "GET" && url === "/api/data-sources/config") {
       return jsonResponse({
-        search_provider: "ddgs",
+        search_provider: "bundled",
+        search_categories: "",
         search_base_url: "",
         search_api_key_env: "",
         extraction_provider: "local",
@@ -87,24 +93,77 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("DataSourcesSection — WALK-05 label", () => {
-  it("WALK-05: shows 'Bundled — ddgs' (not 'Bundled — DuckDuckGo') for the bundled search option", async () => {
+describe("DataSourcesSection — search provider surface", () => {
+  it("shows the bundled keyless composite and never a trademark name", async () => {
     render(createElement(DataSourcesSection), { wrapper: makeWrapper() });
 
-    expect(await screen.findByText(/Current: Bundled — ddgs/i)).toBeInTheDocument();
+    expect(await screen.findByText(/Current: Bundled — keyless/i)).toBeInTheDocument();
     const configure = screen.getByText("Configure search");
     expect(configure.closest("details")).not.toHaveAttribute("open");
     fireEvent.click(configure);
     expect(configure.closest("details")).toHaveAttribute("open");
-    expect(await screen.findByRole("button", { name: /bundled.*ddgs/i })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /bundled.*keyless/i })).toBeInTheDocument();
     expect(
       screen.getByRole("button", {
         name: /news.*recent news headlines via google news/i,
       }),
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Brave Search/i })).toBeInTheDocument();
-    // The old trademark name must not appear
+    // Trademarks and the removed provider must not appear
     expect(screen.queryByText(/DuckDuckGo/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/ddgs/i)).not.toBeInTheDocument();
+  });
+
+  it("states the keyless tier's real capacity where the tier is chosen", async () => {
+    render(createElement(DataSourcesSection), { wrapper: makeWrapper() });
+
+    const notice = await screen.findByText(/Keyless: light use/i);
+    expect(notice).toBeInTheDocument();
+    // Why the limit exists, that it is reported, and every way out of it.
+    expect(notice).toHaveTextContent(/rate limits are reported, not hidden/i);
+    expect(notice).toHaveTextContent(/self-host SearXNG/i);
+    expect(notice).toHaveTextContent(/Parallel 5k\/mo free/i);
+    expect(notice).toHaveTextContent(/Tavily 1k\/mo free/i);
+  });
+
+  it("offers exactly the providers that are actually wired — no false affordances", async () => {
+    render(createElement(DataSourcesSection), { wrapper: makeWrapper() });
+    fireEvent.click(await screen.findByText("Configure search"));
+
+    const offered = Array.from(
+      document.querySelectorAll<HTMLElement>(
+        '[data-disco-control="settings.datasource-pick"][data-provider-id]',
+      ),
+    ).map((el) => el.dataset.providerId);
+    // Every id here has a constructor in `_search_wiring.make_search`, and the
+    // removed one is absent rather than left as a dead button.
+    expect(offered).toEqual([
+      "bundled",
+      "searxng",
+      "parallel",
+      "exa",
+      "wikipedia",
+      "news",
+      "arxiv",
+      "semantic_scholar",
+      "site_scoped",
+      "tavily",
+      "brave",
+      "local",
+      "crawl4ai",
+      "firecrawl",
+    ]);
+    expect(offered).not.toContain("ddgs");
+  });
+
+  it("exposes SearXNG engine categories only when SearXNG is selected", async () => {
+    render(createElement(DataSourcesSection), { wrapper: makeWrapper() });
+    fireEvent.click(await screen.findByText("Configure search"));
+
+    expect(screen.queryByLabelText(/Engine categories/i)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Self-hosted SearXNG/i }));
+    const categories = await screen.findByLabelText(/Engine categories/i);
+    expect(categories).toHaveAttribute("placeholder", expect.stringMatching(/general,science/));
   });
 
   it("persists Brave with a selected stored credential name", async () => {

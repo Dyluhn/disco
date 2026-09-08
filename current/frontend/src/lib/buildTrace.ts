@@ -117,7 +117,11 @@ export interface ActivityItem {
     // declared-artifact route. Rendered as a first-class download card in the feed.
     file?: { filename: string; title?: string };
   };
-  status: "done" | "running" | "pending" | "failed" | "pending_send";
+  /** "settled" is a row that FINISHED without the work succeeding — a wall's
+   * verdict. A refused query never reached an engine, so it is neither the run
+   * succeeding nor failing, and the green check read as "done — good" over
+   * "Not searched: …". Distinct from "failed": nothing broke. */
+  status: "done" | "running" | "pending" | "failed" | "pending_send" | "settled";
   attention: boolean; // confidence gradient: risky/novel steps float up, routine recede
   risk?: SecurityRisk;
   /** True when the engine auto-approved a sandboxed op that would have gated

@@ -11,6 +11,7 @@
 import * as Tabs from "@radix-ui/react-tabs";
 import { Ban, FileX2, Lock, type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/cn";
+import { countOf } from "@/lib/deepResearchHeartbeat";
 import { STATUS_LABEL, cleanDomain, monogram } from "@/lib/sources";
 import type { SourceTiers } from "@/lib/deepResearchTrace";
 import type { ExtractStatus } from "@/types/grounded";
@@ -201,6 +202,21 @@ export function TieredSourcePanel({ tiers }: Props) {
             </Tabs.Trigger>
           ))}
         </Tabs.List>
+        {/* The rows this panel never received. The report event is capped at
+            1 MiB and the engine trims raw evidence to fit, recording the total
+            it started from; without this the panel counted what it was handed
+            and a run that found 1,838 sources listed 744 in silence. Absent
+            unless the event says rows were dropped. */}
+        {tiers.notKept && (
+          <p
+            data-dr-sources-not-kept
+            className="border-b border-hairline px-body py-hair font-ui text-[0.72rem] text-text-faint"
+          >
+            {countOf(tiers.notKept.found, "source")} found ·{" "}
+            {countOf(tiers.notKept.kept, "source")} kept with this report — the rest
+            were trimmed to fit it.
+          </p>
+        )}
         {tabs.map((t) => (
           <Tabs.Content
             key={t.id}

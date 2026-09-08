@@ -3,11 +3,11 @@ grounded answer needs no separate encoder server (portability; faster than the
 network hop). ONNX/CPU via `fastembed` — deliberately NOT torch (light, and no
 ROCm pain on AMD).
 
-Three roles, two models:
+Three roles, three models:
   - Embedder  → `multilingual-e5-large`  (dense vectors; Space-corpus retrieval)
   - Reranker  → `BAAI/bge-reranker-base`  (cross-encoder relevance, MIT)
-  - NLI       → the SAME cross-encoder, framed as claim↔passage entailment
-                (replaces the lexical-overlap stub with a real signal)
+  - NLI       → pinned DeBERTa-v3-small three-way classifier (Apache-2.0),
+                separate from relevance ranking; see local_nli.py
 
 LICENSE NOTE: the default reranker is MIT (commercial-safe). It was previously
 `jinaai/jina-reranker-v2-base-multilingual`, which is CC-BY-NC-4.0 (non-commercial)
@@ -27,12 +27,17 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
-from typing import Any, cast
+from collections import OrderedDict
+from threading import Lock
+from typing import TYPE_CHECKING, Any, cast
 
 from disco.core.env import disco_env
 
 from .models import Passage
 from .nli import Entailment
+
+if TYPE_CHECKING:
+    from .local_nli import NLIPrediction, OnnxNLIPredictor
 
 _log = logging.getLogger(__name__)
 
@@ -268,49 +273,69 @@ class FastEmbedReranker:
         return [passages[i] for i in order[:top_k]]
 
 
+_nli_model: OnnxNLIPredictor | None = None
+_nli_load_lock = Lock()
+
+
+def _nli_backend() -> OnnxNLIPredictor:
+    global _nli_model
+    with _nli_load_lock:
+        if _nli_model is None:
+            from .local_nli import NLI_MODEL, OnnxNLIPredictor
+
+            _require_ram(NLI_MODEL)
+            _nli_model = OnnxNLIPredictor()
+        return _nli_model
+
+
 class FastEmbedNLIVerifier:
-    """[NLIVerifier] Support signal from the SAME cross-encoder, framed as
-    claim↔passage relevance (a strong proxy for 'does this passage support the
-    claim'), replacing the lexical-overlap stub. SYNC per the interface; results
-    cached per (premise, claim).
+    """Compatibility name for the local ONNX three-way verifier.
 
-    A relevance proxy can support "entail" and "neutral" but CANNOT detect
-    contradiction: two compatible sentences about different aspects of one
-    topic score near zero, so any low-score→"contradict" mapping fabricates
-    contradictions (measured live: a fully compatible sentence pair scored
-    0.066/0.001). The default therefore never returns "contradict"; pass an
-    explicit ``contradict_below`` only when the backing model is a real
-    entailment model rather than this relevance proxy."""
+    Relevance ranking remains owned by FastEmbedReranker. NLI uses its own
+    small checkpoint and preserves its actual class label; no relevance
+    threshold can turn a contradiction into support.
+    """
 
-    def __init__(self, *, entail_at: float = 0.5, contradict_below: float | None = None) -> None:
-        self._entail_at = entail_at
-        self._contradict_below = contradict_below
-        self._cache: dict[tuple[str, str], float] = {}
-        # Pairs whose encoder call FAILED. A failed measurement is "neutral"
-        # (no signal), never "contradict" — a score of 0.0 would otherwise
-        # fall below `contradict_below` and label the claim contradicted.
-        self._errored: set[tuple[str, str]] = set()
+    def __init__(self) -> None:
+        self._cache: OrderedDict[tuple[str, str], NLIPrediction] = OrderedDict()
+        self._failures = 0
+        self._backend: OnnxNLIPredictor | None = None
+        self._load_attempted = False
+
+    @property
+    def verifier_failures(self) -> int:
+        return self._failures
+
+    def _prediction(self, premise: str, hypothesis: str) -> NLIPrediction:
+        from .local_nli import NLIPrediction
+
+        key = (premise, hypothesis)
+        if key in self._cache:
+            self._cache.move_to_end(key)
+            return self._cache[key]
+        try:
+            if not self._load_attempted:
+                self._load_attempted = True
+                self._backend = _nli_backend()
+            if self._backend is None:
+                raise RuntimeError("NLI model unavailable for this verifier instance")
+            prediction = self._backend.predict(premise, hypothesis)
+        except EncoderUnavailable:
+            self._load_attempted = False
+            raise
+        except Exception:  # noqa: BLE001 — visible unavailable measurement, never false support
+            self._failures += 1
+            prediction = NLIPrediction("neutral", 0.0, available=False)
+        self._cache[key] = prediction
+        if len(self._cache) > 4096:
+            self._cache.popitem(last=False)
+        return prediction
 
     def score(self, premise: str, hypothesis: str) -> float:
-        key = (premise, hypothesis)
-        if key not in self._cache:
-            try:
-                raw = list(_reranker().rerank(hypothesis, [premise]))[0]
-                self._cache[key] = _sigmoid(float(raw))
-            except EncoderUnavailable:
-                # RAM guard: propagate so the caller gets an honest error, not a wrong neutral
-                raise
-            except Exception:  # noqa: BLE001 — failure → neutral, never crash
-                self._errored.add(key)
-                self._cache[key] = 0.0
-        return self._cache[key]
+        return self._prediction(premise, hypothesis).entailment
 
     def entail(self, premise: str, hypothesis: str) -> Entailment:
-        s = self.score(premise, hypothesis)
-        if (premise, hypothesis) in self._errored:
-            return "neutral"
-        if s >= self._entail_at:
-            return "entail"
-        if self._contradict_below is not None and s <= self._contradict_below:
-            return "contradict"
-        return "neutral"
+        return self._prediction(premise, hypothesis).label
+
+    def verification_available(self, premise: str, hypothesis: str) -> bool:
+        return self._prediction(premise, hypothesis).available

@@ -12,7 +12,7 @@ import { describe, expect, it } from "vitest";
 import type { GroundedAnswer } from "@/types/grounded";
 import { deriveSourceTiers } from "./deepResearchTrace";
 import type { ReportEvent } from "@/types/agent";
-import { citationNumbers } from "./sources";
+import { canonicalWorkKey, citationNumbers, sourceUrlKey } from "./sources";
 
 // Verbatim shape (ids + urls) of the captured duplicate-source report.
 const PASSAGES = [
@@ -74,7 +74,10 @@ describe("chips ↔ Sources panel alignment (the binding invariant)", () => {
   it("numbers tracking, fragment, scheme, and trailing-slash variants as one source", () => {
     const answer = {
       passages: [
-        { id: "a", source_url: "https://example.com/story?utm_source=feed#one" },
+        {
+          id: "a",
+          source_url: "https://example.com/story?utm_source=feed&msockid=abc#one",
+        },
         { id: "b", source_url: "http://example.com/story/" },
         { id: "c", source_url: "https://other.example/item" },
       ],
@@ -82,5 +85,55 @@ describe("chips ↔ Sources panel alignment (the binding invariant)", () => {
     } as unknown as GroundedAnswer;
 
     expect(Object.fromEntries(citationNumbers(answer))).toEqual({ a: 1, b: 1, c: 2 });
+  });
+
+  it("groups DOI, arXiv, and PMID URL variants as one work", () => {
+    expect(canonicalWorkKey("https://doi.org/10.1000/ABC.")).toBe("doi:10.1000/abc");
+    expect(canonicalWorkKey("https://publisher.example/paper/10.1000/abc")).toBe("doi:10.1000/abc");
+    const strong = {
+      passages: [
+        { id: "doi-a", source_url: "https://doi.org/10.1000/ABC." },
+        { id: "doi-b", source_url: "https://publisher.example/paper/10.1000/abc" },
+        { id: "arxiv-a", source_url: "https://arxiv.org/abs/2401.12345v2" },
+        { id: "arxiv-b", source_url: "https://arxiv.org/pdf/2401.12345.pdf" },
+        { id: "arxiv-c", source_url: "https://arxiv.org/html/2401.12345" },
+        { id: "pmid-a", source_url: "https://pubmed.ncbi.nlm.nih.gov/12345/" },
+        { id: "pmid-c", source_url: "https://www.ncbi.nlm.nih.gov/pubmed/12345" },
+        { id: "pmid-b", source_url: "pmid:12345" },
+      ],
+      claims: [],
+    } as unknown as GroundedAnswer;
+    expect(Object.fromEntries(citationNumbers(strong))).toEqual({
+      "doi-a": 1, "doi-b": 1, "arxiv-a": 2, "arxiv-b": 2, "arxiv-c": 2,
+      "pmid-a": 3, "pmid-c": 3, "pmid-b": 3,
+    });
+  });
+
+  it("keeps URL identity separate from work identity", () => {
+    expect(sourceUrlKey("https://doi.org/10.1000/abc")).not.toBe(
+      sourceUrlKey("https://publisher.example/paper/10.1000/abc"),
+    );
+    expect(canonicalWorkKey("https://doi.org/10.1000/abc")).toBe(
+      canonicalWorkKey("https://publisher.example/paper/10.1000/abc"),
+    );
+  });
+
+  it("uses work identity for cited and reviewed source rows", () => {
+    const report = {
+      passages: [
+        { id: "p1", source_url: "https://doi.org/10.1000/abc", source_title: "Paper" },
+      ],
+      reviewed_passages: [],
+      all_hits: [
+        { url: "https://publisher.example/paper/10.1000/abc", status: "ok" },
+        { url: "https://arxiv.org/html/2401.12345", status: "ok" },
+        { url: "https://export.arxiv.org/pdf/2401.12345.pdf", status: "ok" },
+      ],
+    } as unknown as ReportEvent;
+    const tiers = deriveSourceTiers(report);
+    expect(tiers.cited).toHaveLength(1);
+    expect(tiers.reviewed.map((row) => row.url)).toEqual([
+      "https://arxiv.org/html/2401.12345",
+    ]);
   });
 });

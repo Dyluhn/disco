@@ -22,6 +22,8 @@ from disco.core import (
 from disco.core.inspect import (
     InspectRoutingSink,
     inspect_enabled,
+    model_io_enabled,
+    record_model_io,
     record_tool_scope,
     registry,
     routing_sink_for,
@@ -152,6 +154,76 @@ def test_routing_sink_for_disabled(monkeypatch):
     assert routing_sink_for(CID) is None
     # ...and even with a cid, a disabled flag never builds a sink
     assert routing_sink_for("anything") is None
+
+
+def test_model_io_capture_is_opt_in_bounded_and_redacted(monkeypatch):
+    monkeypatch.setenv("DISCO_INSPECT", "1")
+    registry().clear()
+    assert model_io_enabled()
+    record_model_io(
+        CID,
+        role="agent_driver",
+        model="m",
+        provider="fake",
+        request={
+            "messages": [{"role": "user", "content": "visible"}],
+            "api_key": "sk-secret-123456789012345",
+        },
+        response={"text": "returned", "tool_calls": []},
+        declared_decision={"action": "search"},
+    )
+    snap = registry().snapshot(CID)
+    assert snap is not None
+    assert len(snap["model_io"]) == 1
+    row = snap["model_io"][0]
+    assert row["request"]["api_key"] == "[REDACTED]"
+    assert row["response"]["text"] == "returned"
+    assert row["declared_decision"] == {"action": "search"}
+
+
+def test_a_long_prompt_keeps_its_tail_not_only_its_head(monkeypatch):
+    """Head-only truncation threw away everything the host told the model.
+
+    Measured on batch B (2026-09-02, 13 hosted deep-research runs): the research
+    prompt puts the evidence digest first and the subquestion ledger, the HOST
+    FEEDBACK line and the budget countdown LAST, so at 16,000 head-only chars
+    every artifact recorded the evidence and none of the instructions — and a
+    turn that issued no query could not be explained from its own record.
+    """
+    monkeypatch.setenv("DISCO_INSPECT", "1")
+    registry().clear()
+    head = "EVIDENCE POOL: " + "x" * 20_000
+    tail = "HOST FEEDBACK: queries refused. BUDGET: 3 research turns remaining."
+    record_model_io(CID, request={"content": head + tail})
+
+    snap = registry().snapshot(CID)
+    assert snap is not None
+    stored = snap["model_io"][0]["request"]["content"]
+    assert stored.startswith("EVIDENCE POOL: ")
+    assert stored.endswith(tail)
+    dropped = len(head + tail) - 16_000
+    assert f"…[TRUNCATED {dropped} chars]…" in stored
+    # Same total cap as before; only where it cuts has changed.
+    assert len(stored) == 16_000 + len(f"…[TRUNCATED {dropped} chars]…")
+
+
+def test_model_io_redaction_preserves_ordinary_citation_urls(monkeypatch):
+    monkeypatch.setenv("DISCO_INSPECT", "1")
+    registry().clear()
+    url = "https://example.com/2026-ai-laws-update-key-regulations-and-guidance/"
+    record_model_io(CID, response={"source_url": url})
+
+    snap = registry().snapshot(CID)
+    assert snap is not None
+    assert snap["model_io"][0]["response"]["source_url"] == url
+
+
+def test_model_io_capture_is_disabled_when_inspect_is_off(monkeypatch):
+    monkeypatch.delenv("DISCO_INSPECT", raising=False)
+    monkeypatch.delenv("DISCO_INSPECT_MODEL_IO", raising=False)
+    registry().clear()
+    record_model_io(CID, request={"content": "should not capture"})
+    assert registry().snapshot(CID) is None
 
 
 def test_tool_scope_capture_overflow_is_explicit_and_bounded(monkeypatch):

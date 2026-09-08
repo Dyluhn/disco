@@ -230,7 +230,7 @@ describe("createDeepResearchConversation — A4 iterative grounding", () => {
 
     await createDeepResearchConversation({
       query: "q",
-      sources: ["arxiv", "ddgs"],
+      sources: ["arxiv", "web"],
     });
 
     const [, , body] = send.mock.calls[0] as [
@@ -238,7 +238,7 @@ describe("createDeepResearchConversation — A4 iterative grounding", () => {
       string,
       Record<string, unknown>,
     ];
-    expect(body.sources).toEqual(["arxiv", "ddgs"]);
+    expect(body.sources).toEqual(["arxiv", "web"]);
   });
 
   it("leaves title unset for the shared auto-titler", async () => {
@@ -361,6 +361,24 @@ describe("serializeReportToMarkdown — disputed_notes citation numbering", () =
     const md = serializeReportToMarkdown(report);
     expect(md).toContain("Normal section.");
     expect(md).not.toContain("_Conflicts noted:");
+  });
+});
+
+describe("serializeReportToMarkdown — adjacent shared-source citations", () => {
+  it("collapses only adjacent duplicate display markers", () => {
+    const report = makeMinimalReport({
+      summary: "Literal [3] [3]; [[p1]] [[p2]] [[p3]]; [[p1]] text [[p2]].",
+      passages: [
+        { id: "p1", source_title: "One", source_url: "https://one.example.com" },
+        { id: "p2", source_title: "One duplicate", source_url: "https://one.example.com/" },
+        { id: "p3", source_title: "Two", source_url: "https://two.example.com" },
+      ],
+      sections: [],
+    });
+
+    const md = serializeReportToMarkdown(report);
+
+    expect(md).toContain("Literal [3] [3]; [1] [2]; [1] text [1].");
   });
 });
 
@@ -492,7 +510,9 @@ function makeSampleReport(): ReportEvent {
 }
 
 const CAPTURED_MARKDOWN =
-  `# Deep Research: What is the airspeed velocity of an unladen swallow?
+  `# What is the airspeed velocity of an unladen swallow?
+
+> Question: What is the airspeed velocity of an unladen swallow?
 
 ## Executive Summary
 
@@ -522,6 +542,30 @@ Sources cited (2):
 describe("serializeReportToMarkdown — py↔ts byte parity", () => {
   it("produces the exact bytes the Python serializer's suite pins", () => {
     expect(serializeReportToMarkdown(makeSampleReport())).toBe(CAPTURED_MARKDOWN);
+  });
+});
+
+describe("serializeReportToMarkdown — the export carries the question", () => {
+  // Regression: the server-side export puts a generated conversation title in
+  // the H1 (W-10) and recorded the question nowhere, which is what
+  // e2e-live/deep-research-truth.spec.ts:220 caught. The rule that fixes it is
+  // unconditional in both serializers so the two cannot drift; here the H1 is
+  // already the query, so the line repeats it.
+  it("puts the question verbatim on the line under the H1", () => {
+    const md = serializeReportToMarkdown(makeSampleReport());
+
+    expect(md.split("\n").slice(0, 3)).toEqual([
+      "# What is the airspeed velocity of an unladen swallow?",
+      "",
+      "> Question: What is the airspeed velocity of an unladen swallow?",
+    ]);
+  });
+
+  it("does not reshape a question that carries markdown of its own", () => {
+    const query = "Why *exactly* did the [European] swallow slow down — and by how much?";
+    const md = serializeReportToMarkdown({ ...makeSampleReport(), query });
+
+    expect(md).toContain(`> Question: ${query}`);
   });
 });
 

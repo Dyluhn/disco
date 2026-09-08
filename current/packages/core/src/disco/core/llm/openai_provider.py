@@ -18,11 +18,18 @@ message so it surfaces cleanly (the reactive-error rule). The context-window err
 is classified to `LLMContextWindowExceeded` — what the condenser's hard reset and
 the loop's reactive surfacing depend on.
 
-The request-assembly, response-decoding, and streaming logic live in the
-allowlisted private modules (``_request_assembly``, ``_openai_response``,
-``_openai_stream``, ``_responses_api``). This module keeps ``OpenAIProvider`` as
-an explicit, thin defining facade with its exact public method signatures and
-monkeypatch seams.
+Timeouts are PROGRESS-based, never total wall-clock: ``complete`` streams under
+the hood and buffers the result, so a local model that legitimately thinks for
+twenty minutes is distinguishable from a hung provider by whether bytes are
+still arriving. See ``_openai_timeouts`` for the budget. A wall-clock ceiling
+survives only where streaming is impossible (the Responses API, and the one-shot
+fallback for a server that refuses the streamed request).
+
+The request-assembly, response-decoding, streaming, and timeout logic live in
+the allowlisted private modules (``_request_assembly``, ``_openai_response``,
+``_openai_stream``, ``_openai_timeouts``, ``_responses_api``). This module keeps
+``OpenAIProvider`` as an explicit, thin defining facade with its exact public
+method signatures and monkeypatch seams.
 """
 
 from __future__ import annotations
@@ -30,7 +37,9 @@ from __future__ import annotations
 # Compatibility facade: private names are deliberate historical test/import seams.
 # ruff: noqa: F401
 import logging
-from collections.abc import AsyncIterator, Iterable
+from collections.abc import AsyncIterator, Callable, Iterable
+from dataclasses import replace
+from uuid import uuid4
 
 import httpx
 
@@ -60,6 +69,7 @@ from ._openai_response import (
     to_response as _to_response_impl,
 )
 from ._openai_stream import stream_complete as _stream_complete_impl
+from ._openai_timeouts import ProviderTimeouts, resolve_timeouts
 from ._request_assembly import (
     _F5_THINK_BLOCK_RE,
     _F5_THINK_BUDGET_CHARS,
@@ -122,6 +132,7 @@ from .provider_ledger import (
     provider_ledger_enabled,
 )
 from .request_budget import RequestBudgetEstimate
+from .stream_progress import reporter_for
 from .toolcall_recovery import recover_tool_calls
 from .types import (
     EMPTY_REASONING_ONLY_METADATA_KEY,
@@ -138,6 +149,35 @@ from .types import (
 _LOG = logging.getLogger("disco.llm.openai")
 _DISCO_CONVERSATION_HEADER = "X-Disco-Conversation"
 
+# Statuses a server uses to refuse the SHAPE of a request. Only these, and only
+# when the body names streaming, earn the one-shot buffered fallback: anything
+# else (a missing model, a bad key, a filtered prompt) must propagate exactly as
+# it did before, never be retried behind the operator's back.
+_STREAM_REJECT_STATUSES = frozenset({400, 404, 422, 501})
+# Deliberately narrow. A short token like "sse" is a substring of ordinary
+# English ("assessment"), and a false positive here would silently double a
+# genuine bad request.
+_STREAM_REJECT_MARKERS = ("stream", "server-sent")
+
+
+class _StreamRejected(Exception):  # noqa: N818 - control signal, not a failure
+    """The server refused the streamed request itself, before any chunk.
+
+    Transport mechanics, handled once inside ``complete``; never surfaced.
+    """
+
+    def __init__(self, status: int) -> None:
+        super().__init__(f"server rejected the streamed request (HTTP {status})")
+        self.status = status
+
+
+def _is_stream_rejection(status: int, body_text: str) -> bool:
+    """Whether a non-2xx body is the server refusing to stream THIS request."""
+    if status not in _STREAM_REJECT_STATUSES:
+        return False
+    lowered = (body_text or "").lower()
+    return any(marker in lowered for marker in _STREAM_REJECT_MARKERS)
+
 
 class OpenAIProvider:
     """[CONTRACT — ModelProvider] A real OpenAI chat-completions backend."""
@@ -148,7 +188,7 @@ class OpenAIProvider:
         *,
         name: str = "openai",
         api_key: str | None = None,
-        timeout_s: float = 180.0,
+        timeout_s: float | None = None,
         enable_thinking: bool | None = None,
         capabilities: Iterable[Requirement] = (),
         transport: httpx.AsyncBaseTransport | None = None,
@@ -156,19 +196,30 @@ class OpenAIProvider:
         self._base = base_url.rstrip("/")
         self.name = name
         self._key = api_key
-        self._timeout = timeout_s
+        # Unscoped calls share this client session across transport/router retries.
+        self._session_id = uuid4().hex
+        # `timeout_s` is the BUFFERED ceiling only (Responses API + the
+        # stream-reject fallback). Streamed calls are bounded by progress, so
+        # there is deliberately no total ceiling for them. Env is read once,
+        # here, so a live request never pays for environment lookups.
+        self._timeouts: ProviderTimeouts = resolve_timeouts(timeout_s)
+        self._timeout = self._timeouts.buffered_total_s
         self._enable_thinking = enable_thinking
         self._speaks_ctk = _host_speaks_chat_template_kwargs(base_url)
         self._caps = frozenset(capabilities)
         self._transport = transport  # test seam (httpx.MockTransport); None = real
 
-    def _client(self) -> httpx.AsyncClient:
+    def _client(self, timeout: httpx.Timeout | None = None) -> httpx.AsyncClient:
         return httpx.AsyncClient(
-            timeout=self._timeout,
+            timeout=timeout if timeout is not None else self._timeouts.buffered_httpx_timeout(),
             transport=self._transport,
             trust_env=False,
             follow_redirects=False,
         )
+
+    def _stream_client(self) -> httpx.AsyncClient:
+        """Client factory for a streamed call: connect-bounded, read-unbounded."""
+        return self._client(self._timeouts.stream_httpx_timeout())
 
     def _is_openrouter(self) -> bool:
         """True when this provider routes through OpenRouter."""
@@ -183,6 +234,7 @@ class OpenAIProvider:
             name=self.name,
             req=req,
             conversation_header=_DISCO_CONVERSATION_HEADER,
+            fallback_session_id=self._session_id,
         )
 
     @staticmethod
@@ -300,11 +352,18 @@ class OpenAIProvider:
         req: CompletionRequest,
         model: str,
         payload: dict,
+        *,
+        stream_delivery: bool | None = None,
     ) -> None:
         """Provider-request ledger: when DISCO_PROVIDER_LEDGER names a file,
         append one relay-format JSONL record per outbound completion request.
         Best-effort: accounting or ledger failure must never fail a live request.
-        Unset env means no shape work."""
+        Unset env means no shape work.
+
+        ``stream_delivery`` overrides the record's ``stream`` field with the
+        CALL KIND rather than the wire flag. ``complete`` now rides the streamed
+        transport but still delivers one buffered result, and the ledger's
+        downstream consumers read that field as "did the caller stream?"."""
         if not provider_ledger_enabled():
             return
         raw_cid = (req.metadata or {}).get("conversation_id")
@@ -312,6 +371,8 @@ class OpenAIProvider:
         raw_call_kind = (req.metadata or {}).get("provider_ledger_call_kind")
         try:
             request_shape = _provider_request_shape(req, payload)
+            if request_shape is not None and stream_delivery is not None:
+                request_shape = replace(request_shape, stream=stream_delivery)
         except Exception:  # noqa: BLE001 - accounting must never block provider traffic
             request_shape = None
         emit_provider_attempt(
@@ -327,7 +388,10 @@ class OpenAIProvider:
     def request_budget_preview(
         self, req: CompletionRequest, model: str
     ) -> RequestBudgetEstimate | None:
-        """Side-effect-free budget preview. No ledger record, no network I/O."""
+        """Side-effect-free budget preview. No ledger record, no network I/O.
+
+        Shapes the payload exactly as ``complete`` will send it — both ride the
+        streamed transport — so the estimate describes the real request."""
         try:
             payload = self._payload(req, model, stream=True)
         except Exception:
@@ -351,7 +415,59 @@ class OpenAIProvider:
         except ValueError:
             return None
 
-    async def complete(self, req: CompletionRequest, *, model: str) -> CompletionResponse:
+    def _raise_typed_streamed(self, status: int, body_text: str) -> None:
+        """Classify a non-2xx on the STREAMED request.
+
+        A refusal of streaming itself becomes a private control signal so
+        ``complete`` can retry the call once buffered. Every other status is
+        classified and raised exactly as on the buffered path.
+        """
+        if _is_stream_rejection(status, body_text):
+            raise _StreamRejected(status)
+        self._raise_typed(status, body_text)
+
+    def _streamed(
+        self,
+        req: CompletionRequest,
+        model: str,
+        payload: dict,
+        *,
+        raise_typed_fn: Callable[[int, str], None],
+    ) -> AsyncIterator[StreamChunk]:
+        """The one streamed transport both public entry points ride."""
+        return _stream_complete_impl(
+            provider_name=self.name,
+            base_url=self._base,
+            payload=payload,
+            headers=self._headers(req),
+            req=req,
+            model=model,
+            client_factory=self._stream_client,
+            raise_typed_fn=raise_typed_fn,
+            tool_calls_fn=self._tool_calls,
+            recovery_fn=recover_tool_calls,
+            cached_tokens_fn=self._cached_tokens,
+            metadata_fn=self._empty_reasoning_only_metadata,
+            map_finish_fn=_map_finish,
+            timeouts=self._timeouts,
+        )
+
+    async def _complete_buffered(
+        self, req: CompletionRequest, *, model: str
+    ) -> CompletionResponse:
+        """One buffered POST — the only path left with a wall-clock ceiling.
+
+        Used by the Responses API (which this adapter does not stream) and by
+        the one-shot fallback for a server that refuses to stream this request.
+
+        There are no chunks to observe here, so the progress seam gets ONE
+        report at call start instead: without it the caller waits out the whole
+        call with nothing observed, and a UI reading that silence calls a
+        working driver stalled.
+        """
+        reporter = reporter_for(req.metadata)
+        if reporter is not None:
+            await reporter.buffered_start()
         payload = self._payload(req, model, stream=False)
         self._ledger_emit(req, model, payload)
         endpoint = (
@@ -378,6 +494,40 @@ class OpenAIProvider:
             return _decode_responses_response(req=req, model=model, data=resp.json())
         return self._to_response(req, model, resp.json())
 
+    async def complete(self, req: CompletionRequest, *, model: str) -> CompletionResponse:
+        """Buffered result, streamed transport.
+
+        The delivered contract is unchanged — one ``CompletionResponse`` with
+        content, tool calls, finish reason and usage. What changes is that the
+        adapter can now tell a working model from a hung one: bytes arriving
+        keep the call alive for as long as the model needs, while silence past
+        the idle budget is a stall the router may correctly retry.
+        """
+        if _is_responses_endpoint(self._base):
+            return await self._complete_buffered(req, model=model)
+        payload = self._payload(req, model, stream=True)
+        self._ledger_emit(req, model, payload, stream_delivery=False)
+        final: CompletionResponse | None = None
+        try:
+            async for chunk in self._streamed(
+                req, model, payload, raise_typed_fn=self._raise_typed_streamed
+            ):
+                if chunk.done and chunk.final is not None:
+                    final = chunk.final
+        except _StreamRejected as rejected:
+            _LOG.warning(
+                "provider %s refused the streamed request (HTTP %d); "
+                "falling back once to a buffered call",
+                self.name,
+                rejected.status,
+            )
+            return await self._complete_buffered(req, model=model)
+        if final is None:
+            raise LLMTransientError(
+                "provider stream ended without a final result", provider=self.name
+            )
+        return final
+
     async def stream_complete(
         self, req: CompletionRequest, *, model: str
     ) -> AsyncIterator[StreamChunk]:
@@ -389,21 +539,7 @@ class OpenAIProvider:
             return
         payload = self._payload(req, model, stream=True)
         self._ledger_emit(req, model, payload)
-        async for chunk in _stream_complete_impl(
-            provider_name=self.name,
-            base_url=self._base,
-            payload=payload,
-            headers=self._headers(req),
-            req=req,
-            model=model,
-            client_factory=self._client,
-            raise_typed_fn=self._raise_typed,
-            tool_calls_fn=self._tool_calls,
-            recovery_fn=recover_tool_calls,
-            cached_tokens_fn=self._cached_tokens,
-            metadata_fn=self._empty_reasoning_only_metadata,
-            map_finish_fn=_map_finish,
-        ):
+        async for chunk in self._streamed(req, model, payload, raise_typed_fn=self._raise_typed):
             yield chunk
 
     def supports(self, requirement: Requirement, *, model: str) -> bool:

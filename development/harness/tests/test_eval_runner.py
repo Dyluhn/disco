@@ -2,7 +2,7 @@
 `--replay` eval needs the captured research cassette (development/harness/_capture_research_demo);
 this file covers the scoring contract deterministically.
 
-Run: PYTHONPATH=. uv run pytest development/harness/tests/test_eval_runner.py
+Run: uv run pytest development/harness/tests/test_eval_runner.py
 """
 
 from __future__ import annotations

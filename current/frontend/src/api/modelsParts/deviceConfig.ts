@@ -132,9 +132,10 @@ export async function updateImageGenConfig(cfg: ImageGenConfig): Promise<ImageGe
 // ---- data sources (search + extraction provider tiers) ---------------------
 
 let fixtureDataSources: DataSourcesConfig = {
-  search_provider: "ddgs",
+  search_provider: "bundled",
   search_base_url: "",
   search_api_key_env: "",
+  search_categories: "",
   extraction_provider: "local",
   extraction_base_url: "",
   extraction_api_key_env: "",

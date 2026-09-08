@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import AsyncIterator, Sequence
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -13,6 +14,7 @@ from disco.core import (
     MessageEvent,
     NoOpCondenser,
     ReportEvent,
+    ResearchCheckpointEvent,
 )
 from disco.core.llm import (
     DefaultLLMRouter,
@@ -23,7 +25,7 @@ from disco.core.llm import (
 from disco.core.loop import AgentLoop, NeverConfirm, RouterAgent
 from disco.core.security import RuleBasedAnalyzer
 from disco.core.think import strip_think_spans
-from disco.retrieval.deep_research import DepthTier
+from disco.retrieval.deep_research import DepthTier, SavedPool
 from disco.retrieval.models import Passage
 from disco.retrieval.ranking import Embedder
 
@@ -44,6 +46,26 @@ _LOG = logging.getLogger(__name__)
 
 _FOLLOW_UP_SOURCE_CHARS = 12_000
 _FOLLOW_UP_REPORT_CHARS = 12_000
+
+#: How many saved passages the follow-up prompt QUOTES. The budget above used
+#: to be apportioned across the whole corpus, and a real report keeps 90–152
+#: passages: that bought 3–47 characters of each passage's own text, so the
+#: block was a list of ids with a fragment of a title attached and the model
+#: answered from the report sections instead. Sixteen leaves ~700 characters
+#: each — a paragraph the answer can actually be drawn from.
+_FOLLOW_UP_SOURCE_PASSAGES = 16
+
+#: The scoring the selection below uses, identical to
+#: ``retrieval.ranking.LexicalReranker``'s: count the query's words that occur
+#: in the passage. That class itself does not fit here — it is async, takes
+#: ``Passage`` models rather than the saved dicts, and returns an order with no
+#: scores — and reaching it from a synchronous prompt builder would cost more
+#: code than the two lines it saves.
+_WORD = re.compile(r"[a-z0-9]+")
+
+#: A ``[[id]]`` the QUESTION itself names. Whatever else the ranking prefers, a
+#: reader who asks about a passage by id has to be given that passage.
+_NAMED_PASSAGE = re.compile(r"\[\[([^\]\s]+)\]\]")
 
 
 def _clean_model_text(text: str | None) -> str:
@@ -91,14 +113,52 @@ def _bounded_excerpt(body: str, budget: int) -> str:
     return f"{body[:head].rstrip()}{marker}{body[-tail:].lstrip()}"
 
 
-def _build_grounding_block(passages: list[dict[str, Any]]) -> str:
-    """Build a bounded, fairly apportioned block from the saved corpus."""
+def _select_follow_up_passages(
+    passages: list[dict[str, Any]], follow_up_query: str
+) -> list[dict[str, Any]]:
+    """The saved passages this follow-up gets to quote — most relevant first.
+
+    A SORT, not a filter, so a question with no word in common with anything
+    ("summarise this") still gets passages: every score is then 0, the sort is
+    stable, and what comes back is the corpus's own order — which is
+    cited-passages-first. The positional prefix is the floor of this rule
+    rather than a second branch beside it, and an empty selection is not
+    reachable from a non-empty corpus.
+    """
+    named = set(_NAMED_PASSAGE.findall(follow_up_query))
+    query_words = set(_WORD.findall(follow_up_query.lower()))
+
+    def rank(indexed: tuple[int, dict[str, Any]]) -> tuple[int, int, int]:
+        index, passage = indexed
+        pinned = 0 if str(passage.get("id", "")) in named else 1
+        overlap = len(query_words & set(_WORD.findall(str(passage.get("text", "")).lower())))
+        return (pinned, -overlap, index)
+
+    ranked = sorted(enumerate(passages), key=rank)
+    return [passage for _, passage in ranked[:_FOLLOW_UP_SOURCE_PASSAGES]]
+
+
+def _build_grounding_block(passages: list[dict[str, Any]], follow_up_query: str) -> str:
+    """Build the bounded source block: the passages this question reaches for,
+    each with a real excerpt.
+
+    The budget is spent on the SELECTION, not spread across the whole saved
+    corpus. Spread across 152 passages it bought 3 characters of each one's own
+    text, so the block named every source and quoted none of them — and an
+    answer told to cite only the supplied passages then cited ids it had never
+    been shown the text of. Grounding is unaffected: the verifier still checks
+    the answer against the FULL corpus, so what counts as supported is the same
+    as it was.
+    """
     blocks = []
-    for passage in passages:
+    for passage in _select_follow_up_passages(passages, follow_up_query):
         pid = str(passage.get("id", ""))[:128]
         source = str(passage.get("source_title") or passage.get("source_url") or "")[:240]
         blocks.append((f"[[{pid}]] ({source})", str(passage.get("text", ""))))
-    corpus_header = f"Saved source corpus: {len(blocks)} passages."
+    corpus_header = (
+        f"Saved source corpus: {len(passages)} passages. The {len(blocks)} most "
+        "relevant to this follow-up are quoted below."
+    )
     body_budget = max(0, _FOLLOW_UP_SOURCE_CHARS - len(corpus_header) - 1)
     body = _bounded_context_blocks(blocks, body_budget)
     return f"{corpus_header}\n{body}"[:_FOLLOW_UP_SOURCE_CHARS]
@@ -117,7 +177,7 @@ def _build_follow_up_prompt(
     *,
     history: str = "",
 ) -> str:
-    grounding = _build_grounding_block(passages)
+    grounding = _build_grounding_block(passages, follow_up_query)
     report_sections = _build_report_block(prior_report)
     history_block = (
         f"--- EARLIER FOLLOW-UP EXCHANGES ---\n{history}\n--- END EARLIER EXCHANGES ---\n\n"
@@ -131,8 +191,11 @@ def _build_follow_up_prompt(
         f"Below are the report sections the user is referring to.\n\n"
         f"--- REPORT SECTIONS ---\n{report_sections}\n"
         f"--- END REPORT ---\n\n"
-        f"Below are the source passages the report was grounded on. "
-        f"Use them to answer the follow-up question. Cite sources "
+        # The block is a selection now, so this line says so: it used to
+        # promise "the source passages the report was grounded on", which on a
+        # 152-passage report described a list of ids with no text behind them.
+        f"Below are the passages from the report's saved corpus that bear most "
+        f"on this follow-up. Use them to answer it. Cite sources "
         f"with [[passage_id]] markers.\n\n"
         f"--- SOURCE PASSAGES ---\n{grounding}\n"
         f"--- END SOURCES ---\n\n"
@@ -183,6 +246,16 @@ class DeepResearchService:
 
     def inject_source(self, conversation_id: str, passage: Passage) -> bool:
         return self._live_state.inject_source(conversation_id, passage)
+
+    def has_live_run(self, conversation_id: str) -> bool:
+        """True while the deep-research ENGINE is executing this conversation.
+
+        The conversation's `AgentLoop` exists for this surface but never runs
+        it (see `_compose_deep_research_loop`), so a control that winds the
+        loop down is speaking about nothing while this is true. Stop uses it to
+        pick the branch that can actually end the run.
+        """
+        return self._live_state.is_live(conversation_id)
 
     def forget(self, conversation_id: str) -> None:
         self._state.forget(conversation_id)
@@ -386,7 +459,7 @@ class DeepResearchService:
         self,
         conversation_id: str,
         *,
-        resume_from: ReportEvent | None = None,
+        resume_from: ResearchCheckpointEvent | None = None,
     ) -> None:
         """Run the v2 engine on the conversation's research question (the
         first user message + any pre-run additions), emitting the brief and
@@ -394,13 +467,25 @@ class DeepResearchService:
         ReportEvent + StatusEvent(FINISHED). See ``execute_parts.run_execute``
         for the full sequencing.
 
-        `resume_from` is a prior stopped run's checkpoint ReportEvent: its
+        `resume_from` is a prior stopped run's ResearchCheckpointEvent: its
         gathered evidence + issued queries are carried into the engine so
         resume continues from the checkpoint instead of redoing the searches
         that already ran."""
         from ._deep_research_service_parts import execute as execute_parts
 
         await execute_parts.run_execute(self, conversation_id, resume_from=resume_from)
+
+    async def write_from_pool(self, conversation_id: str, pool: SavedPool) -> None:
+        """Write the report again from a SAVED evidence pool — no research.
+
+        The pool file is everything ``writer.write_report`` reads, so this is
+        how a writer change is evaluated against a run that already happened
+        instead of by running the ~90-minute research loop again. Same emit
+        path, same report assembly, same terminal ReportEvent + FINISHED. See
+        ``write_from_pool_parts.run_write_from_pool``."""
+        from ._deep_research_service_parts import write_from_pool as write_from_pool_parts
+
+        await write_from_pool_parts.run_write_from_pool(self, conversation_id, pool)
 
     @staticmethod
     def _has_fresh_user_message(events: list[Event], reports: list[ReportEvent]) -> bool:

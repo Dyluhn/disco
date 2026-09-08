@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import model_validator
+from pydantic import BaseModel, ConfigDict, model_validator
 
 from ._event_render import _OBS_SNIP_CHARS as _OBS_SNIP_CHARS
 from ._event_render import _OBS_SNIP_HEAD as _OBS_SNIP_HEAD
@@ -195,6 +195,68 @@ class CondensationEvent(BaseEvent):
     reason: Literal["request", "tokens", "events", "hard_reset"] = "tokens"
 
 
+#: Which boundary failed. A closed set, and every member is produced by a real
+#: code path that RAISED — never inferred from an error string. The names say
+#: which system to go look at, because that is the only thing a class is for:
+#:
+#: * ``search_infrastructure`` — the search provider could not answer.
+#: * ``extraction_infrastructure`` — sources were found and none could be read.
+#: * ``no_usable_evidence`` — the searches reached the world and it had nothing.
+#:   A research result, not an outage; it is here so the UI can stop showing it
+#:   as one.
+#: * ``host_circuit_breaker`` — the host gave up after consecutive turns in
+#:   which nothing it asked ever reached the world.
+#: * ``model_protocol`` — the driver could not sustain the run's turn protocol.
+#: * ``model_provider`` — the provider itself refused, filtered, or failed the
+#:   call (a typed ``LLMError``).
+#: * ``preflight`` — a required dependency was dead before the run started.
+#: * ``internal_error`` — an exception no code path claimed. It exists so the
+#:   set can stay closed and honest rather than growing a guess.
+RunFailureClass = Literal[
+    "search_infrastructure",
+    "extraction_infrastructure",
+    "no_usable_evidence",
+    "host_circuit_breaker",
+    "model_protocol",
+    "model_provider",
+    "preflight",
+    "internal_error",
+]
+
+
+class RunFailure(BaseModel):
+    """A terminal run failure as FIELDS, beside the prose that already existed.
+
+    Every wall in this product has to radiate four things — why it happened,
+    what state the system is in now, the exact next action, and what remains
+    available meanwhile — and until now a deep-research run radiated all four
+    as one sentence in ``detail``. A UI could render it and a tally script
+    could count it only by reading English. The four parts are separated here
+    so both consume fields; ``detail`` keeps the identical sentence, so nothing
+    that reads it changes.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    failure_class: RunFailureClass
+    why: str
+    state: str
+    next: str
+    allowed: str
+
+    @property
+    def detail(self) -> str:
+        """The four parts as the one sentence operators already read.
+
+        Producers set ``ErrorEvent.detail`` from this, so the prose and the
+        fields can never disagree: there is one text, assembled once.
+        """
+        return (
+            f"{self.why}. STATE: {self.state}. NEXT: {self.next}. "
+            f"STILL AVAILABLE: {self.allowed}"
+        )
+
+
 class ErrorEvent(BaseEvent):
     """A conversation-level (fatal-ish) error, e.g. MaxIterationsReached.
     NOT LLMConvertible."""
@@ -203,6 +265,10 @@ class ErrorEvent(BaseEvent):
     source: EventSource = EventSource.SYSTEM
     code: str
     detail: str
+    # The same failure, typed. Optional because the field is newer than the
+    # event: every historical ErrorEvent replays with None, and a producer that
+    # cannot honestly name a class must leave it None rather than guess.
+    failure: RunFailure | None = None
 
 
 __all__ = [
@@ -212,4 +278,6 @@ __all__ = [
     "ErrorEvent",
     "MessageEvent",
     "ObservationEvent",
+    "RunFailure",
+    "RunFailureClass",
 ]

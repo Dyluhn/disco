@@ -17,6 +17,15 @@ FULL_EMBED_MODEL = "intfloat/multilingual-e5-large"
 FULL_RERANK_MODEL = "BAAI/bge-reranker-base"
 LITE_EMBED_MODEL = "BAAI/bge-small-en-v1.5"
 LITE_RERANK_MODEL = "Xenova/ms-marco-MiniLM-L-6-v2"
+NLI_MODEL = "cross-encoder/nli-deberta-v3-small"
+NLI_REVISION = "fa2804872c3b4bd748f38c0185cc85775361e735"
+NLI_ASSETS = {
+    "config.json": "885d0dceae8fa5c136da9209121ec9eb11160488e840de3bc1f29353674e5712",
+    "tokenizer.json": "5124ef2ead1a10a717703bc436de7f353da76d6340e4587719b42b1693707964",
+    "onnx/model_quint8_avx2.onnx": (
+        "03c2221313dc0c3eac9cec1f746d1319d33f2c2901fcce1c0f08f4daac9b6dae"
+    ),
+}
 
 KOKORO_MODEL_URL = (
     "https://github.com/thewh1teagle/kokoro-onnx/releases/download/"
@@ -94,10 +103,20 @@ def _prefetch_kokoro(tts_dir: Path) -> None:
     _fetch(KOKORO_VOICES_URL, tts_dir / "voices-v1.0.bin", KOKORO_VOICES_SHA)
 
 
+def _prefetch_nli(nli_dir: Path) -> None:
+    # This classifier is separate from the relevance reranker. Put it under
+    # the directory copied into the runtime image, not the builder's HF cache.
+    for name, digest in NLI_ASSETS.items():
+        url = f"https://huggingface.co/{NLI_MODEL}/resolve/{NLI_REVISION}/{name}"
+        _fetch(url, nli_dir / Path(name).name, digest)
+
+
 def main() -> None:
     fastembed_cache = Path(os.environ.get("FASTEMBED_CACHE_PATH", "/opt/disco-cache/fastembed"))
     tts_dir = Path(_env("TTS_DIR", "/opt/disco-cache/tts"))
+    nli_dir = Path(_env("NLI_MODEL_DIR", "/opt/disco-cache/nli"))
     _prefetch_fastembed(fastembed_cache)
+    _prefetch_nli(nli_dir)
     _prefetch_kokoro(tts_dir)
     print("[prefetch] packaged assets ready")
 

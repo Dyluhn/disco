@@ -135,6 +135,7 @@ class ConfigFeatures:
                 provider=dto.search_provider,
                 base_url=dto.search_base_url.strip(),
                 api_key_env=dto.search_api_key_env.strip(),
+                categories=dto.search_categories.strip(),
             )
         )
         self._store.sections.save_extraction(
@@ -171,6 +172,11 @@ class ConfigFeatures:
                 "DISCO_SEMANTIC_SCHOLAR_API_KEY",
                 "S2_API_KEY",
             ),
+            # Optional on these two: they work keyless, and a stored key only
+            # raises the ceiling. Listed so a key that IS stored shows up as
+            # configured rather than sitting unused and unmentioned.
+            "exa": ("EXA_API_KEY", "DISCO_EXA_API_KEY"),
+            "parallel": ("PARALLEL_API_KEY", "DISCO_PARALLEL_API_KEY"),
         }
         for provider, names in provider_envs.items():
             if any(resolve_provider_secret(name, self._secrets) for name in names):
@@ -241,7 +247,16 @@ class ConfigFeatures:
         if kind == "search":
             s = cfg.search
             provider, base_url, key_env = s.provider, s.base_url.strip(), s.api_key_env.strip()
-            bundled = {"ddgs", "arxiv", "news", "semantic_scholar", "site_scoped"}
+            bundled = {
+                "bundled",
+                "exa",
+                "parallel",
+                "wikipedia",
+                "arxiv",
+                "news",
+                "semantic_scholar",
+                "site_scoped",
+            }
         elif kind == "extraction":
             e = cfg.extraction
             provider, base_url, key_env = e.provider, e.base_url.strip(), e.api_key_env.strip()

@@ -255,13 +255,18 @@ export interface ImageGenConfig {
 }
 
 /** Universal web-data providers (§B). Each slot has three tiers; the bundled
- * defaults (ddgs / local) need no key. `*_api_key_env` is the NAME of an env var
- * holding a paid key — never the key itself. Mirror of DataSourcesConfigDTO. */
+ * defaults (bundled / local) need no key. `*_api_key_env` is the NAME of an env
+ * var holding a paid key — never the key itself. Mirror of DataSourcesConfigDTO.
+ * `bundled` is the keyless composite: Parallel + Exa + Wikipedia + arXiv +
+ * Semantic Scholar, each of which is also selectable on its own. */
 export type SearchProvider =
-  | "ddgs"
+  | "bundled"
   | "searxng"
   | "tavily"
   | "brave"
+  | "exa"
+  | "parallel"
+  | "wikipedia"
   | "arxiv"
   | "news"
   | "semantic_scholar"
@@ -271,6 +276,8 @@ export interface DataSourcesConfig {
   search_provider: SearchProvider;
   search_base_url: string;
   search_api_key_env: string;
+  /** searxng ONLY: engine categories for research queries; empty → "general,science". */
+  search_categories?: string;
   extraction_provider: ExtractionProvider;
   extraction_base_url: string;
   extraction_api_key_env: string;

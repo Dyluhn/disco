@@ -12,21 +12,24 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from typing import Any
 
+import pytest
 from disco.core import LLMMessage
 from disco.core.llm import (
     CompletionRequest,
     CompletionResponse,
+    LLMError,
     LLMRouter,
+    LLMTransientError,
     StreamChunk,
     TokenUsage,
 )
 from disco.retrieval.deep_research._synthesis_parts import repair_tables
 from disco.retrieval.deep_research._writer_parts import (
-    continue_truncated_report,
     format_evidence_pool,
     normalize_citations,
     readable_summary,
 )
+from disco.retrieval.deep_research.writer import _MAX_CONTINUATIONS, _continue_if_cut_off, _Draft
 from disco.retrieval.models import Passage
 
 # ---- BW-05: bare [id] -> [[id]] ----------------------------------------
@@ -142,30 +145,35 @@ class _ScriptedRouter(LLMRouter):
         return gen()
 
 
-def _first(text: str, finish: str) -> CompletionResponse:
-    return CompletionResponse(
-        text=text,
-        tool_calls=[],
-        usage=TokenUsage(input_tokens=1, output_tokens=1),
-        finish_reason=finish,  # type: ignore[arg-type]
-        model_used="fake",
-        routing=None,
-    )
+async def _emit(_kind: str, _payload: dict[str, Any]) -> None:
+    return None
 
 
 async def _continue(script: list[tuple[str, str]]) -> tuple[str, int]:
     """Run the truncation guard over `script[0]` as the writer's first response
     and the rest as its continuations. Returns (markdown, continuation calls)."""
+    markdown, calls, _truncated = await _continue_with_state(script)
+    return markdown, calls
+
+
+async def _continue_with_state(
+    script: list[tuple[str, str]],
+) -> tuple[str, int, bool]:
+    """As `_continue`, also returning whether the report is STILL truncated."""
     head_text, head_finish = script[0]
     router = _ScriptedRouter(script[1:])
-    markdown = await continue_truncated_report(
+    # Only `finish_reason == "length"` may drive a continuation.
+    draft, _rounds = await _continue_if_cut_off(
         router,
         [LLMMessage(role="user", content="WRITE THE REPORT")],
-        head_text,
-        _first(head_text, head_finish),
+        _Draft(markdown=head_text, cut_off=head_finish == "length"),
+        rounds_used=0,
         max_tokens=1_000,
+        conversation_id=None,
+        emit=_emit,
+        should_cancel=None,
     )
-    return markdown, router.calls
+    return draft.markdown, router.calls, draft.cut_off
 
 
 async def test_truncation_continues_mid_table_row_without_loss() -> None:
@@ -258,8 +266,27 @@ async def test_no_continuation_when_first_response_completes() -> None:
 
 async def test_truncation_guard_is_bounded() -> None:
     """A model that keeps returning `length` is bounded: the guard continues at
-    most twice, then stops with the accumulated text."""
+    most `_MAX_CONTINUATIONS` times, then stops with the accumulated text."""
     md, calls = await _continue(
+        [
+            ("part-1 [[p1]]", "length"),
+            (" part-2", "length"),
+            (" part-3", "length"),
+            (" part-4", "length"),
+            (" part-5", "length"),
+        ]
+    )
+
+    assert calls == _MAX_CONTINUATIONS == 3
+    assert "part-1" in md
+    assert "part-4" in md
+    assert "part-5" not in md  # the 4th would-be call never happens
+
+
+async def test_exhausted_guard_reports_the_report_is_still_truncated() -> None:
+    """The bounded guard tells the caller when it gave up mid-report, so a
+    cut-off draft can never be shipped as if it were finished."""
+    _md, calls, truncated = await _continue_with_state(
         [
             ("part-1 [[p1]]", "length"),
             (" part-2", "length"),
@@ -268,10 +295,60 @@ async def test_truncation_guard_is_bounded() -> None:
         ]
     )
 
-    assert calls == 2  # exactly two bounded continuations
-    assert "part-1" in md
-    assert "part-3" in md
-    assert "part-4" not in md  # the 3rd would-be call never happens
+    assert calls == 3
+    assert truncated is True
+
+
+async def test_a_completed_continuation_reports_no_truncation() -> None:
+    _md, calls, truncated = await _continue_with_state(
+        [("part-1 [[p1]]", "length"), (" and the rest.", "stop")]
+    )
+
+    assert calls == 1
+    assert truncated is False
+
+
+class _FailingRouter(LLMRouter):
+    """A router whose own retries are already spent: it raises LLMError."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def complete(
+        self, request: CompletionRequest, *, context: Any = None
+    ) -> CompletionResponse:
+        del request, context
+        self.calls += 1
+        raise LLMTransientError("provider unavailable after retries")
+
+    async def stream_complete(
+        self, request: CompletionRequest, *, context: Any = None
+    ) -> AsyncIterator[StreamChunk]:
+        async def gen() -> AsyncIterator[StreamChunk]:
+            yield StreamChunk(done=True, final=await self.complete(request, context=context))
+
+        return gen()
+
+
+async def test_provider_failure_during_continuation_surfaces_instead_of_truncating() -> None:
+    """The router already retried below this loop, so an LLMError here is a
+    genuine run failure. It must propagate as the run's named error rather than
+    silently leaving a report that stops mid-sentence."""
+    router = _FailingRouter()
+
+    with pytest.raises(LLMError):
+        await _continue_if_cut_off(
+            router,
+            [LLMMessage(role="user", content="WRITE THE REPORT")],
+            _Draft(markdown="part-1 [[p1]]", cut_off=True),
+            rounds_used=0,
+            max_tokens=1_000,
+            conversation_id=None,
+            emit=_emit,
+            should_cancel=None,
+        )
+
+    assert router.calls == 1
 
 
 # ---- the evidence pool the writer reads -------------------------------------

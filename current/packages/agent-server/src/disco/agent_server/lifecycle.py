@@ -54,6 +54,7 @@ from .lifecycle_ports import (
     WorkspaceSealProbe,
 )
 from .lifecycle_rehydration import Rehydration
+from .research_recovery import recover_research_run
 from .workspace_commit import WorkspaceCommitUnavailable, resolve_committed_workspace
 from .workspace_fence import WorkspaceFenceService
 
@@ -261,6 +262,10 @@ class OrphanReconciler:
                 with contextlib.suppress(Exception):
                     state = await self._store.get_state(cid)
                     if state.execution_status is ConversationStatus.RUNNING:
+                        events = await self._store.get_events(cid)
+                        if await recover_research_run(cid, events, self._commands):
+                            reconciled += 1
+                            continue
                         transitioned = await self._commands.append_current_run_transition(
                             cid,
                             [

@@ -159,11 +159,17 @@ export function useDeepResearchLifecycle(params: DeepResearchLifecycleParams) {
   const stop = stream.cancel;
 
   // Kill = end the run for good (force-cancel the server task; final).
+  //
+  // It no longer sends the cooperative Stop first. That was harmless while Stop
+  // produced only a terminal status the kill immediately superseded; now Stop
+  // appends a visible `stop_requested` marker, and pre-sending it put "You
+  // pressed Stop" on the trace of a run whose user pressed Kill. The kill
+  // cancels the server task outright, so the cooperative flag added nothing but
+  // that sentence.
   const kill = useCallback(async () => {
     markConversationKilled(session?.cid);
-    stream.cancel();
     if (session) await killConversation(session.cid);
-  }, [session, stream]);
+  }, [session]);
 
   // Retry = a fresh run of the same query (a NEW conversation). Use the recovered
   // query first (handles the resume path where session.query is the sentinel).

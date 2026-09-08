@@ -38,6 +38,7 @@ from typing import Literal
 
 from disco.core.effects import EffectCapability
 from disco.core.events import LLMMessage
+from disco.core.llm.secrets import ensure_process_secret_key
 from disco.core.llm.types import (
     CapabilityProfile,
     CompletionRequest,
@@ -46,7 +47,6 @@ from disco.core.llm.types import (
     ToolSpec,
 )
 from disco.tools.behavior import declares
-from disco.core.llm.secrets import ensure_process_secret_key
 
 Status = Literal["PASS", "FAIL", "SKIP"]
 
@@ -207,14 +207,10 @@ async def check_grounding(rt) -> Check:
     sources retrieved + ≥1 grounded claim → PASS; sources but zero grounded claims → FAIL
     (a real "your model retrieves but doesn't ground" gap worth surfacing)."""
     try:
-        from disco.retrieval.bundled_providers import (
-            DdgsSearchProvider,
-            LocalExtractionProvider,
-        )
+        from disco.retrieval.bundled_providers import LocalExtractionProvider
         from disco.retrieval.engine import DefaultRetrievalEngine
         from disco.retrieval.grounding import GroundingPipeline
-        from disco.retrieval.live import build_live_retrieval
-        from disco.retrieval.ranking import RouterQueryRewriter
+        from disco.retrieval.live import build_keyless_search, build_live_retrieval
         from disco.retrieval.wiring import research_answer
     except Exception as exc:  # noqa: BLE001
         return Check("grounding", "SKIP", f"retrieval extras unavailable: {exc}")
@@ -223,11 +219,10 @@ async def check_grounding(rt) -> Check:
         enc = build_live_retrieval()  # encoders (downloads on first run)
         router = rt._router_now()
         engine = DefaultRetrievalEngine(
-            search=DdgsSearchProvider(),
+            search=build_keyless_search(),
             extraction=LocalExtractionProvider(),
             reranker=enc["reranker"],
             embedder=enc.get("embedder"),
-            rewriter=RouterQueryRewriter(router),
         )
         grounding = GroundingPipeline(router, enc["nli"])
         answer = await research_answer(

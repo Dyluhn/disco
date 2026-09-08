@@ -416,6 +416,32 @@ class LifecycleCommandService:
         pending = [authorized if event is status else event for event in events]
         return await self._store.append_many(conversation_id, pending)
 
+    async def _append_facts_locked(
+        self,
+        conversation_id: str,
+        events: list[Event],
+    ) -> list[Event]:
+        """Atomically persist domain facts that carry NO status transition.
+
+        Not every fenced ingress is a transition. A deep-research resume writes
+        its reconstruction facts and then leaves the status alone on purpose:
+        the ENGINE owns that conversation's status, and it publishes RUNNING
+        itself when the dispatcher re-enters the stopped run from its
+        checkpoint. Routing that through ``append_transition_batch_locked``
+        raised "requires exactly one status event" and the Resume button
+        silently did nothing.
+
+        A StatusEvent here is rejected rather than passed through, so this can
+        never become a way around ``_authorize_status``.
+        """
+
+        self._fence._require_lifecycle_fence(conversation_id)
+        if any(isinstance(event, StatusEvent) for event in events):
+            raise ValueError("lifecycle fact batch must carry no status event")
+        if not events:
+            return []
+        return await self._store.append_many(conversation_id, events)
+
     async def append_current_run_transition(
         self,
         conversation_id: str,

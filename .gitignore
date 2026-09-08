@@ -13,6 +13,9 @@ htmlcov/
 
 # uv / virtualenv
 .venv/
+# Local worktree symlinks and verification environments are not source.
+/.venv
+/.venv-release-check
 
 # SQLite event stores / scratch DBs
 *.db
@@ -55,6 +58,7 @@ review-queue/
 /tmp_weather.csv
 /pytest_shell_sessions.txt
 /pytest_tools.txt
+/f5-pids.txt
 /selected.csv
 /sensor_readings.csv
 /wind_dataset.csv

@@ -2,7 +2,7 @@
 REAL install/eject tools and the REAL verify fold, with invariants checked
 after every step.
 
-    PYTHONPATH=. uv run python development/harness/tc_soak/run.py --cycles 300 --seed 1
+    uv run python development/harness/tc_soak/run.py --cycles 300 --seed 1
 
 Each cycle applies a random operation (install / eject / reinstall / core-edit /
 file-delete / lockfile-corruption / lockfile-forgery / config-edit / verify) to

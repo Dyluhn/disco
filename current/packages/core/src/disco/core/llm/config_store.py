@@ -345,6 +345,17 @@ def _model_purpose(entry: ModelEntry) -> str:
     return f"model:{entry.provider or 'unknown'}"
 
 
+# The keyless hosted MCP search servers. They need no operator approval while
+# they carry no credential — only a query leaves the box — so they resolve to an
+# origin ONLY once a key is configured for them, at which point they are exactly
+# as credentialed as tavily or brave. Same rule as
+# `retrieval._provider_wiring._needs_origin_approval`.
+_KEYLESS_SEARCH_ORIGINS = {
+    "exa": "https://mcp.exa.ai",
+    "parallel": "https://search.parallel.ai",
+}
+
+
 def _search_url(search: SearchSettings) -> str:
     if search.provider == "tavily":
         return "https://api.tavily.com"
@@ -354,6 +365,8 @@ def _search_url(search: SearchSettings) -> str:
         return search.base_url.strip() or "https://api.semanticscholar.org"
     if search.provider == "searxng":
         return search.base_url.strip()
+    if search.provider in _KEYLESS_SEARCH_ORIGINS and search.api_key_env.strip():
+        return search.base_url.strip() or _KEYLESS_SEARCH_ORIGINS[search.provider]
     return ""
 
 

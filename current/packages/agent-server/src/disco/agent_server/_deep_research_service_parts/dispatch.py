@@ -18,6 +18,7 @@ from disco.core import (
     EventSource,
     MessageEvent,
     ReportEvent,
+    ResearchCheckpointEvent,
     StatusEvent,
 )
 
@@ -45,7 +46,7 @@ async def run_phase(service: DeepResearchService, conversation_id: str) -> None:
     """The Deep Research driver (v2 — gateless, decision #7). Inspects the
     conversation state to decide what to do this turn:
     - A stopped run (PAUSED) -> resume from the checkpoint, carrying the
-      partial ReportEvent's evidence + issued queries forward.
+      ResearchCheckpointEvent's evidence + issued queries forward.
     - A report exists + a fresh user message -> follow-up synthesis reusing
       the report's passages as grounding (RP-13).
     - No report + status RUNNING -> no-op: the engine is executing (user
@@ -69,13 +70,14 @@ async def run_phase(service: DeepResearchService, conversation_id: str) -> None:
     events = await service._store.get_events(conversation_id)
     state = await service._store.get_state(conversation_id)
     reports = [e for e in events if isinstance(e, ReportEvent)]
+    checkpoints = [e for e in events if isinstance(e, ResearchCheckpointEvent)]
 
     # Phase R: RESUME a stopped run (status PAUSED) → continue from the
-    # checkpoint. The prior partial ReportEvent carries the gathered evidence
+    # checkpoint. The prior ResearchCheckpointEvent carries gathered evidence
     # and the queries already issued, so the engine doesn't redo them.
     if state.execution_status == ConversationStatus.PAUSED:
         await service._execute_deep_research(
-            conversation_id, resume_from=reports[-1] if reports else None
+            conversation_id, resume_from=checkpoints[-1] if checkpoints else None
         )
         return
 

@@ -59,21 +59,43 @@ class DeepResearchLiveState:
     def __init__(self) -> None:
         self._steers: dict[str, list[str]] = {}
         self._injected_sources: dict[str, list[Passage]] = {}
+        self._writing: set[str] = set()
 
     def forget(self, conversation_id: str) -> None:
         self._steers.pop(conversation_id, None)
         self._injected_sources.pop(conversation_id, None)
+        self._writing.discard(conversation_id)
 
     def begin(self, conversation_id: str) -> None:
+        self._writing.discard(conversation_id)
         self._steers[conversation_id] = []
         self._injected_sources[conversation_id] = []
 
+    def is_live(self, conversation_id: str) -> bool:
+        """True while the ENGINE owns this conversation's run.
+
+        `begin` installs the queues as the run starts and the run's own
+        `finally` removes them, so key presence is the live-run fact —
+        the same one `enqueue_steer` already trusts to decide whether mid-run
+        input becomes a steer or a new user turn. Stop reads it to decide
+        whether the terminal status belongs to the engine or to an AgentLoop.
+        """
+        return conversation_id in self._steers
+
     def enqueue_steer(self, conversation_id: str, text: str) -> bool:
         queue = self._steers.get(conversation_id)
-        if queue is None:
+        if queue is None or conversation_id in self._writing:
             return False
         queue.append(text)
         return True
+
+    def close_research_inputs(self, conversation_id: str) -> None:
+        if self.is_live(conversation_id):
+            self._writing.add(conversation_id)
+
+    def observe_phase(self, conversation_id: str, kind: str, phase: object) -> None:
+        if kind == "phase" and phase == "writing":
+            self.close_research_inputs(conversation_id)
 
     def inject_source(self, conversation_id: str, passage: Passage) -> bool:
         queue = self._injected_sources.get(conversation_id)

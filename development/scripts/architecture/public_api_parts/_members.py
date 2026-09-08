@@ -23,6 +23,8 @@ a record exists for the identity, and it is fail-closed on every prong:
    not merely permitted; an origin *change* remains a bridge's job;
 4. the method/field delta computed from the two signatures equals
    ``removed_members``/``added_members`` exactly — no over-authorization.
+   Named values (including tagged event unions) use their complete definition
+   as the sole member. Declaration kind and origin must remain unchanged.
    Full member strings are stored rather than bare names, so a record cannot
    silently absorb a signature change to a *surviving* member;
 5. :func:`check_member_delta` mirrors ``_check_bridge_delta``, so a stale or
@@ -60,6 +62,9 @@ def _members_of(signature: Any) -> list[str] | None:
     """
     if not isinstance(signature, dict):
         return None
+    if signature.get("kind") == "value":
+        definition = signature.get("signature")
+        return [definition] if isinstance(definition, str) and definition else None
     members = signature.get("members")
     fields = signature.get("fields")
     if (
@@ -93,9 +98,7 @@ def commit_resolves(root: Path, value: str) -> bool:
 
 def _string_list(row: dict[str, Any], key: str) -> list[str] | None:
     value = row.get(key)
-    if not isinstance(value, list) or not all(
-        isinstance(item, str) and item for item in value
-    ):
+    if not isinstance(value, list) or not all(isinstance(item, str) and item for item in value):
         return None
     if value != sorted(value) or len(value) != len(set(value)):
         return None
@@ -124,8 +127,13 @@ def _valid_member_row(row: Any, root: Path) -> bool:
 def _valid_member_scalars(row: dict[str, Any]) -> bool:
     """Validate the scalar half of a member-transition record."""
     scalar_keys = (
-        "surface", "path", "public_name", "old_signature_sha256",
-        "new_signature_sha256", "owner_package", "accepting_commit",
+        "surface",
+        "path",
+        "public_name",
+        "old_signature_sha256",
+        "new_signature_sha256",
+        "owner_package",
+        "accepting_commit",
         "accepting_receipt",
     )
     if not all(isinstance(row[key], str) and row[key] for key in scalar_keys):
@@ -135,13 +143,13 @@ def _valid_member_scalars(row: dict[str, Any]) -> bool:
 
 
 def member_authority(
-    baseline: dict[str, Any], root: Path, problems: list[str],
+    baseline: dict[str, Any],
+    root: Path,
+    problems: list[str],
 ) -> dict[MemberKey, dict[str, Any]]:
     """Return the validated ``member_transitions`` map, or record problems."""
     rows = baseline.get("member_transitions", [])
-    if not isinstance(rows, list) or not all(
-        _valid_member_row(row, root) for row in rows
-    ):
+    if not isinstance(rows, list) or not all(_valid_member_row(row, root) for row in rows):
         problems.append("member_transitions has invalid explicit metadata")
         return {}
     if rows != sorted(rows, key=canonical):
@@ -157,8 +165,11 @@ def member_authority(
 
 
 def _check_signature_pins(
-    identity: TargetIdentity, record: dict[str, Any],
-    old_target: dict[str, Any], new_target: dict[str, Any], problems: list[str],
+    identity: TargetIdentity,
+    record: dict[str, Any],
+    old_target: dict[str, Any],
+    new_target: dict[str, Any],
+    problems: list[str],
 ) -> None:
     """Prong 2: the record pins the exact stored and live signature bytes."""
     old_signature = old_target.get("public_signature")
@@ -176,14 +187,15 @@ def _check_signature_pins(
             f"signature: {identity}; actual={new_sha}"
         )
     if old_sha == new_sha:
-        problems.append(
-            f"member transition records an identical signature: {identity}"
-        )
+        problems.append(f"member transition records an identical signature: {identity}")
 
 
 def _check_origin_sameness(
-    identity: TargetIdentity, record: dict[str, Any],
-    old_target: dict[str, Any], new_target: dict[str, Any], problems: list[str],
+    identity: TargetIdentity,
+    record: dict[str, Any],
+    old_target: dict[str, Any],
+    new_target: dict[str, Any],
+    problems: list[str],
 ) -> None:
     """Prong 3: both origins exist, are equal, and equal the recorded origin."""
     old_origin = target_origin(old_target)
@@ -197,16 +209,25 @@ def _check_origin_sameness(
 
 
 def _check_member_delta(
-    identity: TargetIdentity, record: dict[str, Any],
-    old_target: dict[str, Any], new_target: dict[str, Any], problems: list[str],
+    identity: TargetIdentity,
+    record: dict[str, Any],
+    old_target: dict[str, Any],
+    new_target: dict[str, Any],
+    problems: list[str],
 ) -> None:
     """Prong 4: the computed delta equals the recorded delta exactly."""
-    old_members = _members_of(old_target.get("public_signature"))
+    old_signature = old_target.get("public_signature")
+    new_signature = new_target.get("public_signature")
+    if (
+        isinstance(old_signature, dict)
+        and isinstance(new_signature, dict)
+        and old_signature.get("kind") != new_signature.get("kind")
+    ):
+        problems.append(f"member transition cannot change declaration kind: {identity}")
+    old_members = _members_of(old_signature)
     new_members = _members_of(new_target.get("public_signature"))
     if old_members is None or new_members is None:
-        problems.append(
-            f"member transition target has no member list: {identity}"
-        )
+        problems.append(f"member transition target has no member list: {identity}")
         return
     removed = sorted(set(old_members) - set(new_members))
     added = sorted(set(new_members) - set(old_members))
@@ -218,16 +239,17 @@ def _check_member_delta(
 
 
 def check_member_change(
-    identity: TargetIdentity, old_keys: list[TargetKey], new_keys: list[TargetKey],
+    identity: TargetIdentity,
+    old_keys: list[TargetKey],
+    new_keys: list[TargetKey],
     previous_targets: dict[TargetKey, dict[str, Any]],
     current_targets: dict[TargetKey, dict[str, Any]],
-    record: dict[str, Any], problems: list[str],
+    record: dict[str, Any],
+    problems: list[str],
 ) -> None:
     """Authorize one member-level change, or explain exactly why not."""
     if len(old_keys) != 1 or len(new_keys) != 1:
-        problems.append(
-            f"member transition requires one accepted and one live target: {identity}"
-        )
+        problems.append(f"member transition requires one accepted and one live target: {identity}")
         return
     old_target = previous_targets[old_keys[0]]
     new_target = current_targets[new_keys[0]]
@@ -237,8 +259,11 @@ def check_member_change(
 
 
 def check_member_delta(
-    previous: dict[str, Any], inventory: dict[str, Any], root: Path,
-    current_identities: set[TargetIdentity], changed_members: set[TargetIdentity],
+    previous: dict[str, Any],
+    inventory: dict[str, Any],
+    root: Path,
+    current_identities: set[TargetIdentity],
+    changed_members: set[TargetIdentity],
     problems: list[str],
 ) -> None:
     """Prong 5: mirror ``_check_bridge_delta`` so stale/extra records fail."""

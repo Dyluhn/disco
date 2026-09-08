@@ -5,7 +5,7 @@
 
 # --- heavy / irrelevant ---
 .git
-.venv
+.venv*
 # Dependency trees must never come from the host. The recursive form also
 # excludes workspace-local symlinks such as current/frontend/node_modules; otherwise
 # COPY can replace the lockfile-installed image dependencies with a dead host

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import contextvars
+import inspect
 import logging
 from collections.abc import Awaitable, Callable
 from typing import cast
@@ -489,8 +490,8 @@ class RunSupervisor:
         async def run() -> ConversationState:
             current = cast(RunTask | None, asyncio.current_task())
             if current is not None and self._registry.owns_task(conversation_id, current):
-                agent_view_id, run_intent_id = (
-                    await self._workspace.resolve_current_run_authority(conversation_id)
+                agent_view_id, run_intent_id = await self._workspace.resolve_current_run_authority(
+                    conversation_id
                 )
                 self._authorities.bind(
                     current,
@@ -511,7 +512,9 @@ class RunSupervisor:
             )
 
         task = asyncio.create_task(run(), context=task_context)
-        generation = self._registry.register_task(conversation_id, task)
+        generation = self._registry.register_task(
+            conversation_id, task, owned_coroutine=loop if inspect.iscoroutine(loop) else None
+        )
         if claimed_user_seq is not None:
             self._ingress.claim_user_seq(conversation_id, claimed_user_seq)
         if not completion_managed_externally:

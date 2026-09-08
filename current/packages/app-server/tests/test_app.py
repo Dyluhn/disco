@@ -647,7 +647,12 @@ async def test_conversations_are_owner_scoped(client, store):
     assert all(c["id"] != "c2" for c in mine)
 
 
-def test_delete_is_owner_scoped(client, store):
+def test_delete_is_owner_scoped(client, store, tmp_path, monkeypatch):
+    monkeypatch.setenv("DISCO_DATA_DIR", str(tmp_path))
+    for cid in ("conv_c1", "conv_c2"):
+        directory = tmp_path / "research-recovery" / cid
+        directory.mkdir(parents=True)
+        (directory / "private.json").write_text("private source")
     store.create_conversation("conv_c1", owner_id="me", title="x")
     store.create_conversation("conv_c2", owner_id="other", title="y")
 
@@ -657,6 +662,8 @@ def test_delete_is_owner_scoped(client, store):
     # can delete own
     resp = client.delete("/api/conversations/conv_c1", params={"owner_id": "me"})
     assert resp.json()["deleted"] is True
+    assert not (tmp_path / "research-recovery" / "conv_c1").exists()
+    assert (tmp_path / "research-recovery" / "conv_c2" / "private.json").exists()
     assert client.get("/api/conversations", params={"owner_id": "me"}).json() == []
 
 

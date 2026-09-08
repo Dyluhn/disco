@@ -36,6 +36,7 @@ services:
     environment:
       DISCO_HOST: "0.0.0.0"
       DISCO_PORT: "8800"
+      DISCO_AGENT_BASE: http://agent-server:8000
       DISCO_DATA_DIR: /data
       DISCO_DB: /data/disco.db
       DISCO_CONFIG: /data/disco-config.json
@@ -100,6 +101,7 @@ services:
       DISCO_TTS_DIR: /opt/disco-cache/tts
       DISCO_PROJECTS_ROOT: /data/projects
       FASTEMBED_CACHE_PATH: /opt/disco-cache/fastembed
+      DISCO_NLI_MODEL_DIR: /opt/disco-cache/nli
       DISCO_ENCODER_TIER: "${DISCO_ENCODER_TIER:-${PMX_ENCODER_TIER:-full}}"
       DISCO_ENCODERS: "${DISCO_ENCODERS:-${PMX_ENCODERS:-local}}"
       # Remote encoder endpoints are read by the retrieval runtime in this

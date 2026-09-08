@@ -25,46 +25,69 @@ class DepthTier(str, Enum):
 
 @dataclass(frozen=True)
 class DepthBound:
-    """The cost/time envelope a Deep Research run runs under. All caps are
-    enforced at the engine layer; the first cap hit terminates the run and
-    populates `bounded_by` on the ReportEvent so the user sees what stopped it
-    (not silent truncation). max_subquestions also bounds the plan width — a
-    too-wide decompose returns truncated steps with the same `bounded_by` mark."""
+    """The cost/time envelope a Deep Research run runs under.
+
+    The research agent owns coverage and chooses its pivots.  The effort
+    minimums are host-side guards; they do not create fixed subquestions.
+    """
 
     max_sources: int  # one-execution cap: unique web passages; uploads are excluded
-    max_rounds_per_subq: int  # retrieve-reason-refine round budget per sub-q
-    max_wall_clock_s: int  # whole-run wall clock cap
-    max_subquestions: int  # plan width cap
-    discover_limit: int  # search results requested per query (per round)
+    # Compatibility-only fields retained while callers migrate off the retired
+    # planner vocabulary.  The agent never reads these values.
+    max_rounds_per_subq: int
+    # One-execution cap on MODEL RESEARCH TURNS. The budget currency is work,
+    # not wall-clock seconds: this platform's models decode at 20-45 tok/s and
+    # legitimately think for minutes, so a seconds budget would price hardware,
+    # not waste. Nothing in the research loop is bounded by time.
+    max_research_turns: int
+    max_subquestions: int
+    # Search results KEPT from the one search each query gets. The engine issues
+    # the model's query once and keeps this many of what came back; a SearXNG
+    # call returns roughly 30 rows, so this is the tier's breadth dial. It used
+    # to be small because `deep` searched four paraphrases of the same question
+    # and fused them — paying four provider calls for breadth one call already
+    # had. Extraction is a separate, smaller budget (`extract_cap`): a wider
+    # discover_limit gives the ranker more to choose from, it does not fetch
+    # more pages.
+    discover_limit: int
     extract_cap: int  # max extractions per round (controls page fetching)
     rerank_top_k: int  # passages kept per round after rerank
+    # Scales the prompt's depth guidance (`agent._depth_directive`). It no
+    # longer selects a query-transformation strategy: every tier issues the
+    # model's query as written, once.
     retrieval_depth: Literal["shallow", "standard", "deep"] = "standard"
-    # Report-writing targets are a separate envelope from research admission.
-    # Retrieval may stop at its source/round caps; it must not consume this
-    # reserved writing capacity or cause padding when evidence is narrow.
-    report_min_words: int = 0
-    report_max_words: int = 0
+    # The writer's per-call OUTPUT ceiling, in report-body tokens (the think
+    # headroom rides on top; `writer._writer_max_tokens`). It is a transport
+    # provision, never a target: no tier assigns a word floor or a word range,
+    # and the model is never told this number. A report is as long as the
+    # evidence and the question make it. The tiers differ in RESEARCH — more
+    # turns, more sources — which is what "exhaustive" means; the 8,000-word
+    # floor this field used to sit beside produced the padded, repetitive
+    # reports the phase-6 blind eval scored at the bottom on reads/flows.
     writing_budget_tokens: int = 0
-    # Evidence-capacity thresholds are deliberately separate from source and
-    # sub-question caps.  They tell the controller when it has enough *shape*
-    # to sustain the requested report, not when a fixed number of probes ran.
+    # Characters of the evidence pool the writer is shown. An exhaustive run
+    # admits two million characters across twenty-five sources; a pool budget
+    # sized for eight of them divides into shares too small to carry a source's
+    # notes, and E2's decisive "projected 2030" note was dropped by exactly
+    # that arithmetic. The ceiling is the model window, not preference: see
+    # `_writer_evidence` for the measured chars-per-token this is derived from.
+    evidence_char_budget: int = 220_000
     min_evidence_passages: int = 0
     min_evidence_themes: int = 0
     min_evidence_sources: int = 0
-    initial_probe_count: int = 3
+    initial_probe_count: int = 0
+    minimum_research_turns: int = 1
+    minimum_useful_sources: int = 1
+    review_decisions: int = 3  # includes malformed replies and post-repair verification
 
     @property
     def report_spec(self) -> dict[str, int]:
         """Stable integration shape for synthesis/report assembly."""
-        return {
-            "min_words": self.report_min_words,
-            "max_words": self.report_max_words,
-            "reserved_writing_tokens": self.writing_budget_tokens,
-        }
+        return {"reserved_writing_tokens": self.writing_budget_tokens}
 
     @property
     def evidence_capacity_spec(self) -> dict[str, int]:
-        """Thresholds used by adaptive gathering, separate from writing."""
+        """Compatibility view for callers migrating off the retired planner."""
         return {
             "min_evidence_passages": self.min_evidence_passages,
             "min_evidence_themes": self.min_evidence_themes,
@@ -75,25 +98,25 @@ class DepthBound:
 _TIERS: dict[DepthTier, DepthBound] = {
     # Quick: fast verification runs. 4 starting probes (up to 6 total), 2
     # rounds each. Suitable for "what's the consensus on X" — small enough to
-    # be near-realtime but with multi-section synthesis. The research wall
-    # clock is 360s (minus the writing reserve); the three tiers' budgets are
-    # distinct and ordered (quick < standard < exhaustive).
+    # be near-realtime but with multi-section synthesis. Research is bounded at
+    # 8 model turns; the three tiers' budgets are distinct and ordered
+    # (quick < standard < exhaustive).
     DepthTier.QUICK: DepthBound(
         max_sources=30,
         max_rounds_per_subq=2,
-        max_wall_clock_s=360,
+        max_research_turns=8,
         max_subquestions=6,
         discover_limit=8,
         extract_cap=4,
         rerank_top_k=4,
         retrieval_depth="shallow",
-        report_min_words=1500,
-        report_max_words=2500,
-        writing_budget_tokens=4000,
+        writing_budget_tokens=6_000,
         min_evidence_passages=8,
         min_evidence_themes=3,
         min_evidence_sources=5,
         initial_probe_count=4,
+        minimum_research_turns=2,
+        minimum_useful_sources=6,
     ),
     # Standard-deep: the everyday Deep Research run. 7 starting probes (up to
     # 16 total after adaptive expansion) × up to 4 rounds; up to 90 admitted
@@ -101,38 +124,41 @@ _TIERS: dict[DepthTier, DepthBound] = {
     DepthTier.STANDARD_DEEP: DepthBound(
         max_sources=90,
         max_rounds_per_subq=4,
-        max_wall_clock_s=900,
+        max_research_turns=16,
         max_subquestions=16,
-        discover_limit=10,
+        discover_limit=20,
         extract_cap=6,
         rerank_top_k=6,
         retrieval_depth="standard",
-        report_min_words=4000,
-        report_max_words=7000,
-        writing_budget_tokens=11200,
+        writing_budget_tokens=14_000,
+        review_decisions=4,
         min_evidence_passages=20,
         min_evidence_themes=5,
         min_evidence_sources=12,
         initial_probe_count=7,
+        minimum_research_turns=4,
+        minimum_useful_sources=12,
     ),
     # Exhaustive: long-form survey. 10 starting probes (up to 32 total after
     # adaptive expansion) × up to 6 rounds; up to 240 admitted passages.
     DepthTier.EXHAUSTIVE: DepthBound(
         max_sources=240,
         max_rounds_per_subq=6,
-        max_wall_clock_s=2400,
+        max_research_turns=32,
         max_subquestions=32,
-        discover_limit=12,
+        discover_limit=32,
         extract_cap=8,
         rerank_top_k=8,
         retrieval_depth="deep",
-        report_min_words=8000,
-        report_max_words=12000,
-        writing_budget_tokens=19200,
+        writing_budget_tokens=24_000,
+        evidence_char_budget=260_000,
+        review_decisions=5,
         min_evidence_passages=40,
         min_evidence_themes=8,
         min_evidence_sources=24,
         initial_probe_count=10,
+        minimum_research_turns=6,
+        minimum_useful_sources=20,
     ),
 }
 

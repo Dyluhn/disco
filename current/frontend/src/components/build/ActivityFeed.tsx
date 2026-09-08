@@ -22,6 +22,7 @@ import {
   FileSpreadsheet,
   Loader2,
   MessageSquare,
+  Minus,
   MonitorPlay,
   MousePointerClick,
   Paperclip,
@@ -239,6 +240,10 @@ function StatusDot({ item }: { item: ActivityItem }) {
   if (item.status === "pending")
     return <AlertTriangle className="size-3.5 text-warn" aria-label="awaiting approval" />;
   if (item.status === "failed") return <X className="size-3.5 text-unsupported" aria-label="failed" />;
+  // A settled row finished without the work succeeding — a wall's verdict, not
+  // a result. Neutral dash, muted: it is not an alarm and it is not a tick.
+  if (item.status === "settled")
+    return <Minus className="size-3.5 text-text-faint" aria-label="settled" />;
   return <Check className="size-3.5 text-supported" aria-label="done" />;
 }
 

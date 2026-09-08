@@ -677,8 +677,7 @@ async def stream_research_answer(
             # No supported claims + rewriter available + rounds remain → reformulate.
             exclude_urls = exclude_urls | result.this_round_urls
             yield {"type": "phase", "phase": "reformulating"}
-            new_qs = await rewriter.rewrite(current_query, n=1)
-            current_query = new_qs[0] if new_qs else current_query
+            current_query = await rewriter.rewrite(current_query)
             # Buffered token_frames from the doomed round are discarded here.
 
     except EncoderUnavailable as exc:

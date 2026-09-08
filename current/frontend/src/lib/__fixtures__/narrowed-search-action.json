@@ -1,0 +1,13 @@
+{
+  "tool_name": "search",
+  "arguments": {
+    "subquestion": "EIA Cost and Performance Characteristics 2023 gas combustion turbine overnigh...",
+    "query": "EIA Cost and Performance Characteristics 2023 gas combustion turbine overnight capital cost $/kW peaker",
+    "round": 4,
+    "origin": "model",
+    "narrowed_from": "EIA overnight capital cost gas combustion turbine peaker 2024 Cost and Performance Characteristics",
+    "narrowing": [
+      "2023"
+    ]
+  }
+}

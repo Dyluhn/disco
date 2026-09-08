@@ -337,22 +337,64 @@ class TtsSettings(BaseModel):
 class SearchSettings(BaseModel):
     """[settings] Web DISCOVERY provider. The THREE tiers of the universal design:
     (a) self-host `searxng` (base_url), (b) paid APIs `tavily`/`brave` (BYO key),
-    and (c) BUNDLED keyless adapters (`ddgs`, `arxiv`, `news`,
-    `semantic_scholar`, `site_scoped`) — the FIRST-RUN DEFAULT so a fresh install
-    searches the moment it's downloaded."""
+    and (c) BUNDLED keyless adapters — the FIRST-RUN DEFAULT so a fresh install
+    searches the moment it's downloaded.
+
+    The bundled tier is `bundled`: a COMPOSITE of Parallel + Exa (keyless hosted
+    MCP search, key optional) with Wikipedia, arXiv and Semantic Scholar. Its
+    legs are also selectable individually (`exa`, `parallel`, `wikipedia`, …).
+    It is keyless and therefore small — a few reports a day — and every leg
+    REPORTS its rate limit instead of returning an empty result set. That is the
+    whole reason it replaced `ddgs` on 2026-09-02: `ddgs` scraped the same HTML
+    endpoints SearXNG does, inherited the same IP bans, and answered a rate limit
+    with `[]`, which no caller could distinguish from "the web has nothing".
+    """
 
     provider: Literal[
-        "ddgs",
+        "bundled",
         "searxng",
         "tavily",
         "brave",
+        "exa",
+        "parallel",
+        "wikipedia",
         "arxiv",
         "news",
         "semantic_scholar",
         "site_scoped",
-    ] = "ddgs"
+    ] = "bundled"
     base_url: str = ""  # searxng URL, arxiv/news override, or site_scoped domains
-    api_key_env: str = ""  # secrets key name for tavily/brave/semantic_scholar
+    api_key_env: str = ""  # secrets key name for tavily/brave/semantic_scholar/exa/parallel
+    # searxng ONLY: the engine categories a research query is issued against.
+    # Empty → the provider default ("general,science"), which adds the academic
+    # engines (arXiv, Crossref, OpenAlex, PubMed) to every research query instead
+    # of leaving journal coverage to whatever the general engines happen to index.
+    categories: str = ""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_removed_provider(cls, data: object) -> object:
+        """Load a config that still names the REMOVED `ddgs` tier, loudly.
+
+        The `provider` Literal no longer admits `ddgs`, so a raw validate would
+        raise — and `ConfigStore.load()` catches that and falls back to the SEED,
+        silently discarding the user's whole catalogue and assignments. So this
+        rewrites the value and says exactly what happened, what is running now,
+        and how to choose something else. Neither a crash nor a silent swap.
+        """
+        if not isinstance(data, dict) or data.get("provider") != "ddgs":
+            return data
+        _LOG.warning(
+            "Search provider 'ddgs' has been removed and your config now uses "
+            "'bundled' (keyless: Parallel + Exa + Wikipedia + arXiv + Semantic "
+            "Scholar). Reason: ddgs scraped the same endpoints SearXNG does, so it "
+            "inherited their IP bans, and it reported a rate limit as zero results — "
+            "indistinguishable from a genuinely empty search. The bundled tier "
+            "reports its limits instead. Keyless capacity is light (a few reports a "
+            "day); for volume set Settings -> Data sources -> Search to self-hosted "
+            "SearXNG, or pick another tier there."
+        )
+        return {**data, "provider": "bundled", "base_url": ""}
 
 
 class RoleFallbackSettings(BaseModel):
@@ -465,8 +507,8 @@ class RouterConfig(BaseModel):
     encoders: EncodersSettings = Field(default_factory=EncodersSettings)
     # audio-overview TTS: bundled in-process Kokoro vs remote Speaches, + the toggle.
     tts: TtsSettings = Field(default_factory=TtsSettings)
-    # universal data providers — bundled (ddgs / local) by default so a fresh
-    # install works with no keys; upgradeable to self-host or paid in Settings.
+    # universal data providers — bundled (keyless composite / local) by default so
+    # a fresh install works with no keys; upgradeable to self-host or paid in Settings.
     search: SearchSettings = Field(default_factory=SearchSettings)
     extraction: ExtractionSettings = Field(default_factory=ExtractionSettings)
     # image generation: real backends only (W-50). Default `openrouter` but INACTIVE

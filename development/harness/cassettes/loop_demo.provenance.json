@@ -1,0 +1,25 @@
+{
+  "captured": "replay-capture-v47",
+  "capture_source_commit": "9f14355a38d1832bba17196a34e752dd96fcc9ae",
+  "product_commit": "4287a219c9a05992d324af8b1084da837bb890ce",
+  "profile": "driver-deepseek-flash on every model role",
+  "question": "What is the capital of France and roughly its population?",
+  "surface": "deep_research",
+  "raw_cassette_sha256": "716ac692f947340e0de526b01edff6451142f8b91ea6b9e22e8966243e7e0a60",
+  "raw_events_sha256": "e9157689bf8658d5a43b56109cc5ae47c6b97469836a9cc0e32579bfbf8a9e2e",
+  "migration": "None. Raw capture installed verbatim after strict semantic replay.",
+  "raw_events": 207,
+  "interactions": 133,
+  "reasoning_mode": "Native Deep Research enabled at recording composition; configured provider adapter.",
+  "replay": {
+    "recorded_outputs": 206,
+    "replayed_outputs": 170,
+    "semantic_differences": [],
+    "normalization": "Existing replay contract normalizes wall-clock model_activity pulses and generated IDs; retains research decisions, evidence, review, and report."
+  },
+  "cassette_bytes": 4087627,
+  "events_bytes": 295229,
+  "known_credential_matches": 0,
+  "capture_seconds": 444.5057370662689,
+  "research_acceptance_credit": false
+}

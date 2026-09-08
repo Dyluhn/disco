@@ -10,7 +10,7 @@
  * shared config (not ephemeral) and honored on the next research run.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Container, Globe, KeyRound, Package } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { apiIsLive } from "@/api/liveness";
@@ -42,18 +42,49 @@ interface Opt<P extends string> {
   apiKeyPlaceholder?: string;
 }
 
+/** The honest capacity line for the keyless tier. Shown wherever a keyless
+ *  option is selected, because the failure it prevents is a user planning a
+ *  day of reports on a free tier that will start refusing after a handful. */
+const KEYLESS_CAPACITY_NOTICE =
+  "Keyless: light use (a few reports a day); rate limits are reported, not hidden. " +
+  "For volume, self-host SearXNG or add a key (Parallel 5k/mo free, Tavily 1k/mo free, Brave/Exa paid).";
+
 const SEARCH_OPTS: Opt<SearchProvider>[] = [
   {
-    id: "ddgs",
+    id: "bundled",
     tier: "bundled",
-    label: "Bundled — ddgs",
-    help: "Keyless, in-process. No setup. Moderate rate limits — fine for personal use. The default.",
+    label: "Bundled — keyless",
+    help: "Parallel + Exa + Wikipedia + arXiv + Semantic Scholar, no key. The default.",
+    showApiKeyEnv: true,
+    apiKeyPlaceholder: "optional — raises the keyless limits",
   },
   {
     id: "searxng",
     tier: "selfhost",
     label: "Self-hosted SearXNG",
-    help: "Your own SearXNG instance — set its URL below.",
+    help: "Your own SearXNG instance — set its URL below. The tier that handles volume.",
+  },
+  {
+    id: "parallel",
+    tier: "bundled",
+    label: "Parallel",
+    help: "Keyless hosted web search. Optional key: 5k searches/mo free.",
+    showApiKeyEnv: true,
+    apiKeyPlaceholder: "optional — e.g. PARALLEL_API_KEY",
+  },
+  {
+    id: "exa",
+    tier: "bundled",
+    label: "Exa",
+    help: "Keyless hosted web search. Small free limit; optional key is paid.",
+    showApiKeyEnv: true,
+    apiKeyPlaceholder: "optional — e.g. EXA_API_KEY",
+  },
+  {
+    id: "wikipedia",
+    tier: "bundled",
+    label: "Wikipedia",
+    help: "MediaWiki full-text search. No key required.",
   },
   {
     id: "news",
@@ -133,6 +164,8 @@ function ProviderGroup<P extends string>({
   value,
   baseUrl,
   apiKeyEnv,
+  notice,
+  extra,
   onPick,
   onBaseUrl,
   onApiKeyEnv,
@@ -143,6 +176,10 @@ function ProviderGroup<P extends string>({
   value: P;
   baseUrl: string;
   apiKeyEnv: string;
+  /** Shown under the current selection whenever a bundled/keyless tier is active. */
+  notice?: string;
+  /** Extra provider-specific configuration rendered with the other fields. */
+  extra?: ReactNode;
   onPick: (id: P) => void;
   onBaseUrl: (v: string) => void;
   onApiKeyEnv: (v: string) => void;
@@ -166,6 +203,14 @@ function ProviderGroup<P extends string>({
           <span className="font-ui text-[0.76rem] leading-snug text-text-faint">
             {active?.help}
           </span>
+          {notice && active?.tier === "bundled" && (
+            <span
+              data-disco-notice="datasource.keyless-capacity"
+              className="font-ui text-[0.76rem] leading-snug text-text-muted"
+            >
+              {notice}
+            </span>
+          )}
         </span>
       </div>
 
@@ -237,6 +282,7 @@ function ProviderGroup<P extends string>({
               optional={active?.tier !== "paid"}
             />
           )}
+          {extra}
         </div>
       </details>
     </div>
@@ -256,17 +302,26 @@ export function DataSourcesSection() {
     !!data && !!draft && JSON.stringify(draft) !== JSON.stringify(data);
   const set = (patch: Partial<DataSourcesConfig>) =>
     setDraft((d) => (d ? { ...d, ...patch } : d));
+  // Every tier that can carry a key or a URL clears the OTHER tiers' values on
+  // pick: a stale Tavily key or a stale SearXNG LAN URL left behind by a
+  // previous selection must never re-engage silently under a new provider.
+  const KEYED = new Set<SearchProvider>([
+    "bundled",
+    "tavily",
+    "brave",
+    "semantic_scholar",
+    "exa",
+    "parallel",
+  ]);
   const pickSearchProvider = (id: SearchProvider) => {
     const patch: Partial<DataSourcesConfig> = { search_provider: id };
     if (id !== "searxng" && id !== "site_scoped") patch.search_base_url = "";
-    if (id !== "tavily" && id !== "brave" && id !== "semantic_scholar") {
+    if (id !== "searxng") patch.search_categories = "";
+    if (!KEYED.has(id) || draft?.search_provider !== id) {
       patch.search_api_key_env = "";
     }
-    if (draft?.search_provider !== id) {
-      if (id === "searxng" || id === "site_scoped") patch.search_base_url = "";
-      if (id === "tavily" || id === "brave" || id === "semantic_scholar") {
-        patch.search_api_key_env = "";
-      }
+    if (draft?.search_provider !== id && (id === "searxng" || id === "site_scoped")) {
+      patch.search_base_url = "";
     }
     set(patch);
   };
@@ -295,6 +350,31 @@ export function DataSourcesSection() {
             value={draft.search_provider}
             baseUrl={draft.search_base_url}
             apiKeyEnv={draft.search_api_key_env}
+            notice={KEYLESS_CAPACITY_NOTICE}
+            extra={
+              draft.search_provider === "searxng" ? (
+                <label className="flex flex-col gap-hair">
+                  <span className="font-ui text-[0.78rem] text-text-muted">
+                    Engine categories
+                  </span>
+                  <input
+                    type="text"
+                    spellCheck={false}
+                    value={draft.search_categories ?? ""}
+                    onChange={(event) =>
+                      set({ search_categories: event.target.value })
+                    }
+                    placeholder="general,science  (empty = general,science)"
+                    className="min-h-11 rounded-control border border-hairline bg-bg px-inline py-hair font-mono text-[0.78rem] text-text outline-none transition-colors placeholder:text-text-faint focus:border-accent/60 lg:min-h-0"
+                  />
+                  <span className="font-ui text-[0.74rem] leading-snug text-text-faint">
+                    Research queries go to these SearXNG categories. `science`
+                    adds arXiv / Crossref / OpenAlex / PubMed where your instance
+                    has them enabled.
+                  </span>
+                </label>
+              ) : null
+            }
             onPick={pickSearchProvider}
             onBaseUrl={(v) => set({ search_base_url: v })}
             onApiKeyEnv={(v) => set({ search_api_key_env: v })}

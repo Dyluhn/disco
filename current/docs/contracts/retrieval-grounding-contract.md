@@ -146,8 +146,8 @@ class RetrievalEngine(Protocol):
 ```
 
 **[CONTRACT] the pipeline stages** (BoD §9.3), in order:
-1. **Query transformation.** `standard`: rewrite-retrieve-read (one rewritten query). `deep`: **multi-query / RAG-Fusion** — generate 3–5 paraphrases via the `QUERY_REWRITER` role (router), retrieve each. (HyDE/step-back are [INTERIOR] options.) `shallow`: the raw query. The rewriter is a **local 7–8B** model (router §15.2).
-2. **Broad retrieval.** Pull a wide candidate set (20–50 passages) across the selected provider(s) and corpora. For multi-query, fuse the per-query result lists with **Reciprocal Rank Fusion (RRF)** before reranking.
+1. **Query as written.** The engine issues `req.query` to the provider once, byte for byte, at every `depth`. It does not author queries: the caller does, and on the deep-research path the caller is the model, under a page of instructions about what a good query is. *(Changed 2026-09-02, lane T2. This step used to specify one LLM paraphrase at `standard` and 3–5 at `deep`, fused by RRF. Measured over 16 recorded runs: the rewrite replaced the model's query in 98% of searches, `deep` turned one query into four with median pairwise token Jaccard 0.85 — above the 0.7 at which the loop refuses the MODEL as a near-duplicate — and the keyword compression that followed dropped the `site:` operator from 26% and the year from 19% of the queries carrying one. Of the pages the four searches actually caused to be fetched, 86% were already in the first search's results. Evidence: `AI-Work/disco-research-v2-2026-09-01/lanes/T2-evidence/`.)*
+2. **Broad retrieval.** Pull a wide candidate set across the selected provider(s) and corpora — `discover_limit` results kept from the one search (quick 8 / standard 20 / exhaustive 32, sized to what one provider call returns), deduplicated by canonical URL. Breadth comes from keeping what one search returned, not from issuing the same question several ways.
 3. **Extraction with provenance.** Fetch the candidate URLs via the `ExtractionProvider`, segment into `Passage`s carrying source + location (§2). **Never** rank on snippets alone — open the source (§1.4).
 4. **Rerank.** A **cross-encoder reranker** (self-hosted `bge-reranker-v2-m3`-class with `bge-m3` embeddings; Cohere/Jina rerankers as API options) scores candidate passages against the query and reduces to `top_k` (5–10). This is the highest-leverage stage.
 5. **Return** the reranked passages (with provenance) plus `all_hits`/`extracted` for the UI's source panel.
@@ -299,9 +299,10 @@ Headless. Providers (SearXNG/Firecrawl/APIs), the reranker, the embedder, and th
 - **Explicit failure (§2.2):** a paywalled/blocked/404 URL yields `fetched_ok=False` + the right `status`; it appears in `all_hits` and is never silently dropped.
 
 ### 8.2 The quality pipeline
-- **Multi-query + RRF (`deep`):** N paraphrases produce N result lists fused by RRF before rerank; a passage ranked high across multiple queries outranks one ranked high in only one (table-driven against a fake rewriter).
+- **RRF (`reciprocal_rank_fusion`):** N ranked lists fuse into one; a passage ranked across several lists outranks one ranked high in only one (table-driven). The primitive is kept and tested; the shipped pipeline has one list per query and no caller for it.
 - **Rerank reduces to top_k** and reorders by the (fake) cross-encoder score; cited passages carry full provenance.
-- **`depth` controls aggressiveness:** `shallow` issues one query, `deep` issues multi-query (assert `issued_queries`).
+- **Every `depth` issues the caller's query once, as written** (assert `issued_queries` and what the fake provider was asked, including a query carrying `site:` and a year).
+- **`depth` sizes the tier, it does not transform the query:** `discover_limit` (8/20/32) is how many of the one search's results are kept.
 - **`all_hits` populated:** the result carries the full discovery set (for the UI's All/Cited tabs), distinct from the reranked `passages`.
 
 ### 8.3 Vector store & Space corpora (the isolation tests)

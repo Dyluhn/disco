@@ -653,6 +653,117 @@ async def test_deep_research_run_failure_goes_error_not_stuck(monkeypatch):
     assert any(isinstance(e, ErrorEvent) and e.code == "deep_research_failed" for e in events)
 
 
+async def _failing_run(store, monkeypatch, *, error_event_failures: int):
+    """Drive a doomed DR run whose terminal ErrorEvent append fails the first
+    `error_event_failures` times. Returns the conversation's events."""
+    from disco.agent_server._deep_research_service_parts import execute as execute_parts
+
+    monkeypatch.setattr(execute_parts, "_TERMINAL_RETRY_DELAY_S", 0.0)
+    rt = _dr_runtime(store)
+
+    async def _ok(cid, **kw):
+        return None
+
+    rt._driver_preflight.check = _ok  # type: ignore[method-assign]
+    rt.drivers.router = lambda **kw: object()
+
+    async def _boom(*args, **kwargs):
+        raise LLMAuthError("research key rejected", provider="x")
+
+    monkeypatch.setattr(execute_parts, "run_engine", _boom)
+
+    real_append = store.append
+    remaining = {"n": error_event_failures}
+
+    async def _flaky_append(conversation_id, event):
+        if isinstance(event, ErrorEvent) and remaining["n"] > 0:
+            remaining["n"] -= 1
+            raise RuntimeError("event store write failed")
+        return await real_append(conversation_id, event)
+
+    monkeypatch.setattr(store, "append", _flaky_append)
+
+    await real_append(
+        "c1",
+        MessageEvent(
+            source=EventSource.USER,
+            message=LLMMessage(role="user", content="research X"),
+        ),
+    )
+    await rt.deep_research._maybe_run_deep_research("c1")
+    monkeypatch.setattr(store, "append", real_append)
+    return await store.get_events("c1")
+
+
+async def test_failed_terminal_write_is_retried_before_the_run_is_abandoned(monkeypatch):
+    """A conversation pinned RUNNING with no terminal event is the worst funnel
+    outcome. One transient failure writing the terminal ErrorEvent is retried,
+    and the run still ends with both the ErrorEvent and ERROR."""
+    store = SqliteEventStore(":memory:")
+    events = await _failing_run(store, monkeypatch, error_event_failures=1)
+
+    assert any(isinstance(e, ErrorEvent) and e.code == "deep_research_failed" for e in events)
+    statuses = [e for e in events if isinstance(e, StatusEvent)]
+    assert statuses and statuses[-1].status == ConversationStatus.ERROR
+    assert "research key rejected" in (statuses[-1].detail or "")
+
+
+async def test_unwritable_error_event_still_moves_the_run_out_of_running(monkeypatch):
+    """When the ErrorEvent can never be written, the status-only fallback still
+    takes the conversation to ERROR — it is never left stranded at RUNNING."""
+    store = SqliteEventStore(":memory:")
+    events = await _failing_run(store, monkeypatch, error_event_failures=99)
+
+    assert not any(isinstance(e, ErrorEvent) for e in events)  # never persisted
+    statuses = [e for e in events if isinstance(e, StatusEvent)]
+    assert statuses and statuses[-1].status == ConversationStatus.ERROR
+
+
+async def test_totally_unwritable_failure_is_logged_critical_not_swallowed(
+    monkeypatch, caplog
+):
+    """Both the retry and the status-only fallback failing is the one case that
+    truly strands the conversation: it must be logged CRITICAL with the id."""
+    from disco.agent_server._deep_research_service_parts import execute as execute_parts
+
+    monkeypatch.setattr(execute_parts, "_TERMINAL_RETRY_DELAY_S", 0.0)
+    store = SqliteEventStore(":memory:")
+    rt = _dr_runtime(store)
+
+    async def _ok(cid, **kw):
+        return None
+
+    rt._driver_preflight.check = _ok  # type: ignore[method-assign]
+    rt.drivers.router = lambda **kw: object()
+
+    async def _boom(*args, **kwargs):
+        raise LLMAuthError("research key rejected", provider="x")
+
+    monkeypatch.setattr(execute_parts, "run_engine", _boom)
+
+    real_append = store.append
+    await real_append(
+        "c1",
+        MessageEvent(
+            source=EventSource.USER,
+            message=LLMMessage(role="user", content="research X"),
+        ),
+    )
+
+    async def _dead_append(conversation_id, event):
+        raise RuntimeError("event store write failed")
+
+    monkeypatch.setattr(store, "append", _dead_append)
+    with caplog.at_level("CRITICAL"):
+        await rt.deep_research._maybe_run_deep_research("c1")
+    monkeypatch.setattr(store, "append", real_append)
+
+    assert any(
+        record.levelname == "CRITICAL" and "c1" in record.getMessage()
+        for record in caplog.records
+    )
+
+
 async def test_deep_research_kickoff_probes_rag_answerer_role():
     """P1-3 in v2: the gateless kickoff probes the role the run GENERATES with —
     RAG_ANSWERER (the research agent and the writer both use it) — not

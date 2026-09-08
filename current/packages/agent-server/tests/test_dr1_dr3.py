@@ -160,64 +160,6 @@ def test_decompose_recency_week_prompt_contains_date():
     assert "WEEK" in preamble.upper()
 
 
-# ── E1: DDGS time_filter → timelimit mapping ──────────────────────────────────
-
-
-def test_ddgs_month_maps_to_timelimit_m(monkeypatch):
-    """time_filter='month' must call _blocking_search with timelimit='m'."""
-    from disco.retrieval.bundled_providers import DdgsSearchProvider
-
-    prov = DdgsSearchProvider()
-    calls: list[tuple] = []
-
-    def _fake_blocking(query, limit, timelimit=None):
-        calls.append((query, limit, timelimit))
-        return []
-
-    monkeypatch.setattr(prov, "_blocking_search", _fake_blocking)
-    asyncio.run(prov.search("test query", limit=5, time_filter="month"))
-
-    assert len(calls) == 1
-    assert calls[0][2] == "m", f"expected timelimit='m', got {calls[0][2]!r}"
-
-
-def test_ddgs_week_maps_to_timelimit_w(monkeypatch):
-    """time_filter='week' must call _blocking_search with timelimit='w'."""
-    from disco.retrieval.bundled_providers import DdgsSearchProvider
-
-    prov = DdgsSearchProvider()
-    calls: list[tuple] = []
-
-    def _fake_blocking(query, limit, timelimit=None):
-        calls.append((query, limit, timelimit))
-        return []
-
-    monkeypatch.setattr(prov, "_blocking_search", _fake_blocking)
-    asyncio.run(prov.search("test query", limit=5, time_filter="week"))
-
-    assert len(calls) == 1
-    assert calls[0][2] == "w", f"expected timelimit='w', got {calls[0][2]!r}"
-
-
-def test_ddgs_none_filter_passes_no_timelimit(monkeypatch):
-    """time_filter=None (off) must call _blocking_search with timelimit=None
-    (byte-identical to the pre-DR-3 path)."""
-    from disco.retrieval.bundled_providers import DdgsSearchProvider
-
-    prov = DdgsSearchProvider()
-    calls: list[tuple] = []
-
-    def _fake_blocking(query, limit, timelimit=None):
-        calls.append((query, limit, timelimit))
-        return []
-
-    monkeypatch.setattr(prov, "_blocking_search", _fake_blocking)
-    asyncio.run(prov.search("test query", limit=5, time_filter=None))
-
-    assert len(calls) == 1
-    assert calls[0][2] is None
-
-
 # ── E1: SearXNG time_filter → time_range mapping ─────────────────────────────
 
 

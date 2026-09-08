@@ -1,0 +1,281 @@
+{
+ "_provenance": "Verbatim WebSocket frames from the live L29 proof run, Firefox/Playwright on an isolated stack (agent-server :8002 over a copy of the acceptance data dir, hosted muse-spark driver). Nothing here is hand-written or edited: each event is exactly the frame the browser received. The list is a SELECTION \u2014 seq 82..92 (the writer phase, the Stop marker, the draft stream's own heartbeats) plus the terminal status at seq 94. The 401 KB research_checkpoint at seq 93 is omitted for size; the wall under test never reads it.",
+ "captured_at": "2026-09-02T08:53Z",
+ "conversation_id": "conv_5b11ea42563d4ca195ff1bfa4298e398",
+ "run": {
+  "tier": "quick",
+  "stop_latency_seconds": 61.4,
+  "writer_line_when_stopped": "Writing the report \u00b7 1 s"
+ },
+ "measured_over_the_whole_run": {
+  "searches": 18,
+  "sources_discovered": 26
+ },
+ "events": [
+  {
+   "id": "evt_10b1e5e3571343a1b6a42aeef744cf4f",
+   "source": "agent",
+   "timestamp": "2026-09-02T08:53:51.498210Z",
+   "schema_version": 1,
+   "seq": 82,
+   "agent_view_id": null,
+   "meta": {},
+   "kind": "action",
+   "thought": "Deep Research: phase",
+   "tool_call": {
+    "tool_name": "phase",
+    "arguments": {
+     "phase": "writing"
+    },
+    "call_id": "call_58497be41afd42e1b7c5adaa9e32de0c"
+   },
+   "self_assessed_risk": "UNKNOWN",
+   "llm_response_id": null
+  },
+  {
+   "id": "evt_d18479fa8fc44863b3d9f044d7f4ee42",
+   "source": "agent",
+   "timestamp": "2026-09-02T08:53:53.543053Z",
+   "schema_version": 1,
+   "seq": 83,
+   "agent_view_id": null,
+   "meta": {},
+   "kind": "action",
+   "thought": "Deep Research: stop_requested",
+   "tool_call": {
+    "tool_name": "stop_requested",
+    "arguments": {
+     "requested_at": "2026-09-02T08:53:53.542998+00:00"
+    },
+    "call_id": "call_7f65142ff25f4d31a27843fe82c8663a"
+   },
+   "self_assessed_risk": "UNKNOWN",
+   "llm_response_id": null
+  },
+  {
+   "id": "evt_11e8b2f1874840ac99cf33cbf3711dc6",
+   "source": "agent",
+   "timestamp": "2026-09-02T08:54:13.435123Z",
+   "schema_version": 1,
+   "seq": 84,
+   "agent_view_id": null,
+   "meta": {},
+   "kind": "action",
+   "thought": "Deep Research: model_activity",
+   "tool_call": {
+    "tool_name": "model_activity",
+    "arguments": {
+     "stage": "draft",
+     "tokens_streamed": 1,
+     "seconds": 21.9,
+     "call_ordinal": 9
+    },
+    "call_id": "call_da96a069cb534d4abb29f2e60cefbfe9"
+   },
+   "self_assessed_risk": "UNKNOWN",
+   "llm_response_id": null
+  },
+  {
+   "id": "evt_654685301a6e48f583994350271a2bee",
+   "source": "agent",
+   "timestamp": "2026-09-02T08:54:18.440097Z",
+   "schema_version": 1,
+   "seq": 85,
+   "agent_view_id": null,
+   "meta": {},
+   "kind": "action",
+   "thought": "Deep Research: model_activity",
+   "tool_call": {
+    "tool_name": "model_activity",
+    "arguments": {
+     "stage": "draft",
+     "tokens_streamed": 146,
+     "seconds": 26.9,
+     "call_ordinal": 9
+    },
+    "call_id": "call_b85c54095a5840e68bcb263d1fc5e21c"
+   },
+   "self_assessed_risk": "UNKNOWN",
+   "llm_response_id": null
+  },
+  {
+   "id": "evt_40f3b281be55410c9005641a9b9c2862",
+   "source": "agent",
+   "timestamp": "2026-09-02T08:54:23.450168Z",
+   "schema_version": 1,
+   "seq": 86,
+   "agent_view_id": null,
+   "meta": {},
+   "kind": "action",
+   "thought": "Deep Research: model_activity",
+   "tool_call": {
+    "tool_name": "model_activity",
+    "arguments": {
+     "stage": "draft",
+     "tokens_streamed": 313,
+     "seconds": 31.9,
+     "call_ordinal": 9
+    },
+    "call_id": "call_79e675ffa0854c98b9e2a89387d14eda"
+   },
+   "self_assessed_risk": "UNKNOWN",
+   "llm_response_id": null
+  },
+  {
+   "id": "evt_751d30397f564c1592d517af1503c5cb",
+   "source": "agent",
+   "timestamp": "2026-09-02T08:54:28.470588Z",
+   "schema_version": 1,
+   "seq": 87,
+   "agent_view_id": null,
+   "meta": {},
+   "kind": "action",
+   "thought": "Deep Research: model_activity",
+   "tool_call": {
+    "tool_name": "model_activity",
+    "arguments": {
+     "stage": "draft",
+     "tokens_streamed": 457,
+     "seconds": 37.0,
+     "call_ordinal": 9
+    },
+    "call_id": "call_7e1829ba5ace424ebc5c91d5c9167b2f"
+   },
+   "self_assessed_risk": "UNKNOWN",
+   "llm_response_id": null
+  },
+  {
+   "id": "evt_68aa4ac2c057444ba3f310b148a68c50",
+   "source": "agent",
+   "timestamp": "2026-09-02T08:54:36.460821Z",
+   "schema_version": 1,
+   "seq": 88,
+   "agent_view_id": null,
+   "meta": {},
+   "kind": "action",
+   "thought": "Deep Research: model_activity",
+   "tool_call": {
+    "tool_name": "model_activity",
+    "arguments": {
+     "stage": "draft",
+     "tokens_streamed": 576,
+     "seconds": 45.0,
+     "call_ordinal": 9
+    },
+    "call_id": "call_491c020fbb2d4fa7800b9e493d8118ec"
+   },
+   "self_assessed_risk": "UNKNOWN",
+   "llm_response_id": null
+  },
+  {
+   "id": "evt_132a86301785442e915c0d8b49ee3b84",
+   "source": "agent",
+   "timestamp": "2026-09-02T08:54:41.504779Z",
+   "schema_version": 1,
+   "seq": 89,
+   "agent_view_id": null,
+   "meta": {},
+   "kind": "action",
+   "thought": "Deep Research: model_activity",
+   "tool_call": {
+    "tool_name": "model_activity",
+    "arguments": {
+     "stage": "draft",
+     "tokens_streamed": 779,
+     "seconds": 50.0,
+     "call_ordinal": 9
+    },
+    "call_id": "call_15040a8676464686b636ae2d087dc5c8"
+   },
+   "self_assessed_risk": "UNKNOWN",
+   "llm_response_id": null
+  },
+  {
+   "id": "evt_b2de8eaa2f1a4a6a813afd19acf54489",
+   "source": "agent",
+   "timestamp": "2026-09-02T08:54:46.525169Z",
+   "schema_version": 1,
+   "seq": 90,
+   "agent_view_id": null,
+   "meta": {},
+   "kind": "action",
+   "thought": "Deep Research: model_activity",
+   "tool_call": {
+    "tool_name": "model_activity",
+    "arguments": {
+     "stage": "draft",
+     "tokens_streamed": 908,
+     "seconds": 55.0,
+     "call_ordinal": 9
+    },
+    "call_id": "call_7d7935ae0c5c4a098dfd7e8be3631274"
+   },
+   "self_assessed_risk": "UNKNOWN",
+   "llm_response_id": null
+  },
+  {
+   "id": "evt_755d7c257b704198bb276a1bef127dba",
+   "source": "agent",
+   "timestamp": "2026-09-02T08:54:51.561954Z",
+   "schema_version": 1,
+   "seq": 91,
+   "agent_view_id": null,
+   "meta": {},
+   "kind": "action",
+   "thought": "Deep Research: model_activity",
+   "tool_call": {
+    "tool_name": "model_activity",
+    "arguments": {
+     "stage": "draft",
+     "tokens_streamed": 1033,
+     "seconds": 60.1,
+     "call_ordinal": 9
+    },
+    "call_id": "call_aa83965eeb034450ae97a0b097cec466"
+   },
+   "self_assessed_risk": "UNKNOWN",
+   "llm_response_id": null
+  },
+  {
+   "id": "evt_f6dc1f14db094d3c8661625488a4cb66",
+   "source": "agent",
+   "timestamp": "2026-09-02T08:54:53.638066Z",
+   "schema_version": 1,
+   "seq": 92,
+   "agent_view_id": null,
+   "meta": {},
+   "kind": "action",
+   "thought": "Deep Research: model_activity",
+   "tool_call": {
+    "tool_name": "model_activity",
+    "arguments": {
+     "stage": "draft",
+     "tokens_streamed": 1076,
+     "seconds": 62.1,
+     "call_ordinal": 9
+    },
+    "call_id": "call_773819bd869e49b1b044ce0677423c94"
+   },
+   "self_assessed_risk": "UNKNOWN",
+   "llm_response_id": null
+  },
+  {
+   "id": "evt_fdb6b71213a64f4a829d9cbe1eebe5ba",
+   "source": "system",
+   "timestamp": "2026-09-02T08:54:54.447953Z",
+   "schema_version": 1,
+   "seq": 94,
+   "agent_view_id": null,
+   "meta": {},
+   "kind": "status",
+   "status": "PAUSED",
+   "detail": "stopped",
+   "run_intent_id": null,
+   "host_mutation_id": null,
+   "plan_verification_transition": null,
+   "plan_verifier_failure": null,
+   "plan_verifier_pass": null,
+   "recovery_lease_transition": null
+  }
+ ]
+}

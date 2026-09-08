@@ -9,9 +9,12 @@ from __future__ import annotations
 import json
 import re
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
+
+from ._failures import failure_row
 
 _DEPTH_TIMEOUTS_S = {
     # Wall-clock defaults derived from the product tier budgets (quick=360s,
@@ -23,9 +26,21 @@ _DEPTH_TIMEOUTS_S = {
 _SECRET_KEYS = re.compile(
     r"(?:secret|password|passwd|token|api[_-]?key|authorization|cookie|credential)", re.I
 )
-_SECRET_VALUE = re.compile(r"(?i)\b(?:sk|pk|key|token|bearer)[_-]?[A-Za-z0-9][A-Za-z0-9._-]{15,}")
+_SECRET_VALUE = re.compile(
+    r"(?i)(?<![A-Za-z0-9])(?:"
+    r"(?:sk|pk)[_-][A-Za-z0-9][A-Za-z0-9._-]{15,}|"
+    r"LLM_[A-Za-z0-9][A-Za-z0-9._-]{20,}|"
+    r"bearer\s+[A-Za-z0-9][A-Za-z0-9._-]{15,}"
+    r")"
+)
 _CITATION = re.compile(r"\[\[([^\]]+)\]\]")
 _FOOTNOTE_CITATION = re.compile(r"\[\^([^\]]+)\]")
+
+
+#: The surface that writes a report AGAIN from a run's saved evidence pool,
+#: instead of researching one. A writer change is otherwise judged by paying for
+#: the whole research loop, on a pool no second run can reproduce.
+WRITE_FROM_POOL_SURFACE = "write_from_pool"
 
 
 @dataclass(frozen=True)
@@ -40,6 +55,16 @@ class ResearchRequest:
     timeout_s: float | None = None
     cassette: str | None = None
     auth_token: str | None = None
+    capture_inspect: bool = False
+    #: The saved pool to write from, for ``surface="write_from_pool"``: either a
+    #: path to a pool file or the id of one the server already holds. A path is
+    #: sent INLINE, so a pool captured on another machine replays here.
+    pool: str | None = None
+    #: How long THIS OBSERVER is willing to sit through a product hold before it
+    #: presses Stop. None = forever, which is the honest default: a hold is the
+    #: product waiting out a rate-limited search pool, and the product has no
+    #: wall clock. See :class:`HoldPatience`.
+    hold_patience_s: float | None = None
 
     def __post_init__(self) -> None:
         # The default timeout is derived from the requested depth so a run is
@@ -55,7 +80,12 @@ class ResearchRequest:
         conversation API consumes the deep-research fields.  Sending the
         harmless superset lets this harness exercise either surface while its
         telemetry still records what was requested versus what was supported.
+
+        ``write_from_pool`` is the exception: that route takes a pool and
+        nothing else, so the body says exactly which pool and no more.
         """
+        if self.surface == WRITE_FROM_POOL_SURFACE:
+            return _pool_body(self.pool)
         body: dict[str, Any] = {
             "query": self.query,
             "depth_tier": self.depth,
@@ -66,6 +96,91 @@ class ResearchRequest:
             body["provider"] = self.provider
             body["sources"] = [self.provider]
         return {key: value for key, value in body.items() if value is not None}
+
+
+def _pool_body(pool: str | None) -> dict[str, Any]:
+    """``{"pool": {...}}`` for a pool FILE, ``{"pool_id": ...}`` for one the
+    server already holds. A file is read here and sent whole because the file
+    is the entire contract — the server it replays on need never have seen the
+    run that produced it."""
+    if not pool:
+        raise ValueError("write_from_pool needs a pool file path or a pool id")
+    path = Path(pool)
+    if path.is_file():
+        return {"pool": json.loads(path.read_text(encoding="utf-8"))}
+    return {"pool_id": pool}
+
+
+#: The action name the product emits when it starts waiting out a dead search
+#: pool, and the one it emits when it stops. Read, never produced, by the
+#: harness — this is an outside-observer record.
+HOLD_ACTION = "hold"
+HOLD_RESUMED_ACTION = "hold_resumed"
+#: What the harness writes into the frame log when its own patience ran out, so
+#: a reader can tell the observer's Stop from the user's.
+HOLD_PATIENCE_REASON = "hold_patience"
+
+
+class HoldPatience:
+    """How long this observer will sit through a product hold — observer policy.
+
+    A hold is the product being honest: every search engine is inside its
+    rate-limit cooldown, so it waits instead of burning the run's budget on
+    queries that cannot go out. The product deliberately puts NO wall clock on
+    that, because wall clock is not its budget currency.
+
+    A batch harness has a different problem — it has other runs to get to — so it
+    is allowed to give up watching. That is a decision about the OBSERVER's time,
+    not a limit on the product, and it lands as the product's own Stop
+    (``{"type": "cancel"}``), which produces a resumable checkpoint. It must
+    never be read as a product or provider failure, and the run is labelled
+    ``stopped_during_hold`` precisely so it is not.
+    """
+
+    def __init__(
+        self, patience_s: float | None, *, now: Callable[[], float] = time.monotonic
+    ) -> None:
+        self._patience = patience_s
+        self._now = now
+        self._holding_since: float | None = None
+        self.tripped = False
+
+    def observe(self, frame: Mapping[str, Any]) -> None:
+        """Fold one wire frame in. A hold starts the clock; anything else stops it."""
+        action = _frame_action(frame)
+        if action is None:
+            return
+        if action == HOLD_ACTION:
+            if self._holding_since is None:
+                self._holding_since = self._now()
+        else:
+            self._holding_since = None
+
+    def expired(self) -> bool:
+        """Whether the observer has waited longer than it agreed to."""
+        if self._patience is None or self._holding_since is None or self.tripped:
+            return False
+        return self._now() - self._holding_since >= self._patience
+
+    def trip(self) -> None:
+        self.tripped = True
+
+    @property
+    def holding(self) -> bool:
+        return self._holding_since is not None
+
+
+def _frame_action(frame: Mapping[str, Any]) -> str | None:
+    """The ActionEvent tool name in one wire frame, or None if it is not one."""
+    nested = frame.get("event")
+    event: Mapping[str, Any] = nested if isinstance(nested, Mapping) else frame
+    if str(event.get("kind") or "").casefold() != "action":
+        return None
+    tool_call = event.get("tool_call")
+    if not isinstance(tool_call, Mapping):
+        return None
+    name = tool_call.get("tool_name") or tool_call.get("name")
+    return str(name).casefold() if name else None
 
 
 @dataclass(frozen=True)
@@ -81,8 +196,22 @@ class ObservationEvent:
 class Observation:
     started: float = field(default_factory=time.monotonic)
     events: list[ObservationEvent] = field(default_factory=list)
+    # Model-call records are optional because the public WebSocket does not
+    # expose provider prompts by default. When DISCO_INSPECT is enabled, the
+    # live transport can attach the bounded inspect snapshot here.
+    model_io: list[dict[str, Any]] = field(default_factory=list)
+    # Provider-attempt lifecycle metadata is kept separate from model I/O so
+    # retries never inflate prompt/response counts or expose model content.
+    provider_attempts: list[dict[str, Any]] = field(default_factory=list)
+    inspect_trace: dict[str, Any] | None = None
     probes: list[dict[str, Any]] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
+    # The same terminal failures as STRUCTURE. ``errors`` keeps the sentences it
+    # always kept — a batch tally that bucketed them by regex was reading the
+    # product's prose and would silently mis-bucket every reworded message. Each
+    # row here is the ``failure`` payload the product itself put on the wire:
+    # the class its own raising code path chose, plus the four parts.
+    failures: list[dict[str, Any]] = field(default_factory=list)
     bounds: list[str] = field(default_factory=list)
     source_count: int = 0
     citation_count: int = 0
@@ -98,7 +227,44 @@ class Observation:
             payload=item,
         )
         self.events.append(event)
+        self._collect_model_io(item)
         self._collect(item, phase)
+
+    def record_model_io(self, payload: Mapping[str, Any]) -> None:
+        """Attach one already-redacted model-call record to this run.
+
+        The harness deliberately does not infer hidden reasoning from provider
+        internals.  Callers provide visible request/response content and
+        declared decision metadata through the inspect seam.
+        """
+        self.model_io.append(redact(dict(payload)))
+
+    def record_provider_attempt(self, payload: Mapping[str, Any]) -> None:
+        """Attach bounded provider-attempt metadata from the inspect seam."""
+        self.provider_attempts.append(redact(dict(payload)))
+
+    def record_inspect_trace(self, payload: Mapping[str, Any]) -> None:
+        """Attach the bounded per-conversation inspect snapshot."""
+        snapshot = redact(dict(payload))
+        self.inspect_trace = snapshot
+        trace: Mapping[str, Any] = snapshot
+        nested = trace.get("inspect_trace")
+        if isinstance(nested, Mapping):
+            trace = nested
+        values = trace.get("model_attempts")
+        has_attempt_projection = isinstance(values, list)
+        if not has_attempt_projection:
+            values = [
+                event
+                for event in trace.get("events", [])
+                if isinstance(event, Mapping) and event.get("kind") == "model_attempt"
+            ]
+        if not has_attempt_projection and not values and "model_attempts" not in trace:
+            return
+        self.provider_attempts.clear()
+        for item in values:
+            if isinstance(item, Mapping):
+                self.record_provider_attempt(item)
 
     def _collect(self, item: Mapping[str, Any], phase: str) -> None:
         self._collect_probes(item, phase)
@@ -106,6 +272,18 @@ class Observation:
             if key == "bounded_by" and value:
                 self.bounds.append(str(value))
         self._collect_error(item)
+
+    def _collect_model_io(self, item: Mapping[str, Any]) -> None:
+        # Some transports/projectors surface model calls as a nested model_io
+        # field.  Preserve one record per field and avoid recursively treating
+        # inspect metadata as a second call.
+        value = item.get("model_io")
+        if isinstance(value, Mapping):
+            self.record_model_io(value)
+        elif isinstance(value, list):
+            for row in value:
+                if isinstance(row, Mapping):
+                    self.record_model_io(row)
 
     def _collect_probes(self, item: Mapping[str, Any], phase: str) -> None:
         for key, value in _walk_fields(item):
@@ -119,14 +297,41 @@ class Observation:
                         self.probes.append(row)
 
     def _collect_error(self, item: Mapping[str, Any]) -> None:
-        text = json.dumps(item, ensure_ascii=False).lower()
-        status_error = any(
-            key == "status" and str(value).upper() == "ERROR" for key, value in _walk_fields(item)
+        nested = item.get("event")
+        event = nested if isinstance(nested, Mapping) else item
+        frame_type = str(item.get("type") or "").casefold()
+        event_kind = str(event.get("kind") or "").casefold()
+        state = item.get("state")
+        state_status = state.get("execution_status") if isinstance(state, Mapping) else None
+        status_error = (
+            event_kind == "status" and str(event.get("status") or "").upper() == "ERROR"
+        ) or (
+            frame_type == "state"
+            and str(item.get("status") or state_status or "").upper() == "ERROR"
         )
-        if item.get("type") == "error" or item.get("error") or "exception" in text or status_error:
+        terminal_error = (
+            frame_type == "error"
+            or event_kind in {"error", "agent_error"}
+            or status_error
+        )
+        if terminal_error:
             message = self._error_message(item)
             if message:
                 self.errors.append(str(message))
+            self._collect_failure(event)
+
+    def _collect_failure(self, event: Mapping[str, Any]) -> None:
+        """Keep the structured failure the product declared, if it declared one.
+
+        Read straight off ``ErrorEvent.failure`` — never derived from the
+        message, never inferred from which frame carried it. An event without
+        the field (an older run, or a path that could not honestly name a class)
+        contributes nothing rather than a guess, so a zero here means "the
+        product did not classify it", which is itself the finding.
+        """
+        row = failure_row(event)
+        if row is not None and row not in self.failures:
+            self.failures.append(row)
 
     @staticmethod
     def _error_message(item: Mapping[str, Any]) -> Any:
@@ -136,9 +341,7 @@ class Observation:
                 (
                     value
                     for key, value in _walk_fields(item)
-                    if key in {"message", "error", "detail"}
-                    and isinstance(value, str)
-                    and value
+                    if key in {"message", "error", "detail"} and isinstance(value, str) and value
                 ),
                 None,
             )
@@ -154,6 +357,39 @@ class Observation:
             self.citation_count = len(citations)
         else:
             self.citation_count = len(_citation_ids(report))
+
+    @property
+    def actual_models(self) -> list[str]:
+        values: list[str] = []
+        for event in self.events:
+            for key, value in _walk_fields(event.payload):
+                if key in {"model", "model_used", "chosen_model", "actual_model"} and value:
+                    text = str(value)
+                    if text not in values:
+                        values.append(text)
+        for item in [*self.model_io, *self.provider_attempts]:
+            for key, value in _walk_fields(item):
+                if key in {"model", "model_used", "chosen_model", "actual_model"} and value:
+                    text = str(value)
+                    if text not in values:
+                        values.append(text)
+        return values
+
+    @property
+    def actual_providers(self) -> list[str]:
+        values: list[str] = []
+        sources = [
+            *(event.payload for event in self.events),
+            *self.model_io,
+            *self.provider_attempts,
+        ]
+        for source in sources:
+            for key, value in _walk_fields(source):
+                if key in {"provider", "provider_used", "actual_provider"} and value:
+                    text = str(value)
+                    if text not in values:
+                        values.append(text)
+        return values
 
 
 def redact(value: Any, *, _key: str = "") -> Any:
@@ -220,6 +456,17 @@ def _payload_text_phase(text: str) -> str | None:
     return None
 
 
+#: Report keys whose contents are never report PROSE, so a ``[[id]]`` inside
+#: them is a quotation, not a citation.  The evidence collections were always
+#: excluded; ``meta`` joins them because the writer's declared residual
+#: deficiencies quote the report back (an unresolved-citation finding names the
+#: very ``[[id]]`` it is complaining about), and counting those as citations
+#: would make the report look like it cites evidence it does not have.
+_NON_CITING_KEYS = frozenset(
+    {"passages", "reviewed_passages", "all_hits", "sources", "hits", "meta"}
+)
+
+
 def _citation_ids(value: Any) -> set[str]:
     found: set[str] = set()
     if isinstance(value, Mapping):
@@ -231,7 +478,7 @@ def _citation_ids(value: Any) -> set[str]:
             ):
                 found.update(_CITATION.findall(item))
                 found.update(_FOOTNOTE_CITATION.findall(item))
-            elif key not in {"passages", "reviewed_passages", "all_hits", "sources", "hits"}:
+            elif key not in _NON_CITING_KEYS:
                 found.update(_citation_ids(item))
     elif isinstance(value, list):
         for item in value:

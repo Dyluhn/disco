@@ -13,6 +13,7 @@ import json
 import re
 from collections.abc import Callable
 from typing import Any, Literal
+from urllib.parse import urlsplit
 
 from ..events import WORKSPACE_SNAPSHOT_SENTINEL, LLMMessage, find_elided_arg_markers
 from .provider_ledger import ProviderRequestShape
@@ -208,6 +209,27 @@ def host_requires_explicit_nonthinking(base_url: str) -> bool:
     return (urlsplit(base_url).hostname or "").lower() == "api.deepseek.com"
 
 
+def glm53_lightweight_reasoning(base_url: str, model: str, enabled: bool | None) -> bool:
+    """Translate non-thinking intent for the documented always-thinking GLM 5.3 API.
+
+    Z.ai's GLM 5.3 migration specifies enabled thinking with low effort instead
+    of disabled thinking. OpenCode Go forwards this native model policy.
+    """
+    from urllib.parse import urlsplit
+
+    host = (urlsplit(base_url).hostname or "").lower()
+    model_name = model.rsplit("/", 1)[-1].casefold()
+    return (
+        enabled is False
+        and host in {"api.z.ai", "opencode.ai"}
+        and model_name
+        in {
+            "glm-5.3",
+            "glm-5.3-flash",
+        }
+    )
+
+
 def requires_user_after_terminal_response(base_url: str) -> bool:
     """Whether this compatibility endpoint rejects a trailing response turn."""
     from urllib.parse import urlsplit
@@ -354,6 +376,36 @@ def _tool_arguments_to_wire(raw_arguments: object) -> tuple[str, bool]:
         if not find_elided_arg_markers({str(key): value})
     }
     return json.dumps(arguments, sort_keys=True), len(arguments) != len(raw_arguments)
+
+
+def thinking_payload(
+    base_url: str, model: str, enabled: bool | None, speaks_ctk: bool
+) -> dict[str, Any]:
+    from urllib.parse import urlsplit
+
+    if host_requires_explicit_nonthinking(base_url):
+        return {"thinking": {"type": "disabled"}}
+    if (
+        enabled is False
+        and (urlsplit(base_url).hostname or "").lower() == "ollama.com"
+        and model.rsplit("/", 1)[-1].casefold().split(":", 1)[0] == "deepseek-v4-flash"
+    ):
+        # Ollama exposes thinking control through its compatible API field.
+        # Preserve the caller's explicit nonthinking request on this tested model.
+        return {"reasoning_effort": "none"}
+    if glm53_lightweight_reasoning(base_url, model, enabled):
+        return {"thinking": {"type": "enabled"}, "reasoning_effort": "low"}
+    if (
+        enabled is False
+        and (urlsplit(base_url).hostname or "").lower() == "opencode.ai"
+        and model.rsplit("/", 1)[-1].casefold() == "qwen3.8-flash"
+    ):
+        # Qwen's native flag is forwarded by OpenCode's compatible endpoint.
+        # chat_template_kwargs is a self-hosted server option, not this API.
+        return {"enable_thinking": False}
+    if enabled is not None and speaks_ctk:
+        return {"chat_template_kwargs": {"enable_thinking": enabled}}
+    return {}
 
 
 def _elided_history_call_ids(messages: list[LLMMessage]) -> set[str]:
@@ -527,10 +579,7 @@ def build_payload(
             **(req.provider_prefs or {}),
         }
     et = _resolve_enable_thinking(req=req, enable_thinking=enable_thinking)
-    if host_requires_explicit_nonthinking(base_url):
-        body["thinking"] = {"type": "disabled"}
-    elif et is not None and speaks_ctk:
-        body["chat_template_kwargs"] = {"enable_thinking": et}
+    body.update(thinking_payload(base_url, model, et, speaks_ctk))
     if stream:
         body["stream_options"] = {"include_usage": True}
     ckey = prompt_cache_key_fn(req)
@@ -593,6 +642,7 @@ def build_headers(
     name: str,
     req: CompletionRequest | None,
     conversation_header: str,
+    fallback_session_id: str = "",
 ) -> dict[str, str]:
     """Build the HTTP headers for a provider request."""
     h = {"content-type": "application/json"}
@@ -602,4 +652,14 @@ def build_headers(
     cid = str(raw_cid).strip() if raw_cid is not None else ""
     if cid:
         h[conversation_header] = cid
+    if req is not None:
+        host = (urlsplit(base_url).hostname or "").lower()
+        if host == "opencode.ai":
+            request_id = req.request_id.strip() if isinstance(req.request_id, str) else ""
+            session_id = cid or request_id or fallback_session_id
+            if session_id:
+                h["x-opencode-session"] = session_id
+            if request_id:
+                h["x-opencode-request"] = request_id
+            h["x-opencode-client"] = "disco"
     return h

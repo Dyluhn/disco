@@ -3,7 +3,13 @@
 Reranking is the #1 quality lever (principle 1). The protocols are contractual;
 the shipped implementations are deterministic stubs standing in for the real
 checkpoints ([VERIFY] `bge-reranker-v2-m3`, `bge-m3`) so the pipeline logic is
-testable headless. `reciprocal_rank_fusion` fuses multi-query result lists (§3.2).
+testable headless.
+
+`reciprocal_rank_fusion` (§3.2) fuses several ranked lists into one. It has no
+caller in the shipped pipeline: the retrieval engine issues ONE search per
+query, so there is one list and nothing to fuse. It is kept as the contract's
+named primitive, with its tests, for a future caller that genuinely holds
+several lists — nothing in the deep-research path should grow one back.
 """
 
 from __future__ import annotations
@@ -45,13 +51,83 @@ class Embedder(Protocol):
 
 @runtime_checkable
 class QueryRewriter(Protocol):
-    """[CONTRACT] Produces query paraphrases (one for `standard`, several for
-    `deep`) via the QUERY_REWRITER role (router §15.2)."""
+    """[CONTRACT] Reformulates ONE query into one other query via the
+    QUERY_REWRITER role (router §15.2).
 
-    async def rewrite(self, query: str, *, n: int) -> list[str]: ...
+    Its single caller is the classic research surface, which reformulates only
+    after a round produced zero supported claims. The multi-paraphrase form this
+    protocol used to have existed for the retrieval engine's `deep` fan-out;
+    that fan-out is gone (see `engine.py`) and the parameter went with it, so
+    nothing can quietly start issuing four searches for one question again.
+    """
+
+    async def rewrite(self, query: str) -> str: ...
 
 
 # ---- RRF (§3 step 2) --------------------------------------------------------
+
+
+def merge_search_hits(primary: SearchHit, duplicate: SearchHit) -> SearchHit:
+    """Merge provenance for two hits with the same canonical URL.
+
+    The first hit remains the representative URL/title/snippet.  Later hits can
+    add engine attribution, an exact publication date, or a stronger extraction
+    status; they never create a second source row.
+    """
+
+    engines: list[str] = []
+    for raw in (primary.source_engine, duplicate.source_engine):
+        for label in raw.split("+"):
+            label = label.strip()
+            if label and label not in engines:
+                engines.append(label)
+    status = primary.status
+    if status != "ok" and (duplicate.status == "ok" or status is None):
+        status = duplicate.status
+    return primary.model_copy(
+        update={
+            "source_engine": "+".join(engines),
+            "rank": min(primary.rank, duplicate.rank),
+            "published_at": primary.published_at or duplicate.published_at,
+            "status": status,
+        }
+    )
+
+
+def deduplicate_search_hits(hits: list[SearchHit]) -> list[SearchHit]:
+    """Stable URL-level deduplication used before fetching candidate pages."""
+
+    positions: dict[str, int] = {}
+    out: list[SearchHit] = []
+    for hit in hits:
+        key = source_url_key(hit.url)
+        position = positions.get(key)
+        if position is None:
+            positions[key] = len(out)
+            out.append(hit)
+        else:
+            out[position] = merge_search_hits(out[position], hit)
+    return out
+
+
+def distinct_source_passages(passages: list[Passage], *, top_k: int) -> list[Passage]:
+    """Keep each web document's best passage without crowding out other documents.
+
+    Corpus entries remain individual spans: unlike fetched web documents, their
+    shared URL does not imply that admission can recover the entire document.
+    """
+    seen: set[tuple[str, ...]] = set()
+    selected: list[Passage] = []
+    for passage in passages:
+        key = (
+            ("span", passage.corpus_id or "", passage.id)
+            if passage.corpus_id is not None or not passage.source_url
+            else ("web", source_url_key(passage.source_url))
+        )
+        if key not in seen:
+            seen.add(key)
+            selected.append(passage)
+    return selected[:top_k]
 
 
 def reciprocal_rank_fusion(hit_lists: list[list[SearchHit]], *, k: int = 60) -> list[SearchHit]:
@@ -61,10 +137,15 @@ def reciprocal_rank_fusion(hit_lists: list[list[SearchHit]], *, k: int = 60) -> 
     scores: dict[str, float] = {}
     first_seen: dict[str, SearchHit] = {}
     for hits in hit_lists:
+        seen_in_list: set[str] = set()
         for rank, hit in enumerate(hits):
             key = source_url_key(hit.url)
+            existing = first_seen.get(key)
+            first_seen[key] = hit if existing is None else merge_search_hits(existing, hit)
+            if key in seen_in_list:
+                continue
+            seen_in_list.add(key)
             scores[key] = scores.get(key, 0.0) + 1.0 / (k + rank)
-            first_seen.setdefault(key, hit)
     ordered = sorted(first_seen.items(), key=lambda item: scores[item[0]], reverse=True)
     return [hit for _key, hit in ordered]
 
@@ -106,20 +187,13 @@ class HashingEmbedder:
 
 class RouterQueryRewriter:
     """[CONTRACT] Query rewriter backed by the router's QUERY_REWRITER role.
-    Asks for `n` paraphrases and parses them line by line."""
+    Asks for one rewrite and takes the first non-empty line."""
 
     def __init__(self, router: LLMRouter) -> None:
         self._router = router
 
-    async def rewrite(self, query: str, *, n: int) -> list[str]:
-        if n <= 1:
-            instruction = (
-                f"Rewrite this search query to be clearer; output only the query:\n{query}"
-            )
-        else:
-            instruction = (
-                f"Generate {n} diverse paraphrases of this search query, one per line:\n{query}"
-            )
+    async def rewrite(self, query: str) -> str:
+        instruction = f"Rewrite this search query to be clearer; output only the query:\n{query}"
         req = CompletionRequest(
             profile=CapabilityProfile(role=ModelRole.QUERY_REWRITER),
             messages=[
@@ -141,4 +215,4 @@ class RouterQueryRewriter:
         # SEO junk for a telegraph-history question). Strip before parsing.
         text = strip_think_spans(resp.text)
         lines = [ln.strip(" -•\t") for ln in text.splitlines() if ln.strip()]
-        return lines[:n] or [query]
+        return lines[0] if lines else query

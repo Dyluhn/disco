@@ -11,6 +11,7 @@ import hashlib
 from pathlib import Path
 from typing import Any
 
+from . import _closeout
 from ._constants import ACCEPTED_DIAGRAM_SHA256, SHA256
 
 _DIAGRAM_REL = "current/docs/architecture.generated.md"
@@ -18,7 +19,9 @@ _PKG02_BASE = "1cf00dbe194a2a276ea1fd17ab74589355f2e0dc"
 
 
 def check_contract_file(
-    contract: dict[str, Any], root: Path, problems: list[str],
+    contract: dict[str, Any],
+    root: Path,
+    problems: list[str],
 ) -> None:
     rel = contract.get("path")
     expected = contract.get("sha256")
@@ -36,14 +39,14 @@ def check_contract_file(
         return
     actual = hashlib.sha256(path.read_bytes()).hexdigest()
     if expected != actual or contract.get("bytes") != path.stat().st_size:
-        problems.append(
-            f"contract file drift: {rel} expected {expected}, actual {actual}"
-        )
+        problems.append(f"contract file drift: {rel} expected {expected}, actual {actual}")
 
 
 def check_diagram_transition(
-    transition: dict[str, Any], root: Path,
-    contracts: dict[str, dict[str, Any]], problems: list[str],
+    transition: dict[str, Any],
+    root: Path,
+    contracts: dict[str, dict[str, Any]],
+    problems: list[str],
 ) -> None:
     required = {
         "owner",
@@ -96,8 +99,19 @@ def _logical(path: str) -> str:
     """Bucket-normalised path: a directory move must not read as a rename."""
     for bucket in ("current/", "development/"):
         if path.startswith(bucket):
-            return path[len(bucket):]
+            return path[len(bucket) :]
     return path
+
+
+def _authorize_contract_changes(
+    root: Path, previous: dict[str, Any], changed: list[dict[str, Any]]
+) -> None:
+    try:
+        _closeout.contract_changes(root, previous, changed)
+    except (OSError, ValueError, KeyError, RuntimeError) as error:
+        raise RuntimeError(
+            f"non-diagram contract bytes cannot be rebaselined: {changed}; {error}"
+        ) from error
 
 
 def regenerated_contracts(previous: dict[str, Any], root: Path) -> list[dict[str, Any]]:
@@ -108,25 +122,31 @@ def regenerated_contracts(previous: dict[str, Any], root: Path) -> list[dict[str
         raise RuntimeError("accepted contract-file path authority is missing")
     paths = [row["path"] for row in rows]
     if (
-        paths != sorted(paths) or len(paths) != len(set(paths))
+        paths != sorted(paths)
+        or len(paths) != len(set(paths))
         or _logical(_DIAGRAM_REL) not in {_logical(item) for item in paths}
     ):
         raise RuntimeError("accepted contract-file paths are invalid")
     actual = contract_snapshot(root, paths)
     accepted = {row["path"]: row for row in rows}
-    changed = [row for row in actual if _logical(row["path"]) != _logical(_DIAGRAM_REL)
-               and row != accepted[row["path"]]]
+    changed = [
+        row
+        for row in actual
+        if _logical(row["path"]) != _logical(_DIAGRAM_REL) and row != accepted[row["path"]]
+    ]
     if changed:
-        raise RuntimeError(f"non-diagram contract bytes cannot be rebaselined: {changed}")
+        _authorize_contract_changes(root, previous, changed)
     return actual
 
 
 def updated_diagram_transitions(
-    previous: dict[str, Any], root: Path,
+    previous: dict[str, Any],
+    root: Path,
 ) -> list[dict[str, Any]]:
     rows = previous.get("diagram_transitions")
     if (
-        not isinstance(rows, list) or len(rows) != 1
+        not isinstance(rows, list)
+        or len(rows) != 1
         or not isinstance(rows[0], dict)
         or rows[0].get("from_sha256") != ACCEPTED_DIAGRAM_SHA256
     ):

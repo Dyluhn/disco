@@ -56,13 +56,10 @@ async def test_engine_retrieves_from_space_corpus():
     assert res.all_hits == []  # no web discovery when use_web is False
 
 
-async def test_router_query_rewriter_parses_lines():
-    router = FakeRouter(rewriter_text="first paraphrase\nsecond paraphrase\nthird paraphrase")
+async def test_router_query_rewriter_returns_one_query():
+    router = FakeRouter(rewriter_text="first line\nsecond line\nthird line")
     rw = RouterQueryRewriter(router)
-    many = await rw.rewrite("q", n=4)
-    assert many == ["first paraphrase", "second paraphrase", "third paraphrase"]
-    one = await rw.rewrite("q", n=1)
-    assert one == ["first paraphrase"]
+    assert await rw.rewrite("q") == "first line"
 
 
 async def test_router_query_rewriter_strips_leaked_think():
@@ -73,34 +70,31 @@ async def test_router_query_rewriter_strips_leaked_think():
         "</think>\ntransatlantic cable 1866 finance"
     )
     rw = RouterQueryRewriter(router)
-    assert await rw.rewrite("q", n=1) == ["transatlantic cable 1866 finance"]
+    assert await rw.rewrite("q") == "transatlantic cable 1866 finance"
     # unclosed trailing think (budget ran out) → nothing usable → original query
     router = FakeRouter(rewriter_text="<think>hmm, let me consider what")
     rw = RouterQueryRewriter(router)
-    assert await rw.rewrite("q", n=2) == ["q"]
+    assert await rw.rewrite("q") == "q"
 
 
-async def test_engine_uses_original_query_when_rewriter_provider_fails():
-    """A failed optional rewrite cannot turn a viable search into an empty leg."""
-
-    class _FailingRewriter:
-        async def rewrite(self, query: str, *, n: int) -> list[str]:
-            del query, n
-            raise RuntimeError("provider rejected rewrite")
+async def test_engine_never_reaches_a_rewriter_at_any_depth():
+    """The engine has no rewriter seam left to fail: a `deep` request issues the
+    caller's query, once, exactly as written (regression for the four-paraphrase
+    fan-out that replaced the model's query in 98% of recorded searches)."""
 
     search = FakeSearchProvider([])
     engine = DefaultRetrievalEngine(
         search,
         FakeExtractionProvider({}),
         LexicalReranker(),
-        rewriter=_FailingRewriter(),
     )
 
     result = await engine.retrieve(
         RetrievalRequest(query="Can interpretability predict risky behavior?", depth="deep")
     )
 
-    assert result.issued_queries == ["interpretability predict risky behavior"]
+    assert result.issued_queries == ["Can interpretability predict risky behavior?"]
+    assert search.queries == ["Can interpretability predict risky behavior?"]
 
 
 def test_nli_empty_hypothesis_scores_zero():

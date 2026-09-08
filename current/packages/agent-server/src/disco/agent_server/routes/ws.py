@@ -113,7 +113,13 @@ async def _handle_frame(
     elif frame.type == "send_message" and frame.content is not None:
         await _handle_send_message_frame(store, websocket, conversation_id, frame, runtime)
     elif frame.type == "steer" and frame.steer_text is not None:
-        await _handle_steer_frame(store, conversation_id, frame, runtime)
+        if await _handle_steer_frame(store, conversation_id, frame, runtime) is False:
+            await _send_json_redacted(
+                websocket,
+                WSServerFrame(
+                    type="error", error={"detail": "research_steering_closed"}
+                ).model_dump(mode="json"),
+            )
     elif frame.type == "selection_edit":
         await _handle_selection_edit_frame(store, conversation_id, frame, runtime)
     elif frame.type == "inject_source" and frame.inject_source_text is not None:
@@ -228,15 +234,21 @@ async def _handle_steer_frame(
     conversation_id: str,
     frame: WSClientFrame,
     runtime: ConversationRuntime | None,
-) -> None:
+) -> bool | None:
     """Handle a steer frame: route to the DR queue or kick the agent loop."""
-    # D3: when a DR run is in flight for this cid, route the steer into the
-    # DR queue instead of kicking the agent loop. The engine drains the queue
-    # at each section boundary → the steer becomes a new gather leg.
+    # Research drains guidance at turn boundaries and closes input before
+    # writing. A late steer is explicitly refused, not silently forgotten.
     # OFF-path (no DR run active): falls through to the original agent-loop kick,
     # now routed through the pinned Build kernel (A1 finding #1; disco ⇒ identical).
     steer_text = frame.steer_text or ""
-    if runtime is not None and runtime.deep_research.enqueue_steer(conversation_id, steer_text):
+    if runtime is not None and runtime.deep_research.has_live_run(conversation_id):
+        # Persist before queueing: a restart before the next research boundary
+        # must retain user guidance that the WebSocket accepted.
+        await store.append(conversation_id, _user_message(steer_text, steer=True))
+        if not runtime.deep_research.enqueue_steer(conversation_id, steer_text):
+            if runtime.deep_research.has_live_run(conversation_id):
+                return False
+            await runtime.deep_research._maybe_run_deep_research(conversation_id)
         return
     if runtime is not None:
         await runtime.send_user_turn(conversation_id, steer_text, steer=True)
@@ -323,9 +335,9 @@ async def _close_forbidden_conversation_ws(websocket: WebSocket) -> None:
 
     await _send_json_redacted(
         websocket,
-        WSServerFrame(
-            type="error", error={"detail": "conversation_forbidden"}
-        ).model_dump(mode="json"),
+        WSServerFrame(type="error", error={"detail": "conversation_forbidden"}).model_dump(
+            mode="json"
+        ),
     )
     await websocket.close(code=1008, reason="conversation forbidden")
 

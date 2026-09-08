@@ -94,6 +94,24 @@ def _estimated_json_string_bytes(value: str) -> int:
     return total
 
 
+def estimated_payload_bytes(payload: object) -> int:
+    """The size `append` will measure for this payload — the producer's ruler.
+
+    The append gate rejects on a deliberately conservative UPPER BOUND, not on
+    the real JSON length (it charges a flat 24 bytes per scalar so it can bail
+    out early without serializing). A producer that trims to fit the real length
+    therefore has no idea how close it is to the cap: on an evidence-heavy
+    Deep Research report — thousands of small rows, each with several numeric
+    and null fields — the estimate runs ~8% above the real bytes, which is more
+    than the report builder's headroom, and a report the builder considered
+    fitted was rejected at the final append (live-caught 2026-09-02).
+
+    Anything that sizes a payload before appending it must use this function, so
+    producer and gate measure the same thing.
+    """
+    return _estimated_json_upper_bound(payload, stop_after=MAX_EVENT_PAYLOAD_BYTES)
+
+
 def _estimated_json_upper_bound(value: object, *, stop_after: int) -> int:
     """Conservative, allocation-light JSON size estimate with early exit."""
     total = 0

@@ -2,7 +2,7 @@
 hand-picked cases miss edge cases. Hypothesis generates thousands of inputs
 (truncation, escapes, unicode, control chars) and shrinks any failure.
 
-Run: PYTHONPATH=. uv run pytest development/harness/tests/test_fuzz.py
+Run: uv run pytest development/harness/tests/test_fuzz.py
 """
 
 from __future__ import annotations

@@ -1,19 +1,13 @@
-"""Make the in-repo `harness` package importable regardless of the PYTHONPATH the
-test runner was launched with (the build-soak verify command sets only the
-package-src dirs, not the repo root). Insert the repo root at the front of
-sys.path so `import harness.build_soak...` resolves."""
+"""Hermetic environment for the build-soak suite.
+
+`import harness.build_soak...` needs no sys.path help: `harness` is an installed
+workspace member (`development/pyproject.toml`), so it resolves under the venv
+interpreter whatever PYTHONPATH the runner was launched with.
+"""
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
 import pytest
-
-_REPO_ROOT = Path(__file__).resolve().parents[4]
-if str(_REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_REPO_ROOT))
-
 
 # Every env var `run.py::_relay_log_path()` consults, in its own order. Clearing
 # the WHOLE family (not just the one that bit us) keeps the fix attached to the

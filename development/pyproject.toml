@@ -1,0 +1,32 @@
+# The `harness` package — the outside observer that drives Deep Research and the
+# build loop over the public wire and records what it sees (development/harness/).
+#
+# It is a workspace member for ONE reason: so `import harness` resolves from the
+# repository root under `uv run` and `.venv/bin/python3` without a PYTHONPATH.
+# Before this existed the package was importable only under pytest, which reaches
+# it through `pythonpath` in the root pyproject.toml — so every Makefile target,
+# every CI step and every plain `python -m harness.…` had to carry `PYTHONPATH=.`
+# (and after the three-bucket restructure moved the package to development/, that
+# no longer even worked).
+#
+# The project root is `development/` rather than `development/harness/` because
+# the distribution ships a top-level `harness` package that lives one level down;
+# a member rooted at the package directory would put `development/harness` on the
+# path and `import harness` would still fail.
+#
+# It is development-only and never published. It declares no dependencies of its
+# own: it runs against the workspace's own packages and the shared dev toolchain,
+# both of which `uv sync --all-packages` already provides.
+[project]
+name = "disco-harness"
+version = "0.1.0"
+description = "Wire-level observation harness for Deep Research and the build loop (development-only)."
+requires-python = ">=3.12"
+dependencies = []
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["harness"]

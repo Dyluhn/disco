@@ -16,7 +16,7 @@
 
 import { agentFetch, agentHttpBase, agentLive, agentSend, fixtureDelay } from "./client";
 import { normalizePassageMarkdown } from "./deepResearchParts/passageNormalize";
-import { sourceUrlKey } from "@/lib/sources";
+import { canonicalWorkKey } from "@/lib/sources";
 import type { ReportEvent, ReportSection } from "@/types/agent";
 
 export interface DeepResearchSubmit {
@@ -176,8 +176,8 @@ export async function requestReportAudio(
 
 /** One numbering, everywhere: passage-id → the 1-based [n] numeral the UI
  * renders (lib/sources.ts:citationNumbers) — the position of the passage's
- * SOURCE in first-seen `source_url` order over `report.passages`. Passages
- * from one source share the number; a passage with no URL numbers alone,
+ * WORK in first-seen `source_url` order over `report.passages`. Passages
+ * from one work share the number; a passage with no URL numbers alone,
  * keyed by its id. Same rule over the report's raw passage dicts; the server
  * mirror is `_citation_numbers` in agent-server's _report_citations.py, and
  * the parity tests pin both to the same assignment. */
@@ -189,7 +189,7 @@ function reportCitationNumbers(
   for (const p of passages) {
     const id = String(p.id ?? "?");
     const url = typeof p.source_url === "string" ? p.source_url : "";
-    const key = url ? sourceUrlKey(url) : `#${id}`;
+    const key = url ? canonicalWorkKey(url) : `#${id}`;
     let n = bySource.get(key);
     if (n === undefined) {
       n = bySource.size + 1;
@@ -202,14 +202,32 @@ function reportCitationNumbers(
 
 const CITE_MARKER_RE = /\[\[([^\]]+)\]\]/g;
 
-/** Replace `[[passage_id]]` markers with the UI's `[n]` numeral. Unknown ids
+/** Replace `[[passage_id]]` markers with the UI's `[n]` numeral. Adjacent
+ * markers sharing a source number collapse to one display marker. Unknown ids
  * degrade to `[?]` — a raw id is never shown. Mirrors `_sub_citation_markers`
  * in report_export.py. */
 function subCitationMarkers(text: string, numbers: Map<string, number>): string {
-  return text.replace(CITE_MARKER_RE, (_m, rawId: string) => {
-    const n = numbers.get(rawId.trim());
-    return n !== undefined ? `[${n}]` : "[?]";
-  });
+  const parts: string[] = [];
+  let last = 0;
+  let previousNumber: number | undefined;
+  CITE_MARKER_RE.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = CITE_MARKER_RE.exec(text))) {
+    const between = text.slice(last, match.index);
+    const number = numbers.get(match[1].trim());
+    const duplicate =
+      previousNumber !== undefined &&
+      number !== undefined &&
+      number === previousNumber &&
+      between.trim() === "";
+    if (!duplicate) {
+      parts.push(between, number !== undefined ? `[${number}]` : "[?]");
+    }
+    previousNumber = number;
+    last = match.index + match[0].length;
+  }
+  parts.push(text.slice(last));
+  return parts.join("");
 }
 
 /** One `[n, title, url]` row per citation number, in numeric order — the
@@ -253,7 +271,15 @@ export function serializeReportToMarkdown(
   // markers and the sources footer never show a raw passage id.
   const numbers = reportCitationNumbers(report.passages);
   const lines: string[] = [];
-  lines.push(`# Deep Research: ${report.query}`);
+  lines.push(`# ${report.query}`);
+  lines.push("");
+  // The line under the H1 carries the question VERBATIM, always — the same
+  // unconditional rule Python's serialize_markdown applies, so the two stay
+  // byte-identical. Server-side exports put a generated conversation title in
+  // the H1 (W-10), which left the question recorded nowhere; here the H1 IS
+  // the query, so this line repeats it rather than branching on a title this
+  // serializer is never given.
+  lines.push(`> Question: ${report.query}`);
   lines.push("");
   lines.push("## Executive Summary");
   lines.push("");

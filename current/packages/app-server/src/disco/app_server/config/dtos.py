@@ -471,22 +471,30 @@ class ImageGenConfigDTO(BaseModel):
 
 class DataSourcesConfigDTO(BaseModel):
     """The universal web-data providers (§B). Each slot has three tiers; the bundled
-    defaults (`ddgs` / `local`) need no key. `api_key_env` is the NAME of the env var
-    holding a paid key (never the key itself). The wire mirror of core's
-    SearchSettings + ExtractionSettings."""
+    defaults (`bundled` / `local`) need no key. `api_key_env` is the NAME of the env
+    var holding a paid key (never the key itself). The wire mirror of core's
+    SearchSettings + ExtractionSettings.
+
+    `bundled` is a COMPOSITE of five keyless legs (Parallel, Exa, Wikipedia,
+    arXiv, Semantic Scholar), each of which also stands alone as its own id."""
 
     search_provider: Literal[
-        "ddgs",
+        "bundled",
         "searxng",
         "tavily",
         "brave",
+        "exa",
+        "parallel",
+        "wikipedia",
         "arxiv",
         "news",
         "semantic_scholar",
         "site_scoped",
-    ] = "ddgs"
+    ] = "bundled"
     search_base_url: str = ""
     search_api_key_env: str = ""
+    # searxng ONLY: engine categories for research queries; empty → "general,science"
+    search_categories: str = ""
     extraction_provider: Literal["local", "crawl4ai", "firecrawl"] = "local"
     extraction_base_url: str = ""
     extraction_api_key_env: str = ""

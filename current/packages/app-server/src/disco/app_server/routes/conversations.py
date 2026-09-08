@@ -7,38 +7,60 @@ History surface lists (mirrors the frontend `ConversationSummary`).
 
 from __future__ import annotations
 
-import logging
 import re
 
 import httpx
+from disco.core import ConversationStatus
+from disco.core.auth import CSRF_HEADER, SESSION_COOKIE, cookie_header_values
 from disco.core.env import disco_env
 from disco.core.store.sqlite import SqliteEventStore
+from disco.retrieval.deep_research.recovery import remove_research_artifacts
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from ..auth import current_owner_id
 
-logger = logging.getLogger(__name__)
 _CONVERSATION_ID_RE = re.compile(r"^conv_[A-Za-z0-9_-]+$")
 
-# Best-effort agent-server notify on delete (finding #5): the app-server owns the DB
-# rows but the per-conversation RUNTIME caches (the kernel pin, cached loop, live task,
-# sandbox) live in the SEPARATE agent-server process. When `DISCO_AGENT_BASE` points at
-# the agent-server, a delete fires a best-effort DELETE there so it releases that state;
-# unset → no-op (the agent-server's own delete route still cleans up when hit directly).
-_NOTIFY_TIMEOUT = httpx.Timeout(4.0, connect=2.0)
+# The runtime owner drains work while the owner-scoped row still exists.
+_DELETE_TIMEOUT = httpx.Timeout(30.0, connect=2.0)
 
 
-async def _notify_agent_delete(conversation_id: str, owner_id: str) -> None:
+async def _delete_via_agent(conversation_id: str, request: Request) -> bool:
     base = disco_env("AGENT_BASE", "").rstrip("/")
     if not base:
-        return  # no agent-server URL configured — nothing to notify (graceful)
+        return False
     url = f"{base}/conversations/{conversation_id}"
+    # Forward the authenticated browser's session and CSRF proof to the trusted
+    # configured sibling. An owner_id query argument is not authentication.
+    tokens = cookie_header_values(request.headers.get("cookie"), SESSION_COOKIE)
+    headers = {
+        "Cookie": "; ".join(f"{SESSION_COOKIE}={token}" for token in tokens),
+        CSRF_HEADER: request.headers.get(CSRF_HEADER, ""),
+    }
+    if origin := request.headers.get("origin"):
+        headers["Origin"] = origin
     try:
-        async with httpx.AsyncClient(timeout=_NOTIFY_TIMEOUT) as client:
-            await client.delete(url, params={"owner_id": owner_id})
-    except Exception:  # noqa: BLE001 — cleanup notify must never fail the delete
-        logger.warning("agent-server delete notify failed for %s", conversation_id, exc_info=True)
+        async with httpx.AsyncClient(timeout=_DELETE_TIMEOUT) as client:
+            response = await client.delete(url, headers=headers)
+            response.raise_for_status()
+            result = response.json()
+            if (
+                not isinstance(result, dict)
+                or result.get("id") != conversation_id
+                or result.get("deleted") is not True
+            ):
+                raise ValueError("runtime did not confirm deletion")
+    except (httpx.HTTPError, ValueError) as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "reason": "runtime_delete_unconfirmed",
+                "message": "Deletion could not be confirmed by the Agent server. Refresh History "
+                "and retry if the conversation remains. Other conversations remain usable.",
+            },
+        ) from exc
+    return True
 
 
 class ConversationSummaryDTO(BaseModel):
@@ -128,12 +150,23 @@ def make_conversations_router(store: SqliteEventStore) -> APIRouter:
         # Owner-scoped: a caller can only delete its own (no cross-owner deletes).
         owner_id = current_owner_id(request)
         conversation_id = await _require_owned_conversation(store, conversation_id, owner_id)
+        if await _delete_via_agent(conversation_id, request):
+            if await store.conversation_owner_id(conversation_id) is not None:
+                raise HTTPException(status_code=503, detail={"reason": "runtime_store_mismatch"})
+            return {"id": conversation_id, "deleted": True}
+        if (await store.get_state(conversation_id)).execution_status is ConversationStatus.RUNNING:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "reason": "runtime_owner_required",
+                    "message": "This conversation is running. Delete it through the Agent server "
+                    "so active work stops before its data is removed. "
+                    "Other conversations remain usable.",
+                },
+            )
         deleted = await store.delete_conversation(conversation_id, owner_id=owner_id)
-        # Release the agent-server's in-memory runtime state for this cid (finding #5),
-        # best-effort — only when an agent-server URL is configured; never blocks/fails
-        # the delete (the DB rows are already gone).
         if deleted:
-            await _notify_agent_delete(conversation_id, owner_id)
+            remove_research_artifacts(conversation_id)
         return {"id": conversation_id, "deleted": deleted}
 
     return router

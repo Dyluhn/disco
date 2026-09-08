@@ -45,10 +45,23 @@ from disco.retrieval.vectorstore import InMemoryVectorStore
 
 _TURN0 = (
     '{"brief": "The question asks about X; I will map it before going deep.", '
-    '"action": "search", "queries": ["what is X"]}'
+    '"decision_summary": "Map the question before pivoting.", "coverage": '
+    '{"covered": [], "open": ["baseline"], "contradictions_checked": []}, '
+    '"queries": ["what is X"], "ready_to_write": false}'
 )
-_TURN_STEERED = '{"action": "search", "queries": ["risks of X"]}'
-_DONE = '{"action": "done", "reason": "the evidence covers every angle"}'
+_TURN_STEERED = (
+    '{"brief": "The question asks about X; I will map it before going deep.", '
+    '"decision_summary": "Follow the user steer into risks.", "coverage": '
+    '{"covered": [], "open": ["risks"], "contradictions_checked": []}, '
+    '"queries": ["risks of X"], "ready_to_write": false}'
+)
+_DONE = (
+    '{"brief": "The evidence is sufficient.", "decision_summary": '
+    '"The gathered evidence covers the requested angles.", "coverage": '
+    '{"covered": [{"angle": "baseline", "evidence_ids": ["p1_0"]}], '
+    '"open": [], "contradictions_checked": ["X criticism"]}, '
+    '"queries": [], "ready_to_write": true}'
+)
 _CLEAN_REVIEW = '{"passes": true, "failures": []}'
 _EVIDENCE_ID = re.compile(r"(?m)^\[([\w-]+)\] ")
 
@@ -114,7 +127,7 @@ class _FakeNLI:
 
 class _ScriptedRouter(LLMRouter):
     """Prompt-shape dispatch: research turns replay `turns` (defaulting to
-    done), the writer gets an auto-grounded report, the review passes it.
+    readiness), the writer gets an auto-grounded report, the review passes it.
     Every research-turn user message is recorded so a test can assert what the
     model was actually told."""
 
@@ -182,7 +195,13 @@ def _make_run(
         depth=DepthTier.STANDARD_DEEP,
         conversation_id=conversation_id,
     )
-    run._bound = replace(run._bound, report_min_words=40, report_max_words=4_000)
+    run._bound = replace(
+        run._bound,
+        minimum_research_turns=1,
+        minimum_useful_sources=2,
+        min_evidence_sources=1,
+        min_evidence_themes=1,
+    )
     return run
 
 

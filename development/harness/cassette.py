@@ -37,6 +37,8 @@ class Cassette:
         self._entries: dict[tuple[str, str], Any] = {}
         # ordered log for save() + human inspection
         self._log: list[dict[str, Any]] = []
+        self._ordered: dict[tuple[str, str], list[Any]] = {}
+        self._positions: dict[tuple[str, str], int] = {}
 
     # ---- io -----------------------------------------------------------------
 
@@ -51,8 +53,7 @@ class Cassette:
             if not line:
                 continue
             row = json.loads(line)
-            c._entries[(row["seam"], row["key"])] = row["output"]
-            c._log.append(row)
+            c._load_row(row)
         return c
 
     @classmethod
@@ -78,12 +79,47 @@ class Cassette:
                 continue
             seam = row.get("seam")
             key = row.get("key")
-            output = row.get("output")
-            if seam is None or key is None or "input" not in row:
+            if seam is None or key is None or "input" not in row or "output" not in row:
                 continue
-            c._entries[(seam, key)] = output
-            c._log.append(row)
+            c._load_row(row)
         return c
+
+    def _load_row(self, row: dict[str, Any]) -> None:
+        identity = (row["seam"], row["key"])
+        self._entries.setdefault(identity, row["output"])
+        if "occurrence" in row:
+            values = self._ordered.setdefault(identity, [])
+            if row["occurrence"] != len(values):
+                raise ValueError(f"invalid cassette occurrence for {identity}")
+            values.append(row["output"])
+        self._log.append(row)
+
+    def record_next(self, seam: str, payload: dict[str, Any], output: Any) -> None:
+        """Preserve each response, including failure followed by success on retry."""
+        key = cassette_key(seam, payload)
+        self._load_row(
+            {
+                "seam": seam,
+                "key": key,
+                "input": payload,
+                "output": output,
+                "occurrence": len(self._ordered.get((seam, key), [])),
+            }
+        )
+
+    def lookup_next(self, seam: str, payload: dict[str, Any]) -> Any:
+        """Consume the matching recorded call; legacy one-response rows stay reusable."""
+        identity = (seam, cassette_key(seam, payload))
+        if identity not in self._ordered:
+            return self.lookup(seam, payload)
+        position = self._positions.get(identity, 0)
+        values = self._ordered[identity]
+        if position >= len(values):
+            raise CassetteMiss(
+                f"cassette exhausted: {seam} key={identity[1]} occurrence={position}"
+            )
+        self._positions[identity] = position + 1
+        return values[position]
 
     def save(self, path: str | Path) -> None:
         p = Path(path)

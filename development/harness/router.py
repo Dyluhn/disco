@@ -39,7 +39,7 @@ class RecordingRouter:
 
     async def complete(self, req, *, context=None) -> CompletionResponse:
         resp = await self._inner.complete(req, context=context)
-        self._cas.record("llm.complete", _req_payload(req), resp.model_dump(mode="json"))
+        self._cas.record_next("llm.complete", _req_payload(req), resp.model_dump(mode="json"))
         return resp
 
     async def stream_complete(self, req, *, context=None) -> AsyncIterator[StreamChunk]:
@@ -47,7 +47,7 @@ class RecordingRouter:
         async for ch in self._inner.stream_complete(req, context=context):
             chunks.append(ch)
             yield ch
-        self._cas.record(
+        self._cas.record_next(
             "llm.stream", _req_payload(req), [c.model_dump(mode="json") for c in chunks]
         )
 
@@ -75,10 +75,10 @@ class ReplayRouter:
         self._config = config
 
     async def complete(self, req, *, context=None) -> CompletionResponse:
-        row = self._cas.lookup("llm.complete", _req_payload(req))
+        row = self._cas.lookup_next("llm.complete", _req_payload(req))
         return CompletionResponse.model_validate(row)
 
     async def stream_complete(self, req, *, context=None) -> AsyncIterator[StreamChunk]:
-        rows = self._cas.lookup("llm.stream", _req_payload(req))
+        rows = self._cas.lookup_next("llm.stream", _req_payload(req))
         for r in rows:
             yield StreamChunk.model_validate(r)

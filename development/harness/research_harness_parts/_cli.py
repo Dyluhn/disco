@@ -11,7 +11,7 @@ from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from ._observe import ResearchRequest
+from ._observe import WRITE_FROM_POOL_SURFACE, ResearchRequest
 from ._run import run_batch, run_harness
 from ._transports import (
     FakeTransport,
@@ -38,14 +38,31 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--batch",
         action="store_true",
-        help="run the five-query default acceptance corpus and preserve each trace",
+        help="run the acceptance corpus and preserve each isolated trace",
     )
     parser.add_argument(
         "--queries-file",
         help="newline-delimited query file for --batch (defaults to the acceptance corpus)",
     )
     parser.add_argument("--transport", choices=("live", "replay", "fake"), default="replay")
-    parser.add_argument("--surface", choices=("deep_research", "research"), default="deep_research")
+    parser.add_argument(
+        "--surface",
+        choices=("deep_research", "research", WRITE_FROM_POOL_SURFACE),
+        default="deep_research",
+        help=(
+            "deep_research runs the research loop; write_from_pool skips it and "
+            "writes the report again from --pool, so a writer change is judged "
+            "on evidence a previous run already gathered"
+        ),
+    )
+    parser.add_argument(
+        "--pool",
+        help=(
+            "the saved evidence pool for --surface write_from_pool: a path to a "
+            "pool file (sent inline, so it need not be on the server) or the id "
+            "of one the server already holds"
+        ),
+    )
     parser.add_argument("--cassette")
     parser.add_argument(
         "--frames",
@@ -77,11 +94,41 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--hold-patience-s",
+        type=float,
+        default=None,
+        help=(
+            "OBSERVER POLICY, not a product wall: how long this harness will "
+            "watch a product `hold` (every search engine cooling) before it "
+            "presses the same Stop a user would. The run is then recorded as "
+            "stopped_during_hold — a resumable checkpoint, never a product or "
+            "provider failure. Default: unlimited, matching the product, which "
+            "puts no wall clock on a hold"
+        ),
+    )
+    parser.add_argument(
         "--watch",
         action="store_true",
         help="stream concise, redacted public event progress to stderr",
     )
+    parser.add_argument(
+        "--inspect-model-io",
+        action="store_true",
+        help="fetch the opt-in DISCO_INSPECT trace after each live conversation",
+    )
     parser.add_argument("--output-dir", default="/tmp/disco-deep-research-harness")
+    parser.add_argument(
+        "--concurrency",
+        type=int,
+        default=2,
+        help="maximum number of simultaneous research requests in a batch",
+    )
+    parser.add_argument(
+        "--repeat",
+        type=int,
+        default=1,
+        help="repeat each batch query this many times for reliability sampling",
+    )
     return parser.parse_args(argv)
 
 
@@ -119,11 +166,15 @@ async def _run_batch_cli(
     queries: Sequence[str],
     make_request: Callable[[str], ResearchRequest],
     make_transport: Callable[[ResearchRequest], ResearchTransport],
+    *,
+    concurrency: int,
 ) -> int:
+    repeated = [query for query in queries for _ in range(args.repeat)]
     results = await run_batch(
-        [make_request(query) for query in queries],
+        [make_request(query) for query in repeated],
         transport_factory=make_transport,
         output_dir=args.output_dir,
+        max_concurrency=concurrency,
     )
     ok = all(result.ok for result in results)
     print(
@@ -140,18 +191,30 @@ async def _run_batch_cli(
     return 0 if ok else 1
 
 
-async def _main_async(args: argparse.Namespace) -> int:
-    if not args.batch and not args.query:
+def _validate_main_args(args: argparse.Namespace) -> int | None:
+    """Return the CLI usage status for invalid combinations, if any."""
+    if not args.batch and not args.query and args.surface != WRITE_FROM_POOL_SURFACE:
         return _cli_error("--query is required unless --batch is supplied")
     if args.batch and args.query:
         return _cli_error("--query cannot be combined with --batch")
+    if args.surface == WRITE_FROM_POOL_SURFACE and not args.pool:
+        return _cli_error(f"--surface {WRITE_FROM_POOL_SURFACE} requires --pool")
+    if args.concurrency < 1:
+        return _cli_error("--concurrency must be at least 1")
+    if args.repeat < 1:
+        return _cli_error("--repeat must be at least 1")
+    return None
+
+
+async def _main_async(args: argparse.Namespace) -> int:
+    invalid = _validate_main_args(args)
+    if invalid is not None:
+        return invalid
     cassette = args.cassette
     if args.transport == "replay" and not cassette:
         # The demo cassette lives beside the harness modules, one level above
         # this parts package.
-        cassette = str(
-            Path(__file__).resolve().parent.parent / "cassettes" / "research_demo.jsonl"
-        )
+        cassette = str(Path(__file__).resolve().parent.parent / "cassettes" / "research_demo.jsonl")
     raw_frames: list[Mapping[str, Any]] | None = None
     if args.transport == "fake":
         raw_frames = _load_fake_frames(args.frames)
@@ -170,6 +233,9 @@ async def _main_async(args: argparse.Namespace) -> int:
             timeout_s=args.timeout,
             cassette=cassette,
             auth_token=args.auth_token,
+            capture_inspect=args.inspect_model_io,
+            hold_patience_s=args.hold_patience_s,
+            pool=args.pool,
         )
 
     def make_transport(request: ResearchRequest) -> ResearchTransport:
@@ -183,7 +249,9 @@ async def _main_async(args: argparse.Namespace) -> int:
         queries = _batch_queries(args)
         if not queries:
             return _cli_error("--queries-file did not contain any queries")
-        return await _run_batch_cli(args, queries, make_request, make_transport)
+        return await _run_batch_cli(
+            args, queries, make_request, make_transport, concurrency=args.concurrency
+        )
 
     request = make_request(args.query or "")
     transport = make_transport(request)

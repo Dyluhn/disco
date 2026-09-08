@@ -19,6 +19,58 @@ class EventMigrationError(ValueError):
     """
 
 
+def _is_legacy_stopped_report(raw: dict[str, Any]) -> bool:
+    return (
+        raw.get("kind") == "report"
+        and raw.get("bounded_by") == "stopped"
+        and not str(raw.get("summary", "")).strip()
+        and not raw.get("sections")
+    )
+
+
+def _migrate_legacy_stopped_report(raw: dict[str, Any]) -> dict[str, Any]:
+    """Convert the pre-checkpoint stopped-report shape to a checkpoint."""
+    if not _is_legacy_stopped_report(raw):
+        return raw
+    legacy = raw
+    meta = dict(legacy.get("meta") or {})
+    meta["legacy_stopped_report_migrated"] = True
+    raw = {
+        key: value
+        for key, value in legacy.items()
+        if key
+        in {
+            "id",
+            "source",
+            "timestamp",
+            "schema_version",
+            "seq",
+            "agent_view_id",
+        }
+    }
+    raw.update(
+        {
+            "kind": "research_checkpoint",
+            "meta": meta,
+            "query": str(legacy.get("query", "")),
+            "passages": [
+                *list(legacy.get("passages") or []),
+                *list(legacy.get("reviewed_passages") or []),
+            ],
+            "all_hits": list(legacy.get("all_hits") or []),
+            "trail": [
+                {"kind": "search", "query": query, "resumed": True}
+                for query in list(legacy.get("completed_probes") or [])
+                if isinstance(query, str) and query.strip()
+            ],
+            "completed_queries": list(legacy.get("completed_probes") or []),
+            "depth_tier": legacy.get("depth_tier"),
+            "recency_window": None,
+        }
+    )
+    return raw
+
+
 def migrate_event(raw: dict[str, Any]) -> dict[str, Any]:
     """Upgrade a persisted event dict to the current SCHEMA_VERSION before
     validation. Pure, idempotent, append-only migrations.
@@ -59,4 +111,8 @@ def migrate_event(raw: dict[str, Any]) -> dict[str, Any]:
     # emission default; no workspace evidence exists at this pure read seam.
     if raw.get("kind") == "deliverable" and "artifact_kind" not in raw:
         raw["artifact_kind"] = "app"
-    return raw
+    # Before checkpoints had their own event kind, a user-stopped Deep Research
+    # run was persisted as an empty ReportEvent with ``bounded_by='stopped'``.
+    # Upgrade that overloaded legacy shape on read so ReportEvent can enforce
+    # its actual product contract without making old conversations unreadable.
+    return _migrate_legacy_stopped_report(raw)

@@ -1,0 +1,10 @@
+{
+  "tool_name": "model_activity",
+  "arguments": {
+    "stage": "review",
+    "tokens_streamed": 0,
+    "seconds": 0.0,
+    "call_ordinal": 1,
+    "streams": false
+  }
+}

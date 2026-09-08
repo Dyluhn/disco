@@ -7,6 +7,7 @@ report writer, and invariants are shared by live, replay, and test-fake runs.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import copy
 import json
 import sys
@@ -15,7 +16,13 @@ from pathlib import Path
 from typing import Any, Protocol, cast
 
 from ..cassette import Cassette
-from ._observe import Observation, ResearchRequest
+from ._observe import (
+    HOLD_PATIENCE_REASON,
+    WRITE_FROM_POOL_SURFACE,
+    HoldPatience,
+    Observation,
+    ResearchRequest,
+)
 
 
 class ResearchTransport(Protocol):
@@ -62,6 +69,58 @@ class ReplayTransport:
     def __init__(self, cassette: Cassette | str | Path) -> None:
         self.cassette = cassette if isinstance(cassette, Cassette) else Cassette.load(cassette)
 
+    @staticmethod
+    def _record_legacy_observations(
+        rows: Sequence[Mapping[str, Any]], observer: Observation
+    ) -> None:
+        for row in rows:
+            seam = str(row.get("seam") or "")
+            if seam == "search":
+                payload = row.get("input") or {}
+                observer.record(
+                    {
+                        "type": "search",
+                        "query": payload.get("query") if isinstance(payload, Mapping) else None,
+                        "rows": len(row.get("output") or []),
+                    },
+                    kind="cassette",
+                )
+            elif seam == "extract":
+                payload = row.get("input") or {}
+                output = row.get("output") or {}
+                observer.record(
+                    {
+                        "type": "extract",
+                        "url": payload.get("url") if isinstance(payload, Mapping) else None,
+                        "passage_count": len(output.get("passages") or [])
+                        if isinstance(output, Mapping)
+                        else 0,
+                    },
+                    kind="cassette",
+                )
+
+    @staticmethod
+    def _restore_diagnostic_seams(
+        rows: Sequence[Mapping[str, Any]], observer: Observation
+    ) -> None:
+        """Restore recorded diagnostics without recomputing them from frames."""
+        model_io = ReplayTransport._seam_output(rows, "research.model_io")
+        if model_io is not None:
+            observer.model_io.clear()
+            values = model_io if isinstance(model_io, list) else [model_io]
+            for item in values:
+                if isinstance(item, Mapping):
+                    observer.record_model_io(item)
+        provider_attempts = ReplayTransport._seam_output(rows, "research.provider_attempts")
+        if isinstance(provider_attempts, list):
+            observer.provider_attempts.clear()
+            for item in provider_attempts:
+                if isinstance(item, Mapping):
+                    observer.record_provider_attempt(item)
+        inspect_trace = ReplayTransport._seam_output(rows, "research.inspect")
+        if isinstance(inspect_trace, Mapping):
+            observer.record_inspect_trace(inspect_trace)
+
     async def collect(
         self, request: ResearchRequest, observer: Observation
     ) -> list[dict[str, Any]]:
@@ -69,34 +128,20 @@ class ReplayTransport:
         frames = self._frame_output(rows)
         if frames is None:
             frames = self._legacy_projection(rows, request)
-            for row in rows:
-                seam = str(row.get("seam") or "")
-                if seam == "search":
-                    payload = row.get("input") or {}
-                    observer.record(
-                        {
-                            "type": "search",
-                            "query": payload.get("query") if isinstance(payload, Mapping) else None,
-                            "rows": len(row.get("output") or []),
-                        },
-                        kind="cassette",
-                    )
-                elif seam == "extract":
-                    payload = row.get("input") or {}
-                    output = row.get("output") or {}
-                    observer.record(
-                        {
-                            "type": "extract",
-                            "url": payload.get("url") if isinstance(payload, Mapping) else None,
-                            "passage_count": len(output.get("passages") or [])
-                            if isinstance(output, Mapping)
-                            else 0,
-                        },
-                        kind="cassette",
-                    )
+            self._record_legacy_observations(rows, observer)
         for frame in frames:
             observer.record(frame, kind="replay")
+        # Restore diagnostic seams verbatim so replay preserves model I/O and
+        # inspect evidence instead of recomputing only from public frames.
+        self._restore_diagnostic_seams(rows, observer)
         return frames
+
+    @staticmethod
+    def _seam_output(rows: Sequence[Mapping[str, Any]], seam: str) -> Any:
+        for row in rows:
+            if row.get("seam") == seam:
+                return row.get("output")
+        return None
 
     @staticmethod
     def _frame_output(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]] | None:
@@ -164,12 +209,21 @@ class ReplayTransport:
         ]
 
 
+#: How often the hold watchdog looks. Fine-grained enough that a patience of a
+#: few seconds behaves, cheap enough to leave running for an hour.
+_HOLD_POLL_S = 1.0
+
+
 class LiveWebSocketTransport:
     """Use the deployed agent-server wire API, with no product-side hooks."""
 
     def __init__(self, base_url: str | None = None, *, watch: bool = False) -> None:
         self.base_url = (base_url or "http://localhost:8000").rstrip("/")
         self.watch = watch
+        self.conversation_id: str | None = None
+        # Set per-collect from the request; None means "watch a hold forever",
+        # which is what a single interactive run should do.
+        self._patience: HoldPatience | None = None
 
     def _record(
         self,
@@ -180,6 +234,8 @@ class LiveWebSocketTransport:
         payload = dict(frame)
         frames.append(payload)
         observer.record(payload, kind="live")
+        if self._patience is not None:
+            self._patience.observe(payload)
         if not self.watch:
             return
         event: Mapping[str, Any] = payload
@@ -278,7 +334,7 @@ class LiveWebSocketTransport:
                     self._record(frames, observer, frame)
                     if frame.get("type") == "error":
                         break
-                    if frame.get("type") == "state" and frame.get("status") == "finished":
+                    if _is_terminal_research_frame(frame):
                         break
         return frames
 
@@ -292,7 +348,6 @@ class LiveWebSocketTransport:
         origin = session_headers.pop("Origin")
         body = {
             "surface": "deep_research",
-            "title": request.query[:100],
             "model_override": request.model,
             "depth_tier": request.depth,
             "recency_window": request.recency,
@@ -308,48 +363,212 @@ class LiveWebSocketTransport:
             response = await client.post("/conversations", json=body)
             response.raise_for_status()
             conversation_id = str(response.json()["conversation_id"])
+        self.conversation_id = conversation_id
         url = self.base_url.replace("https://", "wss://").replace("http://", "ws://")
         frames: list[dict[str, Any]] = []
-        async with _connect(
-            websockets,
-            f"{url}/ws/conversations/{conversation_id}",
-            session_headers,
-            request.timeout_s,
-            origin=origin,
-        ) as ws:
-            initial_raw = await asyncio.wait_for(
-                ws.recv(), timeout=min(request.timeout_s or 10.0, 10.0)
-            )
-            initial = json.loads(initial_raw)
-            if not isinstance(initial, dict) or initial.get("type") != "state":
-                raise RuntimeError("conversation WebSocket did not begin with a state frame")
-            self._record(frames, observer, initial)
-            await ws.send(json.dumps({"type": "send_message", "content": request.query}))
+        self._patience = HoldPatience(request.hold_patience_s)
+        watchdog: asyncio.Task[None] | None = None
+        kickoff: asyncio.Task[None] | None = None
+        try:
+            async with _connect(
+                websockets,
+                f"{url}/ws/conversations/{conversation_id}",
+                session_headers,
+                request.timeout_s,
+                origin=origin,
+            ) as ws:
+                initial_raw = await asyncio.wait_for(
+                    ws.recv(), timeout=min(request.timeout_s or 10.0, 10.0)
+                )
+                initial = json.loads(initial_raw)
+                if not isinstance(initial, dict) or initial.get("type") != "state":
+                    raise RuntimeError("conversation WebSocket did not begin with a state frame")
+                self._record(frames, observer, initial)
+                if request.surface == WRITE_FROM_POOL_SURFACE:
+                    # The replay is kicked over HTTP, not over this socket, and
+                    # the POST only returns once the report is written — so it
+                    # runs beside the reader that is watching the same events.
+                    kickoff = asyncio.create_task(
+                        self._post_write_from_pool(
+                            request,
+                            ws,
+                            frames,
+                            observer,
+                            session_headers=session_headers,
+                            mutation_headers=mutation_headers,
+                            origin=origin,
+                            conversation_id=conversation_id,
+                        )
+                    )
+                    command = WRITE_FROM_POOL_SURFACE
+                else:
+                    await ws.send(json.dumps({"type": "send_message", "content": request.query}))
+                    command = "send_message"
+                self._record(
+                    frames,
+                    observer,
+                    {"type": "harness_control", "command": command},
+                )
+                watchdog = self._start_hold_watchdog(ws, frames, observer, request)
+                # v2 (PKG-35): deep research is gateless — the question launches the
+                # run and the model's brief streams as its first output; there is no
+                # AWAITING_PLAN_APPROVAL state to acknowledge.
+                async with asyncio.timeout(request.timeout_s):
+                    async for raw in ws:
+                        frame = json.loads(raw)
+                        self._record(frames, observer, frame)
+                        nested_event = frame.get("event")
+                        event = nested_event if isinstance(nested_event, Mapping) else frame
+                        if event.get("kind") == "report":
+                            # The report is terminal for a deep-research run; keep
+                            # reading one status event when the server supplies it.
+                            continue
+                        if event.get("kind") == "research_checkpoint":
+                            break
+                        if _conversation_status(frame).upper() in {"FINISHED", "ERROR", "PAUSED"}:
+                            break
+                        if frame.get("type") == "error":
+                            break
+        finally:
+            _cancel(watchdog)
+            _cancel(kickoff)
+            # Inspect is diagnostic-only. Fetch it after normal completion,
+            # timeout, or provider failure so an in-flight ``started`` attempt
+            # survives a harness timeout. The helper swallows only its own
+            # diagnostics; the original collection exception remains active.
+            if request.capture_inspect:
+                await self._collect_inspect(
+                    request,
+                    observer,
+                    session_headers=session_headers,
+                    origin=origin,
+                    conversation_id=conversation_id,
+                )
+        return frames
+
+    async def _post_write_from_pool(
+        self,
+        request: ResearchRequest,
+        ws: Any,
+        frames: list[dict[str, Any]],
+        observer: Observation,
+        *,
+        session_headers: Mapping[str, str],
+        mutation_headers: Mapping[str, str],
+        origin: str,
+        conversation_id: str,
+    ) -> None:
+        """Ask the server to write this conversation's report from a saved pool.
+
+        The route appends the same events a run appends, so the socket reader
+        sees an ordinary deep-research stream ending in a ReportEvent. A refused
+        or failed POST would otherwise leave that reader waiting for a report
+        that is never coming, so the failure is recorded and the socket closed.
+        """
+        import httpx
+
+        body = {**request.wire_body(), "conversation_id": conversation_id}
+        try:
+            async with httpx.AsyncClient(
+                base_url=self.base_url,
+                headers={**session_headers, **mutation_headers, "Origin": origin},
+                timeout=request.timeout_s,
+            ) as client:
+                response = await client.post("/research/write-from-pool", json=body)
+                response.raise_for_status()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — a failed kickoff is a run failure
+            observer.errors.append(f"{type(exc).__name__}: {exc}")
             self._record(
                 frames,
                 observer,
-                {"type": "harness_control", "command": "send_message"},
+                {"type": "harness_diagnostic", "write_from_pool_error": str(exc)},
             )
-            # v2 (PKG-35): deep research is gateless — the question launches the
-            # run and the model's brief streams as its first output; there is no
-            # AWAITING_PLAN_APPROVAL state to acknowledge.
-            async with asyncio.timeout(request.timeout_s):
-                async for raw in ws:
-                    frame = json.loads(raw)
-                    self._record(frames, observer, frame)
-                    event = frame.get("event") if isinstance(frame.get("event"), Mapping) else frame
-                    if event.get("kind") == "report":
-                        # The report is terminal for a deep-research run; keep
-                        # reading one status event when the server supplies it.
-                        continue
-                    if event.get("kind") == "status" and str(event.get("status", "")).upper() in {
-                        "FINISHED",
-                        "ERROR",
-                    }:
-                        break
-                    if frame.get("type") == "error":
-                        break
-        return frames
+            with contextlib.suppress(Exception):
+                await ws.close()
+
+    def _start_hold_watchdog(
+        self,
+        ws: Any,
+        frames: list[dict[str, Any]],
+        observer: Observation,
+        request: ResearchRequest,
+    ) -> asyncio.Task[None] | None:
+        """Arm the observer's hold patience, or nothing when it is unlimited."""
+        if request.hold_patience_s is None:
+            return None
+        return asyncio.create_task(self._watch_hold_patience(ws, frames, observer))
+
+    async def _watch_hold_patience(
+        self, ws: Any, frames: list[dict[str, Any]], observer: Observation
+    ) -> None:
+        """Press Stop once this observer has watched a hold longer than it agreed.
+
+        Observer policy, not a product wall: it sends the SAME ``cancel`` a user
+        presses, so the product answers with its own resumable checkpoint. The
+        marker frame records that the harness — not the user, not a failure —
+        ended the run.
+        """
+        patience = self._patience
+        if patience is None:
+            return
+        while True:
+            await asyncio.sleep(_HOLD_POLL_S)
+            if not patience.expired():
+                continue
+            patience.trip()
+            self._record(
+                frames,
+                observer,
+                {
+                    "type": "harness_control",
+                    "command": "cancel",
+                    "reason": HOLD_PATIENCE_REASON,
+                },
+            )
+            await ws.send(json.dumps({"type": "cancel"}))
+            return
+
+    async def _collect_inspect(
+        self,
+        request: ResearchRequest,
+        observer: Observation,
+        *,
+        session_headers: Mapping[str, str],
+        origin: str,
+        conversation_id: str,
+    ) -> None:
+        """Best-effort inspect fetch that cannot replace a transport failure."""
+        try:
+            import httpx
+
+            async with httpx.AsyncClient(
+                base_url=self.base_url,
+                headers={**session_headers, "Origin": origin},
+                timeout=request.timeout_s,
+            ) as client:
+                evidence = await client.get(f"/api/debug/evidence/{conversation_id}")
+                if evidence.is_success:
+                    snapshot = evidence.json()
+                    if isinstance(snapshot, Mapping):
+                        observer.record_inspect_trace(snapshot)
+                        trace = snapshot.get("inspect_trace")
+                        if isinstance(trace, Mapping):
+                            for item in trace.get("model_io", []):
+                                if isinstance(item, Mapping):
+                                    observer.record_model_io(item)
+        except BaseException as exc:  # noqa: BLE001 — diagnostics must not mask collection
+            try:
+                observer.record({"type": "harness_diagnostic", "inspect_error": str(exc)})
+            except Exception:
+                pass
+
+
+def _cancel(task: asyncio.Task[None] | None) -> None:
+    """Stop the hold watchdog, whether or not one was ever armed."""
+    if task is not None:
+        task.cancel()
 
 
 def _transport_for(request: ResearchRequest) -> ResearchTransport:
@@ -366,6 +585,20 @@ def _conversation_status(frame: Mapping[str, Any]) -> str:
         if event.get("kind") == "status":
             return str(event.get("status") or "")
     return ""
+
+
+def _is_terminal_research_frame(frame: Mapping[str, Any]) -> bool:
+    """Recognize terminal report, checkpoint, and lifecycle frames."""
+    nested_event = frame.get("event")
+    event: Mapping[str, Any] = nested_event if isinstance(nested_event, Mapping) else frame
+    if str(event.get("kind") or "").lower() in {"report", "research_checkpoint"}:
+        return True
+    status = str(event.get("status") or "").upper()
+    if frame.get("type") == "state":
+        state = frame.get("state")
+        state_status = state.get("execution_status") if isinstance(state, Mapping) else None
+        status = str(frame.get("status") or state_status or status).upper()
+    return status in {"FINISHED", "ERROR", "PAUSED"}
 
 
 def _connect(

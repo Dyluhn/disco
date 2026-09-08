@@ -9,6 +9,7 @@ models are cached.
 from __future__ import annotations
 
 import pytest
+from disco.core.env import disco_env
 from disco.core.llm.nli import NLIVerifier
 from disco.retrieval.live import build_live_retrieval
 from disco.retrieval.local_encoders import (
@@ -44,9 +45,9 @@ def test_remote_encoders_are_opt_in():
     assert type(d["reranker"]).__name__ == "TeiReranker"
     assert type(d["embedder"]).__name__ == "OpenAIEmbedder"
     assert type(d["nli"]).__name__ == "SidecarNLIVerifier"
-    # search + extraction now default to the BUNDLED tiers (ddgs/local) — keyless,
-    # the universal first-run default — independent of the encoder mode.
-    assert type(d["search"]).__name__ == "DdgsSearchProvider"
+    # search + extraction now default to the BUNDLED tiers (keyless composite /
+    # local) — the universal first-run default — independent of the encoder mode.
+    assert type(d["search"]).__name__ == "MultiSearchProvider"
     assert type(d["extraction"]).__name__ == "LocalExtractionProvider"
 
 
@@ -65,6 +66,45 @@ def test_multilingual_e5_pins_mean_pooling() -> None:
     factory = _embedding_factory("intfloat/multilingual-e5-large")
 
     assert factory.__name__ == "PooledEmbedding"
+
+
+def test_nli_load_failure_is_visible_without_retrying_download_for_every_claim(monkeypatch):
+    from disco.retrieval import local_encoders as le
+
+    attempts = []
+
+    def unavailable():
+        attempts.append(True)
+        raise OSError("offline")
+
+    monkeypatch.setattr(le, "_nli_backend", unavailable)
+    verifier = FastEmbedNLIVerifier()
+    for claim in ("Claim one", "Claim two"):
+        assert verifier.entail("Evidence", claim) == "neutral"
+        assert verifier.score("Evidence", claim) == 0.0
+        assert not verifier.verification_available("Evidence", claim)
+    assert len(attempts) == 1
+    assert verifier.verifier_failures == 2
+
+
+def test_nli_label_score_and_availability_share_the_same_measurement(monkeypatch):
+    from disco.retrieval import local_encoders as le
+    from disco.retrieval.local_nli import NLIPrediction
+
+    calls = []
+
+    class Backend:
+        def predict(self, premise, hypothesis):
+            calls.append((premise, hypothesis))
+            return NLIPrediction("contradict", 0.02)
+
+    monkeypatch.setattr(le, "_nli_backend", Backend)
+    verifier = FastEmbedNLIVerifier()
+    assert verifier.entail("Evidence", "Claim") == "contradict"
+    assert verifier.score("Evidence", "Claim") == 0.02
+    assert verifier.verification_available("Evidence", "Claim")
+    assert calls == [("Evidence", "Claim")]
+    assert verifier.verifier_failures == 0
 
 
 async def test_rerank_truncates_and_batches_to_bound_memory(monkeypatch):
@@ -141,7 +181,7 @@ async def test_embedder_returns_dense_vectors_and_semantic_order():
     assert cos(v[0], v[1]) > cos(v[0], v[2])  # related > unrelated
 
 
-@live
+@pytest.mark.skipif(not disco_env("NLI_MODEL_DIR"), reason="NLI model not explicitly provisioned")
 def test_nli_scores_a_supported_claim_above_an_unrelated_one():
     nli = FastEmbedNLIVerifier()
     supported = nli.score("Paris is the capital of France.", "The capital of France is Paris.")

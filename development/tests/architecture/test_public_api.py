@@ -18,7 +18,7 @@ from typing import Any
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _helpers import assert_problem_contains, git_add, write  # noqa: E402
+from _helpers import PUBLIC_API_MEMBER_NAMES, assert_problem_contains, git_add, write  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "development" / "scripts"))
 from architecture import public_api  # noqa: E402
@@ -874,7 +874,7 @@ class TestFrontendPublicApi:
         # (tapTarget, useScrollFade, ScrollFade). 407 after the composer redesign
         # (SearchTypeSlider, DriverModelNotice, focusModelControl). 409 after the
         # production-readiness wave (McpImportBox, passageNormalize). All additive.
-        assert len(live["frontend_modules"]) == 409
+        assert len(live["frontend_modules"]) == 419
         assert len(authority["contract_files"]) == 2
         assert all(set(row) == {"path", "sha256", "bytes"} for row in authority["contract_files"])
         assert module == {
@@ -979,19 +979,10 @@ class TestFrontendPublicApi:
         # and ModelEntry; records policy adds Entity; MCP diagnostics add McpPool;
         # the launch closeout widens WSClientFrame's `type` Literal with the
         # explicit accept_finished stop-intent frame.
-        assert {row["public_name"] for row in baseline["member_transitions"]} == {
-            "WSClientFrame", "McpPool", "HttpVerifyClient",
-            "DefaultToolExecutor",
-            "ConfigState",
-            "ConfigStore",
-            "SecretBox", "SecretStore", "BuildPlatformAdmissionEvent",
-            "BuildPlatformRegistry", "ConversationRuntime", "AgentLoop",
-            "FinishGate",
-            "AgentErrorEvent",
-            "RetrievalRequest", "SearchHit", "DepthBound", "SectionContent", "Passage",
-            "DefaultLLMRouter", "LLMSummarizingCondenser", "ReportEvent", "ReportFromRun",
-            "ProviderSettings", "ModelEntry", "Entity", "DeepResearchRun",
-        }
+        assert (
+            {row["public_name"] for row in baseline["member_transitions"]}
+            == PUBLIC_API_MEMBER_NAMES
+        )
         for row in baseline["member_transitions"]:
             # A member transition never changes origin — that is a bridge's job.
             assert row["removed_members"] or row["added_members"]

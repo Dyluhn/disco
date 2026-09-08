@@ -31,6 +31,9 @@ def test_logging_inspect_and_provider_variables_reach_their_consumers() -> None:
     agent_service = services["agent-server"]
     agent = agent_service["environment"]
 
+    assert app["DISCO_AGENT_BASE"] == "http://agent-server:8000"
+    assert agent["DISCO_NLI_MODEL_DIR"] == "/opt/disco-cache/nli"
+
     assert agent["DISCO_INSPECT"] == "${DISCO_INSPECT:-0}"
     assert app["DISCO_APPROVALS"] == "/data/disco-approved-origins.json"
     assert agent["DISCO_APPROVALS"] == "/data/disco-approved-origins.json"

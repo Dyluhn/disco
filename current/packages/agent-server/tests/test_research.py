@@ -9,6 +9,7 @@ frames (state → token… → final → state) — the same contract the fixtur
 from __future__ import annotations
 
 from disco.agent_server import ConversationRuntime, create_app
+from disco.agent_server._deep_research_service_parts.execute import build_router_and_engine
 from disco.core import SqliteEventStore
 from disco.core.llm import (
     CompletionResponse,
@@ -258,6 +259,13 @@ def test_think_toggles_reasoning_on_the_answerer_provider(tmp_path):
     off = rt._router_now(enable_thinking=False)._providers["qwen"]
     assert on._enable_thinking is True
     assert off._enable_thinking is False
+
+    deep_router, _engine = build_router_and_engine(
+        rt.deep_research,
+        "deep-research-mode",
+        {"search": _FakeSearch(), "extraction": _FakeExtraction(), "reranker": _FakeReranker()},
+    )
+    assert deep_router._providers["qwen"]._enable_thinking is True
 
 
 def test_research_rejects_empty_query():

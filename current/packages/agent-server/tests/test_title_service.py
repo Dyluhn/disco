@@ -193,6 +193,44 @@ async def test_run_falls_back_when_model_fails() -> None:
 
 
 @pytest.mark.anyio
+async def test_a_failed_summarizer_call_says_so_at_warning(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The title it falls back to is permanent, so the failure has to be findable.
+
+    It was logged at DEBUG, which is why a 14,976-line acceptance log covering
+    299 conversations carried exactly one line about titling at all.
+    """
+    store = _FakeStore([_user("Build a personal finance dashboard with charts")])
+    svc = TitleService(store, lambda *a, **k: _FakeRouter(raises=True))
+
+    with caplog.at_level("WARNING", logger="disco.agent_server.title_service"):
+        await svc._run("cid")  # type: ignore[attr-defined]
+
+    assert [r.getMessage() for r in caplog.records if r.levelname == "WARNING"] == [
+        "auto-title: summarizer call failed (RuntimeError: provider down); "
+        "storing the first-words fallback"
+    ]
+
+
+@pytest.mark.anyio
+async def test_a_summarizer_that_returns_nothing_usable_says_so_at_warning(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Two empty passes is the other failure shape, and it raised nothing."""
+    store = _FakeStore([_user("Build a personal finance dashboard with charts")])
+    svc = TitleService(store, lambda *a, **k: _ScriptedRouter(["", ""]))
+
+    with caplog.at_level("WARNING", logger="disco.agent_server.title_service"):
+        await svc._run("cid")  # type: ignore[attr-defined]
+
+    assert [r.getMessage() for r in caplog.records if r.levelname == "WARNING"] == [
+        "auto-title: summarizer '' produced no usable title in two passes; "
+        "storing the first-words fallback"
+    ]
+
+
+@pytest.mark.anyio
 async def test_run_noop_when_no_first_message_yet() -> None:
     store = _FakeStore([_env("ctx only")])
     router = _FakeRouter(text="X")

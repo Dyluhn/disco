@@ -81,6 +81,7 @@ class EventKind(str, Enum):
     ERROR = "error"  # conversation-level error (distinct from agent_error)
     PLAN = "plan"  # a proposed, structured plan awaiting approval (Build plan-mode)
     REPORT = "report"  # a finished Deep Research multi-section grounded report
+    RESEARCH_CHECKPOINT = "research_checkpoint"  # user-stopped resumable research state
     ALTERNATIVES = "alternatives"  # 2–3 user-choosable options after repeated tool failure
     KNOWLEDGE = "knowledge"  # a scoped best-practice snippet (Cluster 7)
     RUNTIME_CONSTRAINT = "runtime_constraint"  # host-authored typed constraint + recovery

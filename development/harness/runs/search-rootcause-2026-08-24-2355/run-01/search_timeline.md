@@ -1,0 +1,55 @@
+# Deep Research search timeline
+
+| # | Round/turn | Planned → issued | Provider | Outcome | Hits | Extract | Passages | Admitted | Yield | Latency |
+| ---: | --- | --- | --- | --- | ---: | ---: | ---: | ---: | --- | ---: |
+| 1 | 1 / ? | Eric Cline 1177 BC Late Bronze Age collapse theories evidence → Eric Cline "1177 BC" Late Bronze Age collapse theories evidence | searxng | degraded | 0 | 0 | 0 | 0 | no_hits | 15 |
+| 2 | 1 / ? | Sea Peoples Medinet Habu inscription Egyptian texts evidence → Egyptian textual evidence Sea Peoples Medinet Habu inscription | searxng | degraded | 0 | 0 | 0 | 0 | no_hits | 14 |
+| 3 | 1 / ? | Late Bronze Age collapse paleoclimate drought evidence Kaniewski Drake → "Late Bronze Age collapse" paleoclimate drought evidence Kaniewski Drake | searxng | degraded | 0 | 0 | 0 | 0 | no_hits | 15 |
+| 4 | 2 / ? | Late Bronze Age collapse chronology Mycenaean Hittite palatial destruction 1200 BCE → Chronology Late Bronze Age collapse Mycenaean Hittite palatial destruction 1200 BCE | searxng | ok | 7 | 6 | 6 | 4 | — | 750 |
+| 5 | 2 / ? | Late Bronze Age earthquake storm hypothesis archaeoseismology evidence → archaeoseismological evidence Late Bronze Age earthquake storm hypothesis | searxng | ok | 7 | 6 | 6 | 5 | — | 608 |
+| 6 | 2 / ? | Late Bronze Age systems collapse trade networks tin copper interconnectivity → "Late Bronze Age collapse" tin copper trade networks interconnectivity | searxng | ok | 7 | 6 | 6 | 4 | — | 1508 |
+| 7 | 3 / ? | Sea Peoples Medinet Habu inscription Ugarit RS 18.147 textual evidence → Sea Peoples textual evidence Medinet Habu inscription Ugarit RS 18.147 | searxng | degraded | 0 | 0 | 0 | 0 | no_hits | 14 |
+| 8 | 3 / ? | Late Bronze Age collapse paleoclimate drought pollen isotope Kaniewski Manning evidence → "Late Bronze Age collapse" paleoclimate drought pollen isotope evidence Kaniewski Manning | searxng | degraded | 0 | 0 | 0 | 0 | no_hits | 15 |
+| 9 | 3 / ? | Late Bronze Age systems collapse Eric Cline 1177 BC synthesis interconnectivity → Eric Cline "1177 BC" Late Bronze Age systems collapse synthesis interconnectivity | searxng | degraded | 0 | 0 | 0 | 0 | no_hits | 14 |
+| 10 | 4 / ? | Ugarit letters famine Sea Peoples Late Bronze Age archive → Ugarit archive letters famine "Sea Peoples" "Late Bronze Age" | searxng | degraded | 0 | 0 | 0 | 0 | no_hits | 15 |
+| 11 | 4 / ? | Eastern Mediterranean drought 1200 BCE pollen sediment isotope evidence → "Eastern Mediterranean" drought 1200 BCE pollen sediment isotope evidence | searxng | degraded | 0 | 0 | 0 | 0 | no_hits | 14 |
+| 12 | 4 / ? | Late Bronze Age collapse criticism debate Sea Peoples drought theory limits → Debate criticism limits Sea Peoples drought theories Late Bronze Age collapse | searxng | degraded | 0 | 0 | 0 | 0 | no_hits | 15 |
+| 13 | 5 / ? | Mycenaean Pylos Linear B tablets palace destruction evidence → Linear B tablets evidence palace destruction Mycenaean Pylos | searxng | degraded | 0 | 0 | 0 | 0 | no_hits | 14 |
+| 14 | 5 / ? | Hattusa Ugarit archaeological destruction Late Bronze Age 1200 BCE → Hattusa Ugarit archaeological destruction evidence Late Bronze Age 1200 BCE | searxng | degraded | 0 | 0 | 0 | 0 | no_hits | 15 |
+| 15 | 5 / ? | eastern Mediterranean Late Bronze Age drought climate proxy pollen → "eastern Mediterranean" "Late Bronze Age" drought climate proxy pollen | searxng | degraded | 0 | 0 | 0 | 0 | no_hits | 15 |
+| 16 | 6 / ? | Late Bronze Age collapse Sea Peoples migration evidence → evidence Sea Peoples migration Late Bronze Age collapse | searxng | ok | 7 | 6 | 6 | 3 | — | 1963 |
+| 17 | 6 / ? | Late Bronze Age collapse drought climate proxy evidence → climate proxy evidence drought Late Bronze Age collapse | searxng | ok | 7 | 6 | 2 | 2 | — | 2636 |
+| 18 | 6 / ? | Late Bronze Age collapse Linear B palace economy social unrest → "Late Bronze Age collapse" "Linear B" "palace economy" "social unrest" | searxng | ok | 7 | 6 | 6 | 2 | — | 1206 |
+| 19 | 7 / ? | Medinet Habu Ramesses III Sea Peoples inscription evidence → Medinet Habu inscriptions evidence Ramesses III Sea Peoples | searxng | degraded | 0 | 0 | 0 | 0 | no_hits | 186 |
+| 20 | 7 / ? | Ugarit letters famine grain shipments Hittite archive → Ugarit letters concerning famine grain shipments Hittite archives | searxng | degraded | 0 | 0 | 0 | 0 | no_hits | 169 |
+| 21 | 7 / ? | Late Bronze Age collapse pollen sediment isotope drought proxy → "Late Bronze Age collapse" pollen sediment isotope drought proxy | searxng | degraded | 0 | 0 | 0 | 0 | no_hits | 14 |
+| 22 | 8 / ? | Cline 1177 BC perfect storm systems collapse synthesis → Eric Cline "1177 BC" "perfect storm" systems collapse synthesis | searxng | degraded | 0 | 0 | 0 | 0 | no_hits | 180 |
+| 23 | 8 / ? | Late Bronze Age collapse regional variation Egypt Cyprus continuity survival → Late Bronze Age collapse regional variation continuity survival Egypt Cyprus | searxng | degraded | 0 | 0 | 0 | 0 | no_hits | 15 |
+| 24 | 8 / ? | Late Bronze Age collapse critique debate limits historiography → critique debate historiographical limits Late Bronze Age collapse | searxng | degraded | 0 | 0 | 0 | 0 | no_hits | 157 |
+| 25 | 9 / ? | Hattusa Mycenae Ugarit destruction layers burned palaces 1200 BCE archaeology → Archaeological evidence burned palaces destruction layers Hattusa Mycenae Ugarit circa 1200 BCE | searxng | ok | 7 | 6 | 6 | 5 | — | 1914 |
+| 26 | 9 / ? | Late Bronze Age palatial economy collapse internal unrest rebellion evidence → evidence internal unrest rebellion Late Bronze Age palatial economy collapse | searxng | ok | 7 | 6 | 6 | 6 | — | 637 |
+| 27 | 9 / ? | Cyprus Alashiya Egypt survival continuity after 1200 BCE collapse resilience → Cyprus Egypt survival continuity resilience after 1200 BCE collapse | searxng | ok | 7 | 6 | 6 | 2 | — | 1502 |
+| 28 | 10 / ? | Bronze Age collapse criticism debate limits single cause theory → Bronze Age collapse debate criticism single-cause theory limitations | searxng | degraded | 0 | 0 | 0 | 0 | no_hits | 15 |
+| 29 | 10 / ? | eastern Mediterranean Late Bronze Age paleoclimate pollen isotope sediment proxy → "eastern Mediterranean" "Late Bronze Age" paleoclimate proxy pollen isotope sediment | searxng | degraded | 0 | 0 | 0 | 0 | no_hits | 16 |
+| 30 | 10 / ? | Late Bronze Age collapse systems theory historiography current consensus → Current scholarly consensus historiography systems theory Late Bronze Age collapse | searxng | degraded | 0 | 0 | 0 | 0 | no_hits | 180 |
+| 31 | 11 / ? | Ugarit letters famine grain Hittite Late Bronze Age → "Ugarit letters" famine grain Hittite "Late Bronze Age" | searxng | ok | 7 | 6 | 6 | 4 | — | 732 |
+| 32 | 11 / ? | Levant pollen core drought 1200 BCE evidence → Levant pollen core evidence drought 1200 BCE | searxng | ok | 7 | 6 | 6 | 5 | — | 988 |
+| 33 | 11 / ? | Sea Peoples theory criticism limits evidence → critiques limitations evidence Sea Peoples theory | searxng | ok | 7 | 6 | 6 | 5 | — | 684 |
+| 34 | 12 / ? | Late Bronze Age collapse current consensus multi-causal explanation → Current scholarly consensus multi-causal explanation Late Bronze Age collapse | searxng | degraded | 0 | 0 | 0 | 0 | no_hits | 16 |
+| 35 | 12 / ? | Late Bronze Age collapse climate proxy isotope sediment evidence → isotope sediment climate proxy evidence Late Bronze Age collapse | searxng | ok | 7 | 6 | 4 | 2 | — | 954 |
+| 36 | 12 / ? | Late Bronze Age collapse debate criticism limits historiography → historiographical criticism limitations Late Bronze Age collapse debate | searxng | degraded | 0 | 0 | 0 | 0 | no_hits | 15 |
+| 37 | 13 / ? | Late Bronze Age collapse scholarly consensus multi-causal systems theory historiography → Late Bronze Age collapse historiography scholarly consensus multi-causal systems theory | searxng | ok | 7 | 6 | 6 | 4 | — | 769 |
+| 38 | 13 / ? | Mavri Trypa stalagmite Pylos isotope drought Late Bronze Age climate → "Mavri Trypa" stalagmite Pylos isotope drought "Late Bronze Age" climate | searxng | ok | 0 | 0 | 0 | 0 | no_hits | 715 |
+| 39 | 13 / ? | earthquake storm hypothesis critique limits Nur Cline debate → critique limitations "earthquake storm hypothesis" Nur Cline debate | searxng | ok | 0 | 0 | 0 | 0 | no_hits | 533 |
+| 40 | 14 / ? | Late Bronze Age collapse historiography review multi-causal consensus Middleton Knapp → "Late Bronze Age collapse" historiography review multi-causal consensus Middleton Knapp | searxng | degraded | 0 | 0 | 0 | 0 | no_hits | 14 |
+| 41 | 14 / ? | critique climate determinism Late Bronze Age collapse limits drought evidence debate → critique climate determinism Late Bronze Age collapse debate limits drought evidence | searxng | degraded | 0 | 0 | 0 | 0 | no_hits | 151 |
+| 42 | 14 / ? | archaeoseismology earthquake storm criticism Late Bronze Age Nur Cline debate → archaeoseismology "earthquake storm" criticism "Late Bronze Age" Nur Cline debate | searxng | degraded | 0 | 0 | 0 | 0 | no_hits | 14 |
+| 43 | 15 / ? | Knapp Manning "Crisis in Context" 2016 Journal Archaeological Research Late Bronze Age collapse synthesis → Knapp Manning "Crisis in Context" 2016 "Journal of Archaeological Research" "Late Bronze Age collapse" synthesis | searxng | ok | 6 | 6 | 6 | 6 | — | 698 |
+| 44 | 15 / ? | Middleton "Understanding Collapse" 2017 critique resilience Late Bronze Age historiography → Middleton "Understanding Collapse" 2017 critique resilience "Late Bronze Age" historiography | searxng | ok | 7 | 6 | 6 | 1 | — | 661 |
+| 45 | 15 / ? | site:cambridge.org OR site:annualreviews.org Late Bronze Age collapse multi-causal systems review → "Late Bronze Age collapse" multi-causal systems review | searxng | ok | 7 | 6 | 6 | 2 | — | 734 |
+| 46 | 16 / ? | Knapp Manning 2016 Crisis in Context critique climate migration determinism limits → Knapp Manning 2016 "Crisis in Context" critique climate migration determinism limits | searxng | ok | 7 | 6 | 3 | 3 | — | 765 |
+| 47 | 16 / ? | Middleton Understanding Collapse critique resilience systems theory Late Bronze Age → Middleton "Understanding Collapse" critique resilience systems theory Late Bronze Age | searxng | ok | 7 | 6 | 6 | 4 | — | 824 |
+| 48 | 16 / ? | Nur Cline earthquake storm critique archaeoseismology limits debate → Amos Nur Eric Cline "earthquake storm" hypothesis critique archaeoseismology limits debate | searxng | ok | 0 | 0 | 0 | 0 | no_hits | 668 |
+| 49 | 17 / ? | critique environmental determinism Late Bronze Age collapse resilience debate → critique environmental determinism Late Bronze Age collapse resilience debate | searxng | ok | 7 | 6 | 6 | 4 | — | 792 |
+| 50 | 17 / ? | archaeoseismology limits critique earthquake storm hypothesis Mediterranean → limitations critiques archaeoseismology regarding earthquake storm hypothesis Mediterranean | searxng | ok | 7 | 6 | 6 | 3 | — | 1168 |
+| 51 | 17 / ? | Middleton Understanding Collapse critique climate migration determinism review → Middleton "Understanding Collapse" review critique climate migration determinism | searxng | ok | 7 | 6 | 6 | 2 | — | 676 |

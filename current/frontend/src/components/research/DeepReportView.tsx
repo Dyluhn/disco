@@ -20,6 +20,8 @@ import type { ReportEvent } from "@/types/agent";
 
 interface Props {
   query: string;
+  /** The containing research surface already owns the document heading. */
+  titleAlreadyShown?: boolean;
   summary: string | null;
   assembling: AssemblingSection[];
   /** When present, the finished report — supplies the authoritative passages
@@ -271,7 +273,7 @@ function SectionView({
   );
 }
 
-export function DeepReportView({ query, summary, assembling, report, cid }: Props) {
+export function DeepReportView({ query, titleAlreadyShown = false, summary, assembling, report, cid }: Props) {
   const answer = asGroundedAnswer(report, query);
   // ToC: every section title with a state badge (writing / pending get an
   // indicator beside the link so the user knows they're in flight).
@@ -279,9 +281,11 @@ export function DeepReportView({ query, summary, assembling, report, cid }: Prop
     <div className="mx-auto grid w-full max-w-doc grid-cols-1 gap-major px-body lg:grid-cols-[1fr_14rem]">
       <article className="mx-auto flex w-full max-w-measure flex-col gap-section">
         <header className="flex flex-wrap items-baseline gap-inline border-b border-hairline pb-section">
-          <h1 className="font-display text-[2.25rem] font-medium leading-tight tracking-tight text-text">
-            {query}
-          </h1>
+          {!titleAlreadyShown && (
+            <h1 className="font-display text-[2.25rem] font-medium leading-tight tracking-tight text-text">
+              {query}
+            </h1>
+          )}
           {/* Report-level NLI support signal — REAL per-claim verdict counts. */}
           {answer && answer.claims.length > 0 && (
             <span className="ml-auto shrink-0 self-center">

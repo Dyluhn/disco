@@ -165,11 +165,9 @@ class DeepResearchProvider:
         cfg = self._config_store.load()
         enc, sch, ext = cfg.encoders, cfg.search, cfg.extraction
 
-        search_secret_url = {
-            "tavily": "https://api.tavily.com",
-            "brave": sch.base_url or "https://api.search.brave.com",
-            "semantic_scholar": sch.base_url or "https://api.semanticscholar.org",
-        }.get(sch.provider, sch.base_url)
+        from disco.retrieval._provider_wiring import search_trust_origin
+
+        search_secret_url = search_trust_origin(sch.provider, sch.base_url)
         extraction_secret_url = (
             ext.base_url or "https://api.firecrawl.dev"
             if ext.provider == "firecrawl"
@@ -198,6 +196,7 @@ class DeepResearchProvider:
             sch.provider,
             sch.base_url,
             sch.api_key_env,
+            sch.categories,
             ext.provider,
             ext.base_url,
             ext.api_key_env,
@@ -215,6 +214,7 @@ class DeepResearchProvider:
                 search_base_url=sch.base_url,
                 search_api_key=search_key,
                 search_secret_ref=sch.api_key_env,
+                search_categories=sch.categories,
                 search_override=search_override,
                 extraction_provider=ext.provider,
                 extraction_base_url=ext.base_url,
@@ -234,6 +234,7 @@ class DeepResearchProvider:
                 search_base_url=sch.base_url,
                 search_api_key=search_key,
                 search_secret_ref=sch.api_key_env,
+                search_categories=sch.categories,
                 extraction_provider=ext.provider,
                 extraction_base_url=ext.base_url,
                 extraction_api_key=ext_key,
@@ -254,11 +255,13 @@ class DeepResearchProvider:
         cfg = self._config_store.load()
         sch = cfg.search
         from disco.core.llm.secret_refs import secret_ref_allowed_for_origin
+        from disco.retrieval._provider_wiring import search_trust_origin
 
         provider_urls = {
-            "tavily": "https://api.tavily.com",
-            "semantic_scholar": sch.base_url or "https://api.semanticscholar.org",
-            "brave": sch.base_url or "https://api.search.brave.com",
+            provider: search_trust_origin(
+                provider, sch.base_url if sch.provider == provider else ""
+            )
+            for provider in ("tavily", "semantic_scholar", "brave", "exa", "parallel")
         }
 
         def key_for(provider: str, *fallback_names: str) -> str:
@@ -315,7 +318,12 @@ class DeepResearchProvider:
                 and self._origin_approved(sch.base_url, "search:brave", sch.api_key_env)
                 else ""
             ),
+            # exa/parallel are keyless by default; a stored key only raises the
+            # ceiling, so an empty string here is a working configuration.
+            exa_key=key_for("exa"),
+            parallel_key=key_for("parallel"),
             site_scoped_sites=sch.base_url if sch.provider == "site_scoped" else "",
+            searxng_categories=sch.categories,
         )
 
     def in_process_encoders(self) -> bool:

@@ -1,26 +1,14 @@
-"""Event-log replay runner (plan Phase 3) — the event log IS a recording.
+"""Replay human inputs through the runtime using recorded provider responses.
 
-disco is event-sourced: a conversation is a totally-ordered log of typed
-events. The USER `MessageEvent`s (+ a plan approval) are the INPUTS; everything
-the engine emits (`action`/`observation`/`plan`/`report`/`status`/`agent_error`)
-are the OUTPUTS. Pin the non-determinism (LLM + search + extraction) with a replay
-cassette and the engine becomes a pure function inputs → outputs — so re-running a
-recorded conversation and diffing the output sequence catches CODE regressions for
-free (the deterministic variant). With a LIVE model instead, it's a behavioural
-regression check on a real past task (score with the Phase 2 evals).
+The comparison retains research decisions, source admissions, checkpoint stage
+and work counts, review findings, errors, and the complete report. It omits
+wall-clock token pulses: instant cassette completions have no live transport.
+Generated checkpoint identities and serialized pool sizes depend on run IDs
+and timestamps, so they are normalized only in host research trace events.
 
-This module is the machinery + the pure diff/normalization (unit-tested on real
-event objects). The checked-in deterministic fixture captures one real plan-gate
-turn. Longer recordings replay beyond approval when their event log proves the
-plan was approved and their cassette contains all downstream calls.
-
-SURFACE CAVEAT: `build_replay_runtime` serves the LLM + search + extraction from
-the cassette, but NOT the sandbox. So a `build`-surface conversation (file writes
-in a sandbox) is NOT yet fully deterministic on replay — its tool results would
-run live. The `deep_research` surface IS fully replayable (its tools are exactly
-search/extract/LLM, all cassette-served), so the capture helper targets it.
-Build-surface replay is a follow-up: add a `ReplaySandbox` to the Phase 0 layer
-and inject it via the `ConversationRuntime(sandbox_service=)` seam.
+Legacy plan-gate captures are rejected by the CLI. The checked-in capture
+exercises the current gateless Deep Research flow. Replay uses the sandbox
+cassette seam for build runs, whose capture must include sandbox interactions.
 """
 
 from __future__ import annotations
@@ -74,9 +62,29 @@ def _scrub(value: Any) -> Any:
     return value
 
 
+def _research_trace_tool(ev: BaseEvent) -> str | None:
+    """Only host-emitted research narration has these volatile trace fields."""
+    if ev.kind != EventKind.ACTION or ev.source != EventSource.AGENT:
+        return None
+    tool = getattr(ev, "tool_call", None)
+    name = getattr(tool, "tool_name", None)
+    return name if getattr(ev, "thought", None) == f"Deep Research: {name}" else None
+
+
 def normalize_event(ev: BaseEvent) -> dict[str, Any]:
     """A volatile-free, comparable view of one event."""
-    return _scrub(ev.model_dump(mode="json"))
+    normalized = _scrub(ev.model_dump(mode="json"))
+    tool = _research_trace_tool(ev)
+    if tool in {"research_checkpoint_commit", "research_pool"}:
+        args = normalized["tool_call"]["arguments"]
+        fields = (
+            ("conversation_id", "run_id", "checkpoint_id")
+            if tool == "research_checkpoint_commit"
+            else ("pool_id", "bytes")
+        )
+        for field in fields:
+            args.pop(field, None)
+    return normalized
 
 
 def is_input(ev: BaseEvent) -> bool:
@@ -92,14 +100,22 @@ def split_io(events: list[BaseEvent]) -> tuple[list[BaseEvent], list[BaseEvent]]
     return inputs, outputs
 
 
+def is_legacy_plan_fixture(events: list[BaseEvent]) -> bool:
+    """Return true for a pre-gateless capture that still contains PlanEvent."""
+    return any(event.kind == EventKind.PLAN for event in events)
+
+
 def diff_sequences(recorded: list[BaseEvent], replayed: list[BaseEvent]) -> list[str]:
     """Positional semantic diff of two OUTPUT sequences. Returns a list of human-
     readable divergences (empty == identical). Reports the FIRST point of structural
     divergence in detail (a dropped/extra/changed event), since after that the
     sequences are misaligned and further positional diffs are noise."""
     diffs: list[str] = []
-    rn = [normalize_event(e) for e in recorded]
-    pn = [normalize_event(e) for e in replayed]
+    # A cassette completion has no transport stream or wall-clock token pulses.
+    # Preserve every research decision, checkpoint stage/count, tool result,
+    # review and report; model_activity alone is transport telemetry.
+    rn = [normalize_event(e) for e in recorded if _research_trace_tool(e) != "model_activity"]
+    pn = [normalize_event(e) for e in replayed if _research_trace_tool(e) != "model_activity"]
     if len(rn) != len(pn):
         diffs.append(f"length: recorded={len(rn)} events, replayed={len(pn)} events")
     for i, (r, p) in enumerate(zip(rn, pn, strict=False)):
@@ -125,15 +141,16 @@ async def replay_conversation(
     surface: str = "build",
     max_approvals: int = 4,
 ) -> list[BaseEvent]:
-    """Re-feed the recorded USER inputs through a fresh engine (built by
-    `build_runtime(store)` — wire a ReplayRouter + replay providers here) and return
-    the OUTPUT events it produces. Approves plans when the loop parks at plan
-    approval AND the recording shows it proceeded past a plan (bounded, so a buggy
-    loop can't approve forever)."""
+    """Re-feed recorded USER inputs through a fresh engine and return OUTPUTs.
+
+    Current Deep Research is gateless and needs no approval. The bounded plan
+    approval branch remains only as compatibility for direct callers replaying
+    an older non-CLI recording; ``make replay`` rejects such fixtures and asks
+    for a current capture.
+    """
     inputs, recorded_outputs = split_io(recorded)
-    # A recording that stops at AWAITING_PLAN_APPROVAL must stop there again. Only
-    # inject the external approval when the recorded log proves it occurred; using
-    # the mere presence of a PlanEvent would silently expand a plan-only fixture.
+    # Compatibility for old direct callers: only inject approval when the
+    # recording proves it proceeded past a plan, never for a plan-only fixture.
     had_approved_plan = any(
         e.kind == EventKind.STATUS
         and getattr(e, "status", None) == ConversationStatus.RUNNING
@@ -159,15 +176,18 @@ async def replay_conversation(
         if task is not None:
             await task
 
-    await _kick_and_wait()
-    approvals = 0
-    while had_approved_plan and approvals < max_approvals:
-        state = await store.get_state(cid)
-        if state.execution_status != ConversationStatus.AWAITING_PLAN_APPROVAL:
-            break
-        await runtime.approve_plan(cid)
-        approvals += 1
+    from .research_environment import runtime_environment
+
+    with runtime_environment(runtime):
         await _kick_and_wait()
+        approvals = 0
+        while had_approved_plan and approvals < max_approvals:
+            state = await store.get_state(cid)
+            if state.execution_status != ConversationStatus.AWAITING_PLAN_APPROVAL:
+                break
+            await runtime.approve_plan(cid)
+            approvals += 1
+            await _kick_and_wait()
 
     events = await store.get_events(cid)
     _, outputs = split_io(events)
@@ -185,8 +205,7 @@ def load_events(path: str | Path) -> list[BaseEvent]:
 
 
 async def _main() -> None:
-    """`make replay` entrypoint: replay the captured loop fixture deterministically
-    and diff. Exits non-zero (the regression signal) if the event sequence drifted."""
+    """Replay the current gateless loop fixture and diff its event sequence."""
     import sys
 
     from disco.core import SqliteEventStore
@@ -202,6 +221,13 @@ async def _main() -> None:
 
     cassette = Cassette.load(cassette_path)
     recorded = load_events(events_path)
+    if is_legacy_plan_fixture(recorded):
+        print(
+            "legacy plan-gate loop_demo fixture detected; rerun `make capture-loop` "
+            "to capture the current gateless ReportEvent flow",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
 
     def _builder(store):
         from harness.runtime import build_replay_runtime

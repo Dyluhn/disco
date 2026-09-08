@@ -141,6 +141,20 @@ class ReportEvent(BaseEvent, LLMConvertible):
     # surfaced for the UI's cost/time honesty + audit. Optional for backward-compat.
     depth_tier: str | None = None
 
+    @model_validator(mode="after")
+    def _finished_report_has_prose(self) -> ReportEvent:
+        """A report is the product, never a checkpoint or failure account."""
+        if not self.query.strip():
+            raise ValueError("a finished report requires a non-empty query")
+        if not self.summary.strip():
+            raise ValueError("a finished report requires a non-empty executive summary")
+        if not self.sections:
+            raise ValueError("a finished report requires at least one section")
+        for section in self.sections:
+            if not section.title.strip() or not section.markdown.strip():
+                raise ValueError("every finished report section requires a title and prose")
+        return self
+
     def to_llm_message(self) -> LLMMessage:
         # Render headers + summary only — the full body is too large for the View
         # and the citations would resolve to ids the model can't look up anyway.
@@ -153,6 +167,26 @@ class ReportEvent(BaseEvent, LLMConvertible):
             role="assistant",
             content=f"Research report for: {self.query}\n\n{self.summary}\n\n{headers}{bound}",
         )
+
+
+class ResearchCheckpointEvent(BaseEvent):
+    """User-stopped Deep Research state that can be resumed later.
+
+    This is intentionally not a :class:`ReportEvent`: checkpoints carry the
+    gathered evidence and search trail, while reports always carry finished
+    prose. Keeping those contracts separate makes an empty finished report
+    impossible to construct.
+    """
+
+    kind: Literal[EventKind.RESEARCH_CHECKPOINT] = EventKind.RESEARCH_CHECKPOINT
+    source: EventSource = EventSource.AGENT
+    query: str
+    passages: list[dict[str, Any]] = Field(default_factory=list)
+    all_hits: list[dict[str, Any]] = Field(default_factory=list)
+    trail: list[dict[str, Any]] = Field(default_factory=list)
+    completed_queries: list[str] = Field(default_factory=list)
+    depth_tier: str | None = None
+    recency_window: Literal["week", "month"] | None = None
 
 
 class KnowledgeEvent(BaseEvent, LLMConvertible):
@@ -317,6 +351,7 @@ __all__ = [
     "DeliverableEvent",
     "KnowledgeEvent",
     "PlanEvent",
+    "ResearchCheckpointEvent",
     "ReportEvent",
     "RuntimeConstraintEvent",
 ]

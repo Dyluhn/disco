@@ -1,14 +1,18 @@
 # Launch Checklist — release readiness
 
-**Status: MUTABLE.** The honest DONE / PARTIAL / OPEN state of the public
-launch, item by item. Every claim below was verified against the tree at
-`main` = `f724188a` on **2026-08-19**; each carries a one-line pointer to its
-evidence. When an item moves, move it here — do not let this file lie.
+**Status: MUTABLE.** Updated 2026-09-08. The Deep Research closeout below is current. The remaining August 19 inventory is historical and has not been recertified by this work.
 
-For what each launch package changed, see
-[`CURRENT-STATE.md`](./CURRENT-STATE.md).
+## Deep Research
 
-## DONE
+- Engineering: deliberate source selection, discovery/evidence separation, draft-specific repair validation, retained-source inspection, compressed-response decoding, corrupt-text rejection, revised-brief handoff, local evidence context, review-signal disposition, turn accounting, recovery, authenticated deletion, native controls, and packaged offline NLI have regression and live-boundary evidence. Exact source versions and results are in the external closeout record.
+- Provider compatibility: representative DeepSeek, GLM, and Qwen profiles use the common loop. No provider account or individual model is a project release prerequisite. Native search/extraction and local grounding have real execution evidence.
+- Quality is measured by rate, not pass/fail, and measurement remains open: automated structure checks are separate from source-backed semantic review. Failed reports and infrastructure incidents remain in the attempt ledger. The broader 36-attempt campaign has not been completed.
+- Governance approval is granted and applied: the reconciliation restored historical receipts, disclosed the exact retirements, and validated the inventories, API transitions and seal. The explicit owner instruction README.md requires was given in writing on 2026-09-08 — *"after that, you are authorized to merge."* — and the protected seal was rebaselined on it. The two sealed standards are unchanged.
+- Landing: V48 is landed on main from candidate 71535d280fa0a364601b31353bbca7fd7d97aaeb. The incoming main source is preserved on the branch main-dirty-snapshot-2026-09-08 and in /var/home/dylan/Archives/recovered/disco-main-dirty-2026-09-08; the canonical working tree was never reset. Existing-history database compatibility and a disposable forward/inverse patch rehearsal pass. No public release or deployment has occurred.
+
+Current evidence: /var/home/dylan/AI-Work/disco-gap-closure-2026-09-05/CLOSEOUT-RECORD.json. See [Current State](CURRENT-STATE.md) for implementation limits. The dated items below describe their original evidence, not the current Deep Research status.
+
+## August 19 launch inventory — DONE
 
 - **Assist control hidden, prop retained.** Rendering removed on Build and
   Agent; the `assist` prop stays in the signature for API stability,

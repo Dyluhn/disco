@@ -48,6 +48,7 @@ from _workspace_commit_fakes import (  # noqa: E402
     _Workspace,
 )
 
+
 @pytest.fixture
 def event_store():
     store = SqliteEventStore(":memory:")
@@ -74,6 +75,7 @@ from disco.core import (
 )
 from disco.tools.projects import snapshot_workspace
 from fastapi import HTTPException
+
 
 # Keep this fixture at its frozen inventory identity. The comments document
 # why ordinary import/helper extraction must not silently move the fixture:
@@ -919,17 +921,30 @@ async def test_ingress_first_pending_run_blocks_already_queued_deploy(
     rt.run_registry._tasks.pop(cid, None)
 
 
+@pytest.mark.parametrize("use_factory", [False, True])
+@pytest.mark.parametrize("external_completion", [False, True])
 async def test_forget_clears_claim_when_queued_run_is_cancelled_before_entry(
     event_store: SqliteEventStore,
     tmp_path: Path,
+    use_factory: bool,
+    external_completion: bool,
 ) -> None:
+    import inspect
+
     cid = "conv-cancel-before-run-entry"
     rt, _projects = _runtime(event_store, tmp_path)
     rt.settings._set_surface(cid, "build")
     lock = rt.workspace.lock(cid)
     await lock.acquire()
     same_lock = rt.workspace.lock(cid)
-    task, _generation = rt._run_supervisor.create_task(cid, _make_loop())
+    factory = MagicMock(side_effect=_make_loop)
+    pending_loop = None if use_factory else _make_loop()
+    task, _generation = rt._run_supervisor.create_task(
+        cid,
+        pending_loop,
+        loop_factory=factory if use_factory else None,
+        completion_managed_externally=external_completion,
+    )
     rt.workspace.claim_registered_run_locked(cid)
     assert rt.workspace.has_run_claim(cid)
 
@@ -940,8 +955,34 @@ async def test_forget_clears_claim_when_queued_run_is_cancelled_before_entry(
     await forgetting
 
     assert task.cancelled()
+    if pending_loop is not None:
+        assert inspect.getcoroutinestate(pending_loop) == inspect.CORO_CLOSED
+    factory.assert_not_called()
     assert not rt.workspace.has_run_claim(cid)
     assert rt.workspace.lock(cid) is same_lock
+
+
+async def test_rejected_duplicate_run_preserves_callers_coroutine(
+    event_store: SqliteEventStore,
+    tmp_path: Path,
+) -> None:
+    import inspect
+
+    cid = "conv-rejected-coroutine-ownership"
+    rt, _projects = _runtime(event_store, tmp_path)
+    adopted = _make_loop()
+    rejected = _make_loop()
+    task, _generation = rt._run_supervisor.create_task(cid, adopted)
+    try:
+        with pytest.raises(RuntimeError, match="already has a live run task"):
+            rt._run_supervisor.create_task(cid, rejected)
+        assert inspect.getcoroutinestate(rejected) == inspect.CORO_CREATED
+    finally:
+        rejected.close()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    assert inspect.getcoroutinestate(adopted) == inspect.CORO_CLOSED
 
 
 async def test_durable_run_intent_blocks_a_second_runtime_from_old_seal(

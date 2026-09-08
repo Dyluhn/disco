@@ -18,7 +18,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from . import _frontend, _members
+from . import _closeout, _frontend, _members
 from ._constants import (
     BRIDGE_FIELDS,
     PACKAGE,
@@ -43,7 +43,8 @@ def valid_bridge(row: Any) -> bool:
 
 
 def transition_authority(
-    baseline: dict[str, Any], problems: list[str],
+    baseline: dict[str, Any],
+    problems: list[str],
 ) -> dict[TargetKey, dict[str, Any]]:
     rows = baseline.get("additive_transitions")
     if not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows):
@@ -56,10 +57,7 @@ def transition_authority(
         if (
             set(row) != TRANSITION_FIELDS
             or row.get("surface") not in SURFACES
-            or any(
-                not isinstance(row.get(key), str) or not row[key]
-                for key in TRANSITION_FIELDS
-            )
+            or any(not isinstance(row.get(key), str) or not row[key] for key in TRANSITION_FIELDS)
             or not SHA256.fullmatch(row["target_sha256"])
             or not PACKAGE.fullmatch(row["owner_package"])
         ):
@@ -74,7 +72,8 @@ def transition_authority(
 
 
 def bridge_authority(
-    baseline: dict[str, Any], problems: list[str],
+    baseline: dict[str, Any],
+    problems: list[str],
 ) -> dict[tuple[str, str], dict[str, Any]]:
     rows = baseline.get("compatibility_bridges")
     if not isinstance(rows, list) or not all(valid_bridge(row) for row in rows):
@@ -93,15 +92,15 @@ def bridge_authority(
 
 
 def _check_one_bridge(
-    bridge: dict[str, Any], identity: TargetIdentity,
+    bridge: dict[str, Any],
+    identity: TargetIdentity,
     targets: dict[TargetKey, dict[str, Any]],
-    transitions: dict[TargetKey, dict[str, Any]], problems: list[str],
+    transitions: dict[TargetKey, dict[str, Any]],
+    problems: list[str],
 ) -> None:
     keys = [key for key in targets if key[:3] == identity]
     if len(keys) != 1:
-        problems.append(
-            f"compatibility bridge no longer preserves public name: {[bridge]}"
-        )
+        problems.append(f"compatibility bridge no longer preserves public name: {[bridge]}")
         return
     actual_origin = target_origin(targets[keys[0]])
     if actual_origin != bridge["new_origin"]:
@@ -111,14 +110,14 @@ def _check_one_bridge(
         )
     transition = transitions.get(keys[0])
     if transition is None or transition["owner_package"] != bridge["owner_package"]:
-        problems.append(
-            f"compatibility bridge requires a same-owner additive transition: {bridge}"
-        )
+        problems.append(f"compatibility bridge requires a same-owner additive transition: {bridge}")
 
 
 def _check_one_member(
-    record: dict[str, Any], identity: TargetIdentity,
-    targets: dict[TargetKey, dict[str, Any]], problems: list[str],
+    record: dict[str, Any],
+    identity: TargetIdentity,
+    targets: dict[TargetKey, dict[str, Any]],
+    problems: list[str],
 ) -> None:
     """A member record must still name exactly one live public identity."""
     keys = [key for key in targets if key[:3] == identity]
@@ -137,8 +136,11 @@ def _check_one_member(
 
 
 def check_metadata(
-    baseline: dict[str, Any], python_surface: list[dict[str, Any]],
-    frontend_surface: list[dict[str, Any]], root: Path, problems: list[str],
+    baseline: dict[str, Any],
+    python_surface: list[dict[str, Any]],
+    frontend_surface: list[dict[str, Any]],
+    root: Path,
+    problems: list[str],
 ) -> None:
     try:
         targets = surface_targets(python_surface, frontend_surface)
@@ -153,42 +155,42 @@ def check_metadata(
     _frontend.check_declaration_disjoint(declarations, bridges, members, problems)
     stale_transitions = sorted(set(transitions) - set(targets))
     if stale_transitions:
-        problems.append(
-            f"additive transition target is not public: {stale_transitions}"
-        )
+        problems.append(f"additive transition target is not public: {stale_transitions}")
     for (path, public_name), bridge in bridges.items():
-        _check_one_bridge(
-            bridge, ("python", path, public_name), targets, transitions, problems
-        )
+        _check_one_bridge(bridge, ("python", path, public_name), targets, transitions, problems)
     for (path, public_name), record in members.items():
         _check_one_member(record, ("python", path, public_name), targets, problems)
     for (path, public_name), record in declarations.items():
-        _frontend.check_one_declaration(
-            record, ("frontend", path, public_name), targets, problems
-        )
+        _frontend.check_one_declaration(record, ("frontend", path, public_name), targets, problems)
 
 
 def _check_python_change(
-    identity: TargetIdentity, added: set[TargetKey], removed: set[TargetKey],
+    identity: TargetIdentity,
+    added: set[TargetKey],
+    removed: set[TargetKey],
     previous_targets: dict[TargetKey, dict[str, Any]],
     current_targets: dict[TargetKey, dict[str, Any]],
     current_bridges: dict[tuple[str, str], dict[str, Any]],
-    current_members: dict[tuple[str, str], dict[str, Any]], problems: list[str],
+    current_members: dict[tuple[str, str], dict[str, Any]],
+    problems: list[str],
 ) -> None:
     old_keys = [key for key in removed if key[:3] == identity]
     new_keys = [key for key in added if key[:3] == identity]
     record = current_members.get((identity[1], identity[2]))
     if record is not None:
         _members.check_member_change(
-            identity, old_keys, new_keys, previous_targets,
-            current_targets, record, problems,
+            identity,
+            old_keys,
+            new_keys,
+            previous_targets,
+            current_targets,
+            record,
+            problems,
         )
         return
     bridge = current_bridges.get((identity[1], identity[2]))
     if len(old_keys) != 1 or len(new_keys) != 1 or bridge is None:
-        problems.append(
-            f"Python incompatible change requires one bridge: {identity}"
-        )
+        problems.append(f"Python incompatible change requires one bridge: {identity}")
         return
     old_target = previous_targets[old_keys[0]]
     new_target = current_targets[new_keys[0]]
@@ -210,7 +212,9 @@ def _check_python_change(
 
 
 def _check_frontend_change(
-    identity: TargetIdentity, added: set[TargetKey], removed: set[TargetKey],
+    identity: TargetIdentity,
+    added: set[TargetKey],
+    removed: set[TargetKey],
     previous_targets: dict[TargetKey, dict[str, Any]],
     current_targets: dict[TargetKey, dict[str, Any]],
     current_declarations: dict[tuple[str, str], dict[str, Any]],
@@ -225,12 +229,17 @@ def _check_frontend_change(
         identity,
         [key for key in removed if key[:3] == identity],
         [key for key in added if key[:3] == identity],
-        previous_targets, current_targets, record, problems,
+        previous_targets,
+        current_targets,
+        record,
+        problems,
     )
 
 
 def _check_changed_identities(
-    changed: set[TargetIdentity], added: set[TargetKey], removed: set[TargetKey],
+    changed: set[TargetIdentity],
+    added: set[TargetKey],
+    removed: set[TargetKey],
     previous_targets: dict[TargetKey, dict[str, Any]],
     current_targets: dict[TargetKey, dict[str, Any]],
     current_bridges: dict[tuple[str, str], dict[str, Any]],
@@ -241,19 +250,33 @@ def _check_changed_identities(
     for identity in sorted(changed):
         if identity[0] == "frontend":
             _check_frontend_change(
-                identity, added, removed, previous_targets,
-                current_targets, current_declarations, problems,
+                identity,
+                added,
+                removed,
+                previous_targets,
+                current_targets,
+                current_declarations,
+                problems,
             )
         else:
             _check_python_change(
-                identity, added, removed, previous_targets,
-                current_targets, current_bridges, current_members, problems,
+                identity,
+                added,
+                removed,
+                previous_targets,
+                current_targets,
+                current_bridges,
+                current_members,
+                problems,
             )
 
 
 def _check_transition_delta(
-    previous: dict[str, Any], inventory: dict[str, Any],
-    added: set[TargetKey], current_keys: set[TargetKey], problems: list[str],
+    previous: dict[str, Any],
+    inventory: dict[str, Any],
+    added: set[TargetKey],
+    current_keys: set[TargetKey],
+    problems: list[str],
 ) -> None:
     previous_rows = transition_authority(previous, problems)
     current_rows = transition_authority(inventory, problems)
@@ -271,8 +294,10 @@ def _check_transition_delta(
 
 
 def _check_bridge_delta(
-    previous: dict[str, Any], inventory: dict[str, Any],
-    current_identities: set[TargetIdentity], changed_bridges: set[TargetIdentity],
+    previous: dict[str, Any],
+    inventory: dict[str, Any],
+    current_identities: set[TargetIdentity],
+    changed_bridges: set[TargetIdentity],
     problems: list[str],
 ) -> None:
     previous_rows = bridge_authority(previous, problems)
@@ -298,7 +323,9 @@ def _check_bridge_delta(
 
 
 def check_regeneration_delta(
-    previous: dict[str, Any], inventory: dict[str, Any], root: Path,
+    previous: dict[str, Any],
+    inventory: dict[str, Any],
+    root: Path,
     previous_targets: dict[TargetKey, dict[str, Any]],
     current_targets: dict[TargetKey, dict[str, Any]],
     problems: list[str],
@@ -310,7 +337,10 @@ def check_regeneration_delta(
     current_identities = {key[:3] for key in current_keys}
     deleted = [key for key in removed if key[:3] not in current_identities]
     if deleted:
-        problems.append(f"public API regeneration deletes targets: {sorted(deleted)}")
+        try:
+            _closeout.retired_targets(root, previous, deleted)
+        except (OSError, ValueError, KeyError, RuntimeError) as error:
+            problems.append(f"public API regeneration deletes targets: {sorted(deleted)}; {error}")
     changed = {key[:3] for key in removed if key[:3] in current_identities}
     changed_python = {item for item in changed if item[0] == "python"}
     changed_frontend = {item for item in changed if item[0] == "frontend"}
@@ -326,21 +356,40 @@ def check_regeneration_delta(
     # The frontend surface has one authority rather than two, so the partition
     # is simply "claimed or not"; an unclaimed change keeps the original
     # unconditional rejection.
-    declaration_identities = {
-        ("frontend", path, name) for path, name in current_declarations
-    }
+    declaration_identities = {("frontend", path, name) for path, name in current_declarations}
     changed_declarations = changed_frontend & declaration_identities
     _check_changed_identities(
-        changed, added, removed, previous_targets, current_targets,
-        current_bridges, current_members, current_declarations, problems,
+        changed,
+        added,
+        removed,
+        previous_targets,
+        current_targets,
+        current_bridges,
+        current_members,
+        current_declarations,
+        problems,
     )
     _check_transition_delta(previous, inventory, added, current_keys, problems)
     _check_bridge_delta(
-        previous, inventory, current_identities, changed_bridges, problems,
+        previous,
+        inventory,
+        current_identities,
+        changed_bridges,
+        problems,
     )
     _members.check_member_delta(
-        previous, inventory, root, current_identities, changed_members, problems,
+        previous,
+        inventory,
+        root,
+        current_identities,
+        changed_members,
+        problems,
     )
     _frontend.check_declaration_delta(
-        previous, inventory, root, current_identities, changed_declarations, problems,
+        previous,
+        inventory,
+        root,
+        current_identities,
+        changed_declarations,
+        problems,
     )

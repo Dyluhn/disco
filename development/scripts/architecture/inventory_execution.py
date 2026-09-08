@@ -37,6 +37,7 @@ from pathlib import Path
 from typing import Any
 
 from .policy import REPO_ROOT, load_json
+from .test_inventory_parts._rows import logical_node_id
 
 #: Commands the repository actually commits to running, each tagged with the
 #: file and target/step it is quoted from. ``needs_repo_root_on_path`` records
@@ -53,15 +54,15 @@ SANCTIONED_COMMANDS: tuple[dict[str, Any], ...] = (
         "label": "make harness",
         "source": "Makefile:harness",
         "argv": ["-m", "pytest", "--collect-only", "development/harness"],
-        "needs_repo_root_on_path": True,
-        "quote": "PYTHONPATH=. uv run pytest development/harness",
+        "needs_repo_root_on_path": False,
+        "quote": "uv run pytest development/harness",
     },
     {
         "label": "make integrations",
         "source": "Makefile:integrations",
         "argv": ["-m", "pytest", "--collect-only", "current/integrations"],
-        "needs_repo_root_on_path": True,
-        "quote": "PYTHONPATH=. uv run pytest current/integrations",
+        "needs_repo_root_on_path": False,
+        "quote": "uv run pytest current/integrations",
     },
     {
         "label": "ci required unit",
@@ -121,10 +122,15 @@ def collect_for_command(root: Path, spec: dict[str, Any]) -> tuple[set[str], str
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         return set(), f"{spec['label']}: collection did not run: {exc}"
-    ids = {line.strip() for line in result.stdout.splitlines() if "::" in line.strip()}
-    if result.returncode and not ids:
+    ids = {
+        logical_node_id(line.strip()) for line in result.stdout.splitlines() if "::" in line.strip()
+    }
+    if result.returncode:
         tail = "; ".join((result.stderr or result.stdout).strip().splitlines()[-3:])
-        return set(), f"{spec['label']}: exit {result.returncode} collecting nothing: {tail}"
+        return (
+            set(),
+            f"{spec['label']}: exit {result.returncode} after collecting {len(ids)} ids: {tail}",
+        )
     return ids, ""
 
 

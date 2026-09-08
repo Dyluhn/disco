@@ -49,6 +49,8 @@ _LEGACY_IMPORTS: dict[str, tuple[str, ...]] = {
         "DISCO_SEMANTIC_SCHOLAR_API_KEY",
         "PMX_SEMANTIC_SCHOLAR_API_KEY",
     ),
+    "exa": ("EXA_API_KEY", "DISCO_EXA_API_KEY"),
+    "parallel": ("PARALLEL_API_KEY", "DISCO_PARALLEL_API_KEY"),
     "firecrawl": ("FIRECRAWL_API_KEY", "DISCO_FIRECRAWL_API_KEY", "PMX_FIRECRAWL_API_KEY"),
     "openai": ("OPENAI_API_KEY", "DISCO_OPENAI_API_KEY", "PMX_OPENAI_API_KEY"),
 }

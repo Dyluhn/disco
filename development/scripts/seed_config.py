@@ -70,7 +70,7 @@ def main() -> None:
             # picks a vision-capable model.
             "vision_escalation_model": None,
             "projects": ProjectStorageSettings(projects_root=projects_root),
-            # sandbox / search (ddgs) / extraction (local) / encoders (bundled ONNX)
+            # sandbox / search (bundled) / extraction (local) / encoders (bundled ONNX)
             # keep their already-correct keyless defaults.
         }
     )

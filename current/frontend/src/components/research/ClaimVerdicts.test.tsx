@@ -40,6 +40,29 @@ const claims: VerifiedClaim[] = [
 ];
 
 describe("ClaimVerdicts", () => {
+  it("does not invent a zero support estimate for missing evidence", () => {
+    render(<ClaimVerdicts claims={[{ ...claims[0], entailment_score: 0,
+      verification_status: "unresolved", verification_reason: "missing_evidence",
+    }]} passages={[]} />);
+    expect(screen.getByText("Cited evidence is missing.")).toBeInTheDocument();
+    expect(screen.queryByText(/Support estimate/)).not.toBeInTheDocument();
+  });
+
+  it("distinguishes possible contradictions, unresolved evidence and checks that could not run", () => {
+    const measured: VerifiedClaim[] = [
+      { ...claims[0], verification_status: "contradicted", verification_reason: "contradiction" },
+      { ...claims[1], verification_status: "unresolved", verification_reason: "conflicting_evidence" },
+      { ...claims[2], verdict: "weak", entailment_score: 0,
+        verification_status: "unavailable", verification_reason: "verifier_unavailable" },
+    ];
+    render(<ClaimVerdicts claims={measured} passages={passages} />);
+    expect(screen.getByText("Possible contradiction")).toBeInTheDocument();
+    expect(screen.getByText("Unresolved")).toBeInTheDocument();
+    expect(screen.getByText("Not checked")).toBeInTheDocument();
+    expect(screen.getByText(/The evidence check could not run/)).toBeInTheDocument();
+    expect(screen.queryByText(/Support estimate 0%/)).not.toBeInTheDocument();
+  });
+
   it("renders the claim verification summary", () => {
     render(<ClaimVerdicts claims={claims} passages={passages} />);
     // summary text shown in the collapsed state (details not open)

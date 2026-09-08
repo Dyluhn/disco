@@ -10,16 +10,18 @@ import re
 import xml.etree.ElementTree as ET
 from collections.abc import Mapping
 from html.parser import HTMLParser
+from typing import Any, cast
 from urllib.parse import urlencode, urlparse
 
 import httpx
 from disco.core.host_egress import EgressDenied, GuardedResponse, guarded_get
 
+from ._transport_retry import degradation_markers, engines_cooling, note_rate_limited_engines
 from .models import SearchHit
-
-_LOG = logging.getLogger(__name__)
 from .providers import SearchProvider
 from .url_policy import parse_source_date, source_url_key, url_allowed
+
+_LOG = logging.getLogger(__name__)
 
 _ATOM_NS = {"a": "http://www.w3.org/2005/Atom"}
 
@@ -345,9 +347,11 @@ class SiteScopedSearchProvider:
     ) -> None:
         del transport
         if inner is None:
-            from .bundled_providers import DdgsSearchProvider
+            # The bundled keyless web pair — the same two servers the composite
+            # default uses, minus the academic legs a site: filter would starve.
+            from ._mcp_search_providers import ExaMcpSearchProvider, ParallelMcpSearchProvider
 
-            inner = DdgsSearchProvider()
+            inner = MultiSearchProvider((ParallelMcpSearchProvider(), ExaMcpSearchProvider()))
         self._sites = sites
         self._inner = inner
 
@@ -389,6 +393,24 @@ class SiteScopedSearchProvider:
 
 
 class MultiSearchProvider:
+    """Fan one query across several discovery legs and merge them by URL.
+
+    This is the shape of the bundled keyless tier, so it owns two facts nothing
+    above it can see:
+
+    * **A refused leg cools even when the composite succeeded.** ``search_with_
+      degradation_retry`` only cools engines from a response that came back
+      EMPTY, and a five-leg composite rarely does — so a rate-limited leg used to
+      be re-hammered every turn while its four siblings carried the result. The
+      per-member markers are read here, where they exist, and the named legs go
+      into the same process-wide cooldown registry SearXNG's unresponsive
+      engines use.
+    * **Degraded means the whole tier, not one leg.** ``composite_degraded`` is
+      set only when every member reported a refusal and none returned rows;
+      partial trouble stays partial, and the hold/exhaustion machinery upstream
+      can tell "one engine is cooling" from "there is nowhere left to search".
+    """
+
     name = "multi"
 
     def __init__(self, providers: tuple[SearchProvider, ...]) -> None:
@@ -403,7 +425,25 @@ class MultiSearchProvider:
         domains_deny: frozenset[str] | None = None,
         time_filter: str | None = None,
     ) -> list[SearchHit]:
-        rows_by_provider = await self._gather_rows(
+        hits, _diagnostic = await self.search_detailed(
+            query,
+            limit=limit,
+            domains_allow=domains_allow,
+            domains_deny=domains_deny,
+            time_filter=time_filter,
+        )
+        return hits
+
+    async def search_detailed(
+        self,
+        query: str,
+        *,
+        limit: int = 10,
+        domains_allow: frozenset[str] | None = None,
+        domains_deny: frozenset[str] | None = None,
+        time_filter: str | None = None,
+    ) -> tuple[list[SearchHit], dict[str, object]]:
+        rows_by_provider, diagnostic = await self._gather_rows_detailed(
             query,
             limit=limit,
             domains_allow=domains_allow,
@@ -411,9 +451,9 @@ class MultiSearchProvider:
             time_filter=time_filter,
         )
         if not rows_by_provider:
-            return []
+            return [], diagnostic
         by_url, ordered_urls = self._merge_by_url(rows_by_provider)
-        return self._finalize(by_url, ordered_urls, limit)
+        return self._finalize(by_url, ordered_urls, limit), diagnostic
 
     async def _gather_rows(
         self,
@@ -424,11 +464,30 @@ class MultiSearchProvider:
         domains_deny: frozenset[str] | None,
         time_filter: str | None,
     ) -> list[list[SearchHit]]:
+        rows, _diagnostic = await self._gather_rows_detailed(
+            query,
+            limit=limit,
+            domains_allow=domains_allow,
+            domains_deny=domains_deny,
+            time_filter=time_filter,
+        )
+        return rows
+
+    async def _gather_rows_detailed(
+        self,
+        query: str,
+        *,
+        limit: int,
+        domains_allow: frozenset[str] | None,
+        domains_deny: frozenset[str] | None,
+        time_filter: str | None,
+    ) -> tuple[list[list[SearchHit]], dict[str, object]]:
         if not self._providers or limit <= 0:
-            return []
+            return [], {}
         gathered = await asyncio.gather(
             *[
-                provider.search(
+                self._search_provider(
+                    provider,
                     query,
                     limit=limit,
                     domains_allow=domains_allow,
@@ -440,19 +499,84 @@ class MultiSearchProvider:
             return_exceptions=True,
         )
         rows_by_provider: list[list[SearchHit]] = []
+        diagnostics: dict[str, object] = {}
+        refused = 0
         for provider, result in zip(self._providers, gathered, strict=True):
+            provider_name = str(getattr(provider, "name", type(provider).__name__))[:80]
             if isinstance(result, BaseException):
+                # An exception names the leg it came from — a bare "HTTPError"
+                # tells the cooldown registry nothing about which engine to cool.
+                diagnostics[provider_name] = {
+                    "provider_error": f"{provider_name}: upstream error ({type(result).__name__})"
+                }
+                refused += 1
                 _LOG.warning(
                     "search provider %s failed: %s: %s",
-                    getattr(provider, "name", type(provider).__name__),
+                    provider_name,
                     type(result).__name__,
                     result,
                 )
                 continue
-            if not result:
+            rows, provider_diagnostic = result
+            if provider_diagnostic:
+                diagnostics[provider_name] = provider_diagnostic
+                refused += bool(degradation_markers(provider_diagnostic) != ((), ()))
+            if not rows:
                 continue
-            rows_by_provider.append(list(result))
-        return rows_by_provider
+            rows_by_provider.append(list(rows))
+        return rows_by_provider, self._composite_record(diagnostics, rows_by_provider, refused)
+
+    def _composite_record(
+        self,
+        diagnostics: dict[str, object],
+        rows_by_provider: list[list[SearchHit]],
+        refused: int,
+    ) -> dict[str, object]:
+        """Cool the refused legs; declare the tier degraded only if all of them are."""
+        if not diagnostics:
+            return {}
+        # Only ENGINE markers cool — a refused credential is a fact about a key,
+        # not about an engine, and must not park a healthy leg in a cooldown.
+        engines, _errors = degradation_markers(diagnostics)
+        cooled = note_rate_limited_engines(engines)
+        record: dict[str, object] = {"providers": diagnostics}
+        if cooled:
+            _LOG.warning("bundled search legs cooling after refusal: %s", ", ".join(cooled))
+        if not rows_by_provider and refused >= len(self._providers):
+            record["composite_degraded"] = True
+            record["members_total"] = len(self._providers)
+            record["members_cooling"] = list(engines_cooling())
+        return record
+
+    @staticmethod
+    async def _search_provider(
+        provider: SearchProvider,
+        query: str,
+        *,
+        limit: int,
+        domains_allow: frozenset[str] | None,
+        domains_deny: frozenset[str] | None,
+        time_filter: str | None,
+    ) -> tuple[list[SearchHit], dict[str, object]]:
+        detailed = getattr(provider, "search_detailed", None)
+        if callable(detailed):
+            return await cast(Any, detailed)(
+                query,
+                limit=limit,
+                domains_allow=domains_allow,
+                domains_deny=domains_deny,
+                time_filter=time_filter,
+            )
+        return (
+            await provider.search(
+                query,
+                limit=limit,
+                domains_allow=domains_allow,
+                domains_deny=domains_deny,
+                time_filter=time_filter,
+            ),
+            {},
+        )
 
     @staticmethod
     def _merge_by_url(

@@ -39,6 +39,7 @@ from disco.core import (
 )
 from disco.core.loop.engine import _BOOKKEEPING_TOOLS
 from disco.core.view import effective_plan_progress
+from disco.retrieval.deep_research import RESEARCH_TRACE_ACTIONS
 from disco.tools.projects import StorageStatus
 
 from .lifecycle_command_service import LifecycleCommandService
@@ -312,6 +313,13 @@ class _ResumeContextReconstructor:
 
         An action is "dangling" if no ObservationEvent or AgentErrorEvent
         references its id — the server was killed while the tool was in-flight.
+
+        Deep research's own trace actions are exempt (`RESEARCH_TRACE_ACTIONS`):
+        the server appends them to narrate its run, nothing ever pairs them, and
+        no model reads them. Pairing them wrote one "interrupted by a server
+        restart — its outcome is UNKNOWN. Re-verify its effect" observation per
+        turn counter and per token heartbeat: 53 of them on the first resume of
+        a stopped run, all describing a restart that never happened.
         """
         result: list = []
 
@@ -323,7 +331,11 @@ class _ResumeContextReconstructor:
                 resolved.add(e.action_id)
 
         for e in events:
-            if isinstance(e, ActionEvent) and e.id not in resolved:
+            if (
+                isinstance(e, ActionEvent)
+                and e.id not in resolved
+                and e.tool_call.tool_name not in RESEARCH_TRACE_ACTIONS
+            ):
                 result.append(
                     ObservationEvent(
                         source=EventSource.ENVIRONMENT,
@@ -755,6 +767,16 @@ class ResumeService:
                     detail="resumed",
                 )
             )
+        if surface == "deep_research":
+            # No transition to authorize: the ENGINE owns this conversation's
+            # status and publishes RUNNING itself once the dispatcher re-enters
+            # the stopped run from its checkpoint. Sending a statusless batch to
+            # the transition path raised "requires exactly one status event",
+            # which the WS control frame swallowed — so Resume on a stopped
+            # deep-research run did nothing at all, and the conversation sat
+            # PAUSED with a live Resume button that could never work.
+            await self._commands._append_facts_locked(conversation_id, pending)
+            return
         ingress_intent = next(
             (
                 event

@@ -70,9 +70,9 @@ class TrackingRewriter:
         self._paraphrase = paraphrase
         self.calls: list[str] = []
 
-    async def rewrite(self, query: str, *, n: int) -> list[str]:
+    async def rewrite(self, query: str) -> str:
         self.calls.append(query)
-        return [self._paraphrase]
+        return self._paraphrase
 
 
 # ---------------------------------------------------------------------------

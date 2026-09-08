@@ -196,19 +196,26 @@ async def probe_tavily_search(
     api_key: str | None = None,
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> tuple[bool, str, str]:
-    """The REAL Tavily probe: one real query against ``POST {base}/search`` with
-    Tavily's actual auth shape — the key in the JSON body, no header at all.
+    """The REAL Tavily probe: one real query against ``POST {base}/search`` in
+    Tavily's CURRENT auth shape — ``Authorization: Bearer <key>``, with the key
+    absent from the JSON body. (The body-key form this probe used to send is the
+    obsolete one; it made a good key look rejected and a bad one look fine.)
+
+    The shape is deliberately identical to what
+    ``disco.retrieval.bundled_providers.TavilySearchProvider`` sends, so a green
+    here means the runtime adapter will work — the whole point of the button.
 
     ``transport`` is test-only, see ``probe_brave_search``.
     """
     root = base_url.rstrip("/")
     url = f"{root}/search"
-    payload = {"api_key": api_key or "", "query": "disco connectivity test", "max_results": 1}
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    payload = {"query": "disco connectivity test", "max_results": 1}
     try:
         async with httpx.AsyncClient(
             timeout=_TIMEOUT, transport=transport, trust_env=False, follow_redirects=False
         ) as client:
-            resp = await client.post(url, json=payload)
+            resp = await client.post(url, json=payload, headers=headers)
     except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout) as exc:
         return False, "unreachable", f"Couldn't reach {root}: {type(exc).__name__}."
     except httpx.HTTPError as exc:
@@ -222,13 +229,16 @@ async def probe_firecrawl_extract(
     api_key: str | None = None,
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> tuple[bool, str, str]:
-    """The REAL Firecrawl probe: one real scrape against ``POST {base}/v1/scrape``
-    using Firecrawl's actual auth shape — ``Authorization: Bearer <key>``.
+    """The REAL Firecrawl probe: one real scrape against ``POST {base}/v2/scrape``
+    using Firecrawl's actual auth shape — ``Authorization: Bearer <key>``. V2 is
+    the current scrape contract, and the same one
+    ``disco.retrieval.bundled_providers.FirecrawlExtractionProvider`` speaks:
+    probing a contract the runtime does not use is how a green button lies.
 
     ``transport`` is test-only, see ``probe_brave_search``.
     """
     root = base_url.rstrip("/")
-    url = f"{root}/v1/scrape"
+    url = f"{root}/v2/scrape"
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
     payload = {"url": "https://example.com", "formats": ["markdown"]}
     try:
