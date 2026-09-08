@@ -7,9 +7,11 @@ socket is inherited by a fresh install.
 ## Quickstart
 
 ```bash
+sudo apt-get update && sudo apt-get install -y git podman podman-compose  # or dnf / pacman
 git clone https://github.com/Dyluhn/disco.git
 cd disco
 systemctl --user enable --now podman.socket
+export DISCO_SANDBOX_SOCKET=$XDG_RUNTIME_DIR/podman/podman.sock
 podman compose up -d --build
 podman compose logs app-server
 ```
@@ -222,12 +224,16 @@ Linux and WSL2 with systemd, enable it once before bringing up the stack:
 
 ```bash
 systemctl --user enable --now podman.socket
+export DISCO_SANDBOX_SOCKET=$XDG_RUNTIME_DIR/podman/podman.sock
 podman compose up -d --build
 ```
 
-The compose default resolves the host socket from `$XDG_RUNTIME_DIR`, falling
-back to `/run/user/1000/podman/podman.sock`. Set `DISCO_SANDBOX_SOCKET` when your
-UID or socket location differs. `DISCO_LOCAL_ENGINE=podman` is the default and
+Export the socket rather than relying on the compose default. Compose variable
+defaults cannot nest — a distribution's compose provider substitutes one pass —
+so the fallback baked into `compose.yaml` can only spell the literal
+`/run/user/1000/podman/podman.sock`, which is wrong for any UID but 1000. Keep
+`DISCO_SANDBOX_SOCKET` exported for every later `podman compose` command in the
+same shell. `DISCO_LOCAL_ENGINE=podman` is the default and
 keeps native Podman lifecycle/exec semantics even though the socket has the
 engine-neutral in-container name `/var/run/docker.sock`.
 

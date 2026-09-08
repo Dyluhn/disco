@@ -1,4 +1,4 @@
-FROM debian:stable-slim
+FROM docker.io/library/debian:stable-slim
 # Agent toolset: shell, python, common CLI utils. NO secrets/keys — ever.
 # `python-is-python3` provides the `python` alias (Debian ships only `python3`):
 # agents overwhelmingly write `python script.py` / `python -m pip`, and without it

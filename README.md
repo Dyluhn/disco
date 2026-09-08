@@ -102,15 +102,32 @@ This is the supported self-host path from a clean checkout. It boots the app,
 agent, frontend, data volume, bundled encoders, and bundled TTS without source
 edits or a required `.env` file:
 
+### Prerequisites
+
+`git`, rootless **Podman**, and a compose provider. Nothing else — no Python, no
+Node, no `uv` on the host; every build happens inside the containers.
+
+```bash
+sudo apt-get update && sudo apt-get install -y git podman podman-compose  # Debian / Ubuntu
+sudo dnf install -y git podman podman-compose                             # Fedora / RHEL
+sudo pacman -S --needed git podman podman-compose                         # Arch
+```
+
 **Rootless Podman** (the path this project's install testing actually covers):
 
 ```bash
 git clone https://github.com/Dyluhn/disco.git
 cd disco
 systemctl --user enable --now podman.socket
+export DISCO_SANDBOX_SOCKET=$XDG_RUNTIME_DIR/podman/podman.sock
 podman compose up -d --build
 podman compose logs app-server
 ```
+
+The `export` points the Build sandbox at *your* rootless Podman socket. Compose
+variable defaults cannot nest, so the compose file's own fallback can only spell
+the uid-1000 path; exporting it is correct whatever your uid is. Keep it exported
+for every later `podman compose` command in the same shell (`logs`, `exec`, `down`).
 
 **Rootless Docker** — do NOT run the Podman lines above; `podman.socket` does not
 exist on a Docker host and the enable step fails:
@@ -121,6 +138,17 @@ cd disco
 DISCO_LOCAL_ENGINE=docker DISCO_SANDBOX_SOCKET=$XDG_RUNTIME_DIR/docker.sock \
   docker compose up -d --build
 docker compose logs app-server
+```
+
+Confirm all four services before going further — a compose provider can report
+success while one image failed to build:
+
+```bash
+podman compose ps
+# sandbox-image  Exited (0)   <- correct: it only deposits disco-sandbox:base
+# app-server     Up (healthy)
+# agent-server   Up (healthy)
+# frontend       Up (healthy)
 ```
 
 Then open **http://localhost:8088** in a browser.
@@ -145,6 +173,43 @@ prove the configuration:
 ```bash
 podman compose exec agent-server disco-verify --quick
 ```
+
+### Configuring the driver model without a browser
+
+A headless server has no Settings page. The app-server API on port 8800 does the
+same three things the Settings screen does. Adding a *provider* is the whole
+job: it stores the key encrypted and approves the endpoint's origin for egress
+in one call. (Storing a bare secret and hand-writing a model entry does not
+work — a model whose `api_key_env` names a plain environment variable has that
+reference quarantined, and the request then goes out unauthenticated.)
+
+```bash
+# Pair once. On a loopback-bound install (the default) no token is needed.
+CSRF=$(curl -s -c /tmp/disco.jar -H 'Origin: http://127.0.0.1:8800' \
+        -H 'Content-Type: application/json' -d '{}' \
+        http://127.0.0.1:8800/api/auth/mint | python3 -c 'import json,sys;print(json.load(sys.stdin)["csrf_token"])')
+AUTH=(-b /tmp/disco.jar -H "Origin: http://127.0.0.1:8800" -H "X-Disco-CSRF: $CSRF" -H 'Content-Type: application/json')
+
+# 1. the provider — label, OpenAI-compatible base URL, and the key.
+curl -s "${AUTH[@]}" -X POST http://127.0.0.1:8800/api/providers -d "{
+  \"label\": \"My Provider\", \"base_url\": \"https://example.com/v1\",
+  \"kind\": \"openai-compat\", \"api_key\": \"$YOUR_KEY\", \"requires_api_key\": true}"
+# -> {"provider":{"id":"my-provider",...},"catalogue_ok":true}
+
+# 2. see what it serves, and enable the one you want to drive the loop.
+curl -s "${AUTH[@]}" http://127.0.0.1:8800/api/providers/my-provider/models
+curl -s "${AUTH[@]}" -X POST http://127.0.0.1:8800/api/providers/my-provider/enable \
+  -d '{"model_id": "<served-model-id>", "context_window": 131072}'
+# -> the catalogue, including "prov-my-provider-<served-model-id>"
+
+# 3. make it the default driver.
+curl -s "${AUTH[@]}" -X PUT http://127.0.0.1:8800/api/models/assignments \
+  -d '{"default_model": "prov-my-provider-<served-model-id>"}'
+```
+
+`GET /api/providers/presets` lists ready-made base URLs (OpenRouter, OpenAI,
+Anthropic, Groq, DeepSeek, Together, Fireworks, Mistral, xAI). Pass the key in
+the request body only — never on a command line that lands in shell history.
 
 Copy `.env.example` to `.env` only when you need to override ports, bind
 addresses, provider keys, or the sandbox socket. The default is local rootless

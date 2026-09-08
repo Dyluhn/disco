@@ -40,6 +40,20 @@ export default defineConfig({
       { find: "@", replacement: resolve(__dirname, "src") },
     ],
   },
+  build: {
+    rollupOptions: {
+      // Rollup keeps up to `maxParallelFileOps` files open at once while it
+      // resolves and reads modules; its default is 1000. A container image
+      // `RUN` step inherits the host's SOFT nofile limit — 1024 on a stock
+      // systemd distro — and cannot raise it, because the HARD limit there is
+      // 1024 as well. Rollup then runs out of descriptors part-way through
+      // resolution and blames whichever import lost the race, so the image
+      // build fails with a *different* "failed to resolve import <dependency>"
+      // every time. Capping the concurrency makes the build independent of the
+      // host's fd limit; on a bundle this size it costs no measurable time.
+      maxParallelFileOps: 64,
+    },
+  },
   server: {
     fs: { allow: [resolve(__dirname, ".."), __dirname, DEPENDENCY_ROOT] },
     ...(RELIABILITY_APP_PROXY && RELIABILITY_AGENT_PROXY

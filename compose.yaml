@@ -7,6 +7,12 @@
 # keys, or the explicitly less-safe root Docker socket. The model endpoint is
 # configured in the UI after boot.
 #
+# NO NESTED DEFAULTS. Every interpolation here is one level — ${VAR:-literal}.
+# Compose implementations that ship with distributions (podman-compose 1.0.6 on
+# Ubuntu 24.04, for one) substitute a single pass, so ${A:-${B:-c}} survives into
+# the running config as the literal text "${B:-c}" and the stack boots with a
+# garbage bind address, port, or mount. Keep this file to one level.
+#
 # Defaults bind to 127.0.0.1. Do not set DISCO_BIND=0.0.0.0 without your own TLS
 # and auth boundary in front. The sandbox daemon defaults to the current user's
 # rootless Podman socket; /var/run/docker.sock is never selected implicitly.
@@ -43,19 +49,19 @@ services:
       DISCO_SECRETS: /data/secrets.json
       DISCO_APPROVALS: /data/disco-approved-origins.json
       DISCO_SKILLS_DIR: /data/skills
-      DISCO_UI_PORT: "${DISCO_UI_PORT:-${PMX_UI_PORT:-8088}}"
+      DISCO_UI_PORT: "${DISCO_UI_PORT:-8088}"
       DISCO_PUBLIC_UI_URL: "${DISCO_PUBLIC_UI_URL:-}"
       # The bind posture drives first-run auth: loopback-bound (this default) →
       # a localhost front-door page auto-pairs tokenlessly (the ports are
       # kernel-unreachable from other machines); 0.0.0.0/LAN → token required.
       # Keep in LOCKSTEP with the agent-server block + the ports mappings below.
-      DISCO_BIND: "${DISCO_BIND:-${PMX_BIND:-127.0.0.1}}"
-      DISCO_SECRET_KEY: "${DISCO_SECRET_KEY:-${PMX_SECRET_KEY:-}}"
+      DISCO_BIND: "${DISCO_BIND:-127.0.0.1}"
+      DISCO_SECRET_KEY: "${DISCO_SECRET_KEY:-}"
       DISCO_SECRET_KEY_ID: "${DISCO_SECRET_KEY_ID:-}"
       DISCO_SECRET_READ_KEYS: "${DISCO_SECRET_READ_KEYS:-}"
-      DISCO_AUTH_DEV_AUTO_PAIR: "${AUTH_DEV_AUTO_PAIR:-${DISCO_AUTH_DEV_AUTO_PAIR:-${PMX_AUTH_DEV_AUTO_PAIR:-0}}}"
-      DISCO_OPENROUTER_API_KEY: "${DISCO_OPENROUTER_API_KEY:-${PMX_OPENROUTER_API_KEY:-}}"
-      DISCO_GEMMA_API_KEY: "${DISCO_GEMMA_API_KEY:-${PMX_GEMMA_API_KEY:-}}"
+      DISCO_AUTH_DEV_AUTO_PAIR: "${AUTH_DEV_AUTO_PAIR:-0}"
+      DISCO_OPENROUTER_API_KEY: "${DISCO_OPENROUTER_API_KEY:-}"
+      DISCO_GEMMA_API_KEY: "${DISCO_GEMMA_API_KEY:-}"
       OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
       TAVILY_API_KEY: "${TAVILY_API_KEY:-}"
@@ -64,18 +70,19 @@ services:
       FIRECRAWL_API_KEY: "${FIRECRAWL_API_KEY:-}"
       OPENAI_IMAGE_API_KEY: "${OPENAI_IMAGE_API_KEY:-}"
       OPENAI_TTS_API_KEY: "${OPENAI_TTS_API_KEY:-}"
-      DISCO_LOG_LEVEL: "${DISCO_LOG_LEVEL:-${PMX_LOG_LEVEL:-INFO}}"
+      DISCO_LOG_LEVEL: "${DISCO_LOG_LEVEL:-INFO}"
       DISCO_LOG_JSON: "${DISCO_LOG_JSON:-0}"
     volumes:
       - disco-data:/data
     ports:
-      - "${DISCO_BIND:-${PMX_BIND:-127.0.0.1}}:${DISCO_APP_PORT:-${PMX_APP_PORT:-8800}}:8800"
+      - "${DISCO_BIND:-127.0.0.1}:${DISCO_APP_PORT:-8800}:8800"
     # The app-server owns provider /models probes. Give it the same stable host
     # alias as agent-server so the keyless Ollama preset works under Compose.
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8800/api/health')"]
+      # Argument list free of shell metacharacters — see /healthcheck.py for why.
+      test: ["CMD", "python", "/healthcheck.py", "http://127.0.0.1:8800/api/health"]
       interval: 10s
       timeout: 5s
       retries: 6
@@ -102,14 +109,14 @@ services:
       DISCO_PROJECTS_ROOT: /data/projects
       FASTEMBED_CACHE_PATH: /opt/disco-cache/fastembed
       DISCO_NLI_MODEL_DIR: /opt/disco-cache/nli
-      DISCO_ENCODER_TIER: "${DISCO_ENCODER_TIER:-${PMX_ENCODER_TIER:-full}}"
-      DISCO_ENCODERS: "${DISCO_ENCODERS:-${PMX_ENCODERS:-local}}"
+      DISCO_ENCODER_TIER: "${DISCO_ENCODER_TIER:-full}"
+      DISCO_ENCODERS: "${DISCO_ENCODERS:-local}"
       # Remote encoder endpoints are read by the retrieval runtime in this
       # service. Empty values preserve the bundled local encoder default.
-      DISCO_RERANKER_URL: "${DISCO_RERANKER_URL:-${PMX_RERANKER_URL:-}}"
-      DISCO_EMBEDDER_URL: "${DISCO_EMBEDDER_URL:-${PMX_EMBEDDER_URL:-}}"
-      DISCO_NLI_URL: "${DISCO_NLI_URL:-${PMX_NLI_URL:-}}"
-      DISCO_SECRET_KEY: "${DISCO_SECRET_KEY:-${PMX_SECRET_KEY:-}}"
+      DISCO_RERANKER_URL: "${DISCO_RERANKER_URL:-}"
+      DISCO_EMBEDDER_URL: "${DISCO_EMBEDDER_URL:-}"
+      DISCO_NLI_URL: "${DISCO_NLI_URL:-}"
+      DISCO_SECRET_KEY: "${DISCO_SECRET_KEY:-}"
       DISCO_SECRET_KEY_ID: "${DISCO_SECRET_KEY_ID:-}"
       DISCO_SECRET_READ_KEYS: "${DISCO_SECRET_READ_KEYS:-}"
       # The agent-server enforces the SAME CORS/pairing origin allowlist as the
@@ -128,10 +135,10 @@ services:
       DISCO_LOCAL_PREVIEW_PORT_COUNT: "32"
       # Bind posture for first-run auth — keep in LOCKSTEP with the app-server
       # block above (see the comment there).
-      DISCO_BIND: "${DISCO_BIND:-${PMX_BIND:-127.0.0.1}}"
-      DISCO_AUTH_DEV_AUTO_PAIR: "${AUTH_DEV_AUTO_PAIR:-${DISCO_AUTH_DEV_AUTO_PAIR:-${PMX_AUTH_DEV_AUTO_PAIR:-0}}}"
-      DISCO_OPENROUTER_API_KEY: "${DISCO_OPENROUTER_API_KEY:-${PMX_OPENROUTER_API_KEY:-}}"
-      DISCO_GEMMA_API_KEY: "${DISCO_GEMMA_API_KEY:-${PMX_GEMMA_API_KEY:-}}"
+      DISCO_BIND: "${DISCO_BIND:-127.0.0.1}"
+      DISCO_AUTH_DEV_AUTO_PAIR: "${AUTH_DEV_AUTO_PAIR:-0}"
+      DISCO_OPENROUTER_API_KEY: "${DISCO_OPENROUTER_API_KEY:-}"
+      DISCO_GEMMA_API_KEY: "${DISCO_GEMMA_API_KEY:-}"
       OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
       TAVILY_API_KEY: "${TAVILY_API_KEY:-}"
@@ -140,15 +147,15 @@ services:
       FIRECRAWL_API_KEY: "${FIRECRAWL_API_KEY:-}"
       OPENAI_IMAGE_API_KEY: "${OPENAI_IMAGE_API_KEY:-}"
       OPENAI_TTS_API_KEY: "${OPENAI_TTS_API_KEY:-}"
-      DISCO_LOG_LEVEL: "${DISCO_LOG_LEVEL:-${PMX_LOG_LEVEL:-INFO}}"
+      DISCO_LOG_LEVEL: "${DISCO_LOG_LEVEL:-INFO}"
       # Reliability/operator diagnostics. Inspect remains explicitly opt-in;
       # JSON logs make model/tool thrash machine-readable in captured compose logs.
       DISCO_INSPECT: "${DISCO_INSPECT:-0}"
       DISCO_LOG_JSON: "${DISCO_LOG_JSON:-0}"
       # Runtime policy toggles belong to the agent-server: it resolves model
       # vision capability and constructs every Build sandbox egress posture.
-      DISCO_DRIVER_VISION: "${DISCO_DRIVER_VISION:-${PMX_DRIVER_VISION:-0}}"
-      DISCO_BUILD_EGRESS: "${DISCO_BUILD_EGRESS:-${PMX_BUILD_EGRESS:-filtered}}"
+      DISCO_DRIVER_VISION: "${DISCO_DRIVER_VISION:-0}"
+      DISCO_BUILD_EGRESS: "${DISCO_BUILD_EGRESS:-filtered}"
       # MCP egress: this stack runs NO orchestrator-side egress sidecar (the
       # allowlisting proxy is per-sandbox, per-run), so an operator-approved MCP
       # origin connects directly under the filtered posture. Set REQUIRED=1 only
@@ -167,7 +174,7 @@ services:
       MALLOC_CONF: "background_thread:true,dirty_decay_ms:5000,muzzy_decay_ms:5000"
       MALLOC_ARENA_MAX: "2"
       # Where the agent-server reaches sandbox-published preview ports (host-gateway).
-      DISCO_PREVIEW_HOST: "${DISCO_PREVIEW_HOST:-${PMX_PREVIEW_HOST:-host.docker.internal}}"
+      DISCO_PREVIEW_HOST: "${DISCO_PREVIEW_HOST:-host.docker.internal}"
       # gVisor: DISCO_LOCAL_RUNTIME names the OCI runtime for spawned sandboxes.
       # NOT SUPPORTED on this rootless-Podman default path. Podman's Docker-compat
       # API drops the runtime on create without erroring, so a container asked to
@@ -195,7 +202,12 @@ services:
       # which keeps this same non-root-owned boundary. Operators who deliberately
       # accept Docker's root-equivalent rootful source must opt in explicitly with
       # DISCO_SANDBOX_SOCKET=/var/run/docker.sock.
-      - "${DISCO_SANDBOX_SOCKET:-${PMX_SANDBOX_SOCKET:-${XDG_RUNTIME_DIR:-/run/user/1000}/podman/podman.sock}}:/var/run/docker.sock"
+      # The literal default below only fits uid 1000 (the first user on most
+      # distros). Compose interpolation cannot nest, so $XDG_RUNTIME_DIR cannot be
+      # spelled inside the default — the README therefore exports
+      # DISCO_SANDBOX_SOCKET=$XDG_RUNTIME_DIR/podman/podman.sock, which is correct
+      # for every uid. See the "no nested defaults" note at the top of this file.
+      - "${DISCO_SANDBOX_SOCKET:-/run/user/1000/podman/podman.sock}:/var/run/docker.sock"
     # SELinux otherwise denies access to a rootless Podman socket even though
     # the explicit bind mount is present. This service already holds authority
     # over that daemon; disabling its container label does not broaden the
@@ -205,7 +217,7 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
-      - "${DISCO_BIND:-${PMX_BIND:-127.0.0.1}}:${DISCO_AGENT_PORT:-${PMX_AGENT_PORT:-8000}}:8000"
+      - "${DISCO_BIND:-127.0.0.1}:${DISCO_AGENT_PORT:-8000}:8000"
       # One literal loopback host per Preview lease. Cookies are host-scoped,
       # not port-scoped, so publishing every listener on 127.0.0.1 would let
       # generated applications overwrite one another's session cookies.
@@ -249,7 +261,8 @@ services:
       app-server:
         condition: service_healthy # the seed runs once; let app-server win the race
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8000/health')"]
+      # Argument list free of shell metacharacters — see /healthcheck.py for why.
+      test: ["CMD", "python", "/healthcheck.py", "http://127.0.0.1:8000/health"]
       interval: 10s
       timeout: 5s
       retries: 6
@@ -266,10 +279,10 @@ services:
       # (/svc/app, /svc/agent) that this container's nginx proxies to the
       # backends — the single front door. Set absolute URLs only for a
       # split-origin deployment that terminates the backends elsewhere.
-      DISCO_PUBLIC_API_BASE: "${DISCO_PUBLIC_API_BASE:-${PMX_PUBLIC_API_BASE:-}}"
-      DISCO_PUBLIC_AGENT_BASE: "${DISCO_PUBLIC_AGENT_BASE:-${PMX_PUBLIC_AGENT_BASE:-}}"
+      DISCO_PUBLIC_API_BASE: "${DISCO_PUBLIC_API_BASE:-}"
+      DISCO_PUBLIC_AGENT_BASE: "${DISCO_PUBLIC_AGENT_BASE:-}"
     ports:
-      - "${DISCO_BIND:-${PMX_BIND:-127.0.0.1}}:${DISCO_UI_PORT:-${PMX_UI_PORT:-8088}}:80"
+      - "${DISCO_BIND:-127.0.0.1}:${DISCO_UI_PORT:-8088}:80"
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:80/env.js"]
       interval: 10s

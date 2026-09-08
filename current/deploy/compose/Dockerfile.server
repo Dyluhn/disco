@@ -79,12 +79,12 @@ RUN uv sync --frozen --no-dev --all-packages --no-install-package disco-harness
 # just the interpreter + npm's own package keeps this to roughly ~130 MB and
 # pulls in NO build toolchain (no node-gyp, no gcc, no python-dev).
 # ---------------------------------------------------------------------------
-FROM node:22-bookworm-slim AS nodejs
+FROM docker.io/library/node:22-bookworm-slim AS nodejs
 
 # ---------------------------------------------------------------------------
 # Stage 2 — runtime: slim python with only the native libs the servers need.
 # ---------------------------------------------------------------------------
-FROM python:3.12-slim-bookworm
+FROM docker.io/library/python:3.12-slim-bookworm
 
 ARG DISCO_ENCODER_TIER=full
 
@@ -139,6 +139,7 @@ COPY --from=builder /opt/disco-cache /opt/disco-cache
 # PMX_SECRET_KEY) and the seed script it calls. compose sets
 # `entrypoint: ["/entrypoint.sh"]` and the entrypoint runs /app/scripts/seed_config.py.
 COPY current/deploy/compose/entrypoint.sh /entrypoint.sh
+COPY current/deploy/compose/healthcheck.py /healthcheck.py
 COPY development/scripts/ /app/development/scripts/
 RUN chmod +x /entrypoint.sh
 

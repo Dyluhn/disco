@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # ---- Stage 1: build the Vite SPA ----
-FROM node:22-alpine AS build
+FROM docker.io/library/node:22-alpine AS build
 WORKDIR /app/frontend
 
 # Install deps from lockfile for reproducible builds.
@@ -22,7 +22,7 @@ COPY current/packages/agent-server/src/disco/agent_server/element_mention_picker
 RUN npm run typecheck:build && npx vite build
 
 # ---- Stage 2: serve with nginx ----
-FROM nginx:alpine AS serve
+FROM docker.io/library/nginx:alpine AS serve
 
 # Static SPA assets.
 COPY --from=build /app/frontend/dist /usr/share/nginx/html
