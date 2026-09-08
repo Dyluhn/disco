@@ -16,13 +16,14 @@ def _compose() -> dict:
 def test_agent_server_receives_every_advertised_runtime_override() -> None:
     environment = _compose()["services"]["agent-server"]["environment"]
 
-    assert environment["DISCO_BUILD_EGRESS"] == (
-        "${DISCO_BUILD_EGRESS:-${PMX_BUILD_EGRESS:-filtered}}"
-    )
-    assert environment["DISCO_DRIVER_VISION"] == ("${DISCO_DRIVER_VISION:-${PMX_DRIVER_VISION:-0}}")
-    assert environment["DISCO_EMBEDDER_URL"] == ("${DISCO_EMBEDDER_URL:-${PMX_EMBEDDER_URL:-}}")
-    assert environment["DISCO_RERANKER_URL"] == ("${DISCO_RERANKER_URL:-${PMX_RERANKER_URL:-}}")
-    assert environment["DISCO_NLI_URL"] == "${DISCO_NLI_URL:-${PMX_NLI_URL:-}}"
+    # One level of interpolation only — see
+    # core/tests/test_compose_interpolation_portability.py for why the legacy
+    # ${DISCO_X:-${PMX_X:-default}} form cannot survive a distribution's compose.
+    assert environment["DISCO_BUILD_EGRESS"] == "${DISCO_BUILD_EGRESS:-filtered}"
+    assert environment["DISCO_DRIVER_VISION"] == "${DISCO_DRIVER_VISION:-0}"
+    assert environment["DISCO_EMBEDDER_URL"] == "${DISCO_EMBEDDER_URL:-}"
+    assert environment["DISCO_RERANKER_URL"] == "${DISCO_RERANKER_URL:-}"
+    assert environment["DISCO_NLI_URL"] == "${DISCO_NLI_URL:-}"
 
 
 def test_logging_inspect_and_provider_variables_reach_their_consumers() -> None:
@@ -94,7 +95,7 @@ def test_server_image_ships_the_js_runtime_stdio_mcp_servers_need() -> None:
         encoding="utf-8"
     )
 
-    assert "FROM node:22-bookworm-slim AS nodejs" in dockerfile
+    assert "FROM docker.io/library/node:22-bookworm-slim AS nodejs" in dockerfile
     assert "COPY --from=nodejs /usr/local/bin/node /usr/local/bin/node" in dockerfile
     assert (
         "COPY --from=nodejs /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/npm"
