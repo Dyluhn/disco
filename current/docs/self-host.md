@@ -10,6 +10,8 @@ socket is inherited by a fresh install.
 sudo apt-get update && sudo apt-get install -y git podman podman-compose  # or dnf / pacman
 git clone https://github.com/Dyluhn/disco.git
 cd disco
+systemctl --user daemon-reload
+systemctl --user start dbus.socket
 loginctl enable-linger "$USER"
 systemctl --user enable --now podman.socket
 export DISCO_SANDBOX_SOCKET=$XDG_RUNTIME_DIR/podman/podman.sock
@@ -224,10 +226,18 @@ The agent-server mounts the current user's rootless Podman socket by default. On
 Linux and WSL2 with systemd, enable it once before bringing up the stack:
 
 ```bash
+systemctl --user daemon-reload
+systemctl --user start dbus.socket
+loginctl enable-linger "$USER"
 systemctl --user enable --now podman.socket
 export DISCO_SANDBOX_SOCKET=$XDG_RUNTIME_DIR/podman/podman.sock
 podman compose up -d --build
 ```
+
+The first two lines start the per-user services the Podman install added;
+without the user D-Bus, rootless `crun` fails the image build with `sd-bus call:
+Interactive authentication required`. Logging out and back in is equivalent.
+`enable-linger` keeps the containers running after the operator disconnects.
 
 Export the socket rather than relying on the compose default. `compose.yaml` is
 written for the compose providers distributions ship, which substitute variables

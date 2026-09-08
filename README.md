@@ -118,6 +118,8 @@ sudo pacman -S --needed git podman podman-compose                         # Arch
 ```bash
 git clone https://github.com/Dyluhn/disco.git
 cd disco
+systemctl --user daemon-reload
+systemctl --user start dbus.socket
 loginctl enable-linger "$USER"
 systemctl --user enable --now podman.socket
 export DISCO_SANDBOX_SOCKET=$XDG_RUNTIME_DIR/podman/podman.sock
@@ -125,10 +127,19 @@ podman compose up -d --build
 podman compose logs app-server
 ```
 
-`enable-linger` gives your user a systemd session that outlives your login. On a
-server that is what keeps the stack up after you disconnect; without it rootless
-Podman can also fail mid-build with `sd-bus call: Interactive authentication
-required` when the build runs outside a live login session.
+The two `systemctl --user` lines before `enable-linger` set up the per-user
+services the Podman install just added. Logging out and back in does the same
+thing. Skipping them is the usual cause of
+
+```
+error running container: from /usr/bin/crun creating container for [...]:
+  sd-bus call: Interactive authentication required.: Permission denied
+```
+
+part-way through the image build — rootless `crun` needs your user's D-Bus, and
+a shell that was already open when Podman was installed does not have it. (On
+Debian 13 a *fresh* login does not have it either until the socket is started
+once.) `enable-linger` then keeps the stack running after you disconnect.
 
 The `export` points the Build sandbox at *your* rootless Podman socket. The
 compose file is written for the compose providers distributions actually ship,
