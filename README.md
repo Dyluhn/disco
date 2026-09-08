@@ -108,10 +108,31 @@ edits or a required `.env` file:
 Node, no `uv` on the host; every build happens inside the containers.
 
 ```bash
-sudo apt-get update && sudo apt-get install -y git podman podman-compose  # Debian / Ubuntu
-sudo dnf install -y git podman podman-compose                             # Fedora / RHEL
-sudo pacman -S --needed git podman podman-compose                         # Arch
+sudo apt-get update && sudo apt-get install -y git podman docker-compose   # Debian 13
+sudo apt-get update && sudo apt-get install -y git podman podman-compose   # Ubuntu 24.04
 ```
+
+Those two are the combinations this project installs and tests on. On any other
+distribution install `git`, `podman`, and a compose provider — prefer **Compose
+v2** (usually packaged as `docker-compose`), and fall back to `podman-compose`
+where Compose v2 is not packaged or is still the retired Python v1, which is the
+case on Ubuntu 24.04.
+
+`podman compose` is a thin wrapper that hands the file to whichever provider it
+finds, and the providers are not equivalent. Installing `docker-compose` does
+not install a Docker daemon and does not change which engine runs the
+containers.
+
+If your provider is `podman-compose` 1.3.x, `podman compose up` fails with
+
+```
+Error: invalid port format - format is [[hostIP:]hostPort:]containerPort
+```
+
+and, more quietly, hands the containers environment values that still read
+`${DISCO_ENCODER_TIER:-full}`. That version does not apply a `${VAR:-default}`
+when `VAR` is unset and is also one of the service's own environment keys.
+Install `docker-compose` and run `podman compose up -d --build` again.
 
 **Rootless Podman** (the path this project's install testing actually covers):
 

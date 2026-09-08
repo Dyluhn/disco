@@ -7,7 +7,10 @@ socket is inherited by a fresh install.
 ## Quickstart
 
 ```bash
-sudo apt-get update && sudo apt-get install -y git podman podman-compose  # or dnf / pacman
+sudo apt-get update && sudo apt-get install -y git podman docker-compose   # Debian 13
+# Ubuntu 24.04 instead: ... git podman podman-compose  (its docker-compose is the
+# retired Python v1). See the README Prerequisites note on compose providers —
+# podman-compose 1.3.x drops ${VAR:-default} and mangles ports and environment.
 git clone https://github.com/Dyluhn/disco.git
 cd disco
 systemctl --user daemon-reload
