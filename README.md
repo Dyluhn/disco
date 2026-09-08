@@ -118,11 +118,17 @@ sudo pacman -S --needed git podman podman-compose                         # Arch
 ```bash
 git clone https://github.com/Dyluhn/disco.git
 cd disco
+loginctl enable-linger "$USER"
 systemctl --user enable --now podman.socket
 export DISCO_SANDBOX_SOCKET=$XDG_RUNTIME_DIR/podman/podman.sock
 podman compose up -d --build
 podman compose logs app-server
 ```
+
+`enable-linger` gives your user a systemd session that outlives your login. On a
+server that is what keeps the stack up after you disconnect; without it rootless
+Podman can also fail mid-build with `sd-bus call: Interactive authentication
+required` when the build runs outside a live login session.
 
 The `export` points the Build sandbox at *your* rootless Podman socket. Compose
 variable defaults cannot nest, so the compose file's own fallback can only spell
@@ -145,11 +151,11 @@ success while one image failed to build:
 
 ```bash
 podman compose ps
-# sandbox-image  Exited (0)   <- correct: it only deposits disco-sandbox:base
-# app-server     Up (healthy)
-# agent-server   Up (healthy)
-# frontend       Up (healthy)
 ```
+
+Expect four rows: `app-server`, `agent-server` and `frontend` **Up (healthy)**,
+and `sandbox-image` **Exited (0)** — that one is correct, it exists only to
+deposit the `disco-sandbox:base` image into your daemon and then stop.
 
 Then open **http://localhost:8088** in a browser.
 

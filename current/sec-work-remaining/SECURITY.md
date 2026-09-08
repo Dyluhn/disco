@@ -38,7 +38,7 @@ authentication layer since security wave S-W1 (commit `e028d2ac`).**
   (`compose.yaml:42,79,106`; `.env.example:6-8`), and there is no TLS. Auth is a real
   gate against drive-by and cross-owner access, but TLS/reverse-proxy and packaging work (see
   "Hardening status" below) remain prerequisites for any public deployment — do not
-  set `PMX_BIND=0.0.0.0` without your own TLS (a reverse proxy) in front.
+  set `DISCO_BIND=0.0.0.0` without your own TLS (a reverse proxy) in front.
 - **The operator is trusted.** v1 ships one operator, whose session is admin. Non-admin
   sessions cannot mutate install-wide state (provider config, secrets, MCP, skills), but
   the single local operator holds an admin session.

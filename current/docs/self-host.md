@@ -10,6 +10,7 @@ socket is inherited by a fresh install.
 sudo apt-get update && sudo apt-get install -y git podman podman-compose  # or dnf / pacman
 git clone https://github.com/Dyluhn/disco.git
 cd disco
+loginctl enable-linger "$USER"
 systemctl --user enable --now podman.socket
 export DISCO_SANDBOX_SOCKET=$XDG_RUNTIME_DIR/podman/podman.sock
 podman compose up -d --build
