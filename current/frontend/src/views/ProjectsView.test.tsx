@@ -38,9 +38,9 @@ describe("ProjectsView — WO-9 relabel + self-host affordance", () => {
   it("shows an honest, unverified self-host badge on a candidate project row", async () => {
     renderView(<ProjectsView />);
     // conv_demo_snake resolves to a `candidate` (self_host: true, UNVERIFIED) verdict.
-    // WO-C3 (§7.7): an unverified candidate is NEVER stamped "ready" — it carries the
-    // honest "Not runtime-verified" qualifier instead.
-    const badge = await screen.findByText(/not runtime-verified/i);
+    // WO-C3 (§7.7): an unverified candidate is NEVER stamped "ready" — it says plainly
+    // that the bundle has not been run instead (UI-30 reworded, same guarantee).
+    const badge = await screen.findByText(/bundle not run yet/i);
     expect(badge).toBeInTheDocument();
     // The badge is a non-interactive status marker (a <span>), not its own
     // (dead) button — it carries the capability signal, no false affordance.
@@ -49,6 +49,21 @@ describe("ProjectsView — WO-9 relabel + self-host affordance", () => {
     expect(badge.getAttribute("data-self-host")).toBe("candidate");
     const row = badge.closest("li") as HTMLElement;
     expect(row.querySelector('[data-self-host="ready"]')).toBeNull();
+  });
+
+  // UI-30 regression: the old badge read "NOT RUNTIME-VERIFIED" with nothing to
+  // tell the user what it meant or what would change it. The label must stay plain
+  // AND carry that explanation, so a bare internal stamp cannot come back.
+  it("explains the candidate badge instead of stamping internal vocabulary", async () => {
+    renderView(<ProjectsView />);
+    const badge = await screen.findByText(/bundle not run yet/i);
+    // No jargon in the visible label.
+    expect(badge.textContent ?? "").not.toMatch(/runtime-verified/i);
+    // The tooltip says what it means AND what would change it.
+    const tip = badge.getAttribute("title") ?? "";
+    expect(tip).toMatch(/hasn't started that bundle/i);
+    expect(tip).toMatch(/hasn't checked that it works/i);
+    expect(tip).toMatch(/run the bundle yourself/i);
   });
 
   it("does not badge the files-missing row as self-hostable", async () => {

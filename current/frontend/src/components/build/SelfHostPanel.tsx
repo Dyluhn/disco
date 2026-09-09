@@ -64,7 +64,9 @@ export function SelfHostPanel({
 }) {
   // The bundle is downloadable/runnable when the release is self-hostable; the
   // honest "Ready" claim is tied to VERIFICATION (assessment === "verified"), NOT
-  // to `self_host`. A `candidate` self-hosts a bundle but stays "Not runtime-verified".
+  // to `self_host`. A `candidate` self-hosts a bundle, and the copy says plainly
+  // that Disco has not started it and has not checked it — UI-16 rewords that
+  // guarantee into user language, it does not weaken it.
   const selfHostable = release.self_host;
   const verified = release.assessment === "verified";
   const reason = release.reasons[0] ?? null;
@@ -84,15 +86,29 @@ export function SelfHostPanel({
 
       {selfHostable ? (
         <div className="flex flex-col gap-inline">
-          {reason && <p className="font-ui text-[0.78rem] text-text-muted">{reason}</p>}
-          {!verified && (
+          {/* UI-16: the panel leads with plain language — what this is, what to do,
+              and (when unverified) what "verified" would mean. `release.reasons[0]`
+              is DETECTOR diagnostics ("detected a static ingress service from the
+              immutable project contents"), not user copy, so it moves behind the
+              disclosure at the foot of this branch instead of being the headline. */}
+          {!verified ? (
             // A candidate is statically plausible but UNVERIFIED — it never claims
-            // to be "Ready" (§2.1). This qualifier is the honest counterpart.
+            // to be "Ready" (§2.1). Saying plainly that Disco has not started it is
+            // the honest counterpart, in words a user can act on.
             <p
               data-self-host-note="unverified"
-              className="font-ui text-[0.74rem] text-text-faint"
+              className="font-ui text-[0.78rem] text-text-muted"
             >
-              Not runtime-verified — the self-host bundle is available but has not been run.
+              This site can run on its own — download the source below and run the command
+              shown here. Disco hasn't started it yet, so it hasn't checked that it works.
+            </p>
+          ) : (
+            <p
+              data-self-host-note="verified"
+              className="font-ui text-[0.78rem] text-text-muted"
+            >
+              Disco started this bundle and watched it serve. Download the source below and
+              run the command shown here to host it yourself.
             </p>
           )}
           <div className="flex flex-col gap-hair">
@@ -140,6 +156,16 @@ export function SelfHostPanel({
                 ))}
               </ul>
             </div>
+          )}
+          {/* The detector's own words, kept verbatim but demoted: it is evidence for
+              the curious, not the headline a user has to decode (UI-16). */}
+          {reason && (
+            <details className="font-ui text-[0.74rem] text-text-faint">
+              <summary className="cursor-pointer list-none">How Disco worked this out</summary>
+              <p data-self-host-detection-reason className="mt-hair">
+                {reason}
+              </p>
+            </details>
           )}
         </div>
       ) : release.blockers.length > 0 ? (

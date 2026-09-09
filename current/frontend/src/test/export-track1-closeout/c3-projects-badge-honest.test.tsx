@@ -5,10 +5,19 @@
  * FROZEN acceptance path (plan §1.1: `current/frontend/src/test/export-track1-closeout/**`).
  * Locked semantic §2.1 / plan §7 (WO-C3) acceptance 7 requires that at EVERY UI
  * mounting point a `candidate` release is presented as explicitly unverified — the
- * exact string "Not runtime-verified" is shown and the surface never claims the
- * project is "ready". `SelfHostPanel` is one mounting point (covered by
+ * row says the bundle has NOT been run and the surface never claims the project is
+ * "ready" or "verified". `SelfHostPanel` is one mounting point (covered by
  * `c3-candidate-copy.test.tsx`); the per-row badge in `ProjectsView` is a SECOND,
  * and it currently lies.
+ *
+ * UI-30 (2026-09-09) reworded the badge from the internal "NOT RUNTIME-VERIFIED"
+ * to "Bundle not run yet" plus a tooltip saying what it means and what would change
+ * it. The GUARANTEE is unchanged and wider: the row must still carry the
+ * machine-checkable `data-self-host="candidate"` marker, must still say in words
+ * that the bundle has not been run, must NOT stamp `data-self-host="ready"`, and its
+ * text must now contain neither "ready" NOR "verified". The `it(...)` title is left
+ * byte-identical on purpose — it is a sealed identifier in the closeout acceptance
+ * manifest and in development/architecture/test-inventory.json.
  *
  * Boundary (plan §1.2 / §3.3): the real `ProjectsView` is rendered through its real
  * data hooks (`useProjects` + `useProjectRelease`) against the offline fixtures, so
@@ -66,8 +75,17 @@ describe("WO-C3 — ProjectsView candidate badge is honestly unverified, never '
       // A `candidate` is statically plausible and UNVERIFIED (§2.1) — the row must not
       // assert readiness the project has not earned.
       expect(rowEl.querySelector('[data-self-host="ready"]')).toBeNull();
-      // §7 acceptance 7: this mounting point must carry the exact unverified qualifier.
-      expect((rowEl.textContent ?? "").toLowerCase()).toContain("not runtime-verified");
+      // §7 acceptance 7: this mounting point must carry the unverified qualifier — as
+      // a machine-checkable marker AND as words the user can read.
+      const badge = rowEl.querySelector('[data-self-host="candidate"]');
+      expect(badge).not.toBeNull();
+      expect((badge?.textContent ?? "").toLowerCase()).toContain("not run yet");
+      // …and it must explain itself rather than leaving a bare stamp (UI-30).
+      expect(badge?.getAttribute("title") ?? "").toMatch(/hasn't checked that it works/i);
+      // No overclaim in the row's visible text: never "ready", never "verified".
+      const rowText = (rowEl.textContent ?? "").toLowerCase();
+      expect(rowText).not.toContain("ready");
+      expect(rowText).not.toContain("verified");
     });
   });
 });
