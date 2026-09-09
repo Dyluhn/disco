@@ -52,11 +52,19 @@ export function useExportManifest() {
   });
 }
 
-export function useProjectManifest(conversationId: string | null) {
+/** The committed-workspace manifest for a project.
+ *
+ * UI-7: a manifest only EXISTS once the run has committed a workspace. Asking
+ * for one mid-run answered 404 on every visit and logged a console error, so
+ * callers that know the run has not committed yet pass `available: false` and
+ * nothing is requested. A late 404 is still possible (the commit and this
+ * request can race), so the query does not retry it into three errors either. */
+export function useProjectManifest(conversationId: string | null, available = true) {
   return useQuery<ProjectManifest>({
     queryKey: ["project-manifest", conversationId],
     queryFn: () => getProjectManifest(conversationId!),
-    enabled: !!conversationId,
+    enabled: !!conversationId && available,
+    retry: false,
   });
 }
 
