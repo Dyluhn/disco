@@ -189,8 +189,17 @@ export function BuildSurface({
         />
       </BuildActivityFeed>
 
-      {/* gate · steer · re-plan — pinned under the feed */}
-      <div className="flex flex-col gap-inline border-t border-hairline px-body py-inline">
+      {/* gate · steer · re-plan — pinned under the feed. UI-17: on a finished
+          run this region is tall (deliverable card + self-host + composer +
+          schedules) and the chat pane clips its overflow at `lg`. Let it
+          shrink and scroll ITSELF there, so it neither starves the Activity
+          section above it (which then painted over this card) nor hides its
+          own bottom past the clip. Below `lg` the pane still overflows to the
+          ordinary page scroll — unchanged. */}
+      <div
+        data-testid="build-pane-footer"
+        className="flex flex-col gap-inline border-t border-hairline px-body py-inline lg:min-h-0 lg:overflow-y-auto"
+      >
         <BuildDeliverableSection
           b={b}
           deliverable={deliverable}
