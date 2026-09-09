@@ -144,9 +144,11 @@ describe("ImageGenSection — A3 image-gen provider settings", () => {
     expect(body.workflow_json).toBe(graph);
   });
 
-  it("warns that a remote tier selected without its required config is NOT configured (W-50)", async () => {
+  it("says an unconfigured tier is optional and not set up, in a neutral tone (W-50, UI-2)", async () => {
     // openai persisted but no api_key_env → image-gen is NOT configured (no procedural
-    // fallback); the UI must say so rather than imply a backend is active.
+    // fallback); the UI must say so rather than imply a backend is active. It is
+    // an OPTIONAL feature nobody turned on, so it must not read as an error the
+    // user caused — no `warn` chroma, and the next step named.
     vi.unstubAllGlobals();
     vi.stubGlobal(
       "fetch",
@@ -161,8 +163,9 @@ describe("ImageGenSection — A3 image-gen provider settings", () => {
     render(createElement(ImageGenSection), { wrapper: makeWrapper() });
     // The warning carries the distinct "until then" phrasing; the test button may
     // also render a status when the agent server is offline.
-    const warning = await screen.findByText(/until then.*not configured/i);
-    expect(warning).toHaveTextContent(/until then.*not configured/i);
+    const note = await screen.findByText(/Optional: image generation is not set up/i);
+    expect(note).toHaveTextContent(/Name the stored key below/i);
+    expect(note.className).not.toMatch(/warn|unsupported/);
   });
 });
 
