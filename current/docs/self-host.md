@@ -82,6 +82,45 @@ All durable application state lives in the `disco-data` volume. The default
 server image already contains the fastembed ONNX models and Kokoro TTS weights
 under `/opt/disco-cache`, so the `/data` volume does not hide them.
 
+## Start at boot
+
+A rootless compose project does not come back after a reboot on its own:
+`restart: unless-stopped` covers a crash while the machine is up, not a cold
+boot, because no system-wide service owns rootless containers. One user unit
+owns the project. Save as `~/.config/systemd/user/disco.service`:
+
+```ini
+[Unit]
+Description=Disco (compose project)
+Wants=network-online.target podman.socket
+After=network-online.target podman.socket
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=%h/disco
+Environment=DISCO_SANDBOX_SOCKET=%t/podman/podman.sock
+ExecStart=/usr/bin/podman compose up -d
+ExecStop=/usr/bin/podman compose down
+TimeoutStartSec=0
+
+[Install]
+WantedBy=default.target
+```
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now disco.service
+loginctl enable-linger "$USER"
+```
+
+`%h` is the home directory and `%t` is `$XDG_RUNTIME_DIR`, so the unit is
+uid-independent. On rootless Docker use `%h/bin/docker compose` in both Exec
+lines with `Environment=DOCKER_HOST=unix://%t/docker.sock`. `enable-linger` is
+what lets the unit run with nobody logged in — it is already in the Quickstart.
+`podman generate systemd` is not the right tool here: it emits one unit per
+container and is deprecated in Podman 5, and Quadlet has no compose equivalent.
+
 ## Backup and restore
 
 Use the repository lifecycle command rather than copying a live `disco.db` file.

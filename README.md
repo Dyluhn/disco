@@ -365,6 +365,49 @@ the lifecycle command, which now does the whole update itself:
 After either route, re-run the confirmation (`podman ps`) and the proof step
 (`disco-verify --quick`).
 
+### Starting Disco at boot
+
+Nothing starts a rootless container stack after a reboot on its own —
+`restart: unless-stopped` in the compose file only covers a crash while the
+machine is up. Give the compose project one user unit. Save this as
+`~/.config/systemd/user/disco.service`, replacing `%h/disco` if you cloned
+somewhere else:
+
+```ini
+[Unit]
+Description=Disco (compose project)
+Wants=network-online.target podman.socket
+After=network-online.target podman.socket
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=%h/disco
+Environment=DISCO_SANDBOX_SOCKET=%t/podman/podman.sock
+ExecStart=/usr/bin/podman compose up -d
+ExecStop=/usr/bin/podman compose down
+TimeoutStartSec=0
+
+[Install]
+WantedBy=default.target
+```
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now disco.service
+loginctl enable-linger "$USER"     # already run above; this is what makes it survive logout
+```
+
+`%h` is your home directory and `%t` is `$XDG_RUNTIME_DIR`, so the unit is
+correct at any uid. On the rootless Docker path use `%h/bin/docker compose`
+in both Exec lines and set `Environment=DOCKER_HOST=unix://%t/docker.sock`
+instead of the Podman socket.
+
+Check it with `systemctl --user status disco` after a reboot; `journalctl --user
+-u disco` has the compose output. This is a compose project, so it gets one unit
+that owns the project — `podman generate systemd` writes one unit per container
+(and is deprecated in Podman 5), and Quadlet has no compose equivalent.
+
 Copy `.env.example` to `.env` only when you need to override ports, bind
 addresses, provider keys, or the sandbox socket. The default is local rootless
 Podman. Docker also works and is an explicit override, not automatic; prefer
