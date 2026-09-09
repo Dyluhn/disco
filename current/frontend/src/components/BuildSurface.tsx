@@ -262,6 +262,7 @@ export function BuildSurface({
             // element's typed ref + change; the host scopes the targeted edit.
             onSelectionEdit={steerable ? b.selectionEdit : undefined}
             onElementMention={setElementMention}
+            downloadTitle={taskLabel}
           />
         )
       }

@@ -48,6 +48,7 @@ export function ExecutionCanvas({
   onSteer,
   onSelectionEdit,
   onElementMention,
+  downloadTitle = null,
 }: {
   events: AgentEvent[];
   status: ConversationStatus;
@@ -66,6 +67,9 @@ export function ExecutionCanvas({
   ) => void;
   /** Element mention — attach the next clicked preview element to the next chat message. */
   onElementMention?: (payload: ElementMentionPayload) => void;
+  /** Run title, used to name the zip the Preview pane's failure card offers
+   * (UI-40 naming). Absent in the static run view, which has no conversation. */
+  downloadTitle?: string | null;
 }) {
   // Recognize the canonical app handoff independently from later file
   // deliverables. Runtime apps may hand off a directory or server entry rather
@@ -237,6 +241,7 @@ export function ExecutionCanvas({
             onSteer={onSteer}
             onSelectionEdit={onSelectionEdit}
             onElementMention={onElementMention}
+            downloadTitle={downloadTitle}
           />
         </Tabs.Content>
         <Tabs.Content value="cockpit" className="h-full focus:outline-none">

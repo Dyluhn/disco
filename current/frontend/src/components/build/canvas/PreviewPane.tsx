@@ -4,6 +4,7 @@ import { previewBootstrapUrl } from "@/api/preview";
 import { restartPreview } from "@/api/agent";
 import { useToast } from "@/components/toastApi";
 import { useBuildPreview } from "@/hooks/useBuildPreview";
+import { useDownloadProject } from "@/hooks/useProjects";
 import { useElementMention } from "@/hooks/useElementMention";
 import { useElementSelect } from "@/hooks/useElementSelect";
 import { useWorkspaceVersions } from "@/hooks/useWorkspaceVersions";
@@ -55,11 +56,15 @@ export function PreviewPane({
   onSteer,
   onSelectionEdit,
   onElementMention,
+  downloadTitle = null,
 }: {
   status: ConversationStatus;
   cid: string | null;
   events: AgentEvent[];
   untrusted?: boolean;
+  /** Names the SAVED FILE for the failure card's Download source action, the
+   * same way the header's download does (UI-40). Presentation only. */
+  downloadTitle?: string | null;
   onSteer?: (text: string) => void;
   onSelectionEdit?: (ref: SelectionRef, instruction: string, humanLabel?: string) => void;
   onElementMention?: (payload: ElementMentionPayload) => void;
@@ -68,6 +73,7 @@ export function PreviewPane({
   const { data } = useBuildPreview(cid, active);
   const queryClient = useQueryClient();
   const toast = useToast();
+  const download = useDownloadProject();
   const { versions, refetch: refetchVersions } = useWorkspaceVersions(cid, events, status);
   const files = useMemo(() => deriveFiles(events), [events]);
   const appDeliverable = useMemo(() => latestAppDeliverable(events), [events]);
@@ -108,8 +114,23 @@ export function PreviewPane({
     committedWorkspaceKey(events),
   );
 
-  const { launch, launchKey, launchVersionSeq, minting, launchFailure, frameReady, setFrameReady } =
-    usePreviewLaunch(cid, ownsCanonicalPreview, requestedLaunchKey, selectedTarget, selectedVersionSeq);
+  const {
+    launch,
+    launchKey,
+    launchVersionSeq,
+    minting,
+    launchFailure,
+    bootstrapFailure,
+    onBootstrapReady,
+    frameReady,
+    setFrameReady,
+  } = usePreviewLaunch(
+    cid,
+    ownsCanonicalPreview,
+    requestedLaunchKey,
+    selectedTarget,
+    selectedVersionSeq,
+  );
 
   usePreviewRouteBridge(launch, frameRef, currentRouteRef);
   usePreviewAutoRefresh(files, status, data?.reload_strategy, setRefreshNonce);
@@ -222,7 +243,12 @@ export function PreviewPane({
   }
 
   const runtimeUnavailable = computeRuntimeUnavailable(selectedVersionSeq, hasFinishedCommittedApp, data);
-  const visibleFailure = computeVisibleFailure(launchFailure, launchKey, requestedLaunchKey);
+  const visibleFailure = computeVisibleFailure(
+    launchFailure,
+    launchKey,
+    requestedLaunchKey,
+    bootstrapFailure,
+  );
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -281,6 +307,7 @@ export function PreviewPane({
           setDisplayedVersionSeq(launchVersionSeq);
           setFrameReady(true);
         }}
+        onBootstrapReady={onBootstrapReady}
         visibleFailure={visibleFailure}
         dataReason={data?.reason}
         minting={minting}
@@ -292,6 +319,11 @@ export function PreviewPane({
         onSteer={onSteer}
         onDisarmEdit={handleDisarmEdit}
         onApplyEdit={applyEdit}
+        onRefresh={() => void refresh()}
+        onDownloadSource={
+          cid ? () => download.mutate({ id: cid, binding: null, title: downloadTitle }) : null
+        }
+        downloadPending={download.isPending}
       />
     </div>
   );
