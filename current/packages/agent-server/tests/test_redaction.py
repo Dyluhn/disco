@@ -429,3 +429,114 @@ def test_pattern_table_is_ordered() -> None:
                 f"order invariant violated: {labels[s]} at {s} should "
                 f"come before {labels[g]} at {g}"
             )
+
+
+# ---- 11. UI-18 — the redactor must not over-fire on readable commands ------
+#
+# Verbatim captures from the 2026-09-09 UI verification pass (ISSUES.md UI-18).
+# The activity feed showed `Ran a command — REDACTED:env -s -o /dev/null …`
+# and a signup body rendered as `"email":"…",REDACTED:json-cred,"plan":"house"`
+# — the user could not read what the agent ran. Both halves are guarded here:
+# the harmless text stays legible, and the SAME syntactic shape carrying a real
+# credential is still scrubbed.
+
+# The exact command from the report: the standard shell idiom for capturing an
+# HTTP status code. There is no literal secret anywhere in it.
+UI18_CURL_IDIOM = 'HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/)'
+
+# The exact signup body from the report: the agent filled in its own signup
+# form with a self-evident test password.
+UI18_SIGNUP_BODY = '{"email":"test@example.com","password":"testpass123","plan":"house"}'
+
+
+def test_ui18_curl_command_substitution_stays_readable() -> None:
+    """`KEY=$(cmd …)` is a shell substitution, not an env dump: there is no
+    literal secret in it, and collapsing it to `REDACTED:env` hid the whole
+    command from the user. The line must survive byte-for-byte."""
+    assert redact_text(UI18_CURL_IDIOM) == UI18_CURL_IDIOM
+
+
+def test_ui18_signup_body_keeps_json_shape_and_test_password() -> None:
+    """The signup body must stay parseable AND readable: the JSON-cred
+    pattern no longer swallows the key, and an obvious test password is not
+    treated as a credential."""
+    out = redact_text(UI18_SIGNUP_BODY)
+    assert out == UI18_SIGNUP_BODY
+    assert json.loads(out)["plan"] == "house"
+
+
+def test_ui18_json_cred_replaces_only_the_value_not_the_pair() -> None:
+    """A REAL password in the same signup shape is still redacted — but the
+    key and the JSON punctuation survive, so the object still parses and the
+    reader can see WHICH field was scrubbed."""
+    body = '{"email":"a@example.com","password":"Tr0ub4dor&3-Zx9qLm","plan":"house"}'
+    out = redact_text(body)
+    assert "Tr0ub4dor&3-Zx9qLm" not in out
+    parsed = json.loads(out)
+    assert parsed["password"] == "REDACTED:json-cred"
+    assert parsed["email"] == "a@example.com"
+    assert parsed["plan"] == "house"
+
+
+def test_ui18_json_api_key_secret_is_still_redacted() -> None:
+    """Positive control in the JSON shape: a provider-prefixed key in an
+    `"api_key"` field is still scrubbed after the value-only change."""
+    body = '{"api_key":"sk-ant-api03-SYNTHETICnotarealkey0123456789abcdef"}'
+    out = redact_text(body)
+    assert "sk-ant-api03-SYNTHETICnotarealkey0123456789abcdef" not in out
+    assert "REDACTED" in out
+    assert json.loads(out)["api_key"].startswith("REDACTED")
+
+
+def test_ui18_env_dump_credential_is_still_redacted() -> None:
+    """Positive control in the shell shape: a genuine env-dump line with a
+    literal value is still collapsed. The narrowing only exempts `$`
+    substitutions and lower-case names, never a literal env value."""
+    for line in (
+        "AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMIsyntheticEXAMPLEKEY0123456789",
+        "STRIPE_SECRET_KEY=sk_live_4eC39HqLyjWDarjtT1zdp7dc",
+        'GITHUB_TOKEN="ghp_abc123def456ghi789jkl012mno345pqr678"',
+    ):
+        out = redact_text(line)
+        assert "REDACTED:env" in out, f"env catcher regressed on {line!r} -> {out!r}"
+        assert line.split("=", 1)[1].strip("\"'") not in out
+
+
+def test_ui18_lowercase_assignment_is_not_an_env_dump() -> None:
+    """The generic catcher used to carry the `i` flag, so lower-case shell
+    assignments and prose matched it too. Only UPPER_SNAKE env-dump names
+    fire now."""
+    line = "out=$(mktemp) && echo hello > $out"
+    assert redact_text(line) == line
+    assert redact_text("port=8000") == "port=8000"
+
+
+def test_ui18_placeholder_allowlist_does_not_cover_real_looking_values() -> None:
+    """The placeholder exemption is narrow: it needs a self-announcing
+    fixture word, a short body and a plain charset. Anything else in a
+    credential-named field is still redacted."""
+    for body in (
+        '{"password":"correcthorsebatterystaple"}',  # no fixture word
+        '{"password":"testpass123!@#$%^&*()_+="}',  # fixture word, exotic charset
+        '{"password":"testpassword-but-far-too-long-to-be-a-fixture-value"}',
+        '{"token":"sk_live_4eC39HqLyjWDarjtT1zdp7dc"}',
+    ):
+        out = redact_text(body)
+        assert "REDACTED" in out, f"placeholder allowlist over-applied: {body!r} -> {out!r}"
+
+
+def test_ui18_activity_feed_shell_observation_is_readable() -> None:
+    """End to end on the frame path the browser actually sees (`redact_frame`
+    via routes/ws.py): the observed command and its output stay legible."""
+    frame = {
+        "type": "event",
+        "kind": "observation",
+        "tool_result": {
+            "tool_name": "shell",
+            "content": f"$ {UI18_CURL_IDIOM}\n200\n",
+            "success": True,
+        },
+    }
+    out = redact_frame(frame)
+    assert UI18_CURL_IDIOM in out["tool_result"]["content"]
+    assert "REDACTED" not in json.dumps(out)
