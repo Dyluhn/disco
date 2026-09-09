@@ -25,9 +25,7 @@ Differences from the sandboxed BUILD tool:
 
 from __future__ import annotations
 
-import hashlib
 import inspect
-import json
 import logging
 import os
 import re
@@ -55,6 +53,14 @@ from disco.tools.builtin import audio_overview
 from disco.tools.builtin._audio_mixer import encode_mp3, mix_pcm
 from disco.tools.builtin._tts_normalize import normalize_tts_text as _normalize_for_tts
 
+from ._report_audio_store import (
+    _audio_cache_hit,
+    _report_audio_cache_paths,
+    _write_audio_artifacts,
+    existing_report_audio,
+    read_report_audio_meta,
+    report_content_key,
+)
 from .audio_config import SILENCE_MS_DEFAULT
 
 logger = logging.getLogger(__name__)
@@ -389,51 +395,6 @@ async def _generate_turn_script(
     return script
 
 
-def report_content_key(report: ReportEvent) -> str:
-    """Identity of the REPORT itself, ignoring which follow-ups were included.
-
-    The artifact cache key mixes in the follow-up selection and the mode, so it
-    cannot answer "is this audio for the report on screen?". A conversation can
-    hold more than one research run, and restoring the previous run's audio
-    onto a new report would be worse than showing no player at all.
-    """
-    seed = report.query + (report.summary or "") + "".join(s.markdown for s in report.sections)
-    return hashlib.sha256(seed.encode()).hexdigest()[:12]
-
-
-def _report_audio_cache_paths(
-    report: ReportEvent,
-    follow_ups: list[tuple[str, str]] | None,
-    mode: str,
-    out_dir: Path,
-) -> tuple[Path, Path]:
-    """B3: content-hash cache key — the key is a hash of the report text + follow-up
-    content so that regenerating after an edit (new summary/sections/follow-ups)
-    busts the cache and produces a fresh audio file.  The hash replaces the old
-    mode+fu_count suffix which collided across edits of the same conversation.
-    """
-    content_seed = (
-        report.query
-        + (report.summary or "")
-        + "".join(s.markdown for s in report.sections)
-        + ("|".join(f"{q}:{a}" for q, a in follow_ups) if follow_ups else "")
-        + mode
-    )
-    content_hash = hashlib.sha256(content_seed.encode()).hexdigest()[:12]
-    mp3_path = out_dir / f"audio_overview_{mode}_{content_hash}.mp3"
-    transcript_path = out_dir / f"audio_overview_{mode}_{content_hash}.md"
-    return mp3_path, transcript_path
-
-
-def _audio_cache_hit(mp3_path: Path, transcript_path: Path) -> bool:
-    """True when a previous run for this conversation already wrote both
-    artifacts verbatim.  The pipeline is deterministic given the report, the
-    LLM, and the voice settings — and the LLM call is the slow / expensive
-    step.  This makes the endpoint idempotent (idempotency is good for
-    retries, and the UI can re-press the button without re-spending RAM)."""
-    return mp3_path.exists() and transcript_path.exists()
-
-
 def _resolve_tts_voice_params(
     tts_settings: Any,
     resolve_key: Callable[[str | None], str | None] | None,
@@ -696,80 +657,6 @@ def _build_transcript_text(
             transcript_lines.append(f"**{label}:** {turn.text}")
             transcript_lines.append("")
     return "\n".join(transcript_lines)
-
-
-def _meta_path(mp3_path: Path) -> Path:
-    return mp3_path.with_suffix(".json")
-
-
-def read_report_audio_meta(mp3_path: Path) -> dict[str, str]:
-    """The sidecar for one generated overview: its mode and its note.
-
-    The note has to survive an agent-server restart -- the browser reloads with
-    no memory of the run, and the artifact on the data volume is the only thing
-    left -- so it is written next to the MP3 rather than held in the process.
-    """
-    try:
-        data = json.loads(_meta_path(mp3_path).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
-    return {str(k): str(v) for k, v in data.items()} if isinstance(data, dict) else {}
-
-
-def existing_report_audio(out_dir: Path, report_key: str) -> list[dict[str, str]]:
-    """Overviews already generated FOR THIS REPORT, newest first.
-
-    Used to restore the player on a fresh page load: the artifacts live on the
-    data volume, so audio the user generated before a restart (or before
-    closing the tab) is still there and must not look like it never happened.
-    Only files this module wrote are matched, only inside ``out_dir``, and only
-    those whose sidecar names the same report -- a second research run in the
-    same conversation must not inherit the first one's audio.
-    """
-    if not out_dir.is_dir():
-        return []
-    found: list[tuple[float, dict[str, str]]] = []
-    for mp3_path in out_dir.glob("audio_overview_*.mp3"):
-        transcript_path = mp3_path.with_suffix(".md")
-        if not transcript_path.is_file():
-            continue
-        meta = read_report_audio_meta(mp3_path)
-        if meta.get("report_key") != report_key:
-            continue
-        parts = mp3_path.stem.split("_")
-        mode = meta.get("mode") or (parts[2] if len(parts) > 2 else "podcast")
-        found.append(
-            (
-                mp3_path.stat().st_mtime,
-                {
-                    "mode": mode,
-                    "note": meta.get("note", ""),
-                    "mp3_name": mp3_path.name,
-                    "transcript_name": transcript_path.name,
-                },
-            )
-        )
-    return [entry for _mtime, entry in sorted(found, key=lambda row: row[0], reverse=True)]
-
-
-def _write_audio_artifacts(
-    mp3_path: Path,
-    transcript_path: Path,
-    mixed_mp3: bytes,
-    transcript_text: str,
-    meta: dict[str, str],
-) -> None:
-    """Step 5: write to the cid-scoped cache dir.  Atomic: write to .part then
-    rename, so a partial file is never served."""
-    mp3_tmp = mp3_path.with_suffix(mp3_path.suffix + ".part")
-    tr_tmp = transcript_path.with_suffix(transcript_path.suffix + ".part")
-    meta_tmp = _meta_path(mp3_path).with_suffix(".json.part")
-    mp3_tmp.write_bytes(mixed_mp3)
-    tr_tmp.write_text(transcript_text, encoding="utf-8")
-    meta_tmp.write_text(json.dumps(meta), encoding="utf-8")
-    mp3_tmp.replace(mp3_path)
-    tr_tmp.replace(transcript_path)
-    meta_tmp.replace(_meta_path(mp3_path))
 
 
 async def generate_report_audio(

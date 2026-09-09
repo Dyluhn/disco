@@ -30,6 +30,7 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Awaitable, Callable, Sequence
+from dataclasses import dataclass, field
 from typing import Any
 
 from ._fallback_script import _TARGET_SECONDS, _cap_script_duration, _fallback_turns
@@ -45,6 +46,7 @@ from ._types import (
 )
 from ._validation import (
     _coerce_llm_response,
+    _Harvest,
     _harvest_turns,
     _malformed_retry_payload,
 )
@@ -120,6 +122,78 @@ def _notes_for(source: str, capped: bool, minutes: int) -> str:
     return " ".join(parts)
 
 
+@dataclass
+class _Assembly:
+    """The script being built: the turns kept so far, how long it should end up,
+    and how big a window to ask the driver for next.
+
+    The loop owns the budgets and the conversation with the driver; this owns
+    the answer to "what do we have, and what do we still want?". Keeping the two
+    apart is what lets the loop read as the three walls the module docstring
+    describes instead of as bookkeeping.
+    """
+
+    accepted: list[Turn] = field(default_factory=list)
+    seen: set[str] = field(default_factory=set)
+    target: int | None = None
+    batch_size: int = _SCRIPT_BATCH_TURNS
+
+    def wants_more(self) -> bool:
+        """True while the script is short of its target (or has no target yet)."""
+        return self.target is None or len(self.accepted) < self.target
+
+    def request_size(self) -> int:
+        """How many turns to ask for next: a full window, or just the shortfall."""
+        remaining = self.batch_size if self.target is None else self.target - len(self.accepted)
+        return max(1, min(self.batch_size, remaining))
+
+    def shrink_window(self, requested: int) -> None:
+        """The answer was cut off mid-JSON: ask for a smaller window next time
+        rather than replaying the same oversized request."""
+        self.batch_size = max(1, requested // 2)
+
+    def admit(self, harvest: _Harvest, mode: str) -> bool:
+        """Keep whatever is genuinely new in ``harvest``, dropping restatements
+        of turns we already have. False means the answer was barren."""
+        fresh = [turn for turn in harvest.turns if _turn_key(turn) not in self.seen]
+        if not fresh:
+            return False
+        self.seen.update(_turn_key(turn) for turn in fresh)
+        self.accepted.extend(fresh)
+        if self.target is None:
+            self.target = _target_for(harvest.total_hint, len(self.accepted), mode)
+        del self.accepted[self.target :]
+        if harvest.whole_script:
+            # A bare array is the driver saying "that's the whole script", so
+            # its length IS the length -- not a script that stopped short of a
+            # target we picked. Adopting it as the target also ends the loop.
+            self.target = len(self.accepted)
+        return True
+
+
+def _barren_error(content: str, finish: str, start_turn: int) -> str:
+    """The one line saying an answer had nothing usable in it."""
+    return (
+        f"no usable turns in the answer at turn {start_turn} "
+        f"(finish_reason={finish or 'unset'!r}, {len(content)} chars)"
+    )
+
+
+def _barren_correction(
+    payload: dict[str, Any], content: str, finish: str
+) -> dict[str, Any] | None:
+    """The ONE corrective nudge quoting what was wrong, or ``None`` when the
+    answer was truncated -- that case has already been answered by halving the
+    window, and quoting a cut-off reply back would only truncate again."""
+    if finish == "length":
+        return None
+    return _malformed_retry_payload(
+        payload,
+        content,
+        f"it contained no turns with speakable text (finish_reason={finish or 'unset'})",
+    )
+
+
 async def _assemble_from_model(
     report_text: str,
     model: str,
@@ -135,31 +209,27 @@ async def _assemble_from_model(
     Returns ``(turns, target, last_error)``. Never raises: an empty list means
     the caller should fall back, and ``last_error`` says why in one line.
     """
-    accepted: list[Turn] = []
-    seen: set[str] = set()
-    target: int | None = None
-    batch_size = _SCRIPT_BATCH_TURNS
+    state = _Assembly()
     calls = barren = transport_failures = 0
     correction: dict[str, Any] | None = None
     last_error = ""
     started = time.monotonic()
 
-    while calls < _SCRIPT_MAX_PROVIDER_CALLS and (target is None or len(accepted) < target):
+    while calls < _SCRIPT_MAX_PROVIDER_CALLS and state.wants_more():
         if time.monotonic() - started > deadline_s:
             last_error = f"script stage passed its {deadline_s:.0f}s budget"
             _LOG.warning("audio turn-script: %s after %d call(s)", last_error, calls)
             break
-        start_turn = len(accepted) + 1
-        remaining = batch_size if target is None else target - len(accepted)
-        requested = max(1, min(batch_size, remaining))
+        start_turn = len(state.accepted) + 1
+        requested = state.request_size()
         payload = correction or _build_segment_payload_for_model(
             report_text,
             model,
             mode=mode,
             start_turn=start_turn,
             requested_turns=requested,
-            total_turns=target,
-            prior_turns=accepted[-2:],
+            total_turns=state.target,
+            prior_turns=state.accepted[-2:],
             system_messages=system_messages,
             max_output_tokens=max_output_tokens,
         )
@@ -181,33 +251,15 @@ async def _assemble_from_model(
 
         finish = (response.finish_reason or "").strip().lower()
         harvest = _harvest_turns(response.content, mode=mode)
-        fresh = [turn for turn in harvest.turns if _turn_key(turn) not in seen]
         if finish == "length" and requested > 1:
-            # The answer was cut off mid-JSON: ask for a smaller window next
-            # time rather than replaying the same oversized request.
-            batch_size = max(1, requested // 2)
-
-        if fresh:
-            seen.update(_turn_key(turn) for turn in fresh)
-            accepted.extend(fresh)
+            state.shrink_window(requested)
+        if state.admit(harvest, mode):
             barren = 0
             correction = None
-            if target is None:
-                target = _target_for(harvest.total_hint, len(accepted), mode)
-            del accepted[target:]
-            if harvest.whole_script:
-                # A bare array is the driver saying "that's the whole script",
-                # so its length IS the length -- not a script that stopped
-                # short of a target we picked.
-                target = len(accepted)
-                break
             continue
 
         barren += 1
-        last_error = (
-            f"no usable turns in the answer at turn {start_turn} "
-            f"(finish_reason={finish or 'unset'!r}, {len(response.content)} chars)"
-        )
+        last_error = _barren_error(response.content, finish, start_turn)
         _LOG.warning(
             "audio turn-script: %s; barren attempt %d/%d",
             last_error,
@@ -216,25 +268,17 @@ async def _assemble_from_model(
         )
         if barren >= _SCRIPT_MAX_BARREN_ATTEMPTS:
             break
-        correction = (
-            None
-            if finish == "length"
-            else _malformed_retry_payload(
-                payload,
-                response.content,
-                f"it contained no turns with speakable text (finish_reason={finish or 'unset'})",
-            )
-        )
+        correction = _barren_correction(payload, response.content, finish)
 
     _LOG.info(
         "audio turn-script: mode=%s assembled %d/%s turn(s) in %d call(s), %.1fs",
         mode,
-        len(accepted),
-        target if target is not None else "?",
+        len(state.accepted),
+        state.target if state.target is not None else "?",
         calls,
         time.monotonic() - started,
     )
-    return accepted, target, last_error
+    return state.accepted, state.target, last_error
 
 
 async def _generate_turn_script_result(

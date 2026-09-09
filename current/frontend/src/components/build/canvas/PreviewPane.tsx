@@ -9,7 +9,6 @@ import { useElementMention } from "@/hooks/useElementMention";
 import { useElementSelect } from "@/hooks/useElementSelect";
 import { useWorkspaceVersions } from "@/hooks/useWorkspaceVersions";
 import { deriveFiles, deriveSrcDoc } from "@/lib/buildTrace";
-import { cn } from "@/lib/cn";
 import type { ElementMentionPayload } from "@/lib/elementMention";
 import { openFreshPreview } from "@/lib/previewLaunch";
 import type { SelectionRef } from "@/lib/selectionBridge";
@@ -31,8 +30,8 @@ import {
   previewWebSignal,
   previewActiveStatus,
   shouldShowStaticArtifactViewer,
-  shouldShowUpdateErrorBanner,
 } from "./previewPaneParts/helpers";
+import { PreviewNotices } from "./previewPaneParts/PreviewNotices";
 import { PreviewStage } from "./previewPaneParts/PreviewStage";
 import { PreviewToolbar } from "./previewPaneParts/PreviewToolbar";
 import { PreviewUnavailable } from "./previewPaneParts/PreviewUnavailable";
@@ -268,27 +267,11 @@ export function PreviewPane({
         onToggleEdit={toggleEdit}
         onOpenPreview={handleOpenPreview}
       />
-      {restoreNotice && (
-        <div
-          role={restoreNotice.tone === "error" ? "alert" : "status"}
-          className={cn(
-            "shrink-0 border-b px-body py-hair font-ui text-[0.72rem]",
-            restoreNotice.tone === "error"
-              ? "border-unsupported/30 bg-unsupported/10 text-unsupported"
-              : "border-supported/30 bg-supported/10 text-supported",
-          )}
-        >
-          {restoreNotice.text}
-        </div>
-      )}
-      {shouldShowUpdateErrorBanner(selectedVersionSeq, data?.update_error) && (
-        <div
-          role="alert"
-          className="shrink-0 border-b border-warn/30 bg-warn/10 px-body py-hair font-ui text-[0.72rem] text-warn"
-        >
-          Preview is showing the last healthy frame while the platform retries: {data?.update_error}
-        </div>
-      )}
+      <PreviewNotices
+        restoreNotice={restoreNotice}
+        selectedVersionSeq={selectedVersionSeq}
+        updateError={data?.update_error}
+      />
       <VersionBanner
         displayedVersionSeq={displayedVersionSeq}
         restoringSeq={restoringSeq}
