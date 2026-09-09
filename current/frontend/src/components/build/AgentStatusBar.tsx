@@ -48,6 +48,16 @@ const ACTIVE: ConversationStatus[] = [
   "ERROR",
 ];
 
+// UI-11: the "kill is OFFERED here" set — narrower than ACTIVE (which also
+// drives the status label's colour). A run that has already stopped has no
+// loop to interrupt and no sandbox left to tear down, so a live red Kill on
+// FINISHED / ERROR / IDLE is a button that cannot do anything: it reads as if
+// the finished build itself could still be destroyed. Live and gated states
+// keep it.
+const KILLABLE: ConversationStatus[] = ACTIVE.filter(
+  (s) => s !== "FINISHED" && s !== "ERROR",
+);
+
 export function AgentStatusBar({
   status,
   isolation,
@@ -248,7 +258,7 @@ function AgentControls({
   onResume?: () => void;
   surface: "build" | "agent";
 }) {
-  const active = ACTIVE.includes(status);
+  const killable = KILLABLE.includes(status);
 
   // "Stopping…" pending: Stop is cooperative — the loop honors the cancel only at
   // its next checkpoint, so the click would otherwise feel dead. Show pending from
@@ -262,8 +272,8 @@ function AgentControls({
   // Kill confirmation: destructive, so require a second click.
   const [confirmingKill, setConfirmingKill] = useState(false);
   useEffect(() => {
-    if (!active) setConfirmingKill(false); // nothing to kill → drop the prompt
-  }, [active]);
+    if (!killable) setConfirmingKill(false); // nothing to kill → drop the prompt
+  }, [killable]);
 
   return (
     <div className="flex items-center gap-hair">
@@ -279,7 +289,7 @@ function AgentControls({
         }}
       />
       <KillControl
-        active={active}
+        killable={killable}
         confirmingKill={confirmingKill}
         onArm={() => setConfirmingKill(true)}
         onCancel={() => setConfirmingKill(false)}
@@ -364,20 +374,23 @@ function StopButton({
   );
 }
 
-/** Kill: destructive → inline confirm. First click arms; second confirms. */
+/** Kill: destructive → inline confirm. First click arms; second confirms.
+ * Renders NOTHING when there is nothing to kill (UI-11) — no dead red button
+ * on a finished, errored or stopped run. */
 function KillControl({
-  active,
+  killable,
   confirmingKill,
   onArm,
   onCancel,
   onConfirm,
 }: {
-  active: boolean;
+  killable: boolean;
   confirmingKill: boolean;
   onArm: () => void;
   onCancel: () => void;
   onConfirm: () => void;
 }) {
+  if (!killable) return null;
   if (confirmingKill) {
     return (
       <div className="flex items-center gap-hair">
@@ -409,15 +422,9 @@ function KillControl({
     <button
       type="button"
       onClick={onArm}
-      disabled={!active}
       aria-label="Kill the agent: stop, tear down the sandbox, revoke its access"
       data-disco-control="kill"
-      className={cn(
-        "flex max-lg:min-h-11 items-center gap-hair rounded-control border px-inline py-hair font-ui text-[0.78rem] font-medium transition-colors",
-        active
-          ? "border-unsupported text-unsupported hover:bg-unsupported hover:text-bg"
-          : "cursor-not-allowed border-hairline text-text-faint",
-      )}
+      className="flex max-lg:min-h-11 items-center gap-hair rounded-control border border-unsupported px-inline py-hair font-ui text-[0.78rem] font-medium text-unsupported transition-colors hover:bg-unsupported hover:text-bg"
     >
       <OctagonX className="size-3.5" aria-hidden />
       Kill
