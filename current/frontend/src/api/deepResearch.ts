@@ -378,6 +378,11 @@ export interface AudioStreamEvent {
   current?: number;
   total?: number;
   mp3_url?: string;
+  /** Which mode the finished overview was generated in. */
+  mode?: string;
+  /** One plain sentence about how the overview was made (a fallback script, a
+   *  swapped voice, a summarised length). Empty when nothing notable happened. */
+  note?: string;
   reason?: string;
   /** Human-readable failure sentence (what failed, why, what to do). */
   message?: string;
@@ -426,15 +431,19 @@ export async function streamReportAudio(
   mode: string,
   body: string | undefined,
   onEvent: (ev: AudioStreamEvent) => boolean,
+  force = false,
 ): Promise<boolean> {
   const headers = body ? { "Content-Type": "application/json" } : undefined;
   let res: Response;
   try {
-    res = await agentFetch(`/conversations/${cid}/report/audio/stream?mode=${mode}`, {
-      method: "POST",
-      headers,
-      body,
-    });
+    res = await agentFetch(
+      `/conversations/${cid}/report/audio/stream?mode=${mode}${force ? "&force=true" : ""}`,
+      {
+        method: "POST",
+        headers,
+        body,
+      },
+    );
   } catch {
     return false; // network / endpoint unavailable → fall back
   }
@@ -466,33 +475,68 @@ export async function requestReportAudioBlocking(
   cid: string,
   mode: string,
   body: string | undefined,
-): Promise<{ mp3_url: string }> {
+  force = false,
+): Promise<{ mp3_url: string; note?: string; mode?: string }> {
   const headers = body ? { "Content-Type": "application/json" } : undefined;
-  const res = await agentFetch(`/conversations/${cid}/report/audio?mode=${mode}`, {
+  const url = `/conversations/${cid}/report/audio?mode=${mode}${force ? "&force=true" : ""}`;
+  const res = await agentFetch(url, {
     method: "POST",
     headers,
     body,
   });
   if (!res.ok) {
     let reason = `${res.status}`;
+    let message = "";
     try {
-      const resBody = (await res.json()) as { detail?: { reason?: string } | string };
+      const resBody = (await res.json()) as {
+        detail?: { reason?: string; message?: string } | string;
+      };
       const detail = resBody?.detail;
       if (typeof detail === "object" && detail !== null) {
         reason = detail.reason ?? reason;
+        message = detail.message ?? "";
       } else if (typeof detail === "string") {
         reason = detail;
       }
     } catch {
       /* opaque */
     }
+    // The server ships the sentence to show; a bare stage name ("turn_script")
+    // told the operator nothing. Only fall back to it when there is no message.
     throw new Error(
-      reason === "tts_disabled"
-        ? "Audio overview is disabled in Settings → Audio — enable it to generate."
-        : `Audio overview failed: ${reason}`,
+      message ||
+        (reason === "tts_disabled"
+          ? "Audio overview is disabled in Settings → Audio — enable it to generate."
+          : `Audio overview failed: ${reason}`),
     );
   }
   return res.json();
+}
+
+/** One audio overview that already exists on the server for a conversation. */
+export interface ExistingReportAudio {
+  mode: string;
+  note: string;
+  mp3_url: string;
+  transcript_url: string;
+}
+
+/** The overviews already generated for `cid`, newest first (empty when none).
+ *
+ * The artifacts live on the agent-server's data volume, so audio survives a
+ * page reload and a server restart; without asking, the browser reopened a
+ * report with finished audio showing only the "Audio Overview" button (UI-42).
+ * Read-only — it never starts a generation run. Resolves `[]` on any transport
+ * or shape failure, so a report still renders when the endpoint is missing. */
+export async function fetchExistingReportAudio(cid: string): Promise<ExistingReportAudio[]> {
+  try {
+    const res = await agentFetch(`/conversations/${cid}/report/audio`);
+    if (!res.ok) return [];
+    const body = (await res.json()) as { audio?: ExistingReportAudio[] };
+    return Array.isArray(body?.audio) ? body.audio : [];
+  } catch {
+    return [];
+  }
 }
 
 /** The agent-server's absolute URL for a report-relative audio asset path

@@ -55,6 +55,10 @@ vi.mock("@/api/deepResearch", async (importOriginal) => ({
   // requestReportAudio is no longer used in NeedMoreCard (WALK-21: direct fetch
   // with ?mode= param instead). The mock is kept so existing import graph resolves.
   requestReportAudio: vi.fn(),
+  // UI-42: AudioSection asks on mount whether the server already holds audio.
+  // Stubbed here so that read does not consume the per-test `fetch` queue the
+  // audio assertions below prime; AudioSection.test.tsx covers the restore.
+  fetchExistingReportAudio: vi.fn().mockResolvedValue([]),
 }));
 
 // Mock the fetch used by AudioSection.generate so we don't need a real
@@ -439,13 +443,14 @@ describe("NeedMoreCard", () => {
     await user.click(screen.getByRole("button", { name: /Close export dialog/i }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
 
-    // Audio: success → done state; "Regenerate" resets back to idle
+    // Audio: success → done state; "Regenerate" re-runs the pipeline in place
+    // (UI-43 — it used to clear the card back to the starting button), and the
+    // player is still there when it lands.
     const regenBtn = screen.getByRole("button", { name: /Regenerate/i });
     expect(regenBtn).toBeEnabled();
     await user.click(regenBtn);
-    // Returns to idle: Audio Overview button is back
     await waitFor(() =>
-      expect(screen.getByRole("button", { name: /Audio Overview/i })).toBeInTheDocument(),
+      expect(screen.getByRole("button", { name: /Export MP3/i })).toBeInTheDocument(),
     );
   });
 
