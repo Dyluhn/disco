@@ -475,10 +475,31 @@ describe("NeedMoreCard", () => {
       expect(screen.getByRole("button", { name: /Export MP3/i })).toBeInTheDocument(),
     );
     expect(screen.getByRole("button", { name: /Regenerate/i })).toBeInTheDocument();
+    // UI-23: "Audio Overview" and "Regenerate" were two buttons for one action
+    // once a player existed. Regenerate is the only one left.
+    expect(screen.queryByRole("button", { name: /^Audio Overview$/i })).not.toBeInTheDocument();
     // AudioPlayer renders (play button, seek slider)
     expect(
       screen.getByRole("button", { name: /Play audio overview/i }),
     ).toBeInTheDocument();
+  });
+
+  // UI-23: Regenerate must put the offer back, or the card would be a dead end.
+  it("brings the Audio Overview button back when Regenerate resets the section", async () => {
+    const user = userEvent.setup();
+    renderCard();
+
+    await user.click(screen.getByRole("button", { name: /Audio Overview/i }));
+    const modeDialog = await screen.findByRole("dialog", { name: /Generate audio overview/i });
+    await user.click(within(modeDialog).getByRole("button", { name: /Podcast style/i }));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /Regenerate/i })).toBeInTheDocument(),
+    );
+
+    await user.click(screen.getByRole("button", { name: /Regenerate/i }));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /^Audio Overview$/i })).toBeInTheDocument(),
+    );
   });
 
   // (f) Audio Overview → mode dialog → Single speaker → success

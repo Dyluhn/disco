@@ -23,7 +23,6 @@ import {
   ChevronDown,
   ChevronUp,
   Download,
-  Headphones,
   Loader2,
   MessageCircleQuestion,
   Presentation,
@@ -193,15 +192,17 @@ export function NeedMoreCard({
           Export as…
         </button>
 
-        {/* 3. Audio Overview — opens include-modal first if follow-ups exist */}
-        <button
-          type="button"
-          onClick={handleAudioClick}
-          className={CTRL_BTN}
-        >
-          <Headphones className="size-3.5" aria-hidden />
-          Audio Overview
-        </button>
+        {/* 3. Audio Overview — the button lives in AudioSection so that it can
+            stand down once a player exists (UI-23); the include-follow-ups step
+            still runs here, before the mode dialog. */}
+        <AudioSection
+          cid={cid}
+          followUpSeqs={audioFollowUpSeqs}
+          modeOpen={audioModeOpen}
+          onModeOpenChange={setAudioModeOpen}
+          reportQuery={report.query}
+          onStart={handleAudioClick}
+        />
 
         {/* 4. Build a deck — autonomous handoff: turn this report into slides */}
         <button
@@ -218,13 +219,6 @@ export function NeedMoreCard({
           )}
           {building ? "Starting…" : "Build a deck"}
         </button>
-        <AudioSection
-          cid={cid}
-          followUpSeqs={audioFollowUpSeqs}
-          modeOpen={audioModeOpen}
-          onModeOpenChange={setAudioModeOpen}
-          reportQuery={report.query}
-        />
       </div>
 
       {/* Inline follow-up panel (pmx-rise on mount) */}
