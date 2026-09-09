@@ -109,10 +109,10 @@ async def emit_dictated_content_refusal_notice(
                     f"from the deliverable {file_word} {files}: {cond.literal!r}.\n\n"
                     f"This literal was dictated in the user instruction for plan "
                     f"revision {cond.revision} and is carried forward into the "
-                    "current revision. The match is case-sensitive and exact. "
+                    f"current revision. {_match_rule(cond)} "
                     "It needs to appear in one appropriate text deliverable, not "
                     "in every listed file. Never add text to a binary asset. Update "
-                    "a suitable text deliverable so it contains that exact text, then "
+                    "a suitable text deliverable so it carries that text, then "
                     "finish again.\n"
                     "</system-reminder>"
                 ),
@@ -123,6 +123,25 @@ async def emit_dictated_content_refusal_notice(
             # derivation must recognize it without parsing prose.
             meta={"blocking": "user_literal_missing"},
         )
+    )
+
+
+def _match_rule(cond: DictatedContentCondition) -> str:
+    """State how this gate actually compares, so the agent does not over-correct.
+
+    PROD-3: the gate used to claim "case-sensitive and exact" for every
+    condition. For a quoted PHRASE that was both wrong and expensive — the
+    agent spent end-of-run turns rewriting already-correct copy to match a
+    lowercase spelling the check no longer requires.
+    """
+
+    if cond.content_surface == "source_text":
+        return "This is a source identifier: the match is byte-exact, case and spacing included."
+    return (
+        "The match ignores letter case and treats any run of whitespace "
+        "(including a line break) as one space, so your own capitalisation "
+        "and line wrapping are fine — do not rewrite working copy to chase "
+        "the exact spelling above."
     )
 
 

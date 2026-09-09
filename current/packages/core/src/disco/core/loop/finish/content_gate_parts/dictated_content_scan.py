@@ -13,6 +13,7 @@ import posixpath
 from collections.abc import Awaitable, Callable
 from html.parser import HTMLParser
 
+from ....verification import normalized_required_text
 from ...plan_conditions import DictatedContentCondition
 from .errors import _DictatedContentInspectionIncomplete
 
@@ -106,9 +107,14 @@ def _condition_present(
     decoded: str,
 ) -> bool:
     if condition.content_surface == "source_text":
+        # A source literal is an identifier (a filename, an env var, a code
+        # symbol) — case and spacing ARE the content, so it stays byte-exact.
         return condition.literal.encode("utf-8", "surrogatepass") in data
-    expected = " ".join(condition.literal.split())
-    return expected in _normalized_visible_text(path, decoded)
+    # PROD-3: a quoted phrase from the brief is copy. Fold case as well as
+    # whitespace so "Beans of the Month" in the page satisfies a brief that
+    # wrote 'beans of the month'.
+    expected = normalized_required_text(condition.literal)
+    return expected in normalized_required_text(_normalized_visible_text(path, decoded))
 
 
 def is_text_candidate(path: str, data: bytes, *, binary_suffixes: frozenset[str]) -> bool:

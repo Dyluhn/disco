@@ -67,6 +67,25 @@ def requires_structured_browser_runtime(
     )
 
 
+def normalized_required_text(value: str) -> str:
+    """Fold a quoted user PHRASE for a presence check.
+
+    PROD-3: a phrase lifted out of the user's brief ("...a 'beans of the month'
+    section...") is COPY, not an identifier. Comparing it byte-exactly turned
+    ordinary title-casing in the rendered page ("Beans of the Month") into an
+    unmet acceptance check, and the agent burned end-of-run turns grepping for
+    the lowercase spelling and editing prose to smuggle it in. So presence
+    checks fold case and collapse every run of whitespace (newlines included) —
+    a phrase that wrapped across two lines of markup is the same phrase.
+
+    Deliberately NOT applied to identity or source-text literals: an app title
+    the user dictated "exactly", a filename, or a code identifier is a name,
+    where case and spacing are the content.
+    """
+
+    return " ".join(value.split()).casefold()
+
+
 class VerificationClaimStatus(str, Enum):
     PASS = "pass"
     FAIL = "fail"

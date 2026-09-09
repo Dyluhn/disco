@@ -232,6 +232,48 @@ def test_exact_visible_text_does_not_casefold_or_accept_absent_dom_text() -> Non
     assert result.status is VerificationClaimStatus.FAIL
 
 
+def test_prod3_required_phrase_matches_authored_dom_text_ignoring_case_and_wrapping() -> None:
+    """PROD-3 (B5). The brief quoted 'beans of the month'; the built page title-cases
+    the phrase and wraps it across lines. A byte-exact claim failed, so the agent
+    spent extra end-of-run turns editing already-correct copy to insert the
+    lowercase spelling."""
+
+    visible = _claim(
+        "web.visible_text:beans",
+        VerificationClaimKind.VISIBLE_TEXT,
+        "beans of the month",
+    )
+    receipt = structured_web_verification_result(
+        deliverable=_deliverable(visible),
+        verdict=_verdict(
+            rendered_text="Beans of\n   the Month",
+            visible_dom_text="Our roasts\nBeans of\n   the Month",
+        ),
+    )
+
+    assert receipt.status is VerificationClaimStatus.PASS
+    result = next(item for item in receipt.claim_results if item.claim_id == visible.claim_id)
+    assert result.status is VerificationClaimStatus.PASS
+
+
+def test_prod3_case_insensitive_phrase_still_fails_on_different_copy() -> None:
+    visible = _claim(
+        "web.visible_text:beans",
+        VerificationClaimKind.VISIBLE_TEXT,
+        "beans of the month",
+    )
+    receipt = structured_web_verification_result(
+        deliverable=_deliverable(visible),
+        verdict=_verdict(
+            rendered_text="Beans of the Year",
+            visible_dom_text="Beans of the Year",
+        ),
+    )
+
+    result = next(item for item in receipt.claim_results if item.claim_id == visible.claim_id)
+    assert result.status is VerificationClaimStatus.FAIL
+
+
 def test_structured_receipt_retains_integrity_bound_visible_text_observation() -> None:
     receipt = structured_web_verification_result(
         deliverable=_governed_deliverable(),
