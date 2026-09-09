@@ -560,3 +560,61 @@ def test_admin_session_still_writes_providers(client, monkeypatch):
     )
 
     assert created.status_code == 201
+
+
+def test_wrong_key_is_not_reported_as_key_ready(client, monkeypatch):
+    """UI-34: a stored key is not a working key.
+
+    A deliberately wrong key used to save with a green "Key ready" row, because
+    the row only knew that SOME value was stored. The add-time probe now decides:
+    a refusal persists `key_verified` false plus the provider's own answer.
+    """
+
+    async def refusing_fetch(provider, api_key):
+        request = httpx.Request("GET", f"{provider.base_url}/models")
+        response = httpx.Response(401, request=request)
+        raise httpx.HTTPStatusError("unauthorized", request=request, response=response)
+
+    monkeypatch.setattr(providers_mod, "_fetch_provider_catalogue", refusing_fetch)
+
+    resp = client.post(
+        "/api/providers",
+        json={
+            "label": "ollama.com",
+            "base_url": "https://ollama.com/v1",
+            "kind": "openai-compat",
+            "api_key": "not-a-real-key-12345",
+        },
+    )
+
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["catalogue_ok"] is False
+    assert body["catalogue_error"] == "ollama.com rejected this key (401)"
+    row = client.get("/api/providers").json()[0]
+    assert row["has_key"] is True
+    assert row["key_verified"] is False
+    assert row["key_error"] == "ollama.com rejected this key (401)"
+
+
+def test_working_key_is_recorded_as_verified(client, monkeypatch):
+    """The other half of UI-34: a probe the provider answers earns "Key ready"."""
+
+    async def ok_fetch(provider, api_key):
+        return []
+
+    monkeypatch.setattr(providers_mod, "_fetch_provider_catalogue", ok_fetch)
+
+    client.post(
+        "/api/providers",
+        json={
+            "label": "ollama.com",
+            "base_url": "https://ollama.com/v1",
+            "kind": "openai-compat",
+            "api_key": "sk-good",
+        },
+    )
+
+    row = client.get("/api/providers").json()[0]
+    assert row["key_verified"] is True
+    assert row["key_error"] is None

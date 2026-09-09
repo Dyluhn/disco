@@ -60,6 +60,8 @@ type Provider = {
   secret_name: string;
   has_key: boolean;
   requires_api_key?: boolean;
+  key_verified?: boolean | null;
+  key_error?: string | null;
 };
 
 let providers: Provider[];
@@ -117,13 +119,17 @@ function installFetch() {
         secret_name: `provider_${id}`,
         has_key: !!body.api_key,
         requires_api_key: !keyless,
+        key_verified: createCatalogueOk,
+        key_error: createCatalogueOk ? null : "api.openai.com rejected this key (401)",
       };
       providers = [provider];
       return jsonResponse(
         {
           provider,
           catalogue_ok: createCatalogueOk,
-          catalogue_error: createCatalogueOk ? null : "404 from /models",
+          catalogue_error: createCatalogueOk
+            ? null
+            : "api.openai.com rejected this key (401)",
         },
         201,
       );
@@ -275,6 +281,46 @@ describe("ProvidersSection — generic provider objects", () => {
     expect(screen.queryByText("sk-live-secret")).not.toBeInTheDocument();
   });
 
+  it("never calls a rejected key ready, and repeats the provider's answer", async () => {
+    // UI-34: a wrong key used to store as a green "Key ready" row. The add-time
+    // probe now decides the badge, and its refusal is shown in the user's words.
+    catalogueFails = true;
+    createCatalogueOk = false;
+    render(createElement(ProvidersSection), { wrapper: makeWrapper() });
+
+    fireEvent.change(await screen.findByLabelText("Provider preset"), {
+      target: { value: "openai" },
+    });
+    fireEvent.change(screen.getByLabelText("Provider API key"), {
+      target: { value: "not-a-real-key-12345" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Add provider/i }));
+
+    expect(await screen.findByText("Key rejected")).toBeInTheDocument();
+    expect(screen.queryByText("Key ready")).not.toBeInTheDocument();
+    expect(
+      await screen.findAllByText("api.openai.com rejected this key (401)"),
+    ).not.toHaveLength(0);
+  });
+
+  it("keeps the badge neutral while a stored key has not been probed", async () => {
+    providers = [
+      {
+        id: "openai",
+        label: "OpenAI",
+        base_url: "https://api.openai.com/v1",
+        kind: "openai-compat",
+        secret_name: "provider_openai",
+        has_key: true,
+        requires_api_key: true,
+      },
+    ];
+    render(createElement(ProvidersSection), { wrapper: makeWrapper() });
+
+    expect(await screen.findByText("Key stored, not verified")).toBeInTheDocument();
+    expect(screen.queryByText("Key ready")).not.toBeInTheDocument();
+  });
+
   it("renders the failed-/models manual-add path and uses the same enable route", async () => {
     catalogueFails = true;
     createCatalogueOk = false;
@@ -289,7 +335,7 @@ describe("ProvidersSection — generic provider objects", () => {
     fireEvent.click(screen.getByRole("button", { name: /Add provider/i }));
 
     expect(
-      await screen.findByText(/was saved, but \/models did not answer/i),
+      await screen.findByText(/was saved, but its key was not accepted/i),
     ).toBeInTheDocument();
     expect(
       await screen.findByText(/did not return a usable \/models catalogue/i),

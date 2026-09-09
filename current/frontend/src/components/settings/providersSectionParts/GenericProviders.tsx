@@ -5,7 +5,7 @@ import { useDeleteProvider, useModels, useProviders } from "@/hooks/useModels";
 import type { ModelInfo, ProviderMutationResult } from "@/types/models";
 import { AddProviderForm } from "./AddProviderForm";
 import { BrowseProvider } from "./BrowseProvider";
-import { errorText, hostLabel } from "./helpers";
+import { errorText, hostLabel, keyBadge } from "./helpers";
 
 export function GenericProviders() {
   const { data: providers } = useProviders();
@@ -42,9 +42,10 @@ export function GenericProviders() {
           className="rounded-control border border-warn/50 bg-warn/5 px-body py-inline"
         >
           <p className="font-ui text-[0.8rem] text-text">
-            {createNotice.provider.label} was saved, but /models did not answer:{" "}
+            {createNotice.provider.label} was saved, but its key was not
+            accepted:{" "}
             <span className="text-text-muted">
-              {createNotice.catalogue_error ?? "probe failed"}
+              {createNotice.catalogue_error ?? "the /models probe failed"}
             </span>
           </p>
         </div>
@@ -63,6 +64,7 @@ export function GenericProviders() {
           {(providers ?? []).map((provider) => {
             const enabledModels = enabledBySecret.get(provider.secret_name) ?? [];
             const active = activeId === provider.id;
+            const badge = keyBadge(provider);
             return (
               <li key={provider.id} className="border-b border-hairline last:border-b-0">
                 <div className="flex flex-col gap-inline px-body py-inline md:flex-row md:items-center md:justify-between">
@@ -72,24 +74,28 @@ export function GenericProviders() {
                         {provider.label}
                       </span>
                       <span
+                        data-provider-key-state={badge.tone}
                         className={cn(
                           "flex items-center gap-hair font-ui text-[0.74rem]",
-                          provider.has_key || provider.requires_api_key === false
+                          badge.tone === "ok"
                             ? "text-supported"
-                            : "text-unsupported",
+                            : badge.tone === "bad"
+                              ? "text-unsupported"
+                              : "text-text-muted",
                         )}
                       >
                         <KeyRound className="size-3" aria-hidden />
-                        {provider.requires_api_key === false
-                          ? "No key needed"
-                          : provider.has_key
-                            ? "Key ready"
-                            : "No usable key"}
+                        {badge.text}
                       </span>
                     </div>
                     <p className="truncate font-mono text-[0.72rem] text-text-faint">
                       {hostLabel(provider.base_url)} · {enabledModels.length} enabled
                     </p>
+                    {badge.detail && (
+                      <p className="font-ui text-[0.74rem] leading-snug text-unsupported">
+                        {badge.detail}
+                      </p>
+                    )}
                   </div>
                   <div className="flex shrink-0 items-center gap-inline">
                     <button

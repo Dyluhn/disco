@@ -321,10 +321,24 @@ async def _fetch_provider_catalogue(
         return _normalize_catalogue(provider.kind, resp.json())
 
 
-def _error_text(exc: Exception) -> str:
+def _probe_host(base_url: str) -> str:
+    return base_url.split("://", 1)[-1].split("/", 1)[0] or base_url
+
+
+def _error_text(provider: ProviderDTO, exc: Exception) -> str:
+    """The provider's own answer, in words a user can act on.
+
+    "401 from /models" named neither who refused nor why, so a wrong key read as
+    a generic failure (UI-34). Name the host and what it said.
+    """
+    host = _probe_host(provider.base_url)
     if isinstance(exc, httpx.HTTPStatusError):
-        return f"{exc.response.status_code} from /models"
-    return str(exc) or exc.__class__.__name__
+        status = exc.response.status_code
+        if status in (401, 403):
+            return f"{host} rejected this key ({status})"
+        return f"{host} answered {status} to /models"
+    reason = str(exc) or exc.__class__.__name__
+    return f"{host} could not be reached: {reason}"
 
 
 class _ProviderCatalogue:
@@ -360,7 +374,7 @@ class _ProviderCatalogue:
             await _fetch_provider_catalogue(provider, api_key)
             return True, None
         except (httpx.HTTPError, ValueError) as exc:
-            return False, _error_text(exc)
+            return False, _error_text(provider, exc)
 
     async def models(self, provider: ProviderDTO) -> list[ProviderCatalogueModelDTO]:
         # Gate before consulting the cache or decrypting the key. A tampered
@@ -390,7 +404,7 @@ class _ProviderCatalogue:
             except (httpx.HTTPError, ValueError) as exc:
                 raise HTTPException(
                     status_code=502,
-                    detail=f"{provider.label} /models probe failed: {_error_text(exc)}",
+                    detail=f"{provider.label} /models probe failed: {_error_text(provider, exc)}",
                 ) from exc
             self._cache[provider.id] = (time.monotonic(), models)
             return models
@@ -412,6 +426,7 @@ async def _create_provider(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     ok, error = await catalogue.probe(provider, body.api_key.strip() or None)
     catalogue.invalidate(provider.id)
+    provider = state.providers.record_probe(provider.id, ok, error)
     return ProviderMutationResult(provider=provider, catalogue_ok=ok, catalogue_error=error)
 
 
@@ -434,6 +449,7 @@ async def _update_provider(
     else:
         ok, error = False, f"No decryptable key stored for {provider.label}."
     catalogue.invalidate(provider.id)
+    provider = state.providers.record_probe(provider.id, ok, error)
     return ProviderMutationResult(provider=provider, catalogue_ok=ok, catalogue_error=error)
 
 

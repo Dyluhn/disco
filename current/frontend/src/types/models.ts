@@ -89,6 +89,11 @@ export interface ProviderInfo {
   secret_name: string;
   has_key: boolean;
   requires_api_key?: boolean;
+  /** `has_key` says a key is STORED; this says whether it WORKS as of the last
+   *  /models probe: undefined/null = never probed, true = the provider
+   *  answered, false = the provider refused (`key_error` is its answer). */
+  key_verified?: boolean | null;
+  key_error?: string | null;
 }
 
 export interface ProviderPreset {

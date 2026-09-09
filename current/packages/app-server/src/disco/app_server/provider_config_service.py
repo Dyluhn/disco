@@ -139,6 +139,8 @@ class ProviderConfigService:
             secret_name=provider.secret_name,
             has_key=bool(self._resolve_secret_value(provider.secret_name)),
             requires_api_key=provider.requires_api_key,
+            key_verified=provider.key_verified,
+            key_error=provider.key_error,
         )
 
     def _save_providers(self, providers: dict[str, ProviderSettings]) -> None:
@@ -224,6 +226,9 @@ class ProviderConfigService:
                 self._secrets.set_secret(provider.secret_name, api_key)
             except RuntimeError as exc:
                 raise ValueError(str(exc)) from exc
+            # A new key has not been proven yet; the caller re-probes and records.
+            updates["key_verified"] = None
+            updates["key_error"] = None
         updated = provider.model_copy(update=updates)
         if updated.requires_api_key and not (
             patch.api_key or self._resolve_secret_value(provider.secret_name)
@@ -236,6 +241,21 @@ class ProviderConfigService:
         # gesture. Cosmetic edits never bless a previously unapproved origin.
         if patch.base_url is not None or patch.api_key is not None:
             _origin_wiring.approve_provider_origin(self._store, self._secrets, updated)
+        return self._provider_dto(updated)
+
+    def record_probe(self, provider_id: str, ok: bool, error: str | None) -> ProviderDTO:
+        """Persist the outcome of a /models probe so the row can say whether the
+        stored key actually WORKS, not just that one is stored (UI-34)."""
+        cfg = self._store.load()
+        provider = cfg.providers.get(provider_id)
+        if provider is None:
+            raise KeyError(provider_id)
+        updated = provider.model_copy(
+            update={"key_verified": ok, "key_error": None if ok else error}
+        )
+        self._store.save(
+            cfg.model_copy(update={"providers": {**cfg.providers, provider_id: updated}})
+        )
         return self._provider_dto(updated)
 
     def delete_provider(self, provider_id: str) -> None:
