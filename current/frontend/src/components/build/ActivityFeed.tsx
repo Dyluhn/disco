@@ -34,6 +34,7 @@ import { splitThink } from "@/lib/think";
 import { artifactUrl, workspaceFileUrl } from "@/api/artifacts";
 import { DeckExportBar } from "@/components/build/DeckExportBar";
 import { rendererLabel } from "@/lib/slidesRenderer";
+import { unverifiedWarning, type UnverifiedWarning } from "@/lib/unverifiedWarning";
 import type { ActivityItem } from "@/lib/buildTrace";
 
 function ScreenshotThumbnail({
@@ -348,6 +349,27 @@ function Thought({ text }: { text: string }) {
   );
 }
 
+/** UI-12 — the unverified-release warning said in the user's language, with the
+ * raw environment text (a sentence written AT THE MODEL) kept verbatim behind a
+ * disclosure. Same disclosure idiom as Thought above. */
+function UnverifiedWarningBody({ warning }: { warning: UnverifiedWarning }) {
+  return (
+    <div data-testid="unverified-warning" className="flex flex-col gap-hair">
+      <p className="font-ui text-[0.88rem] font-medium leading-snug text-text">{warning.headline}</p>
+      <p className="font-ui text-[0.84rem] leading-snug text-text-muted">{warning.body}</p>
+      <details className="group mt-hair">
+        <summary className="flex min-h-11 cursor-pointer list-none items-center gap-hair font-ui text-[0.72rem] uppercase tracking-wide text-text-faint hover:text-text-muted lg:min-h-0">
+          <ChevronRight className="size-3 transition-transform group-open:rotate-90" aria-hidden />
+          Raw check output
+        </summary>
+        <p className="mt-hair whitespace-pre-wrap break-words border-l-2 border-hairline pl-body font-ui text-[0.8rem] leading-snug text-text-muted">
+          {warning.raw}
+        </p>
+      </details>
+    </div>
+  );
+}
+
 export function ActivityFeed({
   items,
   conversationId,
@@ -375,6 +397,9 @@ export function ActivityFeed({
             </li>
           );
         }
+        // UI-12: an unverified-release warning is rewritten for the user; every
+        // other ⚠ environment line still renders exactly as it arrives.
+        const warning = item.kind === "system_warning" ? unverifiedWarning(item.label) : null;
         const isMessage =
           item.kind === "user" ||
           item.kind === "agent_message" ||
@@ -434,26 +459,30 @@ export function ActivityFeed({
                   )}
                 </span>
               )}
-              <span
-                className={cn(
-                  "font-ui text-[0.88rem] leading-snug",
-                  item.attention ? "font-medium text-text" : "text-text-muted",
-                  item.status === "failed" && "text-unsupported",
-                  isMessage && "whitespace-pre-wrap text-text",
-                )}
-              >
-                {item.label}
-                {item.status === "pending" && (
-                  <span className="ml-inline font-ui text-[0.7rem] uppercase tracking-wide text-warn">
-                    needs approval
-                  </span>
-                )}
-                {item.autoApproved && (
-                  <span className="ml-inline font-ui text-[0.7rem] uppercase tracking-wide text-text-faint">
-                    auto · sandboxed
-                  </span>
-                )}
-              </span>
+              {warning ? (
+                <UnverifiedWarningBody warning={warning} />
+              ) : (
+                <span
+                  className={cn(
+                    "font-ui text-[0.88rem] leading-snug",
+                    item.attention ? "font-medium text-text" : "text-text-muted",
+                    item.status === "failed" && "text-unsupported",
+                    isMessage && "whitespace-pre-wrap text-text",
+                  )}
+                >
+                  {item.label}
+                  {item.status === "pending" && (
+                    <span className="ml-inline font-ui text-[0.7rem] uppercase tracking-wide text-warn">
+                      needs approval
+                    </span>
+                  )}
+                  {item.autoApproved && (
+                    <span className="ml-inline font-ui text-[0.7rem] uppercase tracking-wide text-text-faint">
+                      auto · sandboxed
+                    </span>
+                  )}
+                </span>
+              )}
               {/* The agent's natural-language thought — NEVER truncated, always
                   shown wrapped. Swallowing this was the most painful UX bug.
                   W-02: models that inline raw <think> tags (Qwen-style) get split
