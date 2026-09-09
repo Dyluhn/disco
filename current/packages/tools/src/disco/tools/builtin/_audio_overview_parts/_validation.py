@@ -8,17 +8,22 @@ as they were.
 
 ``_validate_script_batch`` is split into ``_parse_batch_total`` (the
 ``total_turns`` shape/range/consistency checks) and ``_parse_batch_items`` (the
-per-item loop) purely to bring its cyclomatic complexity under budget — the
-checks, their order, and every error string are unchanged from the original.
+per-item loop) purely to bring its cyclomatic complexity under budget.
+The one deliberate behavior change since the split: a first-batch
+``total_turns`` outside the mode's band is pinned into the band rather than
+rejected (see ``_parse_batch_total``).
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import re
 from typing import Any
 
 from ._types import LLMResponse, LLMResponseLike, Turn, _ScriptBatch
+
+_LOG = logging.getLogger(__name__)
 
 
 def _extract_json(text: str) -> str:
@@ -145,20 +150,38 @@ def _parse_batch_total(
     start_turn: int,
     expected_total: int | None,
 ) -> tuple[int | None, str | None]:
-    """Validate the batch's ``total_turns`` field: type, range, and consistency
-    with any already-agreed total / the current start_turn."""
+    """Validate the batch's ``total_turns`` field: type, consistency with any
+    already-agreed total / the current start_turn, and pin it into the mode's
+    length band. Returns the total to use, or an error string."""
 
     total = data.get("total_turns")
     if isinstance(total, bool) or not isinstance(total, int):
         return None, "Script batch total_turns must be an integer"
     min_turns, max_turns = (10, 16) if mode == "single" else (12, 20)
-    if not min_turns <= total <= max_turns:
-        return None, f"Script batch total_turns must be between {min_turns} and {max_turns}"
-    if expected_total is not None and total != expected_total:
+    # The band is OUR length requirement for the finished overview, not the
+    # driver's plan: the model only picks the total on the FIRST batch, and
+    # every batch after that is handed the agreed number verbatim. Rejecting an
+    # out-of-band choice killed the whole audio overview after one correction
+    # attempt on any driver that stubbornly picks its own length (deepseek-v4
+    # -flash on ollama.com does, twice in a row) — so pin the number into the
+    # band and carry on. Drift INSIDE the band is still a real inconsistency
+    # and is still rejected below.
+    clamped = min(max(total, min_turns), max_turns)
+    if clamped != total:
+        _LOG.warning(
+            "audio turn-script: driver chose total_turns=%d outside the %d..%d band "
+            "for mode=%s; pinned to %d",
+            total,
+            min_turns,
+            max_turns,
+            mode,
+            clamped,
+        )
+    if expected_total is not None and clamped != expected_total:
         return None, f"Script batch changed total_turns from {expected_total} to {total}"
-    if start_turn > total:
-        return None, f"Script batch starts at {start_turn} after total_turns={total}"
-    return total, None
+    if start_turn > clamped:
+        return None, f"Script batch starts at {start_turn} after total_turns={clamped}"
+    return clamped, None
 
 
 def _parse_batch_items(

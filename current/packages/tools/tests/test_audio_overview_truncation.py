@@ -268,3 +268,49 @@ async def test_legacy_array_malformed_retry_remains_supported() -> None:
         "First complete turn.",
         "Second complete turn.",
     ]
+
+
+@pytest.mark.asyncio
+async def test_single_mode_total_turns_below_band_is_pinned_not_failed() -> None:
+    """Regression: an audio overview died with `turn_script` because the driver
+    kept choosing its own total.
+
+    Seen on a fresh README install (agent-server, ollama.com /
+    deepseek-v4-flash, single mode, 6-section report): the model answered
+    `total_turns` outside the 10..16 band on the first batch AND on the bounded
+    correction, so `_generate_segmented_turn_script` gave up and the UI showed
+    "Audio overview failed: turn_script". The band is our length requirement,
+    not the model's plan — pin it and finish the script.
+    """
+    payloads: list[dict[str, Any]] = []
+
+    async def call(payload: dict[str, Any]) -> audio.LLMResponse:
+        payloads.append(payload)
+        return _batch_response(payload, total=8)
+
+    turns = await audio._generate_segmented_turn_script(
+        "report", "reasoning-model", mode="single", call_llm=call
+    )
+
+    assert len(turns) == 10  # pinned to the single-mode minimum
+    assert {turn.speaker for turn in turns} == {"A"}
+    # No correction round-trip was needed: one call per batch, nothing retried.
+    assert [_requested_range(p) for p in payloads] == [(1, 4), (5, 8), (9, 10)]
+
+
+@pytest.mark.asyncio
+async def test_podcast_mode_total_turns_above_band_is_pinned_not_failed() -> None:
+    """Same bug, other edge: an over-long total is pinned down to 20 rather
+    than failing the overview."""
+    payloads: list[dict[str, Any]] = []
+
+    async def call(payload: dict[str, Any]) -> audio.LLMResponse:
+        payloads.append(payload)
+        return _batch_response(payload, total=40)
+
+    turns = await audio._generate_segmented_turn_script(
+        "report", "reasoning-model", mode="podcast", call_llm=call
+    )
+
+    assert len(turns) == 20  # pinned to the podcast-mode maximum
+    assert _requested_range(payloads[-1]) == (17, 20)
