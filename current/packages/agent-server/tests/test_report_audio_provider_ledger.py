@@ -154,13 +154,13 @@ async def test_audio_ledger_records_one_attempt_per_normal_segment(
     factory = _HTTPFactory(lambda payload, _attempt: _valid_batch(payload))
     _configure_real_adapter(monkeypatch, factory)
 
-    turns = await report_audio._generate_turn_script(
+    script = await report_audio._generate_turn_script(
         "AUDIO_PROMPT_SECRET",
         "podcast",
         conversation_id="conv_audio_normal",
     )
 
-    assert len(turns) == 12
+    assert len(script.turns) == 12
     assert len(factory.posts) == 3
     assert all(post["json"]["max_tokens"] == 4096 for post in factory.posts)
     _assert_audio_records(
@@ -186,13 +186,13 @@ async def test_audio_ledger_records_length_recovery_attempts(
     factory = _HTTPFactory(reply)
     _configure_real_adapter(monkeypatch, factory)
 
-    turns = await report_audio._generate_turn_script(
+    script = await report_audio._generate_turn_script(
         "AUDIO_PROMPT_SECRET",
         "podcast",
         conversation_id="conv_audio_length",
     )
 
-    assert len(turns) == 12
+    assert len(script.turns) == 12
     assert len(factory.posts) == 7
     _assert_audio_records(
         path,
@@ -215,13 +215,13 @@ async def test_audio_ledger_records_malformed_correction_attempt(
     )
     _configure_real_adapter(monkeypatch, factory)
 
-    turns = await report_audio._generate_turn_script(
+    script = await report_audio._generate_turn_script(
         "AUDIO_PROMPT_SECRET",
         "podcast",
         conversation_id="conv_audio_malformed",
     )
 
-    assert len(turns) == 12
+    assert len(script.turns) == 12
     assert len(factory.posts) == 4
     _assert_audio_records(
         path,
@@ -240,14 +240,17 @@ async def test_audio_ledger_records_terminal_provider_response(
     factory = _HTTPFactory(lambda _payload, _attempt: _Response("", "content_filter"))
     _configure_real_adapter(monkeypatch, factory)
 
-    with pytest.raises(report_audio.TurnScriptError, match="finish_reason='content_filter'"):
-        await report_audio._generate_turn_script(
-            "AUDIO_PROMPT_SECRET",
-            "podcast",
-            conversation_id="conv_audio_terminal",
-        )
+    # A completion status we do not recognise is no longer terminal on its own:
+    # an EMPTY answer is what ends the stage, after the bounded barren budget,
+    # and every attempt is still on the ledger.
+    script = await report_audio._generate_turn_script(
+        "AUDIO_PROMPT_SECRET",
+        "podcast",
+        conversation_id="conv_audio_terminal",
+    )
 
-    assert len(factory.posts) == 1
+    assert script.source == "fallback"
+    assert len(factory.posts) == 3
     _assert_audio_records(
         path,
         expected_attempts=len(factory.posts),

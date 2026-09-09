@@ -297,7 +297,11 @@ async def test_segmented_long_script_completes_transcript_and_audio_workflow():
         _assert_mp3_head((workspace / "segmented_long.mp3").read_bytes())
 
 
-async def test_repeated_provider_truncation_fails_before_tts_or_partial_files():
+async def test_repeated_provider_truncation_still_produces_audio():
+    """A driver that only ever truncates used to fail the overview outright
+    ("finish_reason='length' ... no partial artifact"). The report is right
+    there, so the narration is built from it and the user still gets audio —
+    with the swap stated in the outcome."""
     calls = 0
 
     def _always_truncated(_payload: dict, _llm_url: str):
@@ -326,13 +330,13 @@ async def test_repeated_provider_truncation_fails_before_tts_or_partial_files():
                 _ctx(_jailed_sandbox(workspace)),
             )
 
-        assert not outcome.success
-        assert calls == 3
-        assert "finish_reason='length'" in outcome.content
-        assert "no partial artifact" in outcome.content
-        synth.assert_not_awaited()
-        assert not (workspace / "truncated.mp3").exists()
-        assert not (workspace / "truncated.md").exists()
+        assert outcome.success, outcome.content
+        assert calls == 3  # bounded: three shrinking attempts, then the fallback
+        assert "built straight from the report" in outcome.content
+        assert outcome.structured["script_note"].startswith("The narration was built")
+        synth.assert_awaited()
+        assert (workspace / "truncated.mp3").exists()
+        assert (workspace / "truncated.md").exists()
 
 
 async def test_malformed_then_retry():
@@ -374,7 +378,7 @@ async def test_malformed_then_retry():
         # Second call payload should have 3 messages (user + assistant + error feedback)
         second_call_msgs = llm_calls[1]["messages"]
         assert len(second_call_msgs) == 3
-        assert "invalid" in second_call_msgs[2]["content"].lower()
+        assert "could not be used" in second_call_msgs[2]["content"].lower()
 
         assert (workspace / "retry_test.mp3").exists()
         assert (workspace / "retry_test.md").exists()
@@ -509,8 +513,9 @@ async def test_transcript_matches_script():
             assert expected_line in transcript, f"Missing turn: {expected_line}"
 
 
-async def test_llm_failure_returned_cleanly():
-    """If the LLM is unreachable, the tool returns a clean failure."""
+async def test_llm_failure_falls_back_to_the_report_script():
+    """An unreachable LLM used to end the overview. The report text is already
+    in hand, so the narration is built from it and the outcome says so."""
     with tempfile.TemporaryDirectory() as td:
         workspace = Path(td)
         sb = _jailed_sandbox(workspace)
@@ -529,8 +534,8 @@ async def test_llm_failure_returned_cleanly():
                 ctx,
             )
 
-        assert not outcome.success
-        assert "LLM call failed" in outcome.content or "LLM" in outcome.content
+        assert outcome.success, outcome.content
+        assert "built straight from the report" in outcome.content
 
 
 async def test_artifact_list_includes_both_files():

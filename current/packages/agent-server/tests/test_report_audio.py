@@ -494,7 +494,7 @@ def test_report_endpoint_retains_one_normal_malformed_correction(
         assert transcript.count(f"Malformed recovery turn {index}.") == 1
 
 
-def test_endpoint_repeated_length_stop_is_bounded_and_actionable(
+def test_endpoint_repeated_length_stop_still_returns_audio(
     client: TestClient,
     store: SqliteEventStore,
     configure_tts,
@@ -515,11 +515,14 @@ def test_endpoint_repeated_length_stop_is_bounded_and_actionable(
     monkeypatch.setattr(_ao, "_call_llm", _fake_llm)
     response = client.post(f"/conversations/{cid}/report/audio")
 
-    assert response.status_code == 502
-    detail = response.json()["detail"]
-    assert detail["reason"] == "turn_script"
-    assert "finish_reason='length'" in detail["detail"]
-    assert "no partial artifact" in detail["detail"]
+    # Used to be a 502 with reason=turn_script. A driver that only truncates is
+    # now bounded to three shrinking attempts and the narration is built from
+    # the report, so the endpoint answers 200 with audio and states the swap.
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["ok"] is True
+    assert body["mp3_url"].endswith(".mp3")
+    assert "built straight from the report" in body["note"]
     assert calls == 3
 
 

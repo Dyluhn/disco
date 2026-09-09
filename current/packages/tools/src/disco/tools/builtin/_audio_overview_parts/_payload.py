@@ -13,7 +13,7 @@ import json
 from collections.abc import Sequence
 from typing import Any
 
-from ._types import Turn
+from ._types import Turn, _turn_band
 
 # Each request produces an independently valid JSON batch.  Four turns keeps the
 # spoken output comfortably below the common OpenAI-compatible 4096-token cap,
@@ -63,9 +63,7 @@ def _build_llm_payload(report_text: str, mode: str = "podcast") -> dict:
     # upward edge, and a test patching the constant there must be observed.
     from .. import audio_overview
 
-    return _build_llm_payload_for_model(
-        report_text, audio_overview._audio_llm_model(), mode=mode
-    )
+    return _build_llm_payload_for_model(report_text, audio_overview._audio_llm_model(), mode=mode)
 
 
 def _build_llm_payload_for_model(report_text: str, model: str, mode: str = "podcast") -> dict:
@@ -102,7 +100,7 @@ def _build_segment_payload_for_model(
     max_output_tokens: int | None = None,
 ) -> dict[str, Any]:
     prompt = _SINGLE_SCRIPT_PROMPT if mode == "single" else _TURN_SCRIPT_PROMPT
-    min_turns, max_turns = (10, 16) if mode == "single" else (12, 20)
+    min_turns, max_turns = _turn_band(mode)
     end_turn = start_turn + requested_turns - 1
     if total_turns is None:
         total_instruction = (
@@ -151,7 +149,11 @@ Never repeat an earlier turn index. Do not include markdown fences or prose outs
                 "content": prompt.format(report_text=report_text) + batch_protocol,
             },
         ],
-        "temperature": 0.7,
+        # A turn script is structured output, not creative sampling: 0.7 was
+        # inherited from the prose-writing defaults and is what made a fast
+        # driver wander off the JSON shape. Low but not zero, so repeated
+        # batches don't collapse into the same phrasing.
+        "temperature": 0.3,
     }
     output_tokens = _segment_output_tokens(requested_turns, max_output_tokens)
     if output_tokens is not None:

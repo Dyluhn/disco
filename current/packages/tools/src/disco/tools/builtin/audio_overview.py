@@ -41,6 +41,15 @@ from pydantic import BaseModel, Field
 from ..anatomy import Capability, ToolContext, ToolDef, ToolOutcome
 from ..behavior import declares
 from ._audio_mixer import encode_mp3, mix_pcm
+from ._audio_overview_parts._fallback_script import (
+    _TARGET_SECONDS as _TARGET_SECONDS,
+)
+from ._audio_overview_parts._fallback_script import (
+    _cap_script_duration as _cap_script_duration,
+)
+from ._audio_overview_parts._fallback_script import (
+    _fallback_turns as _fallback_turns,
+)
 from ._audio_overview_parts._llm_client import _call_llm, _call_llm_with_key
 from ._audio_overview_parts._payload import (
     _SCRIPT_BATCH_TURNS as _SCRIPT_BATCH_TURNS,
@@ -89,6 +98,9 @@ from ._audio_overview_parts._script_generation import (
     _SCRIPT_MAX_TRUNCATIONS_PER_BATCH as _SCRIPT_MAX_TRUNCATIONS_PER_BATCH,
 )
 from ._audio_overview_parts._script_generation import (
+    _SCRIPT_STAGE_DEADLINE_S as _SCRIPT_STAGE_DEADLINE_S,
+)
+from ._audio_overview_parts._script_generation import (
     Awaitable as Awaitable,
 )
 from ._audio_overview_parts._script_generation import (
@@ -98,20 +110,13 @@ from ._audio_overview_parts._script_generation import (
     _coerce_llm_response as _coerce_llm_response,
 )
 from ._audio_overview_parts._script_generation import (
-    _extract_script_json as _extract_script_json,
+    _generate_segmented_turn_script as _generate_segmented_turn_script,
 )
-from ._audio_overview_parts._script_generation import _generate_segmented_turn_script
+from ._audio_overview_parts._script_generation import (
+    _generate_turn_script_result,
+)
 from ._audio_overview_parts._script_generation import (
     _malformed_retry_payload as _malformed_retry_payload,
-)
-from ._audio_overview_parts._script_generation import (
-    _validate_script_batch as _validate_script_batch,
-)
-from ._audio_overview_parts._script_generation import (
-    _validate_turn_script as _validate_turn_script,
-)
-from ._audio_overview_parts._script_generation import (
-    _validate_turn_script_single as _validate_turn_script_single,
 )
 from ._audio_overview_parts._synthesis import (
     TTS_SAMPLE_RATE,
@@ -133,16 +138,23 @@ from ._audio_overview_parts._synthesis import (
 from ._audio_overview_parts._types import (
     AudioScriptGenerationError,
     LLMResponseLike,
+    ScriptResult,
     Turn,
 )
 from ._audio_overview_parts._types import (
     LLMResponse as LLMResponse,
 )
-from ._audio_overview_parts._types import (
-    _ScriptBatch as _ScriptBatch,
-)
 from ._audio_overview_parts._validation import (
     _extract_json as _extract_json,
+)
+from ._audio_overview_parts._validation import (
+    _harvest_turns as _harvest_turns,
+)
+from ._audio_overview_parts._validation import (
+    _validate_turn_script as _validate_turn_script,
+)
+from ._audio_overview_parts._validation import (
+    _validate_turn_script_single as _validate_turn_script_single,
 )
 from ._audio_overview_parts._validation import (
     re as re,
@@ -319,8 +331,9 @@ class AudioOverviewTool:
         llm_model: str,
         llm_key: str = "",
         max_output_tokens: int | None = None,
-    ) -> tuple[list[Turn] | None, ToolOutcome | None]:
-        """Generate a complete script through the bounded shared batch protocol."""
+    ) -> tuple[ScriptResult | None, ToolOutcome | None]:
+        """Generate a narratable script. The only failure left is a report with
+        nothing in it to narrate; every other shortfall degrades and says so."""
 
         async def call(payload: dict[str, Any]) -> LLMResponseLike:
             if llm_key:
@@ -328,7 +341,7 @@ class AudioOverviewTool:
             return await _call_llm(payload, llm_url)
 
         try:
-            turns = await _generate_segmented_turn_script(
+            script = await _generate_turn_script_result(
                 report_text,
                 llm_model,
                 mode="podcast",
@@ -341,7 +354,7 @@ class AudioOverviewTool:
                 content=str(exc),
                 error=str(exc),
             )
-        return turns, None
+        return script, None
 
     async def _synthesize_turns(
         self, turns: list[Turn], cfg: _ResolvedTts
@@ -410,6 +423,7 @@ class AudioOverviewTool:
         *,
         turn_count: int,
         silence_ms: int,
+        script_note: str = "",
     ) -> ToolOutcome:
         """Step 6: write the MP3 + transcript through the jailed sandbox and build the
         success ToolOutcome (artifact paths + structured metadata)."""
@@ -427,6 +441,7 @@ class AudioOverviewTool:
                 f"  Transcript: {transcript_path}\n"
                 f"  Turns: {turn_count} | Voices: {cfg.voice_a} (A) + {cfg.voice_b} (B)\n"
                 f"  Backend: {cfg.backend} | Silence between turns: {silence_ms}ms"
+                + (f"\n  Note: {script_note}" if script_note else "")
             ),
             artifacts=[mp3_path, transcript_path],
             structured={
@@ -438,6 +453,7 @@ class AudioOverviewTool:
                 "voice_b": cfg.voice_b,
                 "backend": cfg.provider,
                 "silence_ms": silence_ms,
+                "script_note": script_note,
             },
         )
 
@@ -522,14 +538,15 @@ class AudioOverviewTool:
         llm_url, llm_model, llm_key, max_output_tokens, llm_error = self._resolve_script_llm()
         if llm_error is not None:
             return ToolOutcome(success=False, content=llm_error, error=llm_error)
-        turns, gen_failure = await self._generate_turn_script(
+        script, gen_failure = await self._generate_turn_script(
             report_text, llm_url, llm_model, llm_key, max_output_tokens
         )
         if gen_failure is not None:
             return gen_failure
 
         # --- Step 3: Synthesise each turn to PCM ----------------------------
-        assert turns is not None  # validated above
+        assert script is not None  # validated above
+        turns = script.turns
         pcm_turns, synth_failure = await self._synthesize_turns(turns, tts_cfg)
         if synth_failure is not None:
             return synth_failure
@@ -550,4 +567,5 @@ class AudioOverviewTool:
             tts_cfg,
             turn_count=len(turns),
             silence_ms=SILENCE_MS_DEFAULT,
+            script_note=script.note,
         )
