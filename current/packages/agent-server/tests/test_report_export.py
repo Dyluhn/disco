@@ -755,7 +755,7 @@ def test_markdown_h1_is_the_question_when_the_title_is_only_its_first_words() ->
     report = _make_sample_report()
     clamped = fallback_title(report.query)
 
-    assert clamped == "What is the airspeed velocity of an unladen"
+    assert clamped == "What is the airspeed velocity"  # UI-13: a few words, hard-capped
     assert serialize_markdown(report, None, clamped) == CAPTURED_MARKDOWN
 
 

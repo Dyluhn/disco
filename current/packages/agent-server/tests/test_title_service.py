@@ -16,6 +16,7 @@ from disco.agent_server.title_service import (
     first_user_text,
     sanitize_title,
 )
+from disco.core import SqliteEventStore
 from disco.core.events import EventSource, MessageEvent
 from disco.core.llm.types import LLMMessage
 
@@ -351,3 +352,124 @@ def test_sanitize_title_strips_leaked_think() -> None:
     ) == ("Container Shipping Overview")
     # Unclosed think consumes everything → empty → caller falls back honestly.
     assert sanitize_title("<think>The user wants a concise title (3-6 words, Title") == ""
+
+
+# ── UI-13: reliability (retry once, then a SHORT derived title) ────────────────
+
+
+def test_fallback_title_is_a_few_words_not_the_whole_prompt() -> None:
+    """UI-13: one build in fifteen kept its prompt as its title. The fallback is a
+    LABEL — a few words — even for a prompt short enough to fit the old clamp."""
+    prompt = "Coffee shop subscription website with pricing tiers and a signup flow"
+    t = fallback_title(prompt)
+    assert t == "Coffee shop subscription website with"
+    assert len(t) <= 42
+    assert len(t.split(" ")) <= 5
+    assert prompt.startswith(t)  # a clean prefix — but never the whole prompt
+
+
+def test_fallback_title_clamps_a_long_first_word() -> None:
+    t = fallback_title("Supercalifragilisticexpialidocious" * 3 + " app")
+    assert len(t) <= 42
+
+
+@pytest.mark.anyio
+async def test_run_retries_once_after_a_failed_model_call() -> None:
+    """UI-13: a raising call used to skip straight to the fallback and burn the
+    title permanently. One blip must not decide the name."""
+
+    class _FlakyRouter(_FakeRouter):
+        async def complete(self, req):  # noqa: ANN001
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError("provider blip")
+            return _FakeResp("Coffee Shop Subscription Website")
+
+    store = _FakeStore([_user("Build a coffee shop subscription website with tiers")])
+    router = _FlakyRouter()
+    svc = TitleService(store, lambda *a, **k: router)
+    await svc._run("cid")  # type: ignore[attr-defined]
+    assert router.calls == 2
+    assert store.updated_to == "Coffee Shop Subscription Website"
+
+
+@pytest.mark.anyio
+async def test_run_falls_back_short_after_both_calls_fail() -> None:
+    task = "Build a coffee shop subscription website with pricing tiers and a signup flow"
+    store = _FakeStore([_user(task)])
+    router = _FakeRouter(raises=True)
+    svc = TitleService(store, lambda *a, **k: router)
+    await svc._run("cid")  # type: ignore[attr-defined]
+    assert router.calls == 2  # tried twice
+    assert store.updated_to == fallback_title(task)
+    assert len(store.updated_to or "") <= 42  # never the whole prompt
+
+
+# ── UI-31: two builds of the same prompt get distinguishable titles ────────────
+
+
+async def _sqlite_store_with_task(cids: list[str], task: str) -> SqliteEventStore:
+    """A real store holding one same-prompt conversation per id, all one owner."""
+    store = SqliteEventStore(":memory:")
+    for cid in cids:
+        store.create_conversation(cid, owner_id="local")
+        await store.append(cid, _user(task))
+    return store
+
+
+@pytest.mark.anyio
+async def test_identical_titles_get_a_counter() -> None:
+    """UI-31: two builds from the same prompt both landed on 'Coffee Shop
+    Subscription Website' — two History rows, two Projects cards, nothing but the
+    file count to tell them apart."""
+    task = "Build a coffee shop subscription website"
+    store = await _sqlite_store_with_task(["c1", "c2", "c3"], task)
+    try:
+        router = _FakeRouter(text="Coffee Shop Subscription Website")
+        svc = TitleService(store, lambda *a, **k: router)
+        for cid in ("c1", "c2", "c3"):
+            await svc._run(cid)  # type: ignore[attr-defined]
+        assert [await store.get_title(c) for c in ("c1", "c2", "c3")] == [
+            "Coffee Shop Subscription Website",
+            "Coffee Shop Subscription Website (2)",
+            "Coffee Shop Subscription Website (3)",
+        ]
+    finally:
+        store.close()
+
+
+@pytest.mark.anyio
+async def test_concurrent_titling_of_the_same_prompt_stays_distinct() -> None:
+    """Two builds can finish titling at the same moment; the claim is serialized."""
+    task = "Build a coffee shop subscription website"
+    store = await _sqlite_store_with_task(["c1", "c2"], task)
+    try:
+        router = _FakeRouter(text="Coffee Shop Subscription Website")
+        svc = TitleService(store, lambda *a, **k: router)
+        await asyncio.gather(svc._run("c1"), svc._run("c2"))  # type: ignore[attr-defined]
+        titles = {await store.get_title("c1"), await store.get_title("c2")}
+        assert titles == {
+            "Coffee Shop Subscription Website",
+            "Coffee Shop Subscription Website (2)",
+        }
+    finally:
+        store.close()
+
+
+@pytest.mark.anyio
+async def test_a_different_owners_title_is_not_a_collision() -> None:
+    """History/Projects are owner-scoped, so that is the collision scope."""
+    task = "Build a coffee shop subscription website"
+    store = SqliteEventStore(":memory:")
+    try:
+        store.create_conversation("mine", owner_id="local")
+        store.create_conversation("theirs", owner_id="someone_else")
+        for cid in ("mine", "theirs"):
+            await store.append(cid, _user(task))
+        router = _FakeRouter(text="Coffee Shop Subscription Website")
+        svc = TitleService(store, lambda *a, **k: router)
+        await svc._run("theirs")  # type: ignore[attr-defined]
+        await svc._run("mine")  # type: ignore[attr-defined]
+        assert await store.get_title("mine") == "Coffee Shop Subscription Website"
+    finally:
+        store.close()

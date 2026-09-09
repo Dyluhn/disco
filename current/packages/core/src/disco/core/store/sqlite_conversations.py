@@ -99,6 +99,51 @@ class _ConversationMixin:
                     (title, conversation_id),
                 )
 
+    async def update_title_unique(self, conversation_id: str, title: str) -> str:
+        """Set the display title, appending ``" (2)"``, ``" (3)"``, ... when this
+        owner already has a conversation with that exact title. Returns the title
+        actually stored.
+
+        The scope is the OWNER, which is the scope History/Projects list in
+        (`list_conversation_summaries`) — the only place a collision is visible.
+        Two builds of the same prompt produce the same summarized title (the
+        summarizer runs at temperature 0), which left two History rows and two
+        Projects cards distinguishable only by their file count.
+
+        Race tolerance: the read of the taken names and the write of the winning
+        one happen inside ONE `_write_lock` + transaction, so two conversations
+        finishing their titling at the same moment are serialized and get
+        different names. No-op returning `title` unchanged on an unknown id (as
+        `update_title`, whose UPDATE would match zero rows)."""
+        async with self._write_lock:
+            with self._conn:
+                row = self._conn.execute(
+                    "SELECT owner_id FROM conversations WHERE conversation_id = ?",
+                    (conversation_id,),
+                ).fetchone()
+                if row is None:
+                    return title
+                # LIKE wildcards inside a user/model-authored title are literal.
+                escaped = title.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+                taken = {
+                    r["title"]
+                    for r in self._conn.execute(
+                        "SELECT title FROM conversations WHERE owner_id = ? "
+                        "AND conversation_id != ? AND (title = ? OR title LIKE ? ESCAPE '\\')",
+                        (row["owner_id"], conversation_id, title, f"{escaped} (%)"),
+                    )
+                }
+                unique = title
+                suffix = 1
+                while unique in taken:
+                    suffix += 1
+                    unique = f"{title} ({suffix})"
+                self._conn.execute(
+                    "UPDATE conversations SET title = ? WHERE conversation_id = ?",
+                    (unique, conversation_id),
+                )
+        return unique
+
     async def get_title(self, conversation_id: str) -> str | None:
         """The stored title (None if unset / unknown id). Cheap point-read used by
         the auto-title service to stay idempotent (skip already-titled conversations)."""

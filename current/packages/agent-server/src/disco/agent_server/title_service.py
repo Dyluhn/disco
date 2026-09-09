@@ -5,10 +5,11 @@ first user message, so History/Projects show meaningful names instead of a wall 
 Design (runthru-v2): fire EARLY + ASYNC the moment the first user message lands — that
 message IS the task, so there's nothing to wait for. Summarize it with the cheap
 ``SUMMARIZER``-role model into a 3-6 word Title-Case label and persist it. It NEVER
-blocks the build loop (a detached task) and is NEVER worse than today (falls back to a
-cleaned first-message snippet if the model call fails / there's no key). Idempotent: it
-only acts when the title is still unset, so it's safe to call from ``kick`` on every
-message.
+blocks the build loop (a detached task) and is NEVER worse than today (one retry, then a
+few-word label derived from the first message if the model call fails / there's no key).
+Idempotent: it only acts when the title is still unset, so it's safe to call from ``kick``
+on every message. The name is claimed through the store's de-duplicating write, so two
+conversations can't end up with the identical label.
 """
 
 from __future__ import annotations
@@ -39,6 +40,11 @@ _PROMPT_PREFIX = (
 )
 
 _MAX_TITLE_CHARS = 60
+# UI-13: the no-LLM fallback is a LABEL, not a summary of the task. Its own, much
+# harder cap (below) is what stops a failed summarizer from writing the first
+# message across the History row and the finish screen's title slot.
+_MAX_FALLBACK_WORDS = 5
+_MAX_FALLBACK_CHARS = 42
 _MAX_TASK_CHARS = 800  # cap the prompt input — first messages can be very long
 _TITLE_ENSURE_TIMEOUT_S = 15.0
 _QUOTE_CHARS = "\"'`“”‘’"  # straight + smart quotes + backtick
@@ -51,6 +57,15 @@ _LEADER_RE = re.compile(r"^\s*(?:[-•>*]|\d+[.)])\s+")
 # Leading junk before the first real character (emoji, stray symbols), while KEEPING a
 # leading letter/digit/quote/paren so real titles survive.
 _LEAD_JUNK_RE = re.compile(r"^[^\w(\"'“‘]+")
+
+
+def _clamp(text: str, limit: int) -> str:
+    """Cut ``text`` to ``limit`` chars on a word boundary (whole word if the first
+    word alone already overflows)."""
+    if len(text) <= limit:
+        return text
+    clipped = text[:limit].rsplit(" ", 1)[0].strip()
+    return clipped or text[:limit].strip()
 
 
 def first_user_text(events: Sequence[Event]) -> str | None:
@@ -104,20 +119,23 @@ def sanitize_title(raw: str) -> str:
     t = t.strip().strip(_QUOTE_CHARS).strip()
     t = t.rstrip(".,;:!?—-").strip()
     # 6. Clamp on a word boundary.
-    if len(t) > _MAX_TITLE_CHARS:
-        clipped = t[:_MAX_TITLE_CHARS].rsplit(" ", 1)[0].strip()
-        t = clipped or t[:_MAX_TITLE_CHARS].strip()
-    return t
+    return _clamp(t, _MAX_TITLE_CHARS)
 
 
 def fallback_title(task: str) -> str:
-    """A no-LLM title: the first words of the task, cleaned + clamped. The floor when
-    the model call fails — still far better than ``(untitled)``."""
+    """A no-LLM title: the first FEW words of the task, cleaned + hard-capped. The
+    floor when the model call fails — still far better than ``(untitled)``.
+
+    UI-13: what this returns is stored PERMANENTLY (``_run`` is idempotent), so the
+    old 8-word / 60-char clamp let a whole short prompt land as the conversation's
+    title — the one build in fifteen whose History row and finish screen showed the
+    full task and pushed the deliverable card down. A few words, always: at most
+    ``_MAX_FALLBACK_WORDS`` words AND ``_MAX_FALLBACK_CHARS`` characters."""
     one_line = " ".join((task or "").split())
     if not one_line:
         return ""
-    words = one_line.split(" ")[:8]
-    return sanitize_title(" ".join(words))
+    words = one_line.split(" ")[:_MAX_FALLBACK_WORDS]
+    return _clamp(sanitize_title(" ".join(words)), _MAX_FALLBACK_CHARS)
 
 
 class TitleService:
@@ -190,8 +208,23 @@ class TitleService:
             return  # first user message not present yet; a later kick retries
         title = await self._summarize(task) or fallback_title(task)
         if title:
-            await self._store.update_title(cid, title)
-            _LOG.info("auto-titled %s -> %r", cid, title)
+            stored = await self._store_title(cid, title)
+            _LOG.info("auto-titled %s -> %r", cid, stored)
+
+    async def _store_title(self, cid: str, title: str) -> str:
+        """Persist the title, DE-DUPLICATED against the owner's other conversations
+        (UI-31: two builds of the same prompt both landed on "Coffee Shop Subscription
+        Website", leaving two History rows and two Projects cards nothing but the file
+        count told apart). The store claims the name and appends " (2)" / " (3)" in one
+        locked transaction, so two builds finishing titling at the same moment can't
+        both take it. Returns what was actually stored.
+
+        Stores without the claim method (older fakes) keep the plain overwrite."""
+        claim = getattr(self._store, "update_title_unique", None)
+        if claim is not None:
+            return str(await claim(cid, title))
+        await self._store.update_title(cid, title)
+        return title
 
     async def _summarize(self, task: str) -> str:
         """Model-summarized title via the cheap SUMMARIZER role. Returns '' on any
@@ -203,14 +236,19 @@ class TitleService:
         first pass, retry ONCE with room for the reasoning to finish AND emit
         the title (same shape as the synthesis empty-retry).
 
-        Both failure shapes are logged at WARNING with their reason. This is not
-        a fallback anybody sees: the caller stores a truncated snippet as the
-        conversation's permanent title and nothing revisits it, so a silent ''
-        here is a defect that leaves no trace at all."""
+        UI-13: a RAISING call gets the same second pass. A one-off provider blip
+        used to burn the title for good — one build in fifteen kept its prompt as
+        its name — because the exception skipped straight to the fallback.
+
+        Both failure shapes are logged at WARNING with their reason (once, after
+        the retry). This is not a fallback anybody sees: the caller stores a short
+        derived label as the conversation's permanent title and nothing revisits
+        it, so a silent '' here is a defect that leaves no trace at all."""
         model = ""
-        try:
-            router = self._router_now()
-            for max_tokens in (24, 384):
+        failure: Exception | None = None
+        for max_tokens in (24, 384):
+            try:
+                router = self._router_now()
                 resp = await router.complete(
                     CompletionRequest(
                         profile=CapabilityProfile(role=ModelRole.SUMMARIZER),
@@ -221,23 +259,27 @@ class TitleService:
                         max_tokens=max_tokens,
                     )
                 )
-                model = str(getattr(resp, "model_used", "") or "")
-                title = sanitize_title(getattr(resp, "text", "") or "")
-                if title:
-                    return title
+            except Exception as exc:
+                failure = exc
+                continue
+            failure = None
+            model = str(getattr(resp, "model_used", "") or "")
+            title = sanitize_title(getattr(resp, "text", "") or "")
+            if title:
+                return title
+        if failure is not None:
+            _LOG.warning(
+                "auto-title: summarizer call failed (%s: %s); storing the first-words fallback",
+                type(failure).__name__,
+                failure,
+            )
+        else:
             _LOG.warning(
                 "auto-title: summarizer %r produced no usable title in two passes; "
                 "storing the first-words fallback",
                 model,
             )
-            return ""
-        except Exception as exc:
-            _LOG.warning(
-                "auto-title: summarizer call failed (%s: %s); storing the first-words fallback",
-                type(exc).__name__,
-                exc,
-            )
-            return ""
+        return ""
 
     async def backfill(
         self, conversation_ids: Sequence[str], *, retitle_fallbacks: bool = False
@@ -266,8 +308,7 @@ class TitleService:
                 else:
                     title = await self._summarize(task) or fallback_title(task)
                 if title and title != existing:
-                    await self._store.update_title(cid, title)
-                    result[cid] = title
+                    result[cid] = await self._store_title(cid, title)
             except Exception:
                 _LOG.debug("backfill title failed for %s", cid, exc_info=True)
         return result
