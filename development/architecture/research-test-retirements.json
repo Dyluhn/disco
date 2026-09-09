@@ -353,6 +353,6 @@
     }
   ],
   "marker_source_sha256": {
-    "current/packages/retrieval/tests/test_local_encoders.py": "fde85ff248f11f89fd832cb72c7fb961812a232f71886730b8d4fce7a9dad34c"
+    "current/packages/retrieval/tests/test_local_encoders.py": "73d56e5ef155f6bda7a68ce88a582e8380045ed158c94dad7b959540e02cb6f7"
   }
 }

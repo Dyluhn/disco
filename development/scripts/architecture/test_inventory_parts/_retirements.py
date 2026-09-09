@@ -19,7 +19,7 @@ from ._rows import canonical_row
 PACKAGE = "PKG-35-DEEP-RESEARCH-CLOSEOUT"
 BASELINE_COMMIT = "39117e8e2f094a0d5a3be502766fa0d5b48863a4"
 BASELINE_SHA256 = "98c1ce4994d21a7c8e0a55ac76a5534ad25f3032cb7f7696ff83b4e906c004cf"
-AUTHORITY_SHA256 = "649342bcf495fb03dde2faf5f5a75afe924f5b3f6f65926b5e513eaa3ed6a09e"
+AUTHORITY_SHA256 = "0a96d69db8a979fb4103b25bb04c0fd90e7e5e74506bd30dd94d7d6de3c27e6f"
 INVENTORY_PATH = "development/architecture/test-inventory.json"
 AUTHORITY_PATH = "development/architecture/research-test-retirements.json"
 

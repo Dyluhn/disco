@@ -116,6 +116,7 @@
           ["frontend/src/components/buildSurface/BuildComposerSection.tsx", "build", "@/components/build/BuildSurface", "frontend/src/components/build/BuildSurface.tsx", "shell"],
           ["frontend/src/components/buildSurface/BuildComposerSection.tsx", "build", "@/components/build/SteerInput", "frontend/src/components/build/SteerInput.tsx", "shell"],
           ["frontend/src/components/buildSurface/BuildComposerSection.tsx", "build", "@/components/settings/ScheduleSection", "frontend/src/components/settings/ScheduleSection.tsx", "shell"],
+          ["frontend/src/components/buildSurface/BuildComposerSection.tsx", "build", "@/components/toastApi", "frontend/src/components/toastApi.ts", "shell"],
           ["frontend/src/components/buildSurface/BuildDecisionGates.tsx", "build", "@/components/build/AlternativesGate", "frontend/src/components/build/AlternativesGate.tsx", "shell"],
           ["frontend/src/components/buildSurface/BuildDecisionGates.tsx", "build", "@/components/build/ClarifyPanel", "frontend/src/components/build/ClarifyPanel.tsx", "shell"],
           ["frontend/src/components/buildSurface/BuildDecisionGates.tsx", "build", "@/components/build/ConfirmationPanel", "frontend/src/components/build/ConfirmationPanel.tsx", "shell"],
