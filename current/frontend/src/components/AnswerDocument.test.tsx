@@ -79,6 +79,69 @@ describe("AnswerDocument — streaming block", () => {
   });
 });
 
+// ---- UI-39: markdown in completed prose blocks ------------------------------
+
+describe("AnswerDocument — UI-39 markdown lists in Standard Search answers", () => {
+  const listBlock: AnswerBlock = {
+    kind: "prose",
+    id: "p1",
+    text:
+      "Key factors:\n\n- **Milk quantity and size**: use cold whole milk.\n" +
+      "- **Milk texture and foam**: stretch, then fold.\n",
+    cited_passage_ids: [],
+  };
+
+  it("UI-39: renders a markdown bullet list as real list items, not one run of ' - ' text", () => {
+    render(
+      <AnswerDocument
+        blocks={[listBlock]}
+        partial={{}}
+        streamingBlockId={null}
+        answer={null}
+      />,
+    );
+    const items = screen.getAllByRole("listitem");
+    expect(items).toHaveLength(2);
+    expect(items[0]).toHaveTextContent("Milk quantity and size");
+    expect(items[1]).toHaveTextContent("Milk texture and foam");
+    // The bullet markers must not survive as literal text next to the content.
+    expect(screen.queryByText(/- \*\*Milk quantity and size\*\*/)).not.toBeInTheDocument();
+  });
+
+  it("UI-39: bold inside a list item renders as <strong>", () => {
+    render(
+      <AnswerDocument
+        blocks={[listBlock]}
+        partial={{}}
+        streamingBlockId={null}
+        answer={null}
+      />,
+    );
+    expect(screen.getByText("Milk quantity and size").tagName).toBe("STRONG");
+  });
+
+  it("UI-39: [[passage_id]] markers still resolve to a citation chip, never raw text", () => {
+    render(
+      <AnswerDocument
+        blocks={[
+          {
+            kind: "prose",
+            id: "p2",
+            text: "- Espresso pulls in 25s [[src1_p3]]\n",
+            cited_passage_ids: ["src1_p3"],
+          },
+        ]}
+        partial={{}}
+        streamingBlockId={null}
+        answer={null}
+      />,
+    );
+    // No answer yet → the neutral placeholder chip, exactly as before this fix.
+    expect(screen.queryByText(/\[\[src1_p3\]\]/)).not.toBeInTheDocument();
+    expect(screen.getByText("·")).toBeInTheDocument();
+  });
+});
+
 // ---- F3: cid threading — block download in AnswerDocument -------------------
 
 describe("AnswerDocument — F3 cid threading for block downloads", () => {

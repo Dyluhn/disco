@@ -22,9 +22,12 @@ describe("Markdown citation rendering", () => {
     follow_ups: [],
   };
 
-  it("renders raw [[id]] when no answer is provided", () => {
+  it("UI-39: renders a neutral placeholder (never the raw [[id]]) when no answer is provided", () => {
+    // Before the final answer lands there is no passage to anchor to, but the raw
+    // marker must never reach the reader — the same placeholder CitedText drew.
     render(<Markdown>This is [[s1]].</Markdown>);
-    expect(screen.getByText("This is [[s1]].")).toBeInTheDocument();
+    expect(screen.queryByText(/\[\[s1\]\]/)).not.toBeInTheDocument();
+    expect(screen.getByText("·")).toBeInTheDocument();
     expect(screen.queryByTestId("citation-chip")).not.toBeInTheDocument();
   });
 
