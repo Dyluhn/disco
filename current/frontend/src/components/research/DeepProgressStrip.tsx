@@ -31,7 +31,7 @@
  * full trace (transparency preserved, not discarded).
  */
 
-import { ChevronDown, ChevronRight } from "lucide-react";
+import { ChevronDown, ChevronRight, WifiOff } from "lucide-react";
 import { useState } from "react";
 import { ActivityFeed } from "@/components/build/ActivityFeed";
 import { useNowMs } from "@/hooks/useNowMs";
@@ -66,6 +66,10 @@ interface Props {
   collapsedHold?: ActiveHold | null;
   /** Stop from the collapsed hold line (the same cancel the top bar sends). */
   onStopHold?: () => void;
+  /** The live socket's own state. "degraded" replaces the Live dot with the
+   *  same reconnecting pill the Build surface shows — a stream that is gone
+   *  cannot report that the run is live (UI-33). */
+  connectionState?: "connected" | "degraded";
 }
 
 /** Whole minutes once past a minute, seconds below that. Only ever rendered
@@ -82,6 +86,7 @@ function StatsRow({
   runActive,
   activity,
   nowMs,
+  connectionState,
 }: {
   stats: DeepStats;
   status: ConversationStatus;
@@ -90,6 +95,7 @@ function StatsRow({
   runActive: boolean;
   activity: DeepActivity;
   nowMs: number;
+  connectionState: "connected" | "degraded";
 }) {
   const isFinished = status === "FINISHED";
   // The turn counter is the budget the model itself is spending, so it beats a
@@ -155,8 +161,24 @@ function StatsRow({
           </span>
         </>
       )}
+      {/* The stream is gone, so nothing on this row can speak for the run.
+          Same pill, same words as the Build surface's `build.connection`. */}
+      {connectionState === "degraded" && (
+        <>
+          <span className="text-text-faint">·</span>
+          <span
+            title="Stream reconnecting — activity will replay when the connection returns"
+            data-disco-control="dr.connection"
+            data-connection-state="degraded"
+            className="flex items-center gap-hair rounded-full border border-hairline px-inline py-px font-ui text-[0.7rem] text-text-muted"
+          >
+            <WifiOff className="size-3" aria-hidden />
+            reconnecting…
+          </span>
+        </>
+      )}
       {/* No event has a timestamp → no honest age exists → no indicator. */}
-      {runActive && activity.lastEventAt !== null && (
+      {connectionState === "connected" && runActive && activity.lastEventAt !== null && (
         <>
           <span className="text-text-faint">·</span>
           <ActivitySignal
@@ -286,6 +308,7 @@ export function DeepProgressStrip({
   followUpStatus,
   collapsedHold = null,
   onStopHold,
+  connectionState = "connected",
 }: Props) {
   const isFinished = status === "FINISHED" || status === "IDLE";
   // runActive: the research run itself is working (not a follow-up answer).
@@ -320,6 +343,7 @@ export function DeepProgressStrip({
               runActive={runActive}
               activity={activity}
               nowMs={nowMs}
+              connectionState={connectionState}
             />
           </span>
         </button>
@@ -346,6 +370,7 @@ export function DeepProgressStrip({
           runActive={runActive}
           activity={activity}
           nowMs={nowMs}
+          connectionState={connectionState}
         />
       </header>
 

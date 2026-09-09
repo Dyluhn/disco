@@ -67,6 +67,10 @@ interface RawState {
    *  backend renders FROM these fields, and stays the fallback for events —
    *  and for transport errors — that carry no `failure`. */
   failure: RunFailure | null;
+  /** Whether the live socket is still delivering. The build lane has carried
+   *  this since it shipped; the research run view had nothing, so a server
+   *  outage left "Live" on screen with the run frozen behind it (UI-33). */
+  connectionState: "connected" | "degraded";
 }
 
 export const initial: RawState = {
@@ -76,6 +80,7 @@ export const initial: RawState = {
   events: [],
   error: null,
   failure: null,
+  connectionState: "connected",
 };
 
 function upsert(events: AgentEvent[], event: AgentEvent): AgentEvent[] {
@@ -91,6 +96,19 @@ export type Action = { type: "reset" } | { type: "frame"; frame: WSServerFrame }
 /** Pure reducer — exported for unit tests. */
 export function reducer(state: RawState, action: Action): RawState {
   if (action.type === "reset") return initial;
+  const f = action.frame;
+  // Same shape as the build lane's reducer: the socket announces "degraded"
+  // once, and ANY later frame is the proof it is delivering again.
+  if (f.type === "connection") {
+    return f.state === "degraded" ? { ...state, connectionState: "degraded" } : state;
+  }
+  const next = reduceFrame(state, action);
+  return next.connectionState === "connected"
+    ? next
+    : { ...next, connectionState: "connected" };
+}
+
+function reduceFrame(state: RawState, action: Extract<Action, { type: "frame" }>): RawState {
   const f = action.frame;
   if (f.type === "state") {
     // The snapshot is a projection of EVERY status event, the follow-up's own
@@ -173,6 +191,9 @@ export interface DeepResearchStream {
    *  errors and for events written before `ErrorEvent.failure` existed —
    *  `error` is the fallback then. */
   failure: RunFailure | null;
+  /** "degraded" once the live socket has stopped delivering and is retrying.
+   *  The run view must not keep claiming "Live" behind a dead stream. */
+  connectionState: "connected" | "degraded";
   /** The model's opening brief — how it read the question and the angles it
    *  will chase. The FIRST visible output of a gateless run (v2); null until
    *  it lands. */
@@ -312,6 +333,7 @@ export function useDeepResearchStream(
     events: state.events,
     error: state.error,
     failure: state.failure,
+    connectionState: state.connectionState,
     brief,
     stats,
     activity,

@@ -289,3 +289,30 @@ describe("reducer — ErrorEvent.failure", () => {
     expect(state.failure).toBeNull();
   });
 });
+
+// ---- UI-33 connection state ---------------------------------------------------
+
+describe("reducer — live socket state", () => {
+  it("records the socket going degraded so the run view can stop claiming Live", () => {
+    const state = reducer(
+      { ...initial, status: "RUNNING" },
+      { type: "frame", frame: { type: "connection", state: "degraded" } },
+    );
+    expect(state.connectionState).toBe("degraded");
+    // A dropped stream is not a failed run: nothing else about it moves.
+    expect(state.status).toBe("RUNNING");
+    expect(state.error).toBeNull();
+  });
+
+  it("treats the next delivered frame as proof the stream is back", () => {
+    const degraded = reducer(
+      { ...initial, status: "RUNNING" },
+      { type: "frame", frame: { type: "connection", state: "degraded" } },
+    );
+    const recovered = reducer(degraded, {
+      type: "frame",
+      frame: { type: "event", event: makeStatusEvent("s9", "RUNNING") },
+    });
+    expect(recovered.connectionState).toBe("connected");
+  });
+});
