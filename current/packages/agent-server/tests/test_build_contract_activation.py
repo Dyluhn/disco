@@ -123,6 +123,20 @@ def test_expected_delivery_mode_reflects_contract() -> None:
     assert rt.contract.expected_delivery_mode("d2") == "files"
 
 
+def test_unmapped_brief_kind_declares_no_delivery_shape_so_preview_survives_finish() -> None:
+    """Regression: a brief whose app_kind the registry does not map (a coffee-shop
+    website, say) pins CUSTOM — "shape unknown". Reporting CUSTOM's nominal "files"
+    governed the whole run as a download, so `serve` recorded artifact_kind="files";
+    the finished workspace then had no committed app entry and the canonical Preview
+    capability refused every request with `preview_unavailable`."""
+
+    rt = _runtime()
+    rt.contract.activate_contract_for_brief("d3", MagicMock(app_kind="coffee_shop_site"))
+
+    assert rt.contract.expected_delivery_mode("d3") is None
+    assert rt.contract._build_trackers["d3"][0].kind is ContractKind.CUSTOM
+
+
 @pytest.mark.asyncio
 async def test_forget_conversation_evicts_build_state() -> None:
     rt = _runtime()

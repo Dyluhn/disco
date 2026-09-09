@@ -503,7 +503,16 @@ class BuildContractService:
         contract declares — the agent-server deliverable surface reads this to label /
         validate a handoff (so a deck run can't be handed off as a runnable app).
         Resolves the contract on first use; None when no build contract governs the run
-        (a plain chat conversation has no delivery shape)."""
+        (a plain chat conversation has no delivery shape).
+
+        CUSTOM is the "unmapped kind" fallback (`activate_contract_for_brief`), i.e. the
+        host did NOT recognize a delivery shape — so it declares none, exactly as
+        `_finalizer_alias_for` refuses to fabricate a finalizer for CUSTOM. Reporting
+        CUSTOM's nominal "files" here governed every unclassified Build as a download:
+        `serve` then refused the app handoff (`declared_files_contract_mismatch`) or
+        recorded `artifact_kind="files"`, which leaves a finished web build with no
+        committed app entry and therefore no Preview at all. With no declared shape,
+        `derived_serve_kind` reads the artifact bytes instead."""
         entry = self._build_trackers.get(conversation_id)
         if entry is None:
             if not (
@@ -513,7 +522,9 @@ class BuildContractService:
                 return None
             self._build_scope_guard(conversation_id)
             entry = self._build_trackers.get(conversation_id)
-        return entry[0].artifact.delivery_mode if entry is not None else None
+        if entry is None or entry[0].kind is ContractKind.CUSTOM:
+            return None
+        return entry[0].artifact.delivery_mode
 
     # ---- finalizer -----------------------------------------------------------
 
