@@ -157,6 +157,30 @@ function CockpitShellSection({
   );
 }
 
+/** Every bound port the BACKEND has told us about, from the one place that
+ *  actually looks inside the sandbox (the preview status endpoint's /proc +
+ *  tmux ownership walk).
+ *
+ *  UI-8: the endpoint reports the preview port's owner in `owner` and the wider
+ *  USER_PORTS sweep in `ports`, and some payload shapes carry only the first.
+ *  Reading `ports` alone left the Cockpit announcing ":8000 free / No processes
+ *  detected" while the sandbox had `python3 -m http.server 8000` bound and the
+ *  very same response named its pid. Fold `owner` in so a server the shell tool
+ *  did not start is still visible. Still no guessing: every row here came from
+ *  the backend. */
+function cockpitBoundPorts(
+  data: PreviewInfo | null | undefined,
+): NonNullable<PreviewInfo["ports"]> {
+  const rows = [...(data?.ports ?? [])];
+  const previewPort = data?.port;
+  if (data?.owner && typeof previewPort === "number") {
+    if (!rows.some((entry) => entry.port === previewPort)) {
+      rows.push({ port: previewPort, owner: data.owner });
+    }
+  }
+  return rows;
+}
+
 /** Cockpit — Servers section: the bound USER_PORTS, one per row, with the
  *  owning process surfaced. The set of KNOWN_USER_PORTS is fixed by the
  *  backend's allowlist (`sandbox/_container.py USER_PORTS`), so we render one
@@ -168,7 +192,7 @@ function CockpitServersSection({ data }: { data: PreviewInfo | null | undefined 
   // a stable layout: "the port is the row, the owner is what fills it." The
   // backend's `data.ports` may contain only the bound subset; we fill the rest
   // as `free` from the canonical list.
-  const ports = data?.ports ?? [];
+  const ports = cockpitBoundPorts(data);
   const portByNumber = new Map(ports.map((p) => [p.port, p]));
   const knownBound = KNOWN_USER_PORTS.map((port) => ({
     port,
@@ -232,7 +256,7 @@ function CockpitServersSection({ data }: { data: PreviewInfo | null | undefined 
  *  and the operator wants to see "what's actually running on this box" not
  *  just "is :8000 listening". */
 function CockpitProcessesSection({ data }: { data: PreviewInfo | null | undefined }) {
-  const ports = data?.ports ?? [];
+  const ports = cockpitBoundPorts(data);
   const seen = new Set<number>();
   const procs: Array<{
     pid: number;
