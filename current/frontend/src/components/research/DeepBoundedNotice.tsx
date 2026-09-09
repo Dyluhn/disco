@@ -23,6 +23,7 @@
 
 import { Info, Layers, Zap } from "lucide-react";
 import { countOf } from "@/lib/deepResearchHeartbeat";
+import { DEPTH_TIER_LABEL, depthTierLabel } from "@/lib/depthTier";
 import type { ReportEvent } from "@/types/agent";
 
 interface Props {
@@ -285,7 +286,7 @@ export function DeepBoundedNotice({ report, onTryExhaustive }: Props) {
             {report.depth_tier && (
               <span className="flex items-center gap-hair rounded-full border border-hairline px-inline py-px font-ui text-[0.72rem] uppercase tracking-wide text-text-faint">
                 <Info className="size-2.5" aria-hidden />
-                Tier: {report.depth_tier.replace("_", " ")}
+                Tier: {depthTierLabel(report.depth_tier)}
               </span>
             )}
             {/* A bigger research budget only answers a BUDGET bound. Offering
@@ -298,7 +299,7 @@ export function DeepBoundedNotice({ report, onTryExhaustive }: Props) {
                 className="flex min-h-11 items-center gap-hair rounded-control border border-accent/40 px-inline py-hair font-ui text-[0.78rem] text-accent transition-colors hover:bg-accent hover:text-bg lg:min-h-0"
               >
                 <Zap className="size-3" aria-hidden />
-                Run on Exhaustive tier
+                Run on {DEPTH_TIER_LABEL.exhaustive} tier
               </button>
             )}
           </div>

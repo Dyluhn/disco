@@ -152,7 +152,7 @@ describe("DeepBoundedNotice", () => {
       />,
     );
     // A rerun cannot verify a sentence the evidence does not carry — no false affordance.
-    expect(screen.queryByText("Run on Exhaustive tier")).not.toBeInTheDocument();
+    expect(screen.queryByText("Run on Thorough tier")).not.toBeInTheDocument();
 
     rerender(
       <DeepBoundedNotice
@@ -160,7 +160,7 @@ describe("DeepBoundedNotice", () => {
         onTryExhaustive={onTryExhaustive}
       />,
     );
-    expect(screen.getByText("Run on Exhaustive tier")).toBeInTheDocument();
+    expect(screen.getByText("Run on Thorough tier")).toBeInTheDocument();
   });
 
   it("distinguishes turns the model spent from turns an infrastructure outage ate", () => {
@@ -290,5 +290,22 @@ describe("DeepBoundedNotice", () => {
     const report = makeReport({ meta: { unverified_sentences: "not a list" } });
     const { container } = render(<DeepBoundedNotice report={report} />);
     expect(container.firstChild).toBeNull();
+  });
+  // UI-21: the depth menu, the report banner and this badge used to print three
+  // different names for the same setting ("Thorough" / "Exhaustive" / "quick").
+  it("names the tier the way the depth menu names it", () => {
+    render(<DeepBoundedNotice report={makeReport({ depth_tier: "quick", bounded_by: "turns" })} />);
+    expect(screen.getByText(/^Tier: Quick$/)).toBeInTheDocument();
+  });
+
+  it("offers the deepest tier by the menu's name, not by its wire id", () => {
+    render(
+      <DeepBoundedNotice
+        report={makeReport({ bounded_by: "turns", depth_tier: "standard_deep" })}
+        onTryExhaustive={() => {}}
+      />,
+    );
+    expect(screen.getByRole("button", { name: /Run on Thorough tier/ })).toBeInTheDocument();
+    expect(screen.queryByText(/Exhaustive/)).not.toBeInTheDocument();
   });
 });
