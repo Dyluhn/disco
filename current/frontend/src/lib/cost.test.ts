@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { calculateUsageCost, costLabel, costTag, formatCost } from "./cost";
+import { calculateUsageCost, costLabel, costTag, driverCostTag, formatCost } from "./cost";
+import type { DriverModel } from "@/types/agent";
 import { isFree, isMetered, isSubscription, type ModelInfo, type TokenUsage } from "@/types/models";
 
 const mockPaidModel: ModelInfo = {
@@ -86,5 +87,56 @@ describe("W-05 — subscription pricing across surfaces", () => {
   it("still meters metered models and treats free as free", () => {
     expect(isMetered(mockPaidModel)).toBe(true);
     expect(isMetered(mockFreeModel)).toBe(false);
+  });
+});
+
+// UI-38 — the SAME configured model reaches the research pill as a ModelInfo
+// (app-server /models: pricing_mode "unknown" when the provider catalogue reported
+// no rate) and the Build picker as a DriverModel (agent-server: that same state
+// arrives as free=false). The two surfaces must not disagree about what the user pays.
+const mockUnknownPricingModel: ModelInfo = {
+  id: "driver-deepseek",
+  label: "deepseek-v4-flash",
+  provider: "openrouter",
+  price_in_per_m: 0,
+  price_out_per_m: 0,
+  pricing_mode: "unknown",
+  capabilities: [],
+  model_id: "deepseek/deepseek-v4-flash",
+  context_window: 128_000,
+};
+
+const mockUnknownPricingDriver: DriverModel = {
+  id: "driver-deepseek",
+  label: "deepseek-v4-flash",
+  provider: "openrouter",
+  free: false,
+  context_window: 128_000,
+  capabilities: [],
+};
+
+describe("UI-38 — one pricing state across the research pill and the Build picker", () => {
+  it("never shows the bare word 'Unknown' beside a model name", () => {
+    expect(costTag(mockUnknownPricingModel)).not.toBe("Unknown");
+  });
+
+  it("tags an unknown-price model the same on both surfaces", () => {
+    expect(costTag(mockUnknownPricingModel)).toBe("Paid");
+    expect(driverCostTag(mockUnknownPricingDriver)).toBe("Paid");
+    expect(costTag(mockUnknownPricingModel)).toBe(driverCostTag(mockUnknownPricingDriver));
+  });
+
+  it("does not read an unreported price as free", () => {
+    expect(isFree(mockUnknownPricingModel)).toBe(false);
+  });
+
+  it("still spells the state out in the roomier picker label", () => {
+    expect(costLabel(mockUnknownPricingModel)).toBe("Pricing unknown");
+  });
+
+  it("leaves Free and Subscription tags untouched", () => {
+    expect(costTag(mockFreeModel)).toBe("Free");
+    expect(costTag(mockSubscriptionModel)).toBe("Subscription");
+    expect(costTag(mockPaidModel)).toBe("$10/Mtok");
   });
 });

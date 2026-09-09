@@ -218,6 +218,7 @@ export function DeepResearchRunView({ r }: Props) {
           // bar's button would be, so the line stands down with it.
           collapsedHold={stopping ? null : decision.line}
           onStopHold={r.stop}
+          connectionState={r.connectionState}
         />
       )}
 

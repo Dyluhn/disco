@@ -7,25 +7,24 @@
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { Check, ChevronDown, Gauge } from "lucide-react";
 import { cn } from "@/lib/cn";
+import { DEPTH_TIER_LABEL, type DepthTier as Tier } from "@/lib/depthTier";
 
-type Tier = "quick" | "standard_deep" | "exhaustive";
-
-// Display labels only — the tier ids are wire-level (create frame + telemetry)
-// and MUST NOT change here.
+// The names come from the shared map so the report banner and badge say the
+// same words this menu does (UI-21); only the notes are local to the menu.
 const TIERS: Array<{ id: Tier; label: string; note: string }> = [
   {
     id: "quick",
-    label: "Quick",
+    label: DEPTH_TIER_LABEL.quick,
     note: "Fast evidence pass",
   },
   {
     id: "standard_deep",
-    label: "Standard",
+    label: DEPTH_TIER_LABEL.standard_deep,
     note: "Balanced evidence and review",
   },
   {
     id: "exhaustive",
-    label: "Thorough",
+    label: DEPTH_TIER_LABEL.exhaustive,
     note: "Broad evidence and review",
   },
 ];

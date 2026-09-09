@@ -23,6 +23,8 @@
 
 import { Info, Layers, Zap } from "lucide-react";
 import { countOf } from "@/lib/deepResearchHeartbeat";
+import { UNRESOLVED_MEANING } from "@/lib/claimCheck";
+import { DEPTH_TIER_LABEL, depthTierLabel } from "@/lib/depthTier";
 import type { ReportEvent } from "@/types/agent";
 
 interface Props {
@@ -271,10 +273,21 @@ export function DeepBoundedNotice({ report, onTryExhaustive }: Props) {
             </p>
           )}
           {counts && (
-            <p className="mt-hair font-ui text-[0.82rem] leading-snug text-text-muted">
-              Automated evidence check: {counts.supported} supported, {counts.contradicted} possible contradictions,
-              {" "}{counts.unresolved} unresolved, {counts.unavailable} not checked.
-            </p>
+            <>
+              <p className="mt-hair font-ui text-[0.82rem] leading-snug text-text-muted">
+                Automated evidence check: {counts.supported} supported, {counts.contradicted} possible contradictions,
+                {" "}{counts.unresolved} unresolved, {counts.unavailable} not checked.
+              </p>
+              {/* Without this line the counts read as "three quarters of this
+                  report is unsupported" — which is not what the checker
+                  measured (UI-20). */}
+              <p
+                data-dr-unresolved-meaning=""
+                className="mt-hair font-ui text-[0.78rem] leading-snug text-text-faint"
+              >
+                {UNRESOLVED_MEANING}
+              </p>
+            </>
           )}
           {notes.map((note, index) => (
             <p key={index} className="mt-hair font-ui text-[0.82rem] leading-snug text-text-muted">{note}</p>
@@ -285,7 +298,7 @@ export function DeepBoundedNotice({ report, onTryExhaustive }: Props) {
             {report.depth_tier && (
               <span className="flex items-center gap-hair rounded-full border border-hairline px-inline py-px font-ui text-[0.72rem] uppercase tracking-wide text-text-faint">
                 <Info className="size-2.5" aria-hidden />
-                Tier: {report.depth_tier.replace("_", " ")}
+                Tier: {depthTierLabel(report.depth_tier)}
               </span>
             )}
             {/* A bigger research budget only answers a BUDGET bound. Offering
@@ -298,7 +311,7 @@ export function DeepBoundedNotice({ report, onTryExhaustive }: Props) {
                 className="flex min-h-11 items-center gap-hair rounded-control border border-accent/40 px-inline py-hair font-ui text-[0.78rem] text-accent transition-colors hover:bg-accent hover:text-bg lg:min-h-0"
               >
                 <Zap className="size-3" aria-hidden />
-                Run on Exhaustive tier
+                Run on {DEPTH_TIER_LABEL.exhaustive} tier
               </button>
             )}
           </div>

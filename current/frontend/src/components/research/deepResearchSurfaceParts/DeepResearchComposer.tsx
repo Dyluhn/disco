@@ -12,6 +12,7 @@ import { SuggestionChips } from "@/components/SuggestionChips";
 import { SourcePicker } from "@/components/SourcePicker";
 import { EmptyState } from "@/components/states";
 import { cn } from "@/lib/cn";
+import { DEPTH_TIER_LABEL } from "@/lib/depthTier";
 import type { ScopeId } from "@/shell/mode";
 import { findModel, useAssignments, useModels } from "@/hooks/useModels";
 import type { useDeepResearch } from "@/hooks/useDeepResearch";
@@ -25,16 +26,6 @@ interface Props {
   onScopeChange?: (next: ScopeId) => void;
 }
 
-// Display twin of DepthTierSelector's labels — keeps the collapsed trigger
-// honest about the depth choice hidden inside the menu. A module-level lookup
-// (not a ternary chain): the tier union is closed, and this adds zero decision
-// points to the component (McCabe budget).
-const DEPTH_TRIGGER_LABELS: Record<Tier, string> = {
-  quick: "Quick",
-  standard_deep: "Standard",
-  exhaustive: "Thorough",
-};
-
 export function DeepResearchComposer({ r, draftValue, setDraftValue, onScopeChange }: Props) {
   const [optionsOpen, setOptionsOpen] = useState(false);
   const navigate = useNavigate();
@@ -43,7 +34,7 @@ export function DeepResearchComposer({ r, draftValue, setDraftValue, onScopeChan
     ((next: ScopeId) => {
       if (next === "standard") navigate("/");
     });
-  const depthLabel = DEPTH_TRIGGER_LABELS[r.depthTier as Tier];
+  const depthLabel = DEPTH_TIER_LABEL[r.depthTier as Tier];
 
   // Same catalogue read as ModelLeaderPill: the explicit pick, else the
   // Settings default — the notice mirrors what would actually lead the run.

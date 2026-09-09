@@ -12,10 +12,11 @@ import { Markdown } from "@/components/Markdown";
 import { CitedText } from "@/components/blocks";
 import { ClaimVerdicts } from "@/components/research/ClaimVerdicts";
 import { SupportMeter } from "@/components/research/SupportMeter";
+import { claimCheckCounts } from "@/lib/claimCheck";
 import { asGroundedAnswer } from "@/components/research/groundedAnswer";
 import { cn } from "@/lib/cn";
 import type { AssemblingSection } from "@/lib/deepResearchTrace";
-import type { GroundedAnswer, VerifiedClaim } from "@/types/grounded";
+import type { GroundedAnswer } from "@/types/grounded";
 import type { ReportEvent } from "@/types/agent";
 
 interface Props {
@@ -64,18 +65,6 @@ const CONFIDENCE_VARIANT: Record<
  *  `unsupported_count`, NOT a per-claim breakdown, so the support meter is a
  *  report-level signal. We never fabricate a denominator (an earlier version
  *  used cited_passage_ids.length as a fake "total claims" — passages != claims). */
-function claimVerdictCounts(claims: VerifiedClaim[]) {
-  let supported = 0;
-  let weak = 0;
-  let unsupported = 0;
-  for (const c of claims) {
-    if (c.verdict === "unsupported") unsupported += 1;
-    else if (c.verdict === "weak") weak += 1;
-    else supported += 1;
-  }
-  return { supported, weak, unsupported };
-}
-
 function SectionSkeleton({ title, state }: { title: string; state: "pending" | "writing" }) {
   return (
     <section className="pmx-rise scroll-mt-24 opacity-80">
@@ -289,7 +278,7 @@ export function DeepReportView({ query, titleAlreadyShown = false, summary, asse
           {/* Report-level NLI support signal — REAL per-claim verdict counts. */}
           {answer && answer.claims.length > 0 && (
             <span className="ml-auto shrink-0 self-center">
-              <SupportMeter {...claimVerdictCounts(answer.claims)} />
+              <SupportMeter counts={claimCheckCounts(answer.claims)} legend />
             </span>
           )}
         </header>

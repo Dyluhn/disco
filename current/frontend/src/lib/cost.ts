@@ -16,7 +16,12 @@ export function costLabel(m: ModelInfo): string {
 /** A one-word cost tag for very tight spots (the pill face). */
 export function costTag(m: ModelInfo): string {
   if (isSubscription(m)) return "Subscription";
-  if (isPricingUnknown(m)) return "Unknown";
+  // UI-38: pricing_mode "unknown" = the provider catalogue reported no rate. It is
+  // the SAME stored state the driver payload carries as `free: false`, which the
+  // Build picker already labels "Paid" (see driverCostTag) — so say "Paid" here too
+  // and never print the bare word "Unknown" beside a model name. The roomier
+  // `costLabel` still spells out "Pricing unknown" where there is space for it.
+  if (isPricingUnknown(m)) return "Paid";
   return isFree(m) ? "Free" : `$${m.price_in_per_m}/Mtok`;
 }
 

@@ -260,6 +260,38 @@ describe("deriveLiveTrace — user-visible operations only", () => {
     expect(items[0]?.status).toBe("done");
   });
 
+  // UI-19: a re-frame emitted the same `brief` event as the opening one, so the
+  // trace showed "Framed the question" twice with nothing to explain the repeat.
+  it("names the second framing a re-frame and says what the searches returned", () => {
+    const events = asEvents([
+      BRIEF_ACTION,
+      { kind: "action", id: "a1", thought: "", tool_call: { tool_name: "search", arguments: { query: "market size 2026" } } },
+      { kind: "observation", id: "o1", action_id: "a1", tool_result: { tool_name: "observation", success: true, content: "", structured: { added: 0, total_for_subq: 0 } } },
+      { kind: "action", id: "a2", thought: "", tool_call: { tool_name: "search", arguments: { query: "market share 2026" } } },
+      { kind: "observation", id: "o2", action_id: "a2", tool_result: { tool_name: "observation", success: true, content: "", structured: { added: 0, total_for_subq: 0 } } },
+      { kind: "action", id: "brief-2", thought: "", tool_call: { tool_name: "brief", arguments: { text: "Re-read as a question about concentration." } } },
+    ]);
+    const items = deriveLiveTrace(events, "RUNNING");
+    expect(items[0]?.label).toBe("Framed the question");
+    expect(items.at(-1)?.label).toBe("Re-framed the question — 2 searches admitted no sources");
+  });
+
+  it("counts only the searches since the previous framing", () => {
+    const events = asEvents([
+      BRIEF_ACTION,
+      { kind: "action", id: "a1", thought: "", tool_call: { tool_name: "search", arguments: { query: "q1" } } },
+      { kind: "observation", id: "o1", action_id: "a1", tool_result: { tool_name: "observation", success: true, content: "", structured: { added: 3, total_for_subq: 3 } } },
+      { kind: "action", id: "brief-2", thought: "", tool_call: { tool_name: "brief", arguments: { text: "second" } } },
+      { kind: "action", id: "a2", thought: "", tool_call: { tool_name: "search", arguments: { query: "q2" } } },
+      { kind: "observation", id: "o2", action_id: "a2", tool_result: { tool_name: "observation", success: true, content: "", structured: { added: 0, total_for_subq: 3 } } },
+      { kind: "action", id: "brief-3", thought: "", tool_call: { tool_name: "brief", arguments: { text: "third" } } },
+    ]);
+    const items = deriveLiveTrace(events, "RUNNING");
+    const briefs = items.filter((i) => i.label.includes("framed") || i.label.includes("Framed"));
+    expect(briefs[1]?.label).toBe("Re-framed the question — 1 search admitted 3 sources");
+    expect(briefs[2]?.label).toBe("Re-framed the question — 1 search admitted no sources");
+  });
+
   it("renders search rows + filters phase internals", () => {
     const events = asEvents([
       { kind: "action", id: "a0", thought: "", tool_call: { tool_name: "phase", arguments: { phase: "gather" } } },

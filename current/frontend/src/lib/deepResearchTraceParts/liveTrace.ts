@@ -320,6 +320,50 @@ function holdEpisodes(events: AgentEvent[]): {
   return { redundant, settled };
 }
 
+/**
+ * A run re-frames when the model revises its brief mid-run, and the engine
+ * emits the same `brief` event for that as for the opening one. On screen a
+ * re-frame therefore rendered as a second "Framed the question" with nothing
+ * between the two lines to say why the run had gone back to the start (UI-19).
+ *
+ * The second and later brief rows say they are re-frames, and say what the
+ * searches since the previous framing returned — which is the reason: a round
+ * that admitted nothing is exactly what sends the model back to the question.
+ */
+function reframeLabels(events: AgentEvent[]): Map<string, string> {
+  const labels = new Map<string, string>();
+  let framed = false;
+  let searches = 0;
+  let admitted = 0;
+  for (const e of events) {
+    if (e.kind === "observation") {
+      const result = (e as ObservationEvent).tool_result;
+      const added = result.structured?.added;
+      if (result.tool_name === "observation" && typeof added === "number") admitted += added;
+      continue;
+    }
+    if (e.kind !== "action" || !e.tool_call) continue;
+    if (e.tool_call.tool_name === "search") {
+      searches += 1;
+      continue;
+    }
+    if (e.tool_call.tool_name !== "brief") continue;
+    if (framed) labels.set(e.id, `Re-framed the question — ${reframeReason(searches, admitted)}`);
+    framed = true;
+    searches = 0;
+    admitted = 0;
+  }
+  return labels;
+}
+
+/** Why the model went back to the question, from what the searches since its
+ *  last framing actually returned. */
+function reframeReason(searches: number, admitted: number): string {
+  if (searches === 0) return `the model revised how it reads the question`;
+  if (admitted === 0) return `${countOf(searches, "search", "searches")} admitted no sources`;
+  return `${countOf(searches, "search", "searches")} admitted ${countOf(admitted, "source")}`;
+}
+
 /** Translate the event stream into ActivityFeed items — the live progress
  *  trace's body. Reuses ActivityFeed verbatim (same prop shape). Engine
  *  internals (phase markers) are filtered to the user-visible operations. */
@@ -335,6 +379,7 @@ export function computeLiveTrace(
     }
   }
   const holds = holdEpisodes(events);
+  const reframes = reframeLabels(events);
   // "Writing section: X" items keyed by section title, so the engine's
   // section_done checkpoint marks ITS row done instead of rendering as a raw
   // internal name (the "section_done" leak).
@@ -352,6 +397,8 @@ export function computeLiveTrace(
     if (holds.redundant.has(e.id)) continue; // a re-sync of a wait already shown
     const item = buildActivityItem(e as ActionEvent, tc, observed, status, synthByTitle);
     if (holds.settled.has(e.id)) item.status = "done";
+    const reframe = reframes.get(e.id);
+    if (reframe) item.label = reframe;
     items.push(item);
   }
   return items;

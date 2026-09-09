@@ -8,7 +8,8 @@ import React, { useMemo } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { cn } from "@/lib/cn";
-import { ChartBlockComponent, CitationMarker } from "./blocks";
+import { ChartBlockComponent } from "./blocks/ChartBlock";
+import { CitationMarker } from "./blocks/CitedText";
 import type { ChartDatum, GroundedAnswer } from "@/types/grounded";
 
 /** Parse a ```chart fence's JSON payload, or null when it isn't a valid chart.
@@ -133,15 +134,19 @@ const COMPONENTS: Components = {
 interface MarkdownProps {
   children: string;
   className?: string;
-  /** When provided, [[id]] markers in prose/tables render as Citation chips. */
+  /** Resolves [[id]] markers in prose/tables to Citation chips. Absent/null →
+   *  the same neutral placeholder chip, never the raw marker text. */
   answer?: GroundedAnswer | null;
 }
 
 export function Markdown({ children, className, answer = null }: MarkdownProps) {
   const components = useMemo(() => {
-    if (!answer) return COMPONENTS;
     // Wrap the prose-bearing tags so [[id]] markers in their children render as
-    // citation chips. Each override is listed explicitly (rather than assigned
+    // citation chips. This runs even before the final answer arrives (answer ===
+    // null): CitationMarker then draws the same neutral, same-sized placeholder
+    // CitedText always drew, so an in-flight block never leaks a raw "[[id]]" and
+    // nothing shifts when provenance resolves (zero CLS).
+    // Each override is listed explicitly (rather than assigned
     // through a `Components[keyof Components]` index) because that union is too
     // large for TS to represent on a computed-key assignment (TS2590).
     const wrap =

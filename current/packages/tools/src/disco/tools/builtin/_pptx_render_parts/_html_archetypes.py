@@ -207,7 +207,7 @@ def _html_image_layout(
     layout: str,
     texts_sorted: list[Element],
     images: list[Element],
-    title_tag: Callable[[Element, str], str],
+    title_tag: Callable[..., str],
     bullet_li: Callable[[Element, int], str],
 ) -> str:
     title_el = texts_sorted[0] if texts_sorted else None
@@ -217,14 +217,19 @@ def _html_image_layout(
     bullets_html = f'<ul class="slide-bullets">{bullet_items}</ul>' if bullet_items else ""
 
     if layout == "full_image":
-        img_html = _art_fallback_svg(0, style="position:absolute;inset:0;width:100%;height:100%;")
-        if images:
-            img_src = _img_src(images[0])
-            if img_src:
-                img_html = f'<img class="slide-full-image-bg" src="{img_src}" alt="">'
+        full_src = _img_src(images[0]) if images else None
+        if full_src is None:
+            # UI-24: no image provider configured -> there IS no art. Painting the
+            # generative-SVG fallback under the scrim put small white type over a
+            # pale grey wash (unreadable in the light theme). With art absent, drop
+            # the art + scrim entirely and render the same legible text-only
+            # composition the `title` layout uses: the slide's own solid ground,
+            # a real 4vw title, and body copy at full theme contrast.
+            title_only = title_tag(title_el, "slide-title", "h1") if title_el else ""
+            return f'<div class="slide-title-bar"></div>\n{title_only}\n{bullets_html}'
         return (
             '<div class="slide-full-image-wrap">'
-            f"{img_html}"
+            f'<img class="slide-full-image-bg" src="{full_src}" alt="">'
             '<div class="slide-image-scrim" aria-hidden="true"></div>'
             f'<div class="slide-full-image-copy">{title_html}{bullets_html}</div>'
             "</div>"

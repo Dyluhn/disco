@@ -25,6 +25,9 @@ export interface AudioSectionProps {
   onModeOpenChange: (open: boolean) => void;
   /** B4: report title/query for a meaningful download filename. */
   reportQuery: string;
+  /** Press "Audio Overview". Owned by the card because the include-follow-ups
+   *  step runs before the mode dialog opens. */
+  onStart: () => void;
 }
 
 export function AudioSection({
@@ -33,6 +36,7 @@ export function AudioSection({
   modeOpen,
   onModeOpenChange,
   reportQuery,
+  onStart,
 }: AudioSectionProps) {
   const { audio, generate, reset } = useAudioOverview({ cid, followUpSeqs, onModeOpenChange });
 
@@ -55,6 +59,17 @@ export function AudioSection({
         onOpenChange={onModeOpenChange}
         onChoose={generate}
       />
+
+      {/* The offer to make audio, and only while there is none. Once a player
+          is on screen "Audio Overview" and "Regenerate" sat side by side as
+          two buttons for one thing (UI-23); Regenerate is the honest name for
+          the only action left. */}
+      {audio.status === "idle" && (
+        <button type="button" onClick={onStart} className={CTRL_BTN}>
+          <Headphones className="size-3.5" aria-hidden />
+          Audio Overview
+        </button>
+      )}
 
       {audio.status === "generating" && <AudioProgressRow progress={audio.progress} />}
 

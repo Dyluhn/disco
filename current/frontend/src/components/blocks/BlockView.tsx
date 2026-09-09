@@ -1,7 +1,7 @@
 import { cn } from "@/lib/cn";
+import { Markdown } from "@/components/Markdown";
 import { splitThink } from "@/lib/think";
 import type { AnswerBlock, GroundedAnswer } from "@/types/grounded";
-import { CitedText } from "./CitedText";
 import { CodeBlock } from "./CodeBlock";
 import { TableView } from "./TableView";
 import { ChartBlockComponent } from "./ChartBlock";
@@ -39,10 +39,15 @@ export function BlockView({
       // MiniMax-class drivers can leak an inline <think>…</think> preamble into
       // the answer text; reasoning is never part of the rendered document.
       const prose = splitThink(block.text).answer || block.text;
+      // UI-39: prose arrives as MARKDOWN (bullet lists, headings, tables), so it
+      // renders through the same <Markdown> pipeline the deep-research report view
+      // uses. Rendering it as one inline text run collapsed every "- item" line into
+      // a single paragraph with literal " - " separators. <Markdown> resolves the
+      // [[passage_id]] markers itself, so citation chips are unchanged.
       return (
-        <p className="prose-reading">
-          <CitedText text={prose} answer={answer} />
-        </p>
+        <div className="prose-reading">
+          <Markdown answer={answer}>{prose}</Markdown>
+        </div>
       );
     }
     case "code":

@@ -98,6 +98,8 @@ export function DeepResearchSurface({
     setTopBarIncludeOpen,
     handleTopBarExport,
     handleTopBarIncludeConfirm,
+    reportAction,
+    requestReportAction,
   } = useDeepResearchSurfaceState({ r, onScopeChange, draft, onDraftChange });
 
   // The URL has to carry the run.
@@ -195,9 +197,10 @@ export function DeepResearchSurface({
           setTopBarIncludeOpen={setTopBarIncludeOpen}
           handleTopBarExport={handleTopBarExport}
           handleTopBarIncludeConfirm={handleTopBarIncludeConfirm}
+          requestReportAction={requestReportAction}
         />
         <DeepResearchRunView r={r} />
-        <DeepResearchReportView r={r} />
+        <DeepResearchReportView r={r} reportAction={reportAction} />
       </main>
     </div>
   );

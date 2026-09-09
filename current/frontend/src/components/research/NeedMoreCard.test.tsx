@@ -475,10 +475,31 @@ describe("NeedMoreCard", () => {
       expect(screen.getByRole("button", { name: /Export MP3/i })).toBeInTheDocument(),
     );
     expect(screen.getByRole("button", { name: /Regenerate/i })).toBeInTheDocument();
+    // UI-23: "Audio Overview" and "Regenerate" were two buttons for one action
+    // once a player existed. Regenerate is the only one left.
+    expect(screen.queryByRole("button", { name: /^Audio Overview$/i })).not.toBeInTheDocument();
     // AudioPlayer renders (play button, seek slider)
     expect(
       screen.getByRole("button", { name: /Play audio overview/i }),
     ).toBeInTheDocument();
+  });
+
+  // UI-23: Regenerate must put the offer back, or the card would be a dead end.
+  it("brings the Audio Overview button back when Regenerate resets the section", async () => {
+    const user = userEvent.setup();
+    renderCard();
+
+    await user.click(screen.getByRole("button", { name: /Audio Overview/i }));
+    const modeDialog = await screen.findByRole("dialog", { name: /Generate audio overview/i });
+    await user.click(within(modeDialog).getByRole("button", { name: /Podcast style/i }));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /Regenerate/i })).toBeInTheDocument(),
+    );
+
+    await user.click(screen.getByRole("button", { name: /Regenerate/i }));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /^Audio Overview$/i })).toBeInTheDocument(),
+    );
   });
 
   // (f) Audio Overview → mode dialog → Single speaker → success
@@ -716,5 +737,49 @@ describe("NeedMoreCard", () => {
         within(dialog).queryByLabelText(/PDF template/i),
       ).not.toBeInTheDocument();
     });
+  });
+  // UI-25: the same actions are offered in the top bar; the card runs them.
+  it("opens the follow-up input when the top bar asks for a follow-up", async () => {
+    renderCard({ requestedAction: { name: "follow_up", nonce: 1 } });
+    await waitFor(() =>
+      expect(screen.getByRole("region", { name: /Follow-up input/i })).toBeInTheDocument(),
+    );
+  });
+
+  it("opens the audio mode dialog when the top bar asks for audio", async () => {
+    renderCard({ requestedAction: { name: "audio", nonce: 1 } });
+    expect(
+      await screen.findByRole("dialog", { name: /Generate audio overview/i }),
+    ).toBeInTheDocument();
+  });
+
+  it("ignores a re-render that carries the same press", async () => {
+    const { rerender, onFollowUp } = renderCard({
+      requestedAction: { name: "follow_up", nonce: 1 },
+    });
+    await waitFor(() =>
+      expect(screen.getByRole("region", { name: /Follow-up input/i })).toBeInTheDocument(),
+    );
+    const user = userEvent.setup();
+    // Close it by hand, then re-render with the SAME press: it must stay closed.
+    await user.click(screen.getByRole("button", { name: /Ask a Follow-Up/i }));
+    expect(screen.queryByRole("region", { name: /Follow-up input/i })).not.toBeInTheDocument();
+    rerender(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <MemoryRouter>
+          <ModeProvider>
+            <ModeReadout />
+            <NeedMoreCard
+              report={STUB_REPORT}
+              cid={STUB_CID}
+              onFollowUp={onFollowUp}
+              followUpBusy={false}
+              requestedAction={{ name: "follow_up", nonce: 1 }}
+            />
+          </ModeProvider>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    expect(screen.queryByRole("region", { name: /Follow-up input/i })).not.toBeInTheDocument();
   });
 });
