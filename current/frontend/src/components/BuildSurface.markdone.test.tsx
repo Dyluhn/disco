@@ -97,6 +97,8 @@ function renderSurface(ui: ReactElement) {
 }
 
 beforeEach(() => {
+  // UI-41 persists the acknowledgement per conversation; each case starts clean.
+  window.localStorage.clear();
   vi.stubGlobal(
     "fetch",
     vi.fn(async () => ({
@@ -125,6 +127,57 @@ describe("Mark done — the explicit accept-as-is control", () => {
     expect(acceptFinished).toHaveBeenCalledTimes(1);
     // The whole point of the frame: no prose for the server to intent-match.
     expect(requestPlan).not.toHaveBeenCalled();
+  });
+
+  // UI-41 regression: the button used to do NOTHING visible. Clicking it must
+  // acknowledge (the button latches into a disabled "Done") and that latch must
+  // survive a reload, so the user can tell what they already accepted.
+  it("acknowledges the click: the button latches into a disabled 'Done'", async () => {
+    buildState = baseBuild();
+    const user = userEvent.setup();
+    renderSurface(<BuildSurface />);
+
+    const before = screen.getByRole("button", { name: /mark the build done/i });
+    expect(before).toBeEnabled();
+    expect(before.textContent).toContain("Mark done");
+    expect(before.getAttribute("data-marked-done")).toBe("false");
+
+    await user.click(before);
+
+    const after = screen.getByRole("button", { name: /you accepted this build as-is/i });
+    expect(after).toBeDisabled();
+    expect(after.textContent).toContain("Done");
+    expect(after.textContent).not.toContain("Mark done");
+    expect(after.getAttribute("data-marked-done")).toBe("true");
+  });
+
+  it("keeps the accepted state across a reload of the same conversation", async () => {
+    buildState = baseBuild();
+    const user = userEvent.setup();
+    const first = renderSurface(<BuildSurface />);
+    await user.click(screen.getByRole("button", { name: /mark the build done/i }));
+    first.unmount();
+
+    // A fresh mount is what a reload looks like to the surface.
+    buildState = baseBuild();
+    renderSurface(<BuildSurface />);
+    const restored = screen.getByRole("button", { name: /you accepted this build as-is/i });
+    expect(restored).toBeDisabled();
+    expect(restored.textContent).toContain("Done");
+  });
+
+  it("does not leak the acknowledgement to a different conversation", async () => {
+    buildState = baseBuild({ cid: "cid-1" });
+    const user = userEvent.setup();
+    const first = renderSurface(<BuildSurface />);
+    await user.click(screen.getByRole("button", { name: /mark the build done/i }));
+    first.unmount();
+
+    buildState = baseBuild({ cid: "cid-2" });
+    renderSurface(<BuildSurface />);
+    const other = screen.getByRole("button", { name: /mark the build done/i });
+    expect(other).toBeEnabled();
+    expect(other.textContent).toContain("Mark done");
   });
 
   it("renders only on FINISHED — a live or merely-settled run has nothing to accept", () => {

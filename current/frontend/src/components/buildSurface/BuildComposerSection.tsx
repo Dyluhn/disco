@@ -5,6 +5,7 @@
  */
 
 import type { ReactNode } from "react";
+import { useEffect, useState } from "react";
 import { Check } from "lucide-react";
 // NOTE: this is `components/build/BuildSurface.tsx` (the OTHER file) — not the
 // file this directory decomposes. It is not ours to edit; only its
@@ -14,6 +15,8 @@ import { SteerInput } from "@/components/build/SteerInput";
 import { BuildModelPicker } from "@/components/build/BuildModelPicker";
 import { QueryInput } from "@/components/QueryInput";
 import { ScheduleSection } from "@/components/settings/ScheduleSection";
+import { useToast } from "@/components/toastApi";
+import { isMarkedDone, rememberMarkedDone } from "@/lib/markedDone";
 import type { BuildController, FramingCopy } from "./types";
 import type { BuildFraming } from "@/components/BuildSurface";
 
@@ -38,6 +41,13 @@ export function BuildComposerSection({
   elementMentionChip: ReactNode;
   framing: BuildFraming;
 }) {
+  const toast = useToast();
+  // UI-41: "Mark done" used to do nothing visible. It now acknowledges (toast)
+  // and latches (the button becomes a disabled "Done"), and the latch is stored
+  // per conversation so a reload still shows it — see `lib/markedDone.ts` for why
+  // this is local state rather than a server read-back.
+  const [markedDone, setMarkedDone] = useState(() => isMarkedDone(b.cid));
+  useEffect(() => setMarkedDone(isMarkedDone(b.cid)), [b.cid]);
   return (
     <>
       {/* BP-11: uploads are legal whenever the conversation exists — INCLUDING
@@ -72,14 +82,33 @@ export function BuildComposerSection({
           {b.status === "FINISHED" && (
             <button
               type="button"
-              onClick={b.acceptFinished}
-              aria-label="Mark the build done — accept it as-is"
-              title="Accept the finished build as-is (no re-plan)"
+              onClick={() => {
+                if (markedDone) return;
+                b.acceptFinished();
+                rememberMarkedDone(b.cid);
+                setMarkedDone(true);
+                toast.show({
+                  title: "Marked done",
+                  body: "You accepted this build as-is. Nothing further will run on it.",
+                });
+              }}
+              disabled={markedDone}
+              aria-label={
+                markedDone
+                  ? "Done — you accepted this build as-is"
+                  : "Mark the build done — accept it as-is"
+              }
+              title={
+                markedDone
+                  ? "You accepted this build as-is"
+                  : "Accept the finished build as-is (no re-plan)"
+              }
               data-disco-control="build.mark-done"
-              className="flex max-lg:min-h-11 items-center gap-hair self-start rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:border-accent hover:text-text"
+              data-marked-done={markedDone}
+              className="flex max-lg:min-h-11 items-center gap-hair self-start rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:border-accent hover:text-text disabled:cursor-default disabled:border-accent/40 disabled:text-accent disabled:hover:border-accent/40"
             >
               <Check className="size-3.5" aria-hidden />
-              Mark done
+              {markedDone ? "Done" : "Mark done"}
             </button>
           )}
           {/* re-enter plan mode: a focused, diff-style change is planned + re-approved */}

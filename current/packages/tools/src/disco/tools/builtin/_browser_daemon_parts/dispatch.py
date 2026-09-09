@@ -241,36 +241,112 @@ def _handle_press(ctx: _ActionCtx, state):
     return None
 
 
+# PROD-2: a fill request is a LIST. Testing a signup form one input per model
+# turn ("Submitted a web form" x6: address, city, ZIP, card, expiry, CVC) turned
+# a five-minute site into an hour of round trips. One call now carries every
+# known field; each one is still resolved and validated on its own, and a
+# failure names WHICH field failed and which were already applied, so the model
+# can resume instead of re-deriving the whole form.
+_FILLABLE_ELEMENT_JS = """el => {
+  const tag = el.tagName.toLowerCase();
+  if (tag === 'textarea') return true;
+  if (tag === 'input') {
+    const type = (el.getAttribute('type') || 'text').toLowerCase();
+    return !['button', 'submit', 'reset', 'image', 'file'].includes(type);
+  }
+  return el.isContentEditable === true;
+}"""
+
+
+def _fill_requests(params: dict[str, Any]) -> list[dict[str, Any]]:
+    """The ordered fill requests: the batch when present, else the single field."""
+
+    batch = params.get("fields")
+    if isinstance(batch, list) and batch:
+        return [request for request in batch if isinstance(request, dict)]
+    return [
+        {
+            "index": params.get("index"),
+            "selector": params.get("selector", ""),
+            "text": params.get("text", ""),
+        }
+    ]
+
+
+def _fill_field_label(request: dict[str, Any], position: int, total: int) -> str:
+    if request.get("selector"):
+        target = repr(request["selector"])
+    elif request.get("index") is not None:
+        target = f"index {request['index']}"
+    else:
+        target = "no target"
+    return f"field {position} of {total} ({target})"
+
+
+def _fill_progress(applied: list[str]) -> str:
+    """Name the fields already written, so a partial fill is not a mystery."""
+
+    if not applied:
+        return "; no field was filled"
+    return f"; already filled: {', '.join(applied)}"
+
+
+def _fill_error(ctx: _ActionCtx, reason, detail, freshness, label, applied):
+    return ctx.handler._error(
+        "browser_action_failed",
+        reason,
+        f"{detail} for {label}{_fill_progress(applied)}",
+        freshness,
+    )
+
+
 def _handle_fill(ctx: _ActionCtx, state):
-    index = ctx.params.get("index")
-    selector = ctx.params.get("selector", "")
-    if index is None and not selector:
-        return ctx.handler._error(
-            "browser_action_failed",
-            "selector_not_found",
-            "Index or selector required for fill",
-            ctx.handler._freshness(
-                ctx.lane_name, ctx.generation, ctx.nonce, ctx.requested_epoch, ctx.sync_performed
-            ),
-        )
     freshness = ctx.handler._freshness(
         ctx.lane_name, ctx.generation, ctx.nonce, ctx.requested_epoch, ctx.sync_performed
     )
-    locator, error = ctx.handler._action_locator(
-        ctx.page, ctx.handler._selector_for(ctx.params), freshness
-    )
-    if error is not None:
-        return error
-    assert locator is not None
-    try:
-        locator.fill(ctx.params.get("text", ""))
-    except Exception:
-        return ctx.handler._error(
-            "browser_action_failed",
-            "interaction_blocked",
-            "browser fill could not be completed",
-            freshness,
+    requests = _fill_requests(ctx.params)
+    applied: list[str] = []
+    for position, request in enumerate(requests, start=1):
+        label = _fill_field_label(request, position, len(requests))
+        if request.get("index") is None and not request.get("selector"):
+            return _fill_error(
+                ctx, "selector_not_found", "Index or selector required", freshness, label, applied
+            )
+        locator, error = ctx.handler._action_locator(
+            ctx.page, ctx.handler._selector_for(request), freshness
         )
+        if error is not None:
+            # `_action_locator` reports the failure class truthfully but has no
+            # idea which field it was resolving; say so rather than returning a
+            # bare "target was not found" for a six-field call.
+            error["error"] = f"{error.get('error', '')} for {label}{_fill_progress(applied)}"[:512]
+            return error
+        assert locator is not None
+        try:
+            fillable = locator.evaluate(_FILLABLE_ELEMENT_JS)
+        except Exception:
+            fillable = None
+        if fillable is False:
+            return _fill_error(
+                ctx,
+                "interaction_blocked",
+                "target is not a fillable input, textarea, or contenteditable element",
+                freshness,
+                label,
+                applied,
+            )
+        try:
+            locator.fill(request.get("text", ""))
+        except Exception:
+            return _fill_error(
+                ctx,
+                "interaction_blocked",
+                "browser fill could not be completed",
+                freshness,
+                label,
+                applied,
+            )
+        applied.append(label)
     return None
 
 

@@ -36,10 +36,17 @@ captured secret-bearing event, per the "real-sample harness" rule):
     — name + body, including the trailing token body up to a safe boundary.
   - **Bearer / JWT** (Authorization: Bearer …, eyJ…/eyJ…/eyJ…)
   - **Generic KEY=value** in shell-env output — `name=value` where name is
-    upper-case + underscores + at least one letter, value stops at whitespace
-    or shell-quote boundary. Skips the `KEY=command` form of a shell variable
-    assignment? It still matches and we WANT it to (the value is what leaks).
+    genuinely UPPER-case + underscores + at least one letter (an env-dump
+    line), value stops at whitespace or shell-quote boundary. Two deliberate
+    non-matches (UI-18): the name match is case-SENSITIVE, so ordinary
+    lower-case prose/shell assignments are left readable; and a value that is
+    a shell *substitution* (`KEY=$(cmd …)`, `KEY=$OTHER`) is left readable
+    because it contains no literal secret — only a reference to one. The
+    command the agent ran must stay legible in the activity feed.
   - **JSON `"key": "value"`** where the key looks like a credential name.
+    Only the VALUE is replaced; the key and the JSON punctuation survive, so
+    the surrounding object stays readable (`{"password":"[…]" ,"plan":"house"}`
+    rather than a bare marker where a key/value pair used to be).
   - **URL-embedded credentials** (`https://user:pass@host`).
   - **PEM blocks** (`-----BEGIN … PRIVATE KEY-----`).
 
@@ -78,9 +85,49 @@ def _compile(label: str, pattern: str) -> re.Pattern[str]:
     return re.compile(pattern)
 
 
+# ---- placeholder / test-fixture values (UI-18) ------------------------------
+#
+# The agent types test credentials into its own signup forms; redacting those
+# makes the activity feed unreadable and protects nothing. This allowlist is
+# deliberately NARROW: the value must ANNOUNCE itself as a fixture (it starts
+# with an unmistakable placeholder word, or is a `<…>` / `{{…}}` template
+# slot), must be short, and must be plain `[A-Za-z0-9._-]`. Anything with the
+# shape of real credential material — a provider prefix, punctuation, high
+# length — fails to match and is redacted as before. It is applied ONLY to the
+# JSON-credential pattern (never to shell/env output, which stays sensitive by
+# default per tenet 3).
+_PLACEHOLDER_VALUE = re.compile(
+    r"(?i)\A(?:"
+    r"test|testing|demo|example|sample|dummy|fake|placeholder|changeme|"
+    r"x{3,}|y{3,}|"
+    r"<[A-Za-z0-9_ .-]{1,32}>|"
+    r"\{\{[A-Za-z0-9_ .-]{1,32}\}\}"
+    r")[A-Za-z0-9._-]{0,16}\Z"
+)
+
+
+def _json_cred_replacement(match: re.Match[str]) -> str:
+    """Replace only the VALUE of a JSON credential pair, keeping the key.
+
+    `{"password":"hunter2","plan":"house"}` becomes
+    `{"password":"REDACTED:json-cred","plan":"house"}` — the object still
+    parses and the reader can see WHICH field was scrubbed. An obvious
+    test/placeholder value is left alone (see `_PLACEHOLDER_VALUE`).
+    """
+    key_prefix, value = match.group(1), match.group(2)
+    if _PLACEHOLDER_VALUE.match(value):
+        return match.group(0)
+    return f'{key_prefix}"{_JSON_CRED_LABEL}"'
+
+
 # Specific provider prefixes run first so the generic KEY=value / JSON-cred
 # catchers that come after them don't partially mangle the prefix.
-_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
+#
+# Each entry is (label, pattern, replacement). `replacement` is whatever
+# `re.sub` accepts: a template string (the plain label, for patterns that
+# replace their whole match) or a callable (for patterns that keep the
+# surrounding syntax and replace only the secret value).
+_PATTERNS: list[tuple[str, re.Pattern[str], Any]] = [
     (
         _SECRET_LABEL,
         re.compile(
@@ -99,6 +146,7 @@ _PATTERNS: list[tuple[str, re.Pattern[str]]] = [
             r")"
             r"[A-Za-z0-9_\-]{8,}"
         ),
+        _SECRET_LABEL,
     ),
     # Bearer tokens: Authorization: Bearer xxx, Token: yyy, etc.
     (
@@ -107,21 +155,25 @@ _PATTERNS: list[tuple[str, re.Pattern[str]]] = [
             r"(?i)(?:authorization|token|api[_-]?key)['\"\s:]+(?:bearer\s+)?"
             r"([A-Za-z0-9._\-]{12,})"
         ),
+        _BEARER_LABEL,
     ),
     # JWT (3 base64url segments separated by dots).
     (
         _SECRET_LABEL,
         re.compile(r"eyJ[A-Za-z0-9_\-]+\.eyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+"),
+        _SECRET_LABEL,
     ),
     # PEM private keys (entire block replaced).
     (
         _PEM_LABEL,
         re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----"),
+        _PEM_LABEL,
     ),
     # URL-embedded credentials: https://user:pass@host
     (
         _URL_CRED_LABEL,
         re.compile(r"([a-zA-Z][a-zA-Z0-9+.\-]*://)([^\s/:@]+):([^\s/@]+)@"),
+        _URL_CRED_LABEL,
     ),
     # JSON "credential-like key": "value"  (key starts with secret/credential
     # /token/key/password/auth/api_key/bearer/cookie, value is a non-empty
@@ -135,6 +187,7 @@ _PATTERNS: list[tuple[str, re.Pattern[str]]] = [
             r"openai[_-]?api[_-]?key|anthropic[_-]?api[_-]?key)"
             r'"\s*:\s*)"([^"]+)"'
         ),
+        _json_cred_replacement,
     ),
     # Generic KEY=value in shell-env-style output. The value is everything
     # up to whitespace, a single-quote boundary (matching the opening), or a
@@ -143,9 +196,17 @@ _PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     (
         _ENV_LABEL,
         re.compile(
-            r"(?im)^[ \t]*([A-Z_][A-Z0-9_]{1,})[ \t]*=[ \t]*"
+            # Case-SENSITIVE: a genuine env-dump / export line uses an
+            # UPPER_SNAKE name. Lower-case `foo=bar` in prose or in an
+            # ordinary shell line is not an env dump and stays readable.
+            r"(?m)^[ \t]*([A-Z_][A-Z0-9_]{1,})[ \t]*=[ \t]*"
+            # `KEY=$(cmd …)` / `KEY=$OTHER` is a shell substitution, not a
+            # literal secret: there is nothing to leak and collapsing it
+            # destroys the command the user is trying to read (UI-18).
+            r"(?!\$)"
             r"(\"[^\"\n]*\"|'[^'\n]*'|[^\s\"'`#&;|\n]+)"
         ),
+        _ENV_LABEL,
     ),
 ]
 
@@ -155,8 +216,8 @@ _PATTERNS: list[tuple[str, re.Pattern[str]]] = [
 
 def _redact_string(s: str) -> str:
     """Apply every ordered pattern to one string. Pure + deterministic."""
-    for label, pat in _PATTERNS:
-        s = pat.sub(label, s)
+    for _label, pat, replacement in _PATTERNS:
+        s = pat.sub(replacement, s)
     return s
 
 
@@ -236,7 +297,7 @@ def patterns() -> list[tuple[str, re.Pattern[str]]]:
     """A copy of the ordered pattern table. Use in tests to assert the
     pattern you'd expect fired actually fired (or that the redaction
     label matches)."""
-    return list(_PATTERNS)
+    return [(label, pat) for label, pat, _repl in _PATTERNS]
 
 
 def redact_text(text: str) -> str:

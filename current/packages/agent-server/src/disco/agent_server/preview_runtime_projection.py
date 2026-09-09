@@ -145,6 +145,7 @@ class PreviewRuntimeProjection:
         manager: Any,
         metadata: dict[str, Any],
         managed_detail: str,
+        ports: list[dict[str, Any]],
     ) -> dict[str, Any]:
         url = manager.canonical_url()
         if metadata["status"] == "running" and url is not None:
@@ -152,7 +153,7 @@ class PreviewRuntimeProjection:
                 "available": True,
                 "proxy": True,
                 "owner": None,
-                "ports": [],
+                "ports": ports,
                 **metadata,
             }
         return {
@@ -160,7 +161,7 @@ class PreviewRuntimeProjection:
             "reason": managed_unavailable_reason(metadata["status"], managed_detail)
             or "No health-verified managed preview is currently available.",
             "owner": None,
-            "ports": [],
+            "ports": ports,
             **metadata,
         }
 
@@ -224,6 +225,24 @@ class PreviewRuntimeProjection:
             for port, owner in sorted(owners.items())
             if owner is not None and owner.pid is not None
         ]
+
+    @staticmethod
+    def _namespace_of(session: Any) -> str:
+        try:
+            return f"pmx-{session.sessions.namespace}"
+        except Exception:  # noqa: BLE001 — a namespace is a label, never a failure
+            return ""
+
+    async def _session_ports_payload(
+        self,
+        session: Any,
+        port_owners_fn: PortOwners,
+    ) -> list[dict[str, Any]]:
+        """Bound USER_PORTS in the AGENT's sandbox, from the one /proc probe."""
+        if getattr(session, "_instance", None) is None:
+            return []
+        owners = await self._preview_owners(session, None, port_owners_fn)
+        return self._ports_payload(owners, self._namespace_of(session))
 
     async def _preview_owners(
         self,
@@ -307,7 +326,17 @@ class PreviewRuntimeProjection:
         manager = getattr(session, "_preview_manager", None)
         metadata, managed_detail = managed_preview_metadata(manager)
         if manager is not None and _owns_isolated_sandbox(manager):
-            return self._isolated_preview_payload(manager, metadata, managed_detail)
+            # The preview runs in the manager's OWN sandbox, but the agent's
+            # sandbox keeps running whatever the agent started there. Probe it
+            # with the same /proc walk the non-isolated path uses so the Cockpit
+            # still sees a server the preview did not start (UI-8) instead of
+            # reporting every USER_PORT free.
+            return self._isolated_preview_payload(
+                manager,
+                metadata,
+                managed_detail,
+                await self._session_ports_payload(session, port_owners_fn),
+            )
         if getattr(session, "_instance", None) is None:
             return {
                 "available": False,

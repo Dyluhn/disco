@@ -20,6 +20,7 @@ import {
   fixtureDelay,
   isLive,
 } from "./client";
+import { projectDownloadBasename } from "@/lib/downloadFilename";
 import type {
   BrowseResult,
   Project,
@@ -214,9 +215,17 @@ function triggerAnchorDownload(href: string, filename: string): void {
  * supplied the download is SOURCE-BOUND: its query carries the exact
  * (`version_seq`, `spec_digest`) the release verdict named, so the byte stream is the
  * immutable stored version — never a drifting live mirror (WO-C2 §6). A `null`
- * binding requests the plain, unbound zip and fabricates NO query. Returns nothing
- * on success; throws on a server error (e.g. files_missing → 404). */
-export async function downloadProject(cid: string, binding: DownloadBinding | null): Promise<void> {
+ * binding requests the plain, unbound zip and fabricates NO query. `title` only
+ * names the saved FILE (never the request), so a missing title degrades to the
+ * conversation id and nothing else changes. Returns nothing on success; throws on
+ * a server error (e.g. files_missing → 404). */
+export async function downloadProject(
+  cid: string,
+  binding: DownloadBinding | null,
+  title?: string | null,
+): Promise<void> {
+  // UI-40: name the file after the project, not the opaque conversation id.
+  const filename = `${projectDownloadBasename(cid, title)}.zip`;
   // Real URL-encoding (URLSearchParams → `:` becomes `%3A`), not a raw splice.
   const query = binding
     ? `?${new URLSearchParams({
@@ -231,7 +240,7 @@ export async function downloadProject(cid: string, binding: DownloadBinding | nu
     // GET to the bound URL so the operator's browser downloads the pinned zip (the
     // fixture server 404s the body — the binding riding the query is the point). An
     // UNBOUND offline download has no live workspace to stream, so it stays a no-op.
-    if (binding) triggerAnchorDownload(url, `${cid}.zip`);
+    if (binding) triggerAnchorDownload(url, filename);
     return;
   }
   const res = await agentFetch(url, { headers: { accept: "application/zip" } });
@@ -247,7 +256,7 @@ export async function downloadProject(cid: string, binding: DownloadBinding | nu
   }
   const blob = await res.blob();
   const objectUrl = URL.createObjectURL(blob);
-  triggerAnchorDownload(objectUrl, `${cid}.zip`);
+  triggerAnchorDownload(objectUrl, filename);
   URL.revokeObjectURL(objectUrl);
 }
 

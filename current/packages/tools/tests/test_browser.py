@@ -226,6 +226,52 @@ def test_browser_schema_makes_navigation_precondition_and_url_scope_explicit():
     assert "ignored by other actions" in schema["properties"]["url"]["description"]
 
 
+async def test_prod2_one_fill_call_carries_every_field_to_the_daemon():
+    """PROD-2. A six-field signup form cost six model turns to self-test. The
+    whole form now rides one job; submit is still a separate call."""
+    data = {
+        "ok": True,
+        "url": "http://127.0.0.1:8000",
+        "title": "Signup",
+        "console": [],
+        "elements": [],
+        "text": "hello",
+        "screenshot_path": ".pmx/screenshots/0001-fill.png",
+    }
+    sandbox = _PageSandbox(data)
+    res = await _exec(sandbox).execute(
+        call(
+            "browser",
+            action="fill",
+            fields=[
+                {"selector": "#address", "text": "1 Main St"},
+                {"selector": "#city", "text": "Oakland"},
+                {"index": 7, "text": "94607"},
+            ],
+        )
+    )
+
+    assert res.success
+    job = json.loads(sandbox.files["/workspace/.pmx/job.json"])
+    assert job["action"] == "fill"
+    assert job["fields"] == [
+        {"index": None, "selector": "#address", "text": "1 Main St"},
+        {"index": None, "selector": "#city", "text": "Oakland"},
+        {"index": 7, "selector": "", "text": "94607"},
+    ]
+
+
+def test_prod2_schema_and_description_tell_the_model_to_batch_a_form_fill():
+    """A schema the model is never told about changes nothing."""
+    definition = BrowserTool.definition
+    schema = definition.args_model.model_json_schema()
+
+    assert "fields" in schema["properties"]
+    assert "ONE call" in schema["properties"]["fields"]["description"]
+    assert "fill EVERY field in ONE call" in definition.description
+    assert "Filling never submits" in definition.description
+
+
 # ---- BP-00: vision screenshot transport --------------------------------------
 
 

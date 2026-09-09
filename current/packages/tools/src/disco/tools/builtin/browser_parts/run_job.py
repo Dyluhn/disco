@@ -70,6 +70,9 @@ async def _submit_job(
         "selector": args.selector,
         "click_text": args.click_text,
         "text": args.text,
+        # PROD-2: the batched form fill — one call, every field, still validated
+        # one at a time by the daemon.
+        "fields": [field.model_dump() for field in args.fields],
         "key": args.key,
         "full_page": args.full_page,
         "viewport_width": args.viewport_width,

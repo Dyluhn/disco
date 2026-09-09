@@ -110,6 +110,34 @@ describe("SelfHostPanel — candidate (self-hostable)", () => {
     await userEvent.click(btn);
     expect(onDownload).toHaveBeenCalledOnce();
   });
+
+  // UI-16 regression: the card used to lead with the DETECTOR's words ("detected a
+  // static ingress service from the immutable project contents. Not runtime-verified
+  // — the self-host bundle is available but has not been run."). It must now lead
+  // with what this is, what to do, and what "verified" would mean — and the detector
+  // diagnostic must be demoted, not deleted.
+  it("leads with plain language and demotes the detector diagnostic", () => {
+    const { container } = render(<SelfHostPanel release={candidate()} onDownload={vi.fn()} />);
+
+    const note = container.querySelector('[data-self-host-note="unverified"]');
+    expect(note).not.toBeNull();
+    const text = note?.textContent ?? "";
+    // What it is + what to do.
+    expect(text).toMatch(/can run on its own/i);
+    expect(text).toMatch(/download the source below/i);
+    expect(text).toMatch(/run the command shown/i);
+    // What "verified" would mean, without the word.
+    expect(text).toMatch(/hasn't started it yet/i);
+    expect(text).toMatch(/hasn't checked that it works/i);
+    expect(text).not.toMatch(/runtime-verified/i);
+
+    // The detector's own sentence is preserved verbatim, behind a disclosure — it is
+    // evidence for the curious, never the headline.
+    const detail = container.querySelector("[data-self-host-detection-reason]");
+    expect(detail).not.toBeNull();
+    expect(detail?.textContent).toBe("A Node web server binding $PORT was detected (server.js).");
+    expect(detail?.closest("details")).not.toBeNull();
+  });
 });
 
 describe("SelfHostPanel — needs_review", () => {

@@ -102,8 +102,9 @@ function ProjectRow({ project, onDelete }: { project: Project; onDelete: () => v
   // WO-9 / WO-C3: the release verdict drives a per-row self-host affordance — a
   // non-interactive status badge (never a dead button), capability-driven exactly
   // like the SelfHostPanel. Honest readiness (§7.7): a `verified` project is "ready";
-  // an unverified `candidate` self-hosts a bundle but is stamped "Not runtime-verified",
-  // NEVER "ready". `files_missing` projects have no workspace to assess, so skip the query.
+  // an unverified `candidate` self-hosts a bundle but is stamped "Bundle not run yet"
+  // (with a tooltip saying what that means), NEVER "ready". `files_missing` projects
+  // have no workspace to assess, so skip the query.
   const release = useProjectRelease(project.files_missing ? null : project.id);
   const verified = release.data?.assessment === "verified";
   const bundleAvailable = release.data?.self_host === true;
@@ -141,14 +142,16 @@ function ProjectRow({ project, onDelete }: { project: Project; onDelete: () => v
             </span>
           ) : bundleAvailable ? (
             // Candidate: a bundle is available but it is UNVERIFIED — never stamped
-            // "ready" (§2.1 / §7.7 "every UI mounting point").
+            // "ready" (§2.1 / §7.7 "every UI mounting point"). UI-30: the same
+            // guarantee, said in words a user can act on, with the tooltip carrying
+            // what it means and what would change it.
             <span
               data-self-host="candidate"
-              title="Self-host bundle available — not runtime-verified; open to review"
+              title="Disco packaged this project so it can run on its own, but hasn't started that bundle — so it hasn't checked that it works. Open the project and run the bundle yourself to find out."
               className="flex shrink-0 items-center gap-hair rounded-full border border-hairline px-inline py-px font-ui text-[0.66rem] uppercase tracking-wide text-text-faint"
             >
               <Server className="size-3" aria-hidden />
-              Not runtime-verified
+              Bundle not run yet
             </span>
           ) : null}
         </div>
@@ -171,7 +174,7 @@ function ProjectRow({ project, onDelete }: { project: Project; onDelete: () => v
           type="button"
           data-disco-control="projects.download-zip"
           data-zip-disabled={project.files_missing || download.isPending}
-          onClick={() => download.mutate({ id: project.id, binding: null })}
+          onClick={() => download.mutate({ id: project.id, binding: null, title: project.title })}
           disabled={project.files_missing || download.isPending}
           aria-label={`Download source: ${project.title}`}
           title={project.files_missing ? "Files missing — nothing to download" : "Download source"}

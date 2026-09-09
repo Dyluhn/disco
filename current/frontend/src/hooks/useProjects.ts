@@ -38,11 +38,12 @@ export function useDeleteProject() {
 /** Download a project's workspace zip. The mutation variable carries the optional
  * SOURCE binding: a self-host `candidate` passes its concrete `{version_seq,
  * spec_digest}` so the download is pinned to that immutable version; a plain
- * (unbound) download passes `binding: null`. */
+ * (unbound) download passes `binding: null`. `title` is presentation only — it
+ * names the SAVED FILE (UI-40) and never reaches the request. */
 export function useDownloadProject() {
   return useMutation({
-    mutationFn: (vars: { id: string; binding: DownloadBinding | null }) =>
-      downloadProject(vars.id, vars.binding),
+    mutationFn: (vars: { id: string; binding: DownloadBinding | null; title?: string | null }) =>
+      downloadProject(vars.id, vars.binding, vars.title),
   });
 }
 
@@ -52,11 +53,19 @@ export function useExportManifest() {
   });
 }
 
-export function useProjectManifest(conversationId: string | null) {
+/** The committed-workspace manifest for a project.
+ *
+ * UI-7: a manifest only EXISTS once the run has committed a workspace. Asking
+ * for one mid-run answered 404 on every visit and logged a console error, so
+ * callers that know the run has not committed yet pass `available: false` and
+ * nothing is requested. A late 404 is still possible (the commit and this
+ * request can race), so the query does not retry it into three errors either. */
+export function useProjectManifest(conversationId: string | null, available = true) {
   return useQuery<ProjectManifest>({
     queryKey: ["project-manifest", conversationId],
     queryFn: () => getProjectManifest(conversationId!),
-    enabled: !!conversationId,
+    enabled: !!conversationId && available,
+    retry: false,
   });
 }
 

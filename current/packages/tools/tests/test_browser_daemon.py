@@ -403,6 +403,128 @@ def test_fill_accepts_css_selector_without_a_transient_element_index():
     locator.fill.assert_called_once_with("Jane Doe")
 
 
+def _fill_context(handler, params):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        handler=handler,
+        page=MagicMock(),
+        params=params,
+        lane_name="agent",
+        generation="g" * 32,
+        nonce="n" * 32,
+        requested_epoch=3,
+        sync_performed=False,
+    )
+
+
+def _batch_fill_handler():
+    import disco.tools.builtin._browser_daemon as daemon_mod
+
+    handler = MagicMock()
+    handler._freshness.return_value = {"schema_version": 1}
+    handler._selector_for.side_effect = daemon_mod.BrowserHandler._selector_for
+    handler._error.side_effect = daemon_mod.BrowserHandler._error
+    return handler
+
+
+def test_prod2_one_fill_call_fills_every_field_of_a_form():
+    """PROD-2. Self-testing a signup form one input per model turn (address, city,
+    ZIP, card, expiry, CVC) is six round trips to the model for a five-minute
+    site. One call carries the whole form; nothing is submitted."""
+    from disco.tools.builtin._browser_daemon_parts.dispatch import _handle_fill
+
+    handler = _batch_fill_handler()
+    locators = [MagicMock() for _ in range(3)]
+    handler._action_locator.side_effect = [(locator, None) for locator in locators]
+    ctx = _fill_context(
+        handler,
+        {
+            "action": "fill",
+            "fields": [
+                {"selector": "#city", "text": "Oakland"},
+                {"index": 7, "text": "94607"},
+                {"selector": "#cvc", "text": "123"},
+            ],
+        },
+    )
+
+    assert _handle_fill(ctx, MagicMock()) is None
+    assert [call.args[1] for call in handler._action_locator.call_args_list] == [
+        "#city",
+        "[data-pmx-index='7']",
+        "#cvc",
+    ]
+    assert [locator.fill.call_args.args[0] for locator in locators] == [
+        "Oakland",
+        "94607",
+        "123",
+    ]
+    # A batched fill never submits; submit stays a separate, analyzer-scored call.
+    for locator in locators:
+        assert not locator.click.called
+        assert not locator.press.called
+
+
+def test_prod2_batched_fill_failure_names_the_field_that_failed():
+    """A bare 'browser fill could not be completed' for a six-field call makes the
+    model re-derive the whole form. The error names the field and what already
+    landed."""
+    from disco.tools.builtin._browser_daemon_parts.dispatch import _handle_fill
+
+    handler = _batch_fill_handler()
+    good = MagicMock()
+    handler._action_locator.side_effect = [
+        (good, None),
+        (
+            None,
+            {
+                "ok": False,
+                "error": "browser action target was not found",
+                "error_class": "browser_action_failed",
+                "error_reason": "selector_not_found",
+            },
+        ),
+    ]
+    ctx = _fill_context(
+        handler,
+        {
+            "action": "fill",
+            "fields": [
+                {"selector": "#city", "text": "Oakland"},
+                {"selector": "#zip", "text": "94607"},
+            ],
+        },
+    )
+
+    result = _handle_fill(ctx, MagicMock())
+
+    assert result["error_reason"] == "selector_not_found"
+    assert "field 2 of 2 ('#zip')" in result["error"]
+    assert "already filled: field 1 of 2 ('#city')" in result["error"]
+    good.fill.assert_called_once_with("Oakland")
+
+
+def test_prod2_batched_fill_rejects_a_field_that_is_not_fillable():
+    from disco.tools.builtin._browser_daemon_parts.dispatch import _handle_fill
+
+    handler = _batch_fill_handler()
+    locator = MagicMock()
+    locator.evaluate.return_value = False
+    handler._action_locator.return_value = (locator, None)
+    ctx = _fill_context(
+        handler,
+        {"action": "fill", "fields": [{"selector": "#hero", "text": "Oakland"}]},
+    )
+
+    result = _handle_fill(ctx, MagicMock())
+
+    assert result["error_reason"] == "interaction_blocked"
+    assert "not a fillable input" in result["error"]
+    assert "field 1 of 1 ('#hero')" in result["error"]
+    assert not locator.fill.called
+
+
 def _click_context(handler, page):
     from types import SimpleNamespace
 

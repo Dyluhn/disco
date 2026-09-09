@@ -3,10 +3,23 @@
  *
  * FROZEN acceptance path (plan §1.1: `current/frontend/src/test/export-track1-closeout/**`).
  * Locked semantic §2.1 / plan §7 (WO-C3) acceptance 7: for a `candidate` release
- * every UI mounting point must render the EXACT visible strings "Bundle available"
- * and "Not runtime-verified", and case-insensitive DOM text must contain no
- * "ready". `candidate` means statically plausible and UNVERIFIED — it may never say
- * "Ready", "verified", or an equivalent.
+ * every UI mounting point must render the "Bundle available" status AND an explicit
+ * statement that the bundle has NOT been run, and case-insensitive DOM text must
+ * contain no "ready" and no "verified". `candidate` means statically plausible and
+ * UNVERIFIED — it may never say "Ready", "verified", or an equivalent.
+ *
+ * UI-16 (2026-09-09) reworded the unverified qualifier from the internal phrase
+ * "Not runtime-verified — the self-host bundle is available but has not been run"
+ * into user language ("Disco hasn't started it yet, so it hasn't checked that it
+ * works"). The GUARANTEE this node enforces is unchanged and, if anything, wider:
+ * the panel must still carry the machine-checkable unverified marker
+ * (`[data-self-host-note="unverified"]`), must still say IN WORDS that Disco has
+ * not started/checked it, and the whole rendered DOM must now contain neither
+ * "ready" NOR "verified" (the old node only banned "ready"). The `it(...)` title is
+ * left byte-identical on purpose: it is a sealed identifier in three separate
+ * authority files (the closeout acceptance manifest's frontend_closeout_inventory
+ * and red_tests node_id, and development/architecture/test-inventory.json under the
+ * attestation seal), so renaming it is a governance action, not a copy fix.
  *
  * Boundary (plan §1.2 / §3.3): the panel is driven through its real data hook
  * `useProjectRelease` (real `getProjectRelease` → the offline `candidate` fixture
@@ -52,12 +65,23 @@ describe("WO-C3 — candidate UI is explicitly unverified, never 'Ready'", () =>
       expect(container.querySelector('[data-disco-control="build.self-host"]')).not.toBeNull(),
     );
 
-    // Exact honest copy for a candidate (locked §2.1).
+    // Honest status for a candidate (locked §2.1): a bundle exists, nothing more.
     expect(screen.getByText("Bundle available")).toBeInTheDocument();
-    expect(screen.getByText(/not runtime-verified/i)).toBeInTheDocument();
 
-    // Never "Ready"/"verified"-as-ready anywhere in the rendered DOM.
+    // The unverified state is marked for machines AND stated in words for the
+    // user: Disco has not started the bundle, so it has not checked that it works.
+    const note = container.querySelector('[data-self-host-note="unverified"]');
+    expect(note).not.toBeNull();
+    const noteText = (note?.textContent ?? "").toLowerCase();
+    expect(noteText).toContain("hasn't started it");
+    expect(noteText).toContain("hasn't checked that it works");
+    // The VERIFIED note is the mutually exclusive branch — it must not be mounted.
+    expect(container.querySelector('[data-self-host-note="verified"]')).toBeNull();
+
+    // No overclaim anywhere in the rendered DOM: never "Ready", and (stricter than
+    // the pre-UI-16 node) never "verified" either.
     const domText = (container.textContent ?? "").toLowerCase();
     expect(domText).not.toContain("ready");
+    expect(domText).not.toContain("verified");
   });
 });

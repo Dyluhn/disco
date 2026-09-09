@@ -137,7 +137,13 @@ export function ExecutionCanvas({
   // The Cockpit also surfaces bound-port data from the same useBuildPreview
   // the Preview pane uses — shared query cache, no extra fetch.
   const previewQuery = useBuildPreview(cid, active);
-  const manifestQuery = useProjectManifest(cid);
+  // UI-7: the committed-workspace manifest does not exist until the run has
+  // sealed one. Asking for it mid-run answered 404 on every visit and put a
+  // console error on the page for an entirely expected state, so we only ask
+  // once a workspace version has actually landed (or the run has finished).
+  const hasCommittedWorkspace =
+    status === "FINISHED" || events.some((event) => event.kind === "workspace_version");
+  const manifestQuery = useProjectManifest(cid, hasCommittedWorkspace);
   const manifestFiles = manifestQuery.data?.files ?? [];
   const anySessionBusy = sessions.some((s) => s.busy);
 

@@ -41,9 +41,22 @@ export function BuildActivityFeed({
     // was overlapping the footer below it. A sane minimum height keeps the
     // feed always legible; if the footer still doesn't fit under it, IT
     // overflows the pane instead (reachable via the ordinary page scroll),
-    // which reads as "scroll a bit further," not "broken." `lg:min-h-0`
-    // restores the exact desktop behavior (untouched) at `lg`+.
-    <div className="mt-section flex min-h-[16rem] flex-1 flex-col px-body lg:min-h-0">
+    // which reads as "scroll a bit further," not "broken." The `lg` floor
+    // below is the same idea, sized for the desktop pane.
+    //
+    // UI-17: at `lg` this used to be `min-h-0`, and `flex-1` with a `basis-0`
+    // means it absorbs NONE of the shrink when the pane overflows — the tall
+    // finished-run footer (deliverable card + self-host + composer + schedules)
+    // took every pixel and squeezed this box to 0px. Its non-shrinkable
+    // children (the "Activity" heading and the "Event N of N" scrubber) went
+    // on painting outside that zero-height box, straight over the deliverable
+    // card below. So: a real floor at `lg` too, and `overflow-hidden` so this
+    // section can never paint outside its own box again whatever the footer
+    // does. The footer takes the remainder and scrolls itself (BuildSurface).
+    <div
+      data-testid="build-activity-section"
+      className="mt-section flex min-h-[16rem] flex-1 flex-col overflow-hidden px-body lg:min-h-[9rem]"
+    >
       <div className="flex items-baseline justify-between">
         <h2 className="font-ui text-[0.72rem] font-medium uppercase tracking-wide text-text-faint">
           Activity

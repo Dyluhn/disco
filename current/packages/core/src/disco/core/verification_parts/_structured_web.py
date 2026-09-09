@@ -23,6 +23,7 @@ from ..verification import (
     VerificationClaimStatus,
     VerificationEvidenceModality,
     default_structured_web_claims,
+    normalized_required_text,
     validated_image_data_url,
 )
 from ._authority import with_verification_effect_receipt
@@ -160,6 +161,12 @@ def _rendered_content_result(
     )
 
 
+def _collapse_whitespace(value: str) -> str:
+    """Every run of whitespace (line breaks included) is one space."""
+
+    return " ".join(value.split())
+
+
 def _visible_text_result(
     claim: HostVerificationClaim,
     evidence: _StructuredWebEvidence,
@@ -170,11 +177,23 @@ def _visible_text_result(
         evidence.visible_dom_text if isinstance(evidence.visible_dom_text, str) else None
     )
     available = rendered_text is not None or visible_dom_text is not None
+    # PROD-3: the required PHRASE is compared against the AUTHORED DOM text
+    # case-insensitively and with runs of whitespace (line breaks included)
+    # collapsed — a brief that quoted 'beans of the month' is satisfied by a
+    # page heading that reads "Beans of the Month" across two wrapped lines,
+    # and the agent no longer burns end-of-run turns editing correct copy.
+    #
+    # `rendered_text` stays case-EXACT on purpose: it is post-CSS, so its
+    # casing belongs to `text-transform`, not to the author. Seed 405115 is
+    # already handled by consulting the authored `visible_dom_text` instead
+    # of casefolding the rendered projection.
+    expected_exact = _collapse_whitespace(claim.expected)
+    expected_folded = normalized_required_text(claim.expected)
     ok = (
         rendered_text is not None
-        and claim.expected in rendered_text
+        and expected_exact in _collapse_whitespace(rendered_text)
         or visible_dom_text is not None
-        and claim.expected in visible_dom_text
+        and expected_folded in normalized_required_text(visible_dom_text)
     )
     return _result(
         claim,
@@ -183,10 +202,13 @@ def _visible_text_result(
         else VerificationClaimStatus.FAIL
         if available
         else VerificationClaimStatus.UNAVAILABLE,
-        f"structured visible DOM/accessibility contains required text {claim.expected!r}"
+        f"structured visible DOM/accessibility contains required text "
+        f"{claim.expected!r} (authored DOM text matched ignoring case and "
+        f"whitespace runs)"
         if ok
         else f"structured visible DOM/accessibility does not contain required text "
-        f"{claim.expected!r}"
+        f"{claim.expected!r} (authored DOM text matched ignoring case and "
+        f"whitespace runs)"
         if available
         else "structured browser receipt omitted visible DOM/accessibility text",
         modalities=(VerificationEvidenceModality.DOM_ACCESSIBILITY,) if available else (),

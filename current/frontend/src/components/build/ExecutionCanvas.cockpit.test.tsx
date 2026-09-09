@@ -262,6 +262,69 @@ describe("ExecutionCanvas Cockpit — empty states, no false affordance", () => 
   });
 });
 
+// ---- UI-8: a server the shell tool did not start is still visible ----------
+
+describe("ExecutionCanvas Cockpit — sees servers it did not start", () => {
+  it("shows the preview endpoint's own port owner when the ports sweep is empty", async () => {
+    // The sandbox has `python3 -m http.server 8000` bound (started from tmux,
+    // not through the shell tool). The preview status endpoint names its owner
+    // in `owner`/`port`, and on this payload shape carries no `ports` list at
+    // all. The Cockpit used to read `ports` alone and told the operator ":8000
+    // free / No processes detected" while the very same response named the pid.
+    mockUseSessions.mockReturnValue(noSessions());
+    mockUseBuildPreview.mockReturnValue({
+      data: {
+        available: true,
+        port: 8000,
+        owner: { pid: 1934, cmdline: "python3 -m http.server 8000", session: null },
+        ports: [],
+      } as PreviewInfo,
+    });
+    render(withQc(<ExecutionCanvas events={events} status="RUNNING" cid="c13" />));
+    await userEvent.click(screen.getByRole("tab", { name: /cockpit/i }));
+
+    const port8000 = screen.getByTestId("cockpit-port-8000");
+    expect(within(port8000).getByText("pid 1934")).toBeInTheDocument();
+    expect(within(port8000).queryByText("free")).toBeNull();
+    // …and it counts as a running process, not an empty box.
+    expect(within(screen.getByTestId("cockpit-proc-1934")).getByText(/http\.server/)).toBeInTheDocument();
+  });
+
+  it("does not duplicate a port the ports sweep already reported", async () => {
+    mockUseSessions.mockReturnValue(noSessions());
+    mockUseBuildPreview.mockReturnValue({
+      data: {
+        available: true,
+        port: 8000,
+        owner: { pid: 1934, cmdline: "python3 -m http.server 8000", session: null },
+        ports: [
+          {
+            port: 8000,
+            owner: { pid: 1934, cmdline: "python3 -m http.server 8000", session: "preview" },
+          },
+        ],
+      } as PreviewInfo,
+    });
+    render(withQc(<ExecutionCanvas events={events} status="RUNNING" cid="c14" />));
+    await userEvent.click(screen.getByRole("tab", { name: /cockpit/i }));
+
+    expect(screen.getAllByTestId("cockpit-port-8000")).toHaveLength(1);
+    expect(screen.getAllByTestId("cockpit-proc-1934")).toHaveLength(1);
+  });
+
+  it("still invents nothing when the backend reports no owner at all", async () => {
+    mockUseSessions.mockReturnValue(noSessions());
+    mockUseBuildPreview.mockReturnValue({
+      data: { available: false, port: 8000, owner: null, ports: [] } as PreviewInfo,
+    });
+    render(withQc(<ExecutionCanvas events={events} status="RUNNING" cid="c15" />));
+    await userEvent.click(screen.getByRole("tab", { name: /cockpit/i }));
+
+    expect(within(screen.getByTestId("cockpit-port-8000")).getByText("free")).toBeInTheDocument();
+    expect(screen.queryByTestId(/cockpit-proc-/)).toBeNull();
+  });
+});
+
 // ---- Live updates: re-render reflects new backend data ---------------------
 
 describe("ExecutionCanvas Cockpit — reflects live updates", () => {

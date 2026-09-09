@@ -289,8 +289,38 @@ async def test_visible_text_does_not_accept_copy_only_inside_nonvisible_markup()
 
 
 @pytest.mark.asyncio
+async def test_prod3_quoted_phrase_matches_regardless_of_case_and_wrapping():
+    """PROD-3 (B5). The brief quoted 'beans of the month'; the page title-cases it
+    and the markup wraps it across lines. A byte-exact check turned that into an
+    unmet acceptance condition, and the agent spent end-of-run turns grepping for
+    the lowercase spelling and editing working copy to smuggle it in."""
+
+    miss = await _scan_literal(
+        "<h2>Beans of\n   the Month</h2>",
+        literal="beans of the month",
+        surface="visible_text",
+    )
+
+    assert miss is None
+
+
+@pytest.mark.asyncio
+async def test_prod3_case_folding_does_not_accept_different_copy():
+    miss = await _scan_literal(
+        "<h2>Beans of the Year</h2>",
+        literal="beans of the month",
+        surface="visible_text",
+    )
+
+    assert miss is not None
+    assert miss[0].literal == "beans of the month"
+
+
+@pytest.mark.asyncio
 async def test_source_text_retains_exact_source_matching():
     source = '<nav class="site-nav"><span>Home</span></nav>'
 
     assert await _scan_literal(source, literal="site-nav", surface="source_text") is None
     assert await _scan_literal(source, literal="site-nav", surface="visible_text") is not None
+    # PROD-3 folds case for PHRASES only; a source identifier is a name.
+    assert await _scan_literal(source, literal="Site-Nav", surface="source_text") is not None

@@ -144,6 +144,75 @@ describe("downloadProject — OFFLINE: a bound download is browser-observable; a
   });
 });
 
+describe("downloadProject — UI-40: the saved file is named after the project, not the id", () => {
+  let saved: { href: string; name: string } | null;
+  beforeEach(() => {
+    saved = null;
+    HTMLAnchorElement.prototype.click = function (this: HTMLAnchorElement) {
+      saved = { href: this.href, name: this.download };
+    };
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const u = String(input);
+      if (u.endsWith("/api/auth/session")) {
+        return new Response(JSON.stringify({ authenticated: true, csrf_token: "reg-csrf" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response(new Blob([new Uint8Array([80, 75, 3, 4])]), {
+        status: 200,
+        headers: { "content-type": "application/zip" },
+      });
+    }) as typeof fetch;
+  });
+
+  it("leads with the slugified title and keeps a short id suffix", async () => {
+    const { downloadProject } = await loadProjects({ AGENT_BASE });
+    await downloadProject("conv_8b9b1c2dfeed", null, "Coffee Shop Subscription Website");
+    expect(saved?.name).toBe("coffee-shop-subscription-website-8b9b1c2d.zip");
+  });
+
+  it("falls back to the conversation id when there is no title", async () => {
+    const { downloadProject } = await loadProjects({ AGENT_BASE });
+    await downloadProject("conv_8b9b1c2dfeed", null);
+    expect(saved?.name).toBe("conv_8b9b1c2dfeed.zip");
+  });
+
+  it("sanitises a title into a filename that is safe on every OS", async () => {
+    const { downloadProject } = await loadProjects({ AGENT_BASE });
+    await downloadProject("conv_deadbeef01", null, '  Café / "Ünicode"\\ ?*<>|: Sítio  ');
+    // Lowercase ASCII, digits and hyphens only — no separators, no reserved
+    // Windows characters, no leading/trailing punctuation.
+    expect(saved?.name).toBe("cafe-unicode-sitio-deadbeef.zip");
+    expect(saved?.name).toMatch(/^[a-z0-9][a-z0-9-]*\.zip$/);
+  });
+
+  it("caps a very long title so the filename stays within filesystem limits", async () => {
+    const { downloadProject } = await loadProjects({ AGENT_BASE });
+    await downloadProject("conv_0123456789ab", null, "word ".repeat(80));
+    const name = saved?.name ?? "";
+    expect(name.length).toBeLessThanOrEqual(80);
+    expect(name.endsWith("-01234567.zip")).toBe(true);
+    expect(name.startsWith("word-word-")).toBe(true);
+  });
+
+  it("names an OFFLINE bound download the same way", async () => {
+    HTMLAnchorElement.prototype.click = function (this: HTMLAnchorElement) {
+      saved = { href: this.href, name: this.download };
+    };
+    globalThis.fetch = (async () => {
+      throw new Error("offline downloadProject must not fetch");
+    }) as typeof fetch;
+    const { downloadProject } = await loadProjects(undefined);
+    await downloadProject(
+      "conv_demo_snake",
+      { version_seq: 3, spec_digest: "sha256:demo-candidate-0001" },
+      "Snake Game",
+    );
+    expect(saved?.name).toBe("snake-game-demo_sna.zip");
+  });
+});
+
 describe("isSnapshottedDemoProject — the reachability registry (drives offline resume rehydration)", () => {
   it("is true for snapshotted demo projects and false for the fresh-run + unknown cids", async () => {
     const { isSnapshottedDemoProject } = await loadProjects(undefined);
