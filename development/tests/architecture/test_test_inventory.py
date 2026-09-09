@@ -680,10 +680,17 @@ class TestMappingStatic:
             # `packages/core/tests/test_compose_interpolation_portability.py`:
             # +4 collected package ids and +1 python test file, 0 removed.
             # TypeScript, harness, integrations and tests roots are unchanged.
+            # V50 adds the UI-fix regressions: 5 cases in the existing
+            # `packages/tools/tests/test_audio_overview_truncation.py`, 1 in
+            # `packages/agent-server/tests/test_build_contract_activation.py`,
+            # and 6 TypeScript cases in the new
+            # `frontend/src/components/research/needMoreCardParts/audioProgress.test.ts`
+            # and the existing `frontend/src/components/build/ExecutionCanvas.preview.test.tsx`.
+            # +6 collected package ids and +6 TypeScript static ids, 0 removed.
             "python_test_file_count": 941,
-            "python_static_test_id_count": 11551,
-            "typescript_test_file_count": 287,
-            "typescript_static_test_id_count": 1484,
+            "python_static_test_id_count": 11557,
+            "typescript_test_file_count": 288,
+            "typescript_static_test_id_count": 1490,
         }
         assert mapping["identity"] == baseline["source_identity"]
         assert {key: mapping[key] for key in expected_counts} == expected_counts
@@ -817,12 +824,12 @@ class TestFrontendCollection:
                 len(frontend["vitest_files_list"]),
             )
             == (frontend["vitest_ids"], frontend["vitest_files"])
-            == (1423, 213)
+            == (1429, 214)
         )
         assert frontend["vitest_ids_list"] == sorted(frontend["vitest_ids_list"])
         assert frontend["vitest_files_list"] == sorted(frontend["vitest_files_list"])
-        assert len(set(frontend["vitest_ids_list"])) == 1423
-        assert len(set(frontend["vitest_files_list"])) == 213
+        assert len(set(frontend["vitest_ids_list"])) == 1429
+        assert len(set(frontend["vitest_files_list"])) == 214
         assert set(frontend["playwright_configs"]) == set(test_inventory.PLAYWRIGHT_CONFIGS)
         for config, authority in frontend["playwright_configs"].items():
             assert len(authority["ids"]) == authority["id_count"]
@@ -1110,7 +1117,14 @@ class TestCollectedCounts:
             # `packages/core/tests/test_compose_interpolation_portability.py`:
             # +4 collected package ids and +1 python test file, 0 removed.
             # TypeScript, harness, integrations and tests roots are unchanged.
-            "packages": 12081,
+            # V50 adds the UI-fix regressions: 5 cases in the existing
+            # `packages/tools/tests/test_audio_overview_truncation.py`, 1 in
+            # `packages/agent-server/tests/test_build_contract_activation.py`,
+            # and 6 TypeScript cases in the new
+            # `frontend/src/components/research/needMoreCardParts/audioProgress.test.ts`
+            # and the existing `frontend/src/components/build/ExecutionCanvas.preview.test.tsx`.
+            # +6 collected package ids and +6 TypeScript static ids, 0 removed.
+            "packages": 12087,
             # 1288 from PKG-03-EDIT-EVIDENCE: +24 in the `harness` root, the
             # edit-evidence producer acceptance. The new ids land here and not
             # under `packages` because the producer is harness code; the
@@ -1241,7 +1255,7 @@ class TestCollectedCounts:
         }
         assert set(collected["roots"]) == set(test_inventory.PYTHON_ROOTS)
         assert collected["counts"] == expected
-        assert collected["total"] == 14085 == sum(expected.values())
+        assert collected["total"] == 14091 == sum(expected.values())
         for root in test_inventory.PYTHON_ROOTS:
             ids = collected["roots"][root]
             assert len(ids) == expected[root]
@@ -1257,7 +1271,7 @@ class TestCollectedCounts:
         problems: list[str] = []
         result = test_inventory._check_collected_ids(baseline, REPO_ROOT, problems)
         assert problems == []
-        assert result == {"collected_total": 14085}
+        assert result == {"collected_total": 14091}
 
         drifted = copy.deepcopy(baseline)
         drifted["collected"]["roots"]["tests"] = list(
@@ -1276,9 +1290,9 @@ class TestBaselineValidation:
         assert result == {
             "ok": True,
             "problems": [],
-            "python_static_ids": 11551,
-            "typescript_static_ids": 1484,
-            "collected_total": 14085,
+            "python_static_ids": 11557,
+            "typescript_static_ids": 1490,
+            "collected_total": 14091,
         }
 
         latest_identity = test_inventory.subprocess.check_output(

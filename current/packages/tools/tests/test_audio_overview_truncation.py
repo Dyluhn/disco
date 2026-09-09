@@ -314,3 +314,89 @@ async def test_podcast_mode_total_turns_above_band_is_pinned_not_failed() -> Non
 
     assert len(turns) == 20  # pinned to the podcast-mode maximum
     assert _requested_range(payloads[-1]) == (17, 20)
+
+
+@pytest.mark.asyncio
+async def test_podcast_mode_whole_script_in_one_batch_is_trimmed_not_failed() -> None:
+    """Regression: podcast-mode audio overview died with `turn_script` because
+    the driver answered the FIRST batch with the entire script.
+
+    Seen on a fresh README install (ollama.com / deepseek-v4-flash, podcast
+    mode, 13-source report): the model ignores the requested turn window and
+    writes every turn it planned, so the batch arrived over-full and
+    `_generate_segmented_turn_script` gave up after one correction —
+    "Script batch must contain exactly 2 contiguous turns; received 19".
+    An over-full batch is more work than we asked for, not a broken answer.
+    """
+    payloads: list[dict[str, Any]] = []
+
+    async def call(payload: dict[str, Any]) -> audio.LLMResponse:
+        payloads.append(payload)
+        start, _end = _requested_range(payload)
+        # The driver writes turns `start`..16 regardless of the window we asked for.
+        turns = [
+            {"index": index, "speaker": "A" if index % 2 else "B", "text": f"Turn {index}."}
+            for index in range(start, 17)
+        ]
+        return audio.LLMResponse(
+            content=json.dumps({"total_turns": 16, "turns": turns}), finish_reason="stop"
+        )
+
+    turns = await audio._generate_segmented_turn_script(
+        "report", "reasoning-model", mode="podcast", call_llm=call
+    )
+
+    assert [turn.text for turn in turns] == [f"Turn {index}." for index in range(1, 17)]
+    assert len(payloads) == 1  # one call, no correction round-trip
+
+
+@pytest.mark.asyncio
+async def test_over_full_batch_is_trimmed_to_the_agreed_total() -> None:
+    """The trim never runs past the total the script already agreed on: a
+    driver that overshoots the end of the script has the extra turns dropped."""
+    payloads: list[dict[str, Any]] = []
+
+    async def call(payload: dict[str, Any]) -> audio.LLMResponse:
+        payloads.append(payload)
+        start, _end = _requested_range(payload)
+        turns = [
+            {"index": index, "speaker": "A" if index % 2 else "B", "text": f"Turn {index}."}
+            for index in range(start, start + 30)
+        ]
+        return audio.LLMResponse(
+            content=json.dumps({"total_turns": 12, "turns": turns}), finish_reason="stop"
+        )
+
+    turns = await audio._generate_segmented_turn_script(
+        "report", "reasoning-model", mode="podcast", call_llm=call
+    )
+
+    assert len(turns) == 12
+    assert turns[-1].text == "Turn 12."
+
+
+@pytest.mark.asyncio
+async def test_short_batch_is_still_rejected() -> None:
+    """A batch with FEWER turns than requested is a genuine inconsistency and
+    still costs the bounded correction, then fails."""
+    payloads: list[dict[str, Any]] = []
+
+    async def call(payload: dict[str, Any]) -> audio.LLMResponse:
+        payloads.append(payload)
+        start, _end = _requested_range(payload)
+        return audio.LLMResponse(
+            content=json.dumps(
+                {
+                    "total_turns": 12,
+                    "turns": [{"index": start, "speaker": "A", "text": "Only one."}],
+                }
+            ),
+            finish_reason="stop",
+        )
+
+    with pytest.raises(audio.AudioScriptGenerationError, match="at least 4 contiguous turns"):
+        await audio._generate_segmented_turn_script(
+            "report", "reasoning-model", mode="podcast", call_llm=call
+        )
+
+    assert len(payloads) == 2  # first attempt + the one bounded correction
