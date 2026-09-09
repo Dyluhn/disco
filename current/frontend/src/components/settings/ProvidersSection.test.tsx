@@ -434,7 +434,7 @@ describe("ProvidersSection — generic provider objects", () => {
     fireEvent.click(screen.getByRole("button", { name: /Add provider/i }));
 
     expect(
-      await screen.findByText(/was saved, but its key was not accepted/i),
+      await screen.findByText(/was saved, but the check did not pass/i),
     ).toBeInTheDocument();
     expect(
       await screen.findByText(/did not return a usable \/models catalogue/i),

@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import Iterable
+from typing import NamedTuple
 
 import httpx
 from fastapi import APIRouter, HTTPException, Response
@@ -341,6 +342,15 @@ def _error_text(provider: ProviderDTO, exc: Exception) -> str:
     return f"{host} could not be reached: {reason}"
 
 
+class _ProbeResult(NamedTuple):
+    """One /models probe: did it answer, what it said if not, and whether the
+    answer actually depended on the stored key (None = still unproven)."""
+
+    catalogue_ok: bool
+    error: str | None
+    key_verified: bool | None
+
+
 class _ProviderCatalogue:
     """Per-router-instance /models cache + single-flight probe for one ConfigState.
 
@@ -367,14 +377,31 @@ class _ProviderCatalogue:
             return hit[1]
         return None
 
-    async def probe(self, provider: ProviderDTO, api_key: str | None) -> tuple[bool, str | None]:
+    async def probe(self, provider: ProviderDTO, api_key: str | None) -> _ProbeResult:
         if not self._state.providers.provider_origin_approved(provider):
-            return False, "provider key is not approved for this origin"
+            return _ProbeResult(False, "provider key is not approved for this origin", False)
         try:
             await _fetch_provider_catalogue(provider, api_key)
-            return True, None
         except (httpx.HTTPError, ValueError) as exc:
-            return False, _error_text(provider, exc)
+            return _ProbeResult(False, _error_text(provider, exc), False)
+        if not (provider.requires_api_key and api_key):
+            return _ProbeResult(True, None, None)
+        return _ProbeResult(True, None, await self._key_was_exercised(provider))
+
+    async def _key_was_exercised(self, provider: ProviderDTO) -> bool | None:
+        """Did the key make any difference to that probe?
+
+        Some hosts serve /models to anyone — ollama.com does — so a probe that
+        succeeds proves the endpoint is reachable and says NOTHING about the key
+        (UI-34: a deliberately wrong key passed this way). Ask the same endpoint
+        again with no credential: only a refusal there proves the key carried the
+        first call. `None` means "still unproven", not "rejected".
+        """
+        try:
+            await _fetch_provider_catalogue(provider, None)
+        except (httpx.HTTPError, ValueError):
+            return True
+        return None
 
     async def models(self, provider: ProviderDTO) -> list[ProviderCatalogueModelDTO]:
         # Gate before consulting the cache or decrypting the key. A tampered
@@ -424,10 +451,12 @@ async def _create_provider(
         provider = state.providers.create_provider(body)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    ok, error = await catalogue.probe(provider, body.api_key.strip() or None)
+    result = await catalogue.probe(provider, body.api_key.strip() or None)
     catalogue.invalidate(provider.id)
-    provider = state.providers.record_probe(provider.id, ok, error)
-    return ProviderMutationResult(provider=provider, catalogue_ok=ok, catalogue_error=error)
+    provider = state.providers.record_probe(provider.id, result.key_verified, result.error)
+    return ProviderMutationResult(
+        provider=provider, catalogue_ok=result.catalogue_ok, catalogue_error=result.error
+    )
 
 
 async def _update_provider(
@@ -445,12 +474,14 @@ async def _update_provider(
         else state.providers._resolve_secret_value(provider.secret_name)
     )
     if key or not provider.requires_api_key:
-        ok, error = await catalogue.probe(provider, key)
+        result = await catalogue.probe(provider, key)
     else:
-        ok, error = False, f"No decryptable key stored for {provider.label}."
+        result = _ProbeResult(False, f"No decryptable key stored for {provider.label}.", False)
     catalogue.invalidate(provider.id)
-    provider = state.providers.record_probe(provider.id, ok, error)
-    return ProviderMutationResult(provider=provider, catalogue_ok=ok, catalogue_error=error)
+    provider = state.providers.record_probe(provider.id, result.key_verified, result.error)
+    return ProviderMutationResult(
+        provider=provider, catalogue_ok=result.catalogue_ok, catalogue_error=result.error
+    )
 
 
 async def _delete_provider(

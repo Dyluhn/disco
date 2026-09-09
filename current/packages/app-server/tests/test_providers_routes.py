@@ -74,11 +74,12 @@ def _payload(name: str) -> dict:
 
 
 def test_provider_crud_roundtrip_and_secret_is_write_only(client, state, monkeypatch):
-    captured: dict[str, str] = {}
+    # The add-time probe runs twice: once with the key, then once without, to
+    # learn whether the key made any difference (UI-34).
+    captured: list[tuple[str, str | None]] = []
 
     async def fake_fetch(provider, api_key):
-        captured["provider"] = provider.id
-        captured["api_key"] = api_key
+        captured.append((provider.id, api_key))
         return []
 
     monkeypatch.setattr(providers_mod, "_fetch_provider_catalogue", fake_fetch)
@@ -100,7 +101,7 @@ def test_provider_crud_roundtrip_and_secret_is_write_only(client, state, monkeyp
     assert provider["id"] == "openai"
     assert provider["secret_name"] == "provider_openai"
     assert provider["has_key"] is True
-    assert captured == {"provider": "openai", "api_key": "sk-openai-secret"}
+    assert captured == [("openai", "sk-openai-secret"), ("openai", None)]
     assert "sk-openai-secret" not in str(body)
     assert state._secrets.get_secret("provider_openai") == "sk-openai-secret"
 
@@ -241,7 +242,7 @@ def test_probe_failure_still_saves_provider_and_key(client, state, monkeypatch):
 
 
 def test_tampered_provider_origin_cannot_receive_stored_key(client, state, monkeypatch):
-    calls: list[tuple[str, str]] = []
+    calls: list[tuple[str, str | None]] = []
 
     async def capture_fetch(provider, api_key):
         calls.append((provider.base_url, api_key))
@@ -258,7 +259,11 @@ def test_tampered_provider_origin_cannot_receive_stored_key(client, state, monke
         },
     )
     assert created.status_code == 201, created.text
-    assert calls == [("https://api.openai.com/v1", "sk-host-pinned")]
+    # With the key, then without it (the UI-34 "did the key matter?" check).
+    assert calls == [
+        ("https://api.openai.com/v1", "sk-host-pinned"),
+        ("https://api.openai.com/v1", None),
+    ]
     calls.clear()
 
     # Simulate offline config poisoning: retain the same provider/key identity
@@ -597,13 +602,22 @@ def test_wrong_key_is_not_reported_as_key_ready(client, monkeypatch):
     assert row["key_error"] == "ollama.com rejected this key (401)"
 
 
+def _needs_a_key(good_key: str):
+    """A /models endpoint that answers only when the right key is presented."""
+
+    async def fetch(provider, api_key):
+        if api_key == good_key:
+            return []
+        request = httpx.Request("GET", f"{provider.base_url}/models")
+        response = httpx.Response(401, request=request)
+        raise httpx.HTTPStatusError("unauthorized", request=request, response=response)
+
+    return fetch
+
+
 def test_working_key_is_recorded_as_verified(client, monkeypatch):
-    """The other half of UI-34: a probe the provider answers earns "Key ready"."""
-
-    async def ok_fetch(provider, api_key):
-        return []
-
-    monkeypatch.setattr(providers_mod, "_fetch_provider_catalogue", ok_fetch)
+    """The other half of UI-34: a probe the key carried earns "Key ready"."""
+    monkeypatch.setattr(providers_mod, "_fetch_provider_catalogue", _needs_a_key("sk-good"))
 
     client.post(
         "/api/providers",
@@ -617,6 +631,38 @@ def test_working_key_is_recorded_as_verified(client, monkeypatch):
 
     row = client.get("/api/providers").json()[0]
     assert row["key_verified"] is True
+    assert row["key_error"] is None
+
+
+def test_public_models_endpoint_never_verifies_the_key(client, monkeypatch):
+    """UI-34, the case actually observed: ollama.com serves /models to anyone.
+
+    The probe then succeeds no matter what key is stored, so it proves the host
+    is reachable and nothing about the key. Claiming "Key ready" off that is the
+    original bug wearing a probe; the row must stay unverified.
+    """
+    seen: list[str | None] = []
+
+    async def public_fetch(provider, api_key):
+        seen.append(api_key)
+        return []
+
+    monkeypatch.setattr(providers_mod, "_fetch_provider_catalogue", public_fetch)
+
+    resp = client.post(
+        "/api/providers",
+        json={
+            "label": "ollama.com",
+            "base_url": "https://ollama.com/v1",
+            "kind": "openai-compat",
+            "api_key": "not-a-real-key-12345",
+        },
+    )
+
+    assert resp.json()["catalogue_ok"] is True  # the catalogue IS usable
+    assert seen == ["not-a-real-key-12345", None]  # asked again without the key
+    row = client.get("/api/providers").json()[0]
+    assert row["key_verified"] is None
     assert row["key_error"] is None
 
 

@@ -63,8 +63,8 @@ export function GenericProviders() {
           className="rounded-control border border-warn/50 bg-warn/5 px-body py-inline"
         >
           <p className="font-ui text-[0.8rem] text-text">
-            {createNotice.provider.label} was saved, but its key was not
-            accepted:{" "}
+            {createNotice.provider.label} was saved, but the check did not
+            pass:{" "}
             <span className="text-text-muted">
               {createNotice.catalogue_error ?? "the /models probe failed"}
             </span>

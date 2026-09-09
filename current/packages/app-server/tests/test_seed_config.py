@@ -104,9 +104,7 @@ def test_placeholder_driver_retires_once_a_real_model_leads(
     client = _seeded_client(monkeypatch, tmp_path)
     assert client.post("/api/models", json=_REAL_MODEL).status_code == 201
 
-    resp = client.put(
-        "/api/models/assignments", json={"default_model": "prov-ollama-deepseek"}
-    )
+    resp = client.put("/api/models/assignments", json={"default_model": "prov-ollama-deepseek"})
 
     assert resp.status_code == 200
     assert [m["id"] for m in client.get("/api/models").json()] == ["prov-ollama-deepseek"]

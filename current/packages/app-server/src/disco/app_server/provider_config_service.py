@@ -262,15 +262,20 @@ class ProviderConfigService:
             _origin_wiring.approve_provider_origin(self._store, self._secrets, updated)
         return self._provider_dto(updated)
 
-    def record_probe(self, provider_id: str, ok: bool, error: str | None) -> ProviderDTO:
+    def record_probe(
+        self, provider_id: str, verified: bool | None, error: str | None
+    ) -> ProviderDTO:
         """Persist the outcome of a /models probe so the row can say whether the
-        stored key actually WORKS, not just that one is stored (UI-34)."""
+        stored key actually WORKS, not just that one is stored (UI-34).
+
+        `verified` is None when the probe answered but did not exercise the key.
+        """
         cfg = self._store.load()
         provider = cfg.providers.get(provider_id)
         if provider is None:
             raise KeyError(provider_id)
         updated = provider.model_copy(
-            update={"key_verified": ok, "key_error": None if ok else error}
+            update={"key_verified": verified, "key_error": error if verified is False else None}
         )
         self._store.save(
             cfg.model_copy(update={"providers": {**cfg.providers, provider_id: updated}})
