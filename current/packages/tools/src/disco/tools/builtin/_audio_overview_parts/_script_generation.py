@@ -196,7 +196,11 @@ async def _assemble_from_model(
                 target = _target_for(harvest.total_hint, len(accepted), mode)
             del accepted[target:]
             if harvest.whole_script:
-                break  # a bare array is the driver saying "that's the script"
+                # A bare array is the driver saying "that's the whole script",
+                # so its length IS the length -- not a script that stopped
+                # short of a target we picked.
+                target = len(accepted)
+                break
             continue
 
         barren += 1
