@@ -34,6 +34,45 @@ const STAGE_LABEL: Record<AgentStage, string> = {
 
 const ACTIVE_STAGES = new Set<AgentStage>(["planning", "reading", "executing", "building"]);
 
+/** UI-14 — how long the run took, from the first to the last event that carried
+ * a timestamp. Returns null when the stream has no usable timestamps (replayed
+ * fixtures, very short runs) so the summary just drops the clause instead of
+ * printing "0 min". */
+function runDuration(events: AgentEvent[]): string | null {
+  const stamps = events
+    .map((e) => (e.timestamp ? Date.parse(e.timestamp) : NaN))
+    .filter((t) => Number.isFinite(t));
+  if (stamps.length < 2) return null;
+  const ms = Math.max(...stamps) - Math.min(...stamps);
+  if (ms <= 0) return null;
+  const mins = Math.round(ms / 60_000);
+  if (mins < 1) return `${Math.max(1, Math.round(ms / 1000))} sec`;
+  if (mins < 60) return `${mins} min`;
+  const h = Math.floor(mins / 60);
+  const rest = mins % 60;
+  return rest ? `${h} h ${rest} min` : `${h} h`;
+}
+
+/** UI-14 — the finished run's one-line receipt. After FINISHED the collapsed
+ * card used to say only "Verbose chat is off", which under the (now fixed)
+ * squeezed Activity section read as an empty box. A settled run gets a real
+ * summary — how long it took, how many steps it ran — with the expand
+ * affordance spelled out rather than implied. */
+function runSummaryLine(
+  events: AgentEvent[],
+  activity: ActivityItem[],
+  expanded: boolean,
+): string {
+  const steps = activity.filter((a) => a.kind === "action").length;
+  const took = runDuration(events);
+  const parts = [
+    took ? `Finished in ${took}` : "Finished",
+    `${steps} ${steps === 1 ? "step" : "steps"}`,
+    expanded ? "collapse history" : "expand history",
+  ];
+  return parts.join(" · ");
+}
+
 export function AgentStageCard({
   events,
   status,
@@ -97,7 +136,9 @@ export function AgentStageCard({
             {surface === "agent" && stage === "building" ? "Working" : STAGE_LABEL[stage]}
           </span>
           <span className="block font-ui text-[0.74rem] text-text-faint">
-            Verbose chat is off — {expanded ? "click to collapse" : "click to expand"} the full history
+            {stage === "done"
+              ? runSummaryLine(events, activity, expanded)
+              : `Verbose chat is off — ${expanded ? "click to collapse" : "click to expand"} the full history`}
           </span>
         </span>
       </button>
