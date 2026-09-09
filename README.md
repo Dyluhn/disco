@@ -228,16 +228,28 @@ docker compose logs app-server
 Keep both exports set for every later `docker compose` command in this shell, or
 add them to `~/.bashrc` as the installer suggests.
 
-Confirm all four services before going further — a compose provider can report
-success while one image failed to build:
+Confirm the services before going further — a compose provider can report
+success while one image failed to build. Check with `podman ps`, not `compose
+ps`: the two compose providers print different things, and only one of them
+prints health at all.
 
 ```bash
-podman compose ps      # or: docker compose ps
+podman ps --format '{{.Names}} {{.Status}}'     # or: docker ps --format ...
 ```
 
-Expect four rows: `app-server`, `agent-server` and `frontend` **Up (healthy)**,
-and `sandbox-image` **Exited (0)** — that one is correct, it exists only to
-deposit the `disco-sandbox:base` image into your daemon and then stop.
+Expect three running containers — `app-server`, `agent-server` and `frontend` —
+each **Up ... (healthy)**. The names are `disco_app-server_1` under
+podman-compose and `disco-app-server-1` under Compose v2.
+
+A fourth container, `sandbox-image`, is expected to be **Exited (0)**; it exists
+only to deposit the `disco-sandbox:base` image into your daemon and then stops.
+Add `-a` to `podman ps` to see it.
+
+What `podman compose ps` shows instead, and why it is not the check: under
+podman-compose it lists all four containers with health, but under the
+Compose v2 (`docker-compose`) provider — the one Debian 13 uses — it lists three
+rows, hides the exited `sandbox-image`, and never prints `(healthy)` even when
+every healthcheck is passing.
 
 Then open **http://localhost:8088** in a browser.
 
