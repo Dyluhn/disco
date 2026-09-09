@@ -15,7 +15,13 @@ import {
   streamReportAudio,
   type AudioStreamEvent,
 } from "@/api/deepResearch";
-import { audioReasonMessage, type AudioMode, type AudioStage, type AudioState } from "./audioProgress";
+import {
+  audioReasonDetail,
+  audioReasonMessage,
+  type AudioMode,
+  type AudioStage,
+  type AudioState,
+} from "./audioProgress";
 
 export interface UseAudioOverviewOptions {
   cid: string;
@@ -48,7 +54,8 @@ function makeStreamEventHandler(
     if (ev.stage === "error") {
       setAudio({
         status: "unavailable",
-        reason: audioReasonMessage(ev.reason ?? "unknown"),
+        reason: audioReasonMessage(ev.reason ?? "unknown", ev.message),
+        detail: audioReasonDetail(ev.reason ?? "unknown", ev.detail),
       });
       return true;
     }

@@ -31,14 +31,25 @@ export type AudioState =
   | { status: "idle" }
   | { status: "generating"; progress?: AudioProgress }
   | { status: "done"; audioUrl: string }
-  | { status: "unavailable"; reason: string };
+  /** `reason` is the sentence shown to the operator; `detail` is the
+   *  secondary technical line (failing stage + the server's exception text). */
+  | { status: "unavailable"; reason: string; detail?: string };
 
-/** Map a server error reason to a human message. */
-export function audioReasonMessage(reason: string): string {
+/** The sentence to show for a server error. The server sends `message`; the
+ *  reason-only fallback covers an older server (and the pre-stream blocking
+ *  path), so the UI never degrades to printing a bare stage name again. */
+export function audioReasonMessage(reason: string, message?: string): string {
+  if (message) return message;
   if (reason === "tts_disabled") {
     return "Audio overview is disabled in Settings → Audio — enable it to generate.";
   }
-  return `Audio overview failed: ${reason}`;
+  return `Audio overview failed at the ${reason} stage.`;
+}
+
+/** The secondary line under the message: which stage failed, and why. */
+export function audioReasonDetail(reason: string, detail?: string): string | undefined {
+  if (!reason) return detail;
+  return detail ? `${reason}: ${detail}` : reason;
 }
 
 /** Human-readable label for the current generation stage (W-09). */

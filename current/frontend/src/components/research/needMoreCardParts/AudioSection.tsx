@@ -107,6 +107,13 @@ export function AudioSection({
               Try again
             </button>
           </div>
+          {audio.detail && (
+            // Secondary line: the failing stage and the server's own text, so
+            // the operator can act without digging through container logs.
+            <span className="font-mono text-[0.7rem] break-words text-text-faint/70">
+              {audio.detail}
+            </span>
+          )}
         </div>
       )}
     </div>

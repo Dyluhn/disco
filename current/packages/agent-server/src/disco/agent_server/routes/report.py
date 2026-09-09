@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import logging
 import posixpath
 from pathlib import Path
 from typing import Annotated, Any
@@ -24,6 +25,8 @@ from ..report_audio import (
 )
 from ..runtime import ConversationRuntime
 from ._common import _AUDIO_MEDIA_TYPES, require_owned_conversation
+
+_LOG = logging.getLogger(__name__)
 
 # ── Request body models ───────────────────────────────────────────────────────
 
@@ -64,12 +67,43 @@ _DEFAULT_AUDIO_BODY = AudioBody()
 # ── Helper: gather follow-up pairs from the event log ─────────────────────────
 
 
+# A bare stage name ("turn_script") is not an error message — it told the
+# operator nothing about what broke or what to do next, and the server logged
+# nothing at all, so the only way to see the real failure was to re-run the
+# pipeline by hand. Each known failure now ships the sentence the UI shows;
+# `reason` stays the stable machine-readable stage and `detail` the exception.
+_AUDIO_FAILURE_MESSAGES = {
+    "turn_script": (
+        "Couldn't write the narration script for this report. "
+        "This is the model talking, not the voice: check the model assigned to "
+        "answering in Settings → Models, then try again."
+    ),
+    "tts_backend": (
+        "Couldn't turn the narration script into speech. "
+        "Check the voice backend in Settings → Audio, then try again."
+    ),
+    "tts_disabled": "Audio overview is disabled in Settings → Audio — enable it to generate.",
+    "internal": (
+        "Audio overview hit an unexpected error and stopped. "
+        "The server log has the full traceback."
+    ),
+}
+
+
+def _audio_failure_event(reason: str, detail: str | None) -> dict[str, str]:
+    """Return the stable wire payload for an audio-generation failure."""
+    event = {"reason": reason, "message": _AUDIO_FAILURE_MESSAGES[reason]}
+    if detail:
+        event["detail"] = detail
+    return event
+
+
 def _audio_generation_failure(
     exc: TtsBackendError | TurnScriptError,
 ) -> dict[str, str]:
     """Return the stable wire payload for a known audio-generation failure."""
     reason = "turn_script" if isinstance(exc, TurnScriptError) else "tts_backend"
-    return {"reason": reason, "detail": str(exc)}
+    return _audio_failure_event(reason, str(exc))
 
 
 def _clean_post_report_messages(events: list[Any], report_seq: int) -> list[MessageEvent]:
@@ -322,9 +356,11 @@ async def _report_audio_response(
         )
     except TtsDisabled:
         raise HTTPException(
-            status_code=503, detail={"ok": False, "reason": "tts_disabled"}
+            status_code=503,
+            detail={"ok": False, **_audio_failure_event("tts_disabled", None)},
         ) from None
     except (TtsBackendError, TurnScriptError) as exc:
+        _LOG.warning("report audio failed for %s (mode=%s): %s", conversation_id, mode, exc)
         raise HTTPException(
             status_code=502,
             detail={"ok": False, **_audio_generation_failure(exc)},
@@ -375,11 +411,17 @@ async def _report_audio_stream_response(
                 }
             )
         except TtsDisabled:
-            await queue.put({"stage": "error", "reason": "tts_disabled"})
+            await queue.put({"stage": "error", **_audio_failure_event("tts_disabled", None)})
         except (TtsBackendError, TurnScriptError) as exc:
+            # Was silent: the failure only ever reached the browser, so the
+            # server log showed a plain 200 for a run that produced nothing.
+            _LOG.warning(
+                "report audio failed for %s (mode=%s): %s", conversation_id, mode, exc
+            )
             await queue.put({"stage": "error", **_audio_generation_failure(exc)})
         except Exception as exc:  # never hang the stream on an unexpected error
-            await queue.put({"stage": "error", "reason": "internal", "detail": str(exc)})
+            _LOG.exception("report audio crashed for %s (mode=%s)", conversation_id, mode)
+            await queue.put({"stage": "error", **_audio_failure_event("internal", str(exc))})
         finally:
             await queue.put(None)  # sentinel: generation finished
 

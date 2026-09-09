@@ -558,6 +558,9 @@ def test_endpoint_classifies_audio_generation_failure(
         "detail": {
             "ok": False,
             "reason": expected_reason,
+            # The stage name alone told the operator nothing; every classified
+            # failure now also ships the sentence the UI shows.
+            "message": report_routes._AUDIO_FAILURE_MESSAGES[expected_reason],
             "detail": "classified audio failure",
         }
     }
@@ -1234,6 +1237,7 @@ def test_audio_stream_classifies_audio_generation_failure(
         {
             "stage": "error",
             "reason": expected_reason,
+            "message": report_routes._AUDIO_FAILURE_MESSAGES[expected_reason],
             "detail": "classified audio failure",
         }
     ]

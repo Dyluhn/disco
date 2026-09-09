@@ -379,6 +379,10 @@ export interface AudioStreamEvent {
   total?: number;
   mp3_url?: string;
   reason?: string;
+  /** Human-readable failure sentence (what failed, why, what to do). */
+  message?: string;
+  /** Technical failure text behind `message`. */
+  detail?: string;
   // W-08: real voice-model download byte counters.
   downloaded?: number;
   pct?: number;
