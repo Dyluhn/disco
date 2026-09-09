@@ -618,3 +618,29 @@ def test_working_key_is_recorded_as_verified(client, monkeypatch):
     row = client.get("/api/providers").json()[0]
     assert row["key_verified"] is True
     assert row["key_error"] is None
+
+
+def test_second_provider_for_the_same_base_url_is_refused(client, monkeypatch):
+    """UI-35: two rows for one endpoint are indistinguishable in the list.
+
+    Adding the same base URL twice used to create a second identical row backed
+    by a different secret, so neither row could be told from the other.
+    """
+
+    async def ok_fetch(provider, api_key):
+        return []
+
+    monkeypatch.setattr(providers_mod, "_fetch_provider_catalogue", ok_fetch)
+    body = {
+        "label": "ollama.com",
+        "base_url": "https://ollama.com/v1",
+        "kind": "openai-compat",
+        "api_key": "sk-one",
+    }
+    assert client.post("/api/providers", json=body).status_code == 201
+
+    resp = client.post("/api/providers", json={**body, "api_key": "sk-two"})
+
+    assert resp.status_code == 400
+    assert "already added as 'ollama.com'" in resp.json()["detail"]
+    assert len(client.get("/api/providers").json()) == 1

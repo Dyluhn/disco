@@ -7,7 +7,7 @@ chokepoints. ConfigState retains the public/private API as thin delegators.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from typing import Any
 
 from disco.core.llm import ConfigStore, SecretStore
@@ -106,6 +106,19 @@ def _validated_provider_base_url(raw: str) -> str:
     return base_url
 
 
+def _provider_with_base_url(
+    providers: Iterable[ProviderSettings], base_url: str
+) -> ProviderSettings | None:
+    """The already-saved provider for this endpoint, if any.
+
+    Two rows for the same base URL are indistinguishable in the list and split
+    the same endpoint across two secrets (UI-35), so adding one is a mistake
+    worth naming rather than a state worth persisting.
+    """
+    wanted = base_url.casefold()
+    return next((p for p in providers if p.base_url.casefold() == wanted), None)
+
+
 class ProviderInUseError(Exception):
     """Raised when deleting a provider would strand catalogue models."""
 
@@ -179,6 +192,12 @@ class ProviderConfigService:
         base_url = _validated_provider_base_url(body.base_url)
         if body.requires_api_key and not api_key:
             raise ValueError("api_key is empty")
+        existing = _provider_with_base_url(self._store.load().providers.values(), base_url)
+        if existing is not None:
+            raise ValueError(
+                f"{base_url} is already added as {existing.label!r}. Remove that "
+                "provider first if you need to replace its key."
+            )
         provider_id = self._unique_provider_id(label)
         secret_name = f"provider_{provider_id}"
         if api_key:
