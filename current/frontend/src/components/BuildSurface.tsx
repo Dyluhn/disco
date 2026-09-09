@@ -166,7 +166,9 @@ export function BuildSurface({
         isolation={isolation}
         taskLabel={taskLabel}
         download={download}
-        onDownloadClick={() => b.cid && download.mutate({ id: b.cid, binding: null })}
+        onDownloadClick={() =>
+          b.cid && download.mutate({ id: b.cid, binding: null, title: taskLabel })
+        }
         framing={framing}
       />
       <BuildActivityFeed
@@ -206,6 +208,7 @@ export function BuildSurface({
           download={download}
           exportManifest={exportManifest}
           release={release}
+          downloadTitle={taskLabel}
         />
         <BuildDecisionGates b={b} />
         <BuildAskGate b={b} finalMessage={finalMessage} />

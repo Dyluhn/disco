@@ -38,11 +38,12 @@ export function useDeleteProject() {
 /** Download a project's workspace zip. The mutation variable carries the optional
  * SOURCE binding: a self-host `candidate` passes its concrete `{version_seq,
  * spec_digest}` so the download is pinned to that immutable version; a plain
- * (unbound) download passes `binding: null`. */
+ * (unbound) download passes `binding: null`. `title` is presentation only — it
+ * names the SAVED FILE (UI-40) and never reaches the request. */
 export function useDownloadProject() {
   return useMutation({
-    mutationFn: (vars: { id: string; binding: DownloadBinding | null }) =>
-      downloadProject(vars.id, vars.binding),
+    mutationFn: (vars: { id: string; binding: DownloadBinding | null; title?: string | null }) =>
+      downloadProject(vars.id, vars.binding, vars.title),
   });
 }
 

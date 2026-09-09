@@ -22,12 +22,15 @@ export function BuildDeliverableSection({
   download,
   exportManifest,
   release,
+  downloadTitle = null,
 }: {
   b: BuildController;
   deliverable: DeliverableView | null;
   download: ReturnType<typeof useDownloadProject>;
   exportManifest: ReturnType<typeof useExportManifest>;
   release: ReturnType<typeof useProjectRelease>;
+  /** The run's own title — names the SAVED ZIP (UI-40), nothing else. */
+  downloadTitle?: string | null;
 }) {
   const toast = useToast();
   return (
@@ -59,7 +62,9 @@ export function BuildDeliverableSection({
                 )
             : undefined
         }
-        onDownload={() => b.cid && download.mutate({ id: b.cid, binding: null })}
+        onDownload={() =>
+          b.cid && download.mutate({ id: b.cid, binding: null, title: downloadTitle })
+        }
         onExportManifest={() => b.cid && exportManifest.mutate(b.cid)}
       />
       {/* WO-9: capability-driven Self-host handoff — renders from the release
@@ -83,7 +88,7 @@ export function BuildDeliverableSection({
               r.self_host && r.version_seq !== null && r.spec_digest !== null
                 ? { version_seq: r.version_seq, spec_digest: r.spec_digest }
                 : null;
-            download.mutate({ id: b.cid, binding });
+            download.mutate({ id: b.cid, binding, title: downloadTitle });
           }}
         />
       )}
