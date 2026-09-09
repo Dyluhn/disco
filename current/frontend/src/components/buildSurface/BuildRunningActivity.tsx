@@ -8,6 +8,7 @@
 import { Loader2 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { Markdown } from "@/components/Markdown";
+import { SANDBOX_URL_NOTE, scrubSandboxUrls } from "@/lib/sandboxUrls";
 import { ActivityFeed } from "@/components/build/ActivityFeed";
 import { AgentStageCard } from "@/components/build/AgentStageCard";
 import { LiveSignalBar } from "@/components/build/LiveSignalBar";
@@ -92,20 +93,48 @@ export function BuildRunningActivity({
         (b.status === "FINISHED" ||
           b.status === "STUCK" ||
           b.status === "AWAITING_USER_DECISION") && (
-          <div
-            className={cn(
-              "mt-section rounded-card border px-body py-inline text-[0.95rem]",
-              b.status === "STUCK" ? "border-warn/40 bg-warn/5" : "border-hairline bg-surface-1",
-            )}
-          >
-            {b.status === "STUCK" && (
-              <p className="mb-hair font-ui text-[0.74rem] uppercase tracking-wide text-warn">
-                Agent's latest reply
-              </p>
-            )}
-            <Markdown>{finalMessage}</Markdown>
-          </div>
+          <FinalMessageCallout status={b.status} finalMessage={finalMessage} />
         )}
     </>
+  );
+}
+
+/**
+ * The terminal summary callout. UI-10: the agent narrates from INSIDE its sandbox
+ * ("served via preview at http://localhost:8000/"), and that loopback address does
+ * nothing in the user's browser. The rewrite happens HERE, at the presentation
+ * layer — the stored transcript and the replay stream keep the model's own words.
+ */
+function FinalMessageCallout({
+  status,
+  finalMessage,
+}: {
+  status: BuildController["status"];
+  finalMessage: string;
+}) {
+  const summary = scrubSandboxUrls(finalMessage);
+  return (
+    <div
+      data-testid="build-final-summary"
+      className={cn(
+        "mt-section rounded-card border px-body py-inline text-[0.95rem]",
+        status === "STUCK" ? "border-warn/40 bg-warn/5" : "border-hairline bg-surface-1",
+      )}
+    >
+      {status === "STUCK" && (
+        <p className="mb-hair font-ui text-[0.74rem] uppercase tracking-wide text-warn">
+          Agent's latest reply
+        </p>
+      )}
+      <Markdown>{summary.text}</Markdown>
+      {summary.replaced && (
+        <p
+          data-disco-note="sandbox-url-rewritten"
+          className="mt-inline font-ui text-[0.74rem] text-text-faint"
+        >
+          {SANDBOX_URL_NOTE}
+        </p>
+      )}
+    </div>
   );
 }

@@ -19,6 +19,7 @@ import { ActivityFeed } from "@/components/build/ActivityFeed";
 import { ExecutionCanvas } from "@/components/build/ExecutionCanvas";
 import { PlanPanel } from "@/components/build/PlanPanel";
 import { Markdown } from "@/components/Markdown";
+import { SANDBOX_URL_NOTE, scrubSandboxUrls } from "@/lib/sandboxUrls";
 import type { AgentEvent, ConversationStatus } from "@/types/agent";
 
 export function StaticRunView({
@@ -36,6 +37,13 @@ export function StaticRunView({
   const activity = useMemo(() => deriveActivity(events, null, status), [events, status]);
   const plan = useMemo(() => derivePlan(events), [events]);
   const finalMessage = useMemo(() => latestAgentMessage(events), [events]);
+  // UI-10: same presentation-layer rewrite as the live Build surface — a
+  // sandbox loopback URL in the agent's summary is not an address the reader
+  // of a shared/imported run can open. The stored events stay untouched.
+  const summary = useMemo(
+    () => (finalMessage ? scrubSandboxUrls(finalMessage) : null),
+    [finalMessage],
+  );
   const deliverable = useMemo(() => deriveDeliverable(events), [events]);
 
   return (
@@ -60,9 +68,20 @@ export function StaticRunView({
               inert by construction (they only render with a conversationId). */}
           <ActivityFeed items={activity} />
 
-          {finalMessage && (
-            <div className="mt-section rounded-card border border-hairline bg-surface-1 px-body py-inline text-[0.95rem]">
-              <Markdown>{finalMessage}</Markdown>
+          {summary && (
+            <div
+              data-testid="build-final-summary"
+              className="mt-section rounded-card border border-hairline bg-surface-1 px-body py-inline text-[0.95rem]"
+            >
+              <Markdown>{summary.text}</Markdown>
+              {summary.replaced && (
+                <p
+                  data-disco-note="sandbox-url-rewritten"
+                  className="mt-inline font-ui text-[0.74rem] text-text-faint"
+                >
+                  {SANDBOX_URL_NOTE}
+                </p>
+              )}
             </div>
           )}
 
