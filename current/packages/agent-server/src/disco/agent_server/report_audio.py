@@ -766,6 +766,7 @@ async def generate_report_audio(
     resolve_key: Callable[[str | None], str | None] | None = None,
     follow_ups: list[tuple[str, str]] | None = None,
     on_progress: ProgressCallback | None = None,
+    force: bool = False,
 ) -> tuple[Path, Path]:
     """Run the audio-overview pipeline for `report` and write the artifacts into
     `out_dir` (one cid-scoped subdir, created on demand).  Returns
@@ -801,8 +802,12 @@ async def generate_report_audio(
     mp3_path, transcript_path = _report_audio_cache_paths(report, follow_ups, mode, out_dir)
 
     # If a previous run for this conversation already wrote both files, hand
-    # them back verbatim — see `_audio_cache_hit`.
-    if _audio_cache_hit(mp3_path, transcript_path):
+    # them back verbatim — see `_audio_cache_hit`. `force` is what "Regenerate"
+    # presses: the cache key is a hash of the report, so an unchanged report
+    # would otherwise hand back the identical file and nothing would appear to
+    # happen. The rewrite is atomic, so the old artifact stays servable until
+    # the new one lands.
+    if not force and _audio_cache_hit(mp3_path, transcript_path):
         # Cache hit — instant, no synth, no download.  Tell the UI so it shows
         # "ready" rather than a false "downloading voice model…" note (W-08).
         await _emit(on_progress, {"stage": "cache_hit"})

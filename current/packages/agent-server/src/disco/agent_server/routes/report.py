@@ -355,6 +355,7 @@ async def _report_audio_response(
     conversation_id: str,
     mode: str,
     body: AudioBody,
+    force: bool = False,
 ) -> dict:
     report, follow_ups, tts, out_dir = await _resolve_audio_inputs(
         store, conversation_id, mode, body.follow_up_seqs or []
@@ -367,6 +368,7 @@ async def _report_audio_response(
             out_dir=out_dir,
             mode=mode,
             follow_ups=follow_ups,
+            force=force,
             # Prefer an encrypted-store key for the remote TTS provider; falls
             # back to the env var by name when the runtime/store isn't wired.
             resolve_key=runtime._resolve_secret if runtime is not None else None,
@@ -409,6 +411,7 @@ async def _report_audio_stream_response(
     conversation_id: str,
     mode: str,
     body: AudioBody,
+    force: bool = False,
 ) -> StreamingResponse:
     report, follow_ups, tts, out_dir = await _resolve_audio_inputs(
         store, conversation_id, mode, body.follow_up_seqs or []
@@ -428,6 +431,7 @@ async def _report_audio_stream_response(
                 out_dir=out_dir,
                 mode=mode,
                 follow_ups=follow_ups,
+                force=force,
                 resolve_key=runtime._resolve_secret if runtime is not None else None,
                 on_progress=_on_progress,
             )
@@ -555,6 +559,7 @@ def make_report_router(store: SqliteEventStore, runtime: ConversationRuntime | N
         conversation_id: str,
         request: Request,
         mode: str = Query("podcast"),
+        force: bool = Query(False),
         body: Annotated[AudioBody, Body()] = _DEFAULT_AUDIO_BODY,
     ) -> dict:
         """Generate (or return the cached) audio overview for the latest Deep
@@ -571,17 +576,21 @@ def make_report_router(store: SqliteEventStore, runtime: ConversationRuntime | N
         includes the follow-up count so different selections produce separate
         cached files.
 
+        ``force=true`` re-runs the pipeline even when a cached artifact for the
+        exact same report already exists — what "Regenerate" presses.
+
         404 → no ReportEvent; 400 → unknown mode; 503 → TTS disabled in
         Settings; 502 → synth/LLM failure. 200 →
         ``{"ok": True, "mp3_url": ..., "transcript_url": ...}``."""
         conversation_id = await require_owned_conversation(request, store, conversation_id)
-        return await _report_audio_response(store, runtime, conversation_id, mode, body)
+        return await _report_audio_response(store, runtime, conversation_id, mode, body, force)
 
     @router.post("/conversations/{conversation_id}/report/audio/stream")
     async def report_audio_stream(
         conversation_id: str,
         request: Request,
         mode: str = Query("podcast"),
+        force: bool = Query(False),
         body: AudioBody | None = None,
     ) -> StreamingResponse:
         """SSE variant of the audio endpoint that streams REAL staged progress
@@ -601,7 +610,9 @@ def make_report_router(store: SqliteEventStore, runtime: ConversationRuntime | N
         (raised before the stream opens)."""
         body = body or AudioBody()
         conversation_id = await require_owned_conversation(request, store, conversation_id)
-        return await _report_audio_stream_response(store, runtime, conversation_id, mode, body)
+        return await _report_audio_stream_response(
+            store, runtime, conversation_id, mode, body, force
+        )
 
     @router.get("/conversations/{conversation_id}/report/audio")
     async def report_audio_existing(conversation_id: str, request: Request) -> dict:
