@@ -29,6 +29,7 @@ import {
 } from "@/lib/buildTrace";
 import { useReplay } from "@/lib/useReplay";
 import { isolationForBackend } from "@/lib/isolation";
+import { publishConversationTitle } from "@/lib/documentTitle";
 import { publishRunStatus } from "@/lib/runStatusBridge";
 import { useVerboseAgentChat } from "@/lib/useVerboseAgentChat";
 import { useDownloadProject, useExportManifest, useProjectRelease } from "@/hooks/useProjects";
@@ -130,6 +131,13 @@ export function BuildSurface({
   // run finishes or needs the user while the tab is hidden. Use the clean taskLabel
   // (stored title on resume) so the tab badge isn't the "(resumed)" sentinel.
   useBuildNotifications(b.status, taskLabel);
+
+  // UI-28: name the browser tab after this run, not the app. Cleared on unmount
+  // so the next route names itself.
+  useEffect(() => {
+    publishConversationTitle(taskLabel);
+    return () => publishConversationTitle(null);
+  }, [taskLabel]);
 
   // Gap #4: publish this surface's live run status to the W6 E2E bridge so the
   // harness can await RUNNING / AWAITING_* / FINISHED. (AgentSurface delegates to

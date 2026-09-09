@@ -68,7 +68,12 @@ export function RoleModelPicker({
           disabled={busy || disabled}
           className="flex min-h-11 w-full items-center justify-between gap-inline rounded-control border border-hairline bg-surface-1 px-inline py-hair font-ui text-[0.84rem] text-text transition-colors hover:border-hairline-strong disabled:cursor-not-allowed disabled:opacity-50 sm:w-64 lg:min-h-0"
         >
-          <span className="truncate">{selected?.label ?? noneLabel ?? value}</span>
+          {/* Model labels carry the real model behind the slot ("Driver
+              Unconfigured — not configured"), which does not fit 16rem. Wrap
+              rather than clip: the tail is the part that identifies it. */}
+          <span className="min-w-0 text-left leading-snug">
+            {selected?.label ?? noneLabel ?? value}
+          </span>
           <ChevronDown className="size-3.5 shrink-0 text-text-faint" aria-hidden />
         </button>
       </Dialog.Trigger>

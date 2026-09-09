@@ -106,6 +106,11 @@ class ProviderDTO(BaseModel):
     secret_name: str
     has_key: bool
     requires_api_key: bool = True
+    # `has_key` only says a value is STORED. These say whether it WORKS, as of
+    # the last /models probe: None = stored but never proven, True = the
+    # provider answered, False = the provider refused (`key_error` is its answer).
+    key_verified: bool | None = None
+    key_error: str | None = None
 
 
 class ProviderPresetDTO(BaseModel):

@@ -1,7 +1,8 @@
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, Info } from "lucide-react";
 import { useRef } from "react";
 import type { ReactNode } from "react";
 import { ScrollFadeEdges } from "@/components/ScrollFade";
+import { cn } from "@/lib/cn";
 import { useScrollFade } from "@/hooks/useScrollFade";
 import { AudioSection } from "@/components/settings/AudioSection";
 import { ChatVerbositySection } from "@/components/settings/ChatVerbositySection";
@@ -45,21 +46,21 @@ function imageGenIssue(
 ): string | null {
   if (!imageGen) return null;
   if (imageGen.provider === "comfyui" && !(imageGen.base_url ?? "").trim()) {
-    return "Image generation needs a ComfyUI URL.";
+    return "Add a ComfyUI URL to turn it on.";
   }
   if (imageGen.provider === "openai" && !(imageGen.api_key_env ?? "").trim()) {
-    return "Image generation needs a stored key name.";
+    return "Name the stored key to turn it on.";
   }
   if (imageGen.provider === "openrouter") {
     if (!openRouterKey) return null;
     if (!openRouterKey.configured) {
-      return "Image generation needs an OpenRouter key.";
+      return "Store an OpenRouter key to turn it on.";
     }
     if (openRouterKey.locked) {
-      return "Image generation needs the OpenRouter key re-entered.";
+      return "Re-enter the OpenRouter key to turn it on.";
     }
     if (!(imageGen.model ?? "").trim()) {
-      return "Image generation needs an image model.";
+      return "Pick an image model to turn it on.";
     }
   }
   return null;
@@ -88,8 +89,17 @@ function SettingsAttentionBanner() {
   const { data: models } = useModels();
   const { data: assignments } = useAssignments();
 
-  const issues: { title: string; detail: string; href: string; cta: string }[] =
-    [];
+  // "attention": something the user set up is broken or missing and work will
+  // fail. "optional": a feature nobody has turned on yet — a stock install has
+  // several, and painting them red made the page read as a wall of errors the
+  // user had caused (UI-2).
+  const issues: {
+    title: string;
+    detail: string;
+    href: string;
+    cta: string;
+    tone: "attention" | "optional";
+  }[] = [];
   const lockedCount =
     (secrets?.locked_names.length ?? 0) + (openRouterKey?.locked ? 1 : 0);
   if (lockedCount > 0) {
@@ -98,6 +108,7 @@ function SettingsAttentionBanner() {
       detail: "A stored key cannot be decrypted.",
       href: "#providers",
       cta: "Review providers",
+      tone: "attention",
     });
   }
   const modelConfigIssue = modelIssue(models, assignments);
@@ -107,15 +118,17 @@ function SettingsAttentionBanner() {
       detail: modelConfigIssue,
       href: "#model-library",
       cta: "Configure model",
+      tone: "attention",
     });
   }
   const imageIssue = imageGenIssue(imageGen, openRouterKey);
   if (imageIssue) {
     issues.push({
-      title: "Image generation unavailable",
+      title: "Image generation — optional, not set up",
       detail: imageIssue,
       href: "#image-generation",
-      cta: "Configure image generation",
+      cta: "Set up image generation",
+      tone: "optional",
     });
   }
   if (projects && projects.status !== "ok") {
@@ -124,42 +137,66 @@ function SettingsAttentionBanner() {
       detail: "The configured project folder is not ready.",
       href: "#project-storage",
       cta: "Review storage",
+      tone: "attention",
     });
   }
   if (issues.length === 0) return null;
 
+  const anyAttention = issues.some((issue) => issue.tone === "attention");
   return (
     <div
       role="status"
-      className="overflow-hidden rounded-card border border-warn/40 bg-warn/[0.04]"
+      className={cn(
+        "overflow-hidden rounded-card border",
+        anyAttention ? "border-warn/40 bg-warn/[0.04]" : "border-hairline bg-surface-1/30",
+      )}
     >
-      {issues.map((issue) => (
-        <div
-          key={issue.title}
-          className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-inline border-b border-warn/15 px-body py-inline last:border-b-0 sm:grid-cols-[auto_minmax(0,1fr)_auto]"
-        >
-          <AlertTriangle className="size-4 shrink-0 text-warn" aria-hidden />
-          <div className="min-w-0">
-            <p className="font-ui text-[0.84rem] font-medium text-text">
-              {issue.title}
-            </p>
-            <p className="font-ui text-[0.78rem] leading-snug text-text-muted">
-              {issue.detail}
-            </p>
-          </div>
-          <a
-            href={issue.href}
-            onClick={() => {
-              const target = document.querySelector(issue.href);
-              const disclosure = target?.querySelector("details");
-              if (disclosure instanceof HTMLDetailsElement) disclosure.open = true;
-            }}
-            className="col-start-2 w-fit shrink-0 rounded-control border border-warn/25 px-inline py-hair font-ui text-[0.76rem] font-medium text-accent hover:border-warn/50 sm:col-start-auto"
+      {issues.map((issue) => {
+        const attention = issue.tone === "attention";
+        const Icon = attention ? AlertTriangle : Info;
+        return (
+          <div
+            key={issue.title}
+            data-attention-tone={issue.tone}
+            className={cn(
+              "grid grid-cols-[auto_minmax(0,1fr)] items-center gap-inline border-b px-body py-inline last:border-b-0 sm:grid-cols-[auto_minmax(0,1fr)_auto]",
+              attention ? "border-warn/15" : "border-hairline",
+            )}
           >
-            {issue.cta}
-          </a>
-        </div>
-      ))}
+            <Icon
+              className={cn(
+                "size-4 shrink-0",
+                attention ? "text-warn" : "text-text-faint",
+              )}
+              aria-hidden
+            />
+            <div className="min-w-0">
+              <p className="font-ui text-[0.84rem] font-medium text-text">
+                {issue.title}
+              </p>
+              <p className="font-ui text-[0.78rem] leading-snug text-text-muted">
+                {issue.detail}
+              </p>
+            </div>
+            <a
+              href={issue.href}
+              onClick={() => {
+                const target = document.querySelector(issue.href);
+                const disclosure = target?.querySelector("details");
+                if (disclosure instanceof HTMLDetailsElement) disclosure.open = true;
+              }}
+              className={cn(
+                "col-start-2 w-fit shrink-0 rounded-control border px-inline py-hair font-ui text-[0.76rem] font-medium text-accent sm:col-start-auto",
+                attention
+                  ? "border-warn/25 hover:border-warn/50"
+                  : "border-hairline hover:border-hairline-strong",
+              )}
+            >
+              {issue.cta}
+            </a>
+          </div>
+        );
+      })}
     </div>
   );
 }

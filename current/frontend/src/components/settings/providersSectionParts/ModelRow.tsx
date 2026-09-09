@@ -75,8 +75,8 @@ export function ModelRow({
         )}
         {asking && (
           <p className="max-w-56 text-right font-ui text-[0.7rem] text-text-faint">
-            {providerLabel} doesn't report context windows — enter this
-            model's real limit.
+            {providerLabel} doesn&rsquo;t report context windows. Most current
+            models accept 128k; check the provider&rsquo;s model page.
           </p>
         )}
       </div>

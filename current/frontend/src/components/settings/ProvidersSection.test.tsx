@@ -60,6 +60,8 @@ type Provider = {
   secret_name: string;
   has_key: boolean;
   requires_api_key?: boolean;
+  key_verified?: boolean | null;
+  key_error?: string | null;
 };
 
 let providers: Provider[];
@@ -77,6 +79,7 @@ let models: Array<{
   context_window: number;
 }>;
 let catalogueFails = false;
+let catalogueOmitsContext = false;
 let createCatalogueOk = true;
 let lastEnableBody: unknown = null;
 let lastCreateBody: Record<string, unknown> | null = null;
@@ -117,13 +120,17 @@ function installFetch() {
         secret_name: `provider_${id}`,
         has_key: !!body.api_key,
         requires_api_key: !keyless,
+        key_verified: createCatalogueOk,
+        key_error: createCatalogueOk ? null : "api.openai.com rejected this key (401)",
       };
       providers = [provider];
       return jsonResponse(
         {
           provider,
           catalogue_ok: createCatalogueOk,
-          catalogue_error: createCatalogueOk ? null : "404 from /models",
+          catalogue_error: createCatalogueOk
+            ? null
+            : "api.openai.com rejected this key (401)",
         },
         201,
       );
@@ -152,6 +159,18 @@ function installFetch() {
           price_out_per_m: 10,
           capabilities: ["vision", "long_context"],
         },
+        ...(catalogueOmitsContext
+          ? [
+              {
+                model_id: "no-context-model",
+                label: "No context model",
+                context_window: null,
+                price_in_per_m: 1,
+                price_out_per_m: 2,
+                capabilities: [],
+              },
+            ]
+          : []),
       ]);
     }
     if (method === "POST" && url === "/api/providers/openai/enable") {
@@ -194,6 +213,7 @@ beforeEach(() => {
   providers = [];
   models = [];
   catalogueFails = false;
+  catalogueOmitsContext = false;
   createCatalogueOk = true;
   lastEnableBody = null;
   lastCreateBody = null;
@@ -275,6 +295,131 @@ describe("ProvidersSection — generic provider objects", () => {
     expect(screen.queryByText("sk-live-secret")).not.toBeInTheDocument();
   });
 
+  it("never calls a rejected key ready, and repeats the provider's answer", async () => {
+    // UI-34: a wrong key used to store as a green "Key ready" row. The add-time
+    // probe now decides the badge, and its refusal is shown in the user's words.
+    catalogueFails = true;
+    createCatalogueOk = false;
+    render(createElement(ProvidersSection), { wrapper: makeWrapper() });
+
+    fireEvent.change(await screen.findByLabelText("Provider preset"), {
+      target: { value: "openai" },
+    });
+    fireEvent.change(screen.getByLabelText("Provider API key"), {
+      target: { value: "not-a-real-key-12345" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Add provider/i }));
+
+    expect(await screen.findByText("Key rejected")).toBeInTheDocument();
+    expect(screen.queryByText("Key ready")).not.toBeInTheDocument();
+    expect(
+      await screen.findAllByText("api.openai.com rejected this key (401)"),
+    ).not.toHaveLength(0);
+  });
+
+  it("keeps the badge neutral while a stored key has not been probed", async () => {
+    providers = [
+      {
+        id: "openai",
+        label: "OpenAI",
+        base_url: "https://api.openai.com/v1",
+        kind: "openai-compat",
+        secret_name: "provider_openai",
+        has_key: true,
+        requires_api_key: true,
+      },
+    ];
+    render(createElement(ProvidersSection), { wrapper: makeWrapper() });
+
+    expect(await screen.findByText("Key stored, not verified")).toBeInTheDocument();
+    expect(screen.queryByText("Key ready")).not.toBeInTheDocument();
+  });
+
+  it("asks before removing a provider and says what goes with it", async () => {
+    // UI-37: the trash icon deleted immediately while the model library asked
+    // first — same destructiveness, plus the stored key, so it asks too.
+    providers = [
+      {
+        id: "openai",
+        label: "OpenAI",
+        base_url: "https://api.openai.com/v1",
+        kind: "openai-compat",
+        secret_name: "provider_openai",
+        has_key: true,
+        requires_api_key: true,
+        key_verified: true,
+      },
+    ];
+    render(createElement(ProvidersSection), { wrapper: makeWrapper() });
+
+    fireEvent.click(await screen.findByLabelText("Delete OpenAI"));
+
+    expect(await screen.findByText("Remove OpenAI?")).toBeInTheDocument();
+    expect(
+      screen.getByText(/Removes api\.openai\.com and its stored key/i),
+    ).toBeInTheDocument();
+    // Nothing was deleted by opening the gate.
+    expect(screen.getByText("Key ready")).toBeInTheDocument();
+  });
+
+  it("always shows a state in Browse, never a blank panel", async () => {
+    // UI-36/UI-4: with a rejected key the panel rendered nothing at all — no
+    // catalogue, no error — so Browse looked like a dead button.
+    catalogueFails = true;
+    render(createElement(ProvidersSection), { wrapper: makeWrapper() });
+
+    fireEvent.change(await screen.findByLabelText("Provider preset"), {
+      target: { value: "openai" },
+    });
+    fireEvent.change(screen.getByLabelText("Provider API key"), {
+      target: { value: "sk-live-secret" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Add provider/i }));
+
+    // The panel opens on add, so the toggle must say so — clicking it blind is
+    // what closed the catalogue and made Browse look dead.
+    const browse = await screen.findByRole("button", { name: "Close" });
+    expect(browse).toHaveAttribute("aria-expanded", "true");
+    expect(
+      await screen.findByText(/did not return a usable \/models catalogue/i),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("No matching models.")).not.toBeInTheDocument();
+  });
+
+  it("prefills 128k when the catalogue reports no context window", async () => {
+    // UI-3: the box opened empty, so enabling a model required knowing 131072.
+    catalogueOmitsContext = true;
+    render(createElement(ProvidersSection), { wrapper: makeWrapper() });
+
+    fireEvent.change(await screen.findByLabelText("Provider preset"), {
+      target: { value: "openai" },
+    });
+    fireEvent.change(screen.getByLabelText("Provider API key"), {
+      target: { value: "sk-live-secret" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Add provider/i }));
+
+    fireEvent.click(
+      await screen.findByRole("switch", { name: /Enable no-context-model/i }),
+    );
+
+    expect(
+      await screen.findByLabelText("Context window for no-context-model"),
+    ).toHaveValue("131072");
+    expect(screen.getByText(/Most current models accept 128k/i)).toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Enable", exact: true }),
+    );
+    await waitFor(() =>
+      expect(lastEnableBody).toEqual({
+        model_id: "no-context-model",
+        label: "No context model",
+        context_window: 131072,
+      }),
+    );
+  });
+
   it("renders the failed-/models manual-add path and uses the same enable route", async () => {
     catalogueFails = true;
     createCatalogueOk = false;
@@ -289,7 +434,7 @@ describe("ProvidersSection — generic provider objects", () => {
     fireEvent.click(screen.getByRole("button", { name: /Add provider/i }));
 
     expect(
-      await screen.findByText(/was saved, but \/models did not answer/i),
+      await screen.findByText(/was saved, but the check did not pass/i),
     ).toBeInTheDocument();
     expect(
       await screen.findByText(/did not return a usable \/models catalogue/i),

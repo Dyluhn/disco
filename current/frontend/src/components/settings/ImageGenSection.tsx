@@ -25,7 +25,7 @@ import {
 } from "@/hooks/useModels";
 import { ContextualFieldsPanel } from "./imageGenSectionParts/ContextualFieldsPanel";
 import { computeImageGenFieldsDirty } from "./imageGenSectionParts/fieldsDirty";
-import { getFallbackWarning } from "./imageGenSectionParts/fallbackWarning";
+import { getSetupNote } from "./imageGenSectionParts/setupNote";
 import {
   OPTIONS,
   type Provider,
@@ -95,7 +95,7 @@ export function ImageGenSection() {
   };
 
   const workflowJsonError = getWorkflowJsonError(workflowJson);
-  const fallbackWarning = getFallbackWarning(data, orKey.data);
+  const setupNote = getSetupNote(data, orKey.data);
 
   return (
     <section className="flex flex-col gap-inline">
@@ -135,13 +135,13 @@ export function ImageGenSection() {
             </span>
           </div>
 
-          {fallbackWarning && (
+          {setupNote && (
             <div
-              className="rounded-control border border-warn/35 bg-warn/5 px-body py-inline font-ui text-[0.8rem] leading-snug text-warn"
+              className="rounded-control border border-hairline bg-surface-1/40 px-body py-inline font-ui text-[0.8rem] leading-snug text-text-muted"
               role="status"
-              data-disco-flag="imagegen-procedural-fallback"
+              data-disco-flag="imagegen-not-configured"
             >
-              {fallbackWarning}
+              {setupNote}
             </div>
           )}
 

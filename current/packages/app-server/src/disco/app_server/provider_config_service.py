@@ -7,7 +7,7 @@ chokepoints. ConfigState retains the public/private API as thin delegators.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from typing import Any
 
 from disco.core.llm import ConfigStore, SecretStore
@@ -106,6 +106,19 @@ def _validated_provider_base_url(raw: str) -> str:
     return base_url
 
 
+def _provider_with_base_url(
+    providers: Iterable[ProviderSettings], base_url: str
+) -> ProviderSettings | None:
+    """The already-saved provider for this endpoint, if any.
+
+    Two rows for the same base URL are indistinguishable in the list and split
+    the same endpoint across two secrets (UI-35), so adding one is a mistake
+    worth naming rather than a state worth persisting.
+    """
+    wanted = base_url.casefold()
+    return next((p for p in providers if p.base_url.casefold() == wanted), None)
+
+
 class ProviderInUseError(Exception):
     """Raised when deleting a provider would strand catalogue models."""
 
@@ -139,6 +152,8 @@ class ProviderConfigService:
             secret_name=provider.secret_name,
             has_key=bool(self._resolve_secret_value(provider.secret_name)),
             requires_api_key=provider.requires_api_key,
+            key_verified=provider.key_verified,
+            key_error=provider.key_error,
         )
 
     def _save_providers(self, providers: dict[str, ProviderSettings]) -> None:
@@ -177,6 +192,12 @@ class ProviderConfigService:
         base_url = _validated_provider_base_url(body.base_url)
         if body.requires_api_key and not api_key:
             raise ValueError("api_key is empty")
+        existing = _provider_with_base_url(self._store.load().providers.values(), base_url)
+        if existing is not None:
+            raise ValueError(
+                f"{base_url} is already added as {existing.label!r}. Remove that "
+                "provider first if you need to replace its key."
+            )
         provider_id = self._unique_provider_id(label)
         secret_name = f"provider_{provider_id}"
         if api_key:
@@ -224,6 +245,9 @@ class ProviderConfigService:
                 self._secrets.set_secret(provider.secret_name, api_key)
             except RuntimeError as exc:
                 raise ValueError(str(exc)) from exc
+            # A new key has not been proven yet; the caller re-probes and records.
+            updates["key_verified"] = None
+            updates["key_error"] = None
         updated = provider.model_copy(update=updates)
         if updated.requires_api_key and not (
             patch.api_key or self._resolve_secret_value(provider.secret_name)
@@ -236,6 +260,26 @@ class ProviderConfigService:
         # gesture. Cosmetic edits never bless a previously unapproved origin.
         if patch.base_url is not None or patch.api_key is not None:
             _origin_wiring.approve_provider_origin(self._store, self._secrets, updated)
+        return self._provider_dto(updated)
+
+    def record_probe(
+        self, provider_id: str, verified: bool | None, error: str | None
+    ) -> ProviderDTO:
+        """Persist the outcome of a /models probe so the row can say whether the
+        stored key actually WORKS, not just that one is stored (UI-34).
+
+        `verified` is None when the probe answered but did not exercise the key.
+        """
+        cfg = self._store.load()
+        provider = cfg.providers.get(provider_id)
+        if provider is None:
+            raise KeyError(provider_id)
+        updated = provider.model_copy(
+            update={"key_verified": verified, "key_error": error if verified is False else None}
+        )
+        self._store.save(
+            cfg.model_copy(update={"providers": {**cfg.providers, provider_id: updated}})
+        )
         return self._provider_dto(updated)
 
     def delete_provider(self, provider_id: str) -> None:

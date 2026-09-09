@@ -10,6 +10,19 @@ function withQuery(ui: ReactElement) {
   return render(<QueryClientProvider client={qc}>{ui}</QueryClientProvider>);
 }
 
+describe("Settings — attention banner", () => {
+  it("presents an unconfigured optional feature as informational, not an error", async () => {
+    // UI-2: image generation nobody has turned on rendered as a red error
+    // banner, both in its own section and at the top of the page, so a stock
+    // install read as a list of faults the user had caused.
+    withQuery(<SettingsView />);
+    const title = await screen.findByText(/Image generation — optional, not set up/i);
+    const row = title.closest("[data-attention-tone]");
+    expect(row).toHaveAttribute("data-attention-tone", "optional");
+    expect(row?.className).not.toMatch(/warn|unsupported/);
+  });
+});
+
 describe("Settings — model-assignment matrix", () => {
   it("shows the absolute/manual story with a default primary + every role, cost-legible", async () => {
     const user = userEvent.setup();

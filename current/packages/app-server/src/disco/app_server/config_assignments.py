@@ -5,10 +5,15 @@ exposes an instance of this class as the plain `assignments` attribute.
 
 from __future__ import annotations
 
-from disco.core.llm import ConfigStore, ModelRole
+from disco.core.llm import ConfigStore, ModelRole, RouterConfig
 
 from .config.dtos import AssignmentsDTO, AssignmentsPatch
 from .config.mappers import _assignments_from
+
+# The single catalogue entry a fresh install ships (development/scripts/seed_config.py):
+# an endpoint-less stand-in so Settings has something to show before the user adds
+# a real driver.
+_PLACEHOLDER_DRIVER = "driver-unconfigured"
 
 
 class ConfigAssignments:
@@ -39,4 +44,21 @@ class ConfigAssignments:
             assignments,
             vision_escalation_model=vision_model,
         )
-        return _assignments_from(new_cfg)
+        return _assignments_from(self._retire_placeholder_driver(new_cfg))
+
+    def _retire_placeholder_driver(self, cfg: RouterConfig) -> RouterConfig:
+        """Drop the first-run stand-in once a real model leads.
+
+        It has no endpoint and cannot answer a request, so leaving it in the
+        Model library after setup offered an entry that only ever fails (UI-29).
+        Kept while anything still points at it — an orphaned assignment would be
+        a worse outcome than a stale row.
+        """
+        if cfg.default_model == _PLACEHOLDER_DRIVER or _PLACEHOLDER_DRIVER not in cfg.models:
+            return cfg
+        if _PLACEHOLDER_DRIVER in cfg.assignments.values():
+            return cfg
+        if cfg.vision_escalation_model == _PLACEHOLDER_DRIVER:
+            return cfg
+        remaining = {k: v for k, v in cfg.models.items() if k != _PLACEHOLDER_DRIVER}
+        return self._store.save(cfg.model_copy(update={"models": remaining}))

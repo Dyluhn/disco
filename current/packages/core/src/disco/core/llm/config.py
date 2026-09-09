@@ -52,6 +52,11 @@ class ProviderSettings(BaseModel):
     kind: Literal["openai-compat", "anthropic", "gemini"]
     secret_name: str
     requires_api_key: bool = True
+    # Outcome of the last /models probe made with this provider's key.
+    # None = never probed (the key is stored but unproven), True = the provider
+    # answered, False = the provider refused and ``key_error`` holds its answer.
+    key_verified: bool | None = None
+    key_error: str | None = None
 
 
 class ModelEntry(BaseModel):

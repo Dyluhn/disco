@@ -49,6 +49,7 @@
 import { useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { useDeepResearch } from "@/hooks/useDeepResearch";
+import { publishConversationTitle } from "@/lib/documentTitle";
 import type { ScopeId } from "@/shell/mode";
 import { useDeepResearchSurfaceState } from "./deepResearchSurfaceParts/useDeepResearchSurfaceState";
 import { DeepResearchComposer } from "./deepResearchSurfaceParts/DeepResearchComposer";
@@ -119,6 +120,13 @@ export function DeepResearchSurface({
   // A run opened FROM `/deep/:cid` is already at its own URL. Recording that
   // too keeps this once per run: a surface the user has deliberately left
   // cannot be pulled back to the run it still holds in memory.
+  // UI-28: name the browser tab after the question being researched.
+  const query = r.query;
+  useEffect(() => {
+    publishConversationTitle(query);
+    return () => publishConversationTitle(null);
+  }, [query]);
+
   const runCid = r.cid;
   const runHasEvents = r.activity.lastEventAt !== null;
   const urlCarriesRun = useRef<string | null>(null);
