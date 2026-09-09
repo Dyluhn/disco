@@ -18,6 +18,7 @@ import { useExportCapabilities } from "@/hooks/useExportCapabilities";
 import type { ReportExportFmt } from "@/api/deepResearch";
 import type { ScopeId } from "@/shell/mode";
 import { useToast } from "@/components/toastApi";
+import type { ReportAction, ReportActionName } from "../NeedMoreCard";
 
 interface Params {
   r: ReturnType<typeof useDeepResearch>;
@@ -97,6 +98,14 @@ export function useDeepResearchSurfaceState({ r, onScopeChange, draft, onDraftCh
     [r, runTopBarExport],
   );
 
+  // UI-25: the report actions also live in the top bar. The press is held here
+  // because the top bar and the "Need More?" card are siblings; the card runs
+  // it, since that is where each action's own state lives.
+  const [reportAction, setReportAction] = useState<ReportAction | null>(null);
+  const requestReportAction = useCallback((name: ReportActionName) => {
+    setReportAction((prev) => ({ name, nonce: (prev?.nonce ?? 0) + 1 }));
+  }, []);
+
   const handleTopBarIncludeConfirm = useCallback(
     (seqs: number[]) => {
       setTopBarIncludeOpen(false);
@@ -118,5 +127,7 @@ export function useDeepResearchSurfaceState({ r, onScopeChange, draft, onDraftCh
     setTopBarIncludeOpen,
     handleTopBarExport,
     handleTopBarIncludeConfirm,
+    reportAction,
+    requestReportAction,
   };
 }

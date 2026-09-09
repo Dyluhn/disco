@@ -14,11 +14,13 @@ import type { AgentEvent, ResearchFollowUpGroundingPayload } from "@/types/agent
 import { DeepReportView } from "../DeepReportView";
 import { asGroundedAnswer } from "../groundedAnswer";
 import { TieredSourcePanel } from "../TieredSourcePanel";
-import { NeedMoreCard } from "../NeedMoreCard";
+import { NeedMoreCard, type ReportAction } from "../NeedMoreCard";
 import { FollowUpStatus } from "../FollowUpStatus";
 
 interface Props {
   r: ReturnType<typeof useDeepResearch>;
+  /** A report action pressed in the top bar (UI-25). */
+  reportAction?: ReportAction | null;
 }
 
 /**
@@ -87,7 +89,7 @@ function FollowUpAnswer({
   );
 }
 
-export function DeepResearchReportView({ r }: Props) {
+export function DeepResearchReportView({ r, reportAction = null }: Props) {
   return (
     <>
       {/* The report document. v2 (gateless): there is no plan to wait for, so
@@ -162,6 +164,7 @@ export function DeepResearchReportView({ r }: Props) {
             onFollowUp={(question) => r.followUp(question)}
             followUpBusy={r.followUpStatus === "follow_up"}
             followUps={r.followUps}
+            requestedAction={reportAction}
           />
         </div>
       )}

@@ -10,8 +10,11 @@ import {
   Bell,
   FileText,
   FileType,
+  Headphones,
   Loader2,
+  MessageCircleQuestion,
   Play,
+  Presentation,
   RotateCcw,
   Search,
   Square,
@@ -22,6 +25,7 @@ import type { useDeepResearchDoneNotification } from "@/hooks/useDeepResearchDon
 import type { ReportExportFmt } from "@/api/deepResearch";
 import type { ExportCapabilities } from "@/hooks/useExportCapabilities";
 import { IncludeFollowUpsModal } from "../IncludeFollowUpsModal";
+import type { ReportActionName } from "../NeedMoreCard";
 import { CTRL_BTN, KILL_BTN, NOTIFY_ARMED_BTN, PENDING_BTN } from "./styles";
 
 interface Props {
@@ -34,7 +38,38 @@ interface Props {
   setTopBarIncludeOpen: (open: boolean) => void;
   handleTopBarExport: (fmt: ReportExportFmt) => void;
   handleTopBarIncludeConfirm: (seqs: number[]) => void;
+  /** Press one of the report actions the "Need More?" card owns (UI-25). */
+  requestReportAction: (name: ReportActionName) => void;
 }
+
+/** The three report actions that used to be reachable only by scrolling past
+ *  the whole report and its sources. Export is already here as MD / PDF, so it
+ *  is not repeated. The card keeps all four; these are the same presses. */
+const REPORT_ACTIONS: Array<{
+  name: ReportActionName;
+  label: string;
+  title: string;
+  Icon: typeof Headphones;
+}> = [
+  {
+    name: "follow_up",
+    label: "Follow-up",
+    title: "Ask a follow-up question about this report",
+    Icon: MessageCircleQuestion,
+  },
+  {
+    name: "audio",
+    label: "Audio",
+    title: "Generate an audio overview of this report",
+    Icon: Headphones,
+  },
+  {
+    name: "deck",
+    label: "Deck",
+    title: "Turn this report into a slide deck",
+    Icon: Presentation,
+  },
+];
 
 /**
  * Stop, and what replaces it once Stop has been asked for.
@@ -78,6 +113,7 @@ export function DeepResearchTopBar({
   setTopBarIncludeOpen,
   handleTopBarExport,
   handleTopBarIncludeConfirm,
+  requestReportAction,
 }: Props) {
   // fix-c #4: disable while in-flight so a second click can't double-fire the
   // server export; shared by `disabled` and `aria-disabled` below (was two
@@ -200,6 +236,22 @@ export function DeepResearchTopBar({
               )}
             </>
           )}
+          {/* UI-25: the report's own actions, next to the exports. */}
+          {r.status === "FINISHED" &&
+            r.report &&
+            REPORT_ACTIONS.map(({ name, label, title, Icon }) => (
+              <button
+                key={name}
+                type="button"
+                onClick={() => requestReportAction(name)}
+                data-disco-control={`dr.report-action.${name}`}
+                className={CTRL_BTN}
+                title={title}
+              >
+                <Icon className="size-3.5" aria-hidden />
+                {label}
+              </button>
+            ))}
           {(r.status === "FINISHED" || r.status === "ERROR") && (
             <Link to="/" onClick={handleNewResearch} data-disco-control="dr.new-research" className={CTRL_BTN}>
               <RotateCcw className="size-3.5" aria-hidden />

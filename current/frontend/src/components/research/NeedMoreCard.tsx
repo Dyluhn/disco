@@ -17,7 +17,7 @@
  * Pressing all three sequentially leaves all controls interactive.
  */
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   ChevronDown,
@@ -40,6 +40,19 @@ import { AudioSection } from "./needMoreCardParts/AudioSection";
 
 // ── Main export ───────────────────────────────────────────────────────────────
 
+/** One press of a report action, wherever it was pressed.
+ *
+ *  The card sits below the sources at the bottom of a long report, so a reader
+ *  had to scroll past everything to find Ask a Follow-Up / Audio Overview /
+ *  Build a deck (UI-25). The top bar offers the same three; the press arrives
+ *  here, because this is where those actions' state lives. `nonce` rises on
+ *  every press so pressing the same one twice works. */
+export type ReportActionName = "follow_up" | "audio" | "deck";
+export interface ReportAction {
+  name: ReportActionName;
+  nonce: number;
+}
+
 export interface NeedMoreCardProps {
   /** The finished report (for client-side MD export + audio). */
   report: ReportEvent;
@@ -53,6 +66,8 @@ export interface NeedMoreCardProps {
    *  "Include follow-ups?" modal is shown before Export / Audio so the user can
    *  choose which pairs to include. Empty list = skip the modal. */
   followUps?: MessageEvent[];
+  /** A press of the same action from the top bar. */
+  requestedAction?: ReportAction | null;
 }
 
 export function NeedMoreCard({
@@ -61,6 +76,7 @@ export function NeedMoreCard({
   onFollowUp,
   followUpBusy,
   followUps = [],
+  requestedAction = null,
 }: NeedMoreCardProps) {
   // Independent, resettable state per action.
   const [followUpOpen, setFollowUpOpen] = useState(false);
@@ -154,8 +170,25 @@ export function NeedMoreCard({
     setAudioModeOpen(true);
   }, []);
 
+  // Run a top-bar press here, and scroll the card into view so the reader sees
+  // what it did. Keyed on the nonce, not on the handlers: their identities move
+  // with unrelated state and a re-run must not fire the action a second time.
+  const cardRef = useRef<HTMLElement>(null);
+  const handledNonce = useRef(0);
+  useEffect(() => {
+    if (!requestedAction || requestedAction.nonce === handledNonce.current) return;
+    handledNonce.current = requestedAction.nonce;
+    // Optional call: jsdom (and any host without smooth scrolling) has no
+    // scrollIntoView, and the action must still run there.
+    cardRef.current?.scrollIntoView?.({ behavior: "smooth", block: "center" });
+    if (requestedAction.name === "follow_up") setFollowUpOpen(true);
+    else if (requestedAction.name === "audio") handleAudioClick();
+    else void handleBuildDeck();
+  }, [requestedAction, handleAudioClick, handleBuildDeck]);
+
   return (
     <section
+      ref={cardRef}
       aria-label="Need More?"
       className="rounded-card border border-hairline bg-surface-1 p-body"
     >
