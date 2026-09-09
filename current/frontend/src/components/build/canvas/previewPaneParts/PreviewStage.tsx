@@ -74,7 +74,13 @@ export function PreviewStage({
       {shouldShowStatusOverlay(launch, minting, runtimeUnavailable, visibleFailure, frameReady) && (
         <div
           role={statusOverlayRole(visibleFailure, runtimeUnavailable)}
-          className="pointer-events-none absolute inset-x-body top-body z-20 rounded-control border border-hairline bg-bg/95 px-body py-hair font-ui text-[0.76rem] text-text-muted shadow-sm backdrop-blur"
+          data-testid="preview-status-overlay"
+          // UI-15: the strip spans the FULL stage width. Inset from the sides it
+          // left a few pixels of the frame's own first line showing past its left
+          // edge — when that frame was a bare proxy error ("preview origin
+          // expired"), the user saw a stray "p" glyph floating beside this
+          // message. A full-bleed strip covers the line it is speaking for.
+          className="pointer-events-none absolute inset-x-0 top-0 z-20 border-b border-hairline bg-bg/95 px-body py-hair font-ui text-[0.76rem] text-text-muted shadow-sm backdrop-blur"
         >
           {statusOverlayMessage(visibleFailure, runtimeUnavailable, dataReason)}
         </div>
