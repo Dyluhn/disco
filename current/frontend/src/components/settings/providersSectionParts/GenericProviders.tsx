@@ -122,6 +122,7 @@ export function GenericProviders() {
                     <button
                       type="button"
                       data-disco-control="settings.provider-browse"
+                      aria-expanded={active}
                       onClick={() => setActiveId(active ? null : provider.id)}
                       className="min-h-11 rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:border-hairline-strong hover:text-text lg:min-h-0"
                     >

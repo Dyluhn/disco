@@ -20,7 +20,7 @@ export function BrowseProvider({
   provider: ProviderInfo;
   enabledModels: ModelInfo[];
 }) {
-  const { data, isLoading, isError, error } = useProviderModels(provider.id, true);
+  const { data, isError, error } = useProviderModels(provider.id, true);
   const enable = useEnableProviderModel(provider.id);
   const disable = useDisableProviderModel(provider.id);
   const [q, setQ] = useState("");
@@ -134,10 +134,11 @@ export function BrowseProvider({
           className={cn(FIELD, TAP_TARGET)}
         />
       </div>
-      {isLoading && (
-        <p className="font-ui text-[0.82rem] text-text-muted">Loading models...</p>
-      )}
-      {isError && (
+      {/* Exactly one of these always renders: the probe's failure, the wait, an
+          empty catalogue, an empty search, or the list. A silent panel used to
+          be reachable whenever `data` was still undefined without the query
+          reporting `isLoading` — which read as "Browse does nothing" (UI-36). */}
+      {isError ? (
         <CatalogueErrorBanner
           providerLabel={provider.label}
           error={error}
@@ -148,12 +149,17 @@ export function BrowseProvider({
           onManualAdd={manualAdd}
           addPending={enable.isPending}
         />
-      )}
-      {!isLoading && !isError && rows.length === 0 && (
+      ) : data === undefined ? (
+        <p className="font-ui text-[0.82rem] text-text-muted">Loading models…</p>
+      ) : data.length === 0 ? (
+        <p className="rounded-control border border-dashed border-hairline px-body py-inline font-ui text-[0.8rem] text-text-faint">
+          {provider.label} returned an empty catalogue.
+        </p>
+      ) : rows.length === 0 ? (
         <p className="rounded-control border border-dashed border-hairline px-body py-inline font-ui text-[0.8rem] text-text-faint">
           No matching models.
         </p>
-      )}
+      ) : null}
       {rows.length > 0 && (
         <ul className="overflow-hidden rounded-control border border-hairline bg-surface-1">
           {rows.slice(0, 100).map((m) => {

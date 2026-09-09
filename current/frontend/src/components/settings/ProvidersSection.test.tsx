@@ -348,6 +348,30 @@ describe("ProvidersSection — generic provider objects", () => {
     expect(screen.getByText("Key ready")).toBeInTheDocument();
   });
 
+  it("always shows a state in Browse, never a blank panel", async () => {
+    // UI-36/UI-4: with a rejected key the panel rendered nothing at all — no
+    // catalogue, no error — so Browse looked like a dead button.
+    catalogueFails = true;
+    render(createElement(ProvidersSection), { wrapper: makeWrapper() });
+
+    fireEvent.change(await screen.findByLabelText("Provider preset"), {
+      target: { value: "openai" },
+    });
+    fireEvent.change(screen.getByLabelText("Provider API key"), {
+      target: { value: "sk-live-secret" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Add provider/i }));
+
+    // The panel opens on add, so the toggle must say so — clicking it blind is
+    // what closed the catalogue and made Browse look dead.
+    const browse = await screen.findByRole("button", { name: "Close" });
+    expect(browse).toHaveAttribute("aria-expanded", "true");
+    expect(
+      await screen.findByText(/did not return a usable \/models catalogue/i),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("No matching models.")).not.toBeInTheDocument();
+  });
+
   it("renders the failed-/models manual-add path and uses the same enable route", async () => {
     catalogueFails = true;
     createCatalogueOk = false;
