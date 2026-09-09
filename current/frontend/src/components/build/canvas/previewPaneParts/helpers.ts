@@ -178,11 +178,22 @@ export function computeRuntimeUnavailable(
   return selectedVersionSeq === null && !committedStatic && data != null && !data.available;
 }
 
+/** The failure the pane should actually SAY something about.
+ *
+ * `launchFailure` only counts while the minted launch is stale (`launchKey !==
+ * requestedLaunchKey`) — a failure attached to the launch already on screen is
+ * old news the user has moved past.
+ *
+ * `bootstrapFailure` (UI-44) short-circuits that test, because it belongs to
+ * the CURRENT launch by construction: the mint succeeded, so the two keys are
+ * equal, and routing it through `launchFailure` would silently show nothing. */
 export function computeVisibleFailure(
   launchFailure: string | null,
   launchKey: string,
   requestedLaunchKey: string,
+  bootstrapFailure: string | null = null,
 ): string | null {
+  if (bootstrapFailure) return bootstrapFailure;
   return launchFailure && launchKey !== requestedLaunchKey ? launchFailure : null;
 }
 
@@ -240,6 +251,23 @@ export function shouldShowStatusOverlay(
   return Boolean(launch) && (minting || runtimeUnavailable || Boolean(visibleFailure) || !frameReady);
 }
 
+/** Whether the preview iframe is still worth showing.
+ *
+ * A frame that NEVER loaded (`frameReady` false) while a failure is visible is
+ * displaying whatever the proxy answered with — a raw nginx 403 or an expired
+ * origin page — so the plain-language failure card replaces it (UI-44).
+ *
+ * `frameReady` is the whole distinction. A previously healthy frame keeps it
+ * true through a later failed update, and THAT frame deliberately stays on
+ * screen behind the "showing the last healthy frame" banner. */
+export function shouldRenderPreviewFrame(
+  launch: PreviewLaunch | null,
+  visibleFailure: string | null,
+  frameReady: boolean,
+): boolean {
+  return Boolean(launch) && (frameReady || !visibleFailure);
+}
+
 export function statusOverlayRole(
   visibleFailure: string | null,
   runtimeUnavailable: boolean,
@@ -270,6 +298,8 @@ export function previewFailureExplanation(reason: string): string {
       return "Preview could not be opened because the platform could not establish an isolated preview origin. Try again in a moment.";
     case "local_preview_origin_pool_exhausted":
       return "Every isolated preview slot is in use. Close another preview tab, then try again.";
+    case "preview_bootstrap_timeout":
+      return "The preview server never answered, so nothing was loaded — whatever the frame was showing came from the proxy, not from your app. Press Refresh to try again, or use Download source to open the project on your own machine.";
     case "invalid_preview_path":
     case "reserved_preview_path":
     case "preview_target_too_long":

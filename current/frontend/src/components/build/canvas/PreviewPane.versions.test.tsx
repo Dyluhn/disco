@@ -267,6 +267,11 @@ describe("PreviewPane version history", () => {
       .mockRejectedValueOnce(new Error("capability unavailable"));
     renderPane();
     const currentFrame = await screen.findByTitle("Preview");
+    // The frame this test is about is the CURRENT, healthy one, so let it
+    // actually complete its bootstrap handshake and load. UI-44 hides a frame
+    // that never loaded at all (it would be showing a raw proxy error page);
+    // this one has loaded, so a later failed version mint must leave it alone.
+    await completePreviewLoad();
 
     await user.click(screen.getByRole("button", { name: /version history/i }));
     await user.click(versionLabel(2, "finished app"));

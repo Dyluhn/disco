@@ -16,6 +16,12 @@ type PreviewLaunchFrameProps = Omit<
   "name" | "src"
 > & {
   launch: PreviewLaunch;
+  /** Fired when the POST trampoline announces `disco-preview-bootstrap-ready`.
+   * Optional: a caller that does not watch the handshake is unaffected. The
+   * ABSENCE of this call is the only signal that the preview origin never
+   * answered (UI-44) — the frame's own `onLoad` is gated behind it, so a proxy
+   * error page in the frame is otherwise indistinguishable from a slow load. */
+  onBootstrapReady?: () => void;
 };
 
 type PreviewLaunchFrameInstanceProps = PreviewLaunchFrameProps & {
@@ -27,7 +33,7 @@ const PreviewLaunchFrameInstance = forwardRef<
   PreviewLaunchFrameInstanceProps
 >(
   function PreviewLaunchFrameInstance(
-    { launch, launchIdentity, onLoad, ...props },
+    { launch, launchIdentity, onLoad, onBootstrapReady, ...props },
     forwardedRef,
   ) {
     const { url: launchUrl, intent: launchIntent } = launch;
@@ -50,7 +56,7 @@ const PreviewLaunchFrameInstance = forwardRef<
 
     useEffect(() => {
       if (!launchIntent) return;
-      const onBootstrapReady = (event: MessageEvent) => {
+      const handleBootstrapReady = (event: MessageEvent) => {
         if (
           !bootstrapReadySeenRef.current &&
           event.source === internalRef.current?.contentWindow &&
@@ -60,12 +66,13 @@ const PreviewLaunchFrameInstance = forwardRef<
           // iframe load is the exact signed target selected by the trampoline.
           targetLoadArmedRef.current = true;
           bootstrapReadySeenRef.current = true;
-          window.removeEventListener("message", onBootstrapReady);
+          window.removeEventListener("message", handleBootstrapReady);
+          onBootstrapReady?.();
         }
       };
-      window.addEventListener("message", onBootstrapReady);
-      return () => window.removeEventListener("message", onBootstrapReady);
-    }, [launchIntent]);
+      window.addEventListener("message", handleBootstrapReady);
+      return () => window.removeEventListener("message", handleBootstrapReady);
+    }, [launchIntent, onBootstrapReady]);
 
     useEffect(() => {
       if (!internalRef.current) return;
