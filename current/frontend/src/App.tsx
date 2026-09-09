@@ -1,4 +1,4 @@
-import { lazy, useEffect, useRef } from "react";
+import { lazy, useEffect, useRef, useSyncExternalStore } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   Navigate,
@@ -9,6 +9,11 @@ import {
   useNavigate,
   useParams,
 } from "react-router-dom";
+import {
+  documentTitle,
+  getConversationTitle,
+  subscribeConversationTitle,
+} from "@/lib/documentTitle";
 import { installE2EBridge, type DiscoE2EState } from "@/lib/e2eBridge";
 import { getPublishedRunStatus } from "@/lib/runStatusBridge";
 import { clearFreshMode } from "@/lib/sessionResume";
@@ -127,6 +132,23 @@ function E2EBridgeMounter() {
     // only stable bindings (a ref + module-level getters), so there are no deps.
   }, []);
 
+  return null;
+}
+
+/** Keeps the browser tab named after where the user is (UI-28). The sole writer
+ *  of `document.title`: a surface showing one conversation publishes its title
+ *  through the seam in `@/lib/documentTitle` rather than assigning it here. */
+function DocumentTitle() {
+  const { pathname } = useLocation();
+  const { mode } = useMode();
+  const conversationTitle = useSyncExternalStore(
+    subscribeConversationTitle,
+    getConversationTitle,
+    () => null,
+  );
+  useEffect(() => {
+    document.title = documentTitle(pathname, mode, conversationTitle);
+  }, [pathname, mode, conversationTitle]);
   return null;
 }
 
@@ -257,6 +279,7 @@ export default function App() {
           <PairingGate>
           {/* W6: evidence-harness bridge — inert in production without opt-in */}
           <E2EBridgeMounter />
+          <DocumentTitle />
           <Routes>
             <Route element={<Shell />}>
               <Route index element={<MainSurface />} />
