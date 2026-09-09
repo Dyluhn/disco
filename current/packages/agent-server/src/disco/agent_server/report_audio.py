@@ -716,40 +716,68 @@ def read_report_audio_meta(mp3_path: Path) -> dict[str, str]:
     return {str(k): str(v) for k, v in data.items()} if isinstance(data, dict) else {}
 
 
+# The sentence shown under a restored player whose artifact we cannot prove was
+# made from the report currently on screen.
+_EARLIER_VERSION_NOTE = "This audio was made from an earlier version of this report."
+
+
+def _audio_entry(
+    mp3_path: Path, transcript_path: Path, meta: dict[str, str], *, stale: bool
+) -> dict[str, str]:
+    """One listing row for a generated overview.
+
+    ``mode`` comes from the sidecar when there is one and from the filename
+    otherwise -- ``audio_overview_<mode>_<hash>.mp3`` is the only name this
+    module has ever written, so the mode is recoverable either way.
+    """
+    parts = mp3_path.stem.split("_")
+    note = meta.get("note", "")
+    if stale:
+        note = f"{_EARLIER_VERSION_NOTE} {note}".strip()
+    return {
+        "mode": meta.get("mode") or (parts[2] if len(parts) > 2 else "podcast"),
+        "note": note,
+        "stale": "true" if stale else "",
+        "mp3_name": mp3_path.name,
+        "transcript_name": transcript_path.name,
+    }
+
+
 def existing_report_audio(out_dir: Path, report_key: str) -> list[dict[str, str]]:
-    """Overviews already generated FOR THIS REPORT, newest first.
+    """Overviews already on disk for this conversation, newest first.
 
     Used to restore the player on a fresh page load: the artifacts live on the
     data volume, so audio the user generated before a restart (or before
     closing the tab) is still there and must not look like it never happened.
-    Only files this module wrote are matched, only inside ``out_dir``, and only
-    those whose sidecar names the same report -- a second research run in the
-    same conversation must not inherit the first one's audio.
+    Only files this module wrote are matched, and only inside ``out_dir``.
+
+    Two passes, because "which report is this audio for?" is only answerable
+    for artifacts written since the sidecar existed:
+
+      1. Sidecars naming THIS report win outright, unmarked.
+      2. Otherwise take whatever is there -- an artifact from a build with no
+         sidecar at all, or one whose sidecar names a different report -- and
+         mark it ``stale`` so the UI can say it came from an earlier version.
+         Showing nothing while an MP3 sits on the volume is the worse answer:
+         that is the whole of UI-42, and it would have persisted for every
+         overview generated before this change shipped.
     """
     if not out_dir.is_dir():
         return []
-    found: list[tuple[float, dict[str, str]]] = []
+    exact: list[tuple[float, dict[str, str]]] = []
+    other: list[tuple[float, dict[str, str]]] = []
     for mp3_path in out_dir.glob("audio_overview_*.mp3"):
         transcript_path = mp3_path.with_suffix(".md")
         if not transcript_path.is_file():
-            continue
+            continue  # a half-written pair, or an orphan transcript
         meta = read_report_audio_meta(mp3_path)
-        if meta.get("report_key") != report_key:
-            continue
-        parts = mp3_path.stem.split("_")
-        mode = meta.get("mode") or (parts[2] if len(parts) > 2 else "podcast")
-        found.append(
-            (
-                mp3_path.stat().st_mtime,
-                {
-                    "mode": mode,
-                    "note": meta.get("note", ""),
-                    "mp3_name": mp3_path.name,
-                    "transcript_name": transcript_path.name,
-                },
-            )
-        )
-    return [entry for _mtime, entry in sorted(found, key=lambda row: row[0], reverse=True)]
+        mtime = mp3_path.stat().st_mtime
+        if meta.get("report_key") == report_key:
+            exact.append((mtime, _audio_entry(mp3_path, transcript_path, meta, stale=False)))
+        else:
+            other.append((mtime, _audio_entry(mp3_path, transcript_path, meta, stale=True)))
+    chosen = exact or other
+    return [entry for _mtime, entry in sorted(chosen, key=lambda row: row[0], reverse=True)]
 
 
 def _write_audio_artifacts(
