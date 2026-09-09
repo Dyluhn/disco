@@ -8,10 +8,7 @@
 import {
   Ban,
   Bell,
-  FileText,
-  FileType,
   Headphones,
-  Loader2,
   MessageCircleQuestion,
   Play,
   Presentation,
@@ -25,6 +22,7 @@ import type { useDeepResearchDoneNotification } from "@/hooks/useDeepResearchDon
 import type { ReportExportFmt } from "@/api/deepResearch";
 import type { ExportCapabilities } from "@/hooks/useExportCapabilities";
 import { IncludeFollowUpsModal } from "../IncludeFollowUpsModal";
+import { DeepResearchExportControls } from "./DeepResearchExportControls";
 import type { ReportActionName } from "../NeedMoreCard";
 import { CTRL_BTN, KILL_BTN, NOTIFY_ARMED_BTN, PENDING_BTN } from "./styles";
 
@@ -115,11 +113,6 @@ export function DeepResearchTopBar({
   handleTopBarIncludeConfirm,
   requestReportAction,
 }: Props) {
-  // fix-c #4: disable while in-flight so a second click can't double-fire the
-  // server export; shared by `disabled` and `aria-disabled` below (was two
-  // separately-written copies of the same condition).
-  const exportDisabled = r.exportPending !== null;
-  const pdfDisabled = !exportCaps.pdf || exportDisabled;
   return (
     <>
       {/* Header row: H1 + actions */}
@@ -185,57 +178,12 @@ export function DeepResearchTopBar({
               Retry
             </button>
           )}
-          {r.report && (
-            <>
-              <button
-                type="button"
-                onClick={() => handleTopBarExport("md")}
-                disabled={exportDisabled}
-                aria-disabled={exportDisabled}
-                data-disco-control="dr.export.topbar.md"
-                data-export-cap="true"
-                className={exportDisabled ? PENDING_BTN : CTRL_BTN}
-                title="Download as Markdown"
-              >
-                {r.exportPending === "md" ? (
-                  <Loader2 className="size-3.5 animate-spin" aria-hidden />
-                ) : (
-                  <FileText className="size-3.5" aria-hidden />
-                )}
-                MD
-              </button>
-              <button
-                type="button"
-                onClick={() => handleTopBarExport("pdf")}
-                // fix-c #4: disable while in-flight so a second click can't
-                // double-fire the server export; the icon swaps to a spinner
-                // when this fmt is the active pending one. Mirrors the
-                // ExportModal pattern in NeedMoreCard.
-                disabled={pdfDisabled}
-                aria-disabled={pdfDisabled}
-                data-disco-control="dr.export.topbar.pdf"
-                data-export-cap={String(exportCaps.pdf)}
-                className={pdfDisabled ? PENDING_BTN : CTRL_BTN}
-                title={
-                  exportCaps.pdf
-                    ? "Download as PDF"
-                    : "PDF export unavailable — the server has no WeasyPrint"
-                }
-              >
-                {r.exportPending === "pdf" ? (
-                  <Loader2 className="size-3.5 animate-spin" aria-hidden />
-                ) : (
-                  <FileType className="size-3.5" aria-hidden />
-                )}
-                PDF
-              </button>
-              {!exportCaps.pdf && (
-                <span className="font-ui text-[0.68rem] text-text-faint">
-                  PDF needs WeasyPrint on the server
-                </span>
-              )}
-            </>
-          )}
+          <DeepResearchExportControls
+            hasReport={Boolean(r.report)}
+            exportPending={r.exportPending}
+            exportCaps={exportCaps}
+            handleTopBarExport={handleTopBarExport}
+          />
           {/* UI-25: the report's own actions, next to the exports. */}
           {r.status === "FINISHED" &&
             r.report &&

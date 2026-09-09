@@ -1,5 +1,5 @@
 import { AlertTriangle, FileSpreadsheet } from "lucide-react";
-import { SheetDownload } from "../build/ActivityFeed";
+import { SheetDownload } from "../build/activityFeedParts/SheetDownload";
 
 /**
  * SheetBlockComponent — renders a workbook PREVIEW card: sheet metadata + a

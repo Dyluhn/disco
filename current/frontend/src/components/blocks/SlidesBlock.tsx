@@ -2,7 +2,7 @@ import { useState } from "react";
 import { AlertTriangle, ChevronLeft, ChevronRight, MonitorPlay } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { rendererLabel } from "@/lib/slidesRenderer";
-import { SlidesDownload } from "../build/ActivityFeed";
+import { SlidesDownload } from "../build/activityFeedParts/SlidesDownload";
 
 /**
  * SlidesBlockComponent — renders a navigable slide-deck PREVIEW card. Each
