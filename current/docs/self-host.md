@@ -6,6 +6,11 @@ socket is inherited by a fresh install.
 
 ## Quickstart
 
+The repository is private: clone it with your own GitHub access — an SSH key on
+your account (`git@github.com:Dyluhn/disco.git`) or a `repo`-scoped personal
+access token as the password for the `https://` clone. Without access the clone
+stops at `Repository not found`.
+
 ```bash
 sudo apt-get update && sudo apt-get install -y git podman docker-compose   # Debian 13
 # Ubuntu 24.04 instead: ... git podman podman-compose  (its docker-compose is the

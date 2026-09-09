@@ -134,6 +134,13 @@ and, more quietly, hands the containers environment values that still read
 when `VAR` is unset and is also one of the service's own environment keys.
 Install `docker-compose` and run `podman compose up -d --build` again.
 
+The repository is private, so `git clone` needs your own GitHub access. Either
+put an SSH key on your account and clone `git@github.com:Dyluhn/disco.git`, or
+create a personal access token with `repo` scope and give it as the password the
+`https://` clone asks for; `gh auth login` sets up either. Without access the
+clone stops at `Repository not found` — GitHub does not distinguish "private"
+from "missing" for a client it does not recognise.
+
 **Rootless Podman** (the path this project's install testing actually covers):
 
 ```bash
