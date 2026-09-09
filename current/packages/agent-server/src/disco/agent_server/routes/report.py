@@ -25,6 +25,7 @@ from ..report_audio import (
     generate_report_audio,
     read_report_audio_meta,
     report_audio_cache_dir,
+    report_content_key,
 )
 from ..runtime import ConversationRuntime
 from ._common import _AUDIO_MEDIA_TYPES, require_owned_conversation
@@ -484,7 +485,7 @@ async def _report_audio_stream_response(
     )
 
 
-def _existing_report_audio_response(conversation_id: str) -> dict:
+def _existing_report_audio_response(conversation_id: str, report: ReportEvent) -> dict:
     """What audio already exists for this conversation, newest first.
 
     The artifacts live on the data volume, so an overview generated before a
@@ -503,7 +504,7 @@ def _existing_report_audio_response(conversation_id: str) -> dict:
                 "mp3_url": f"{base}/{entry['mp3_name']}",
                 "transcript_url": f"{base}/{entry['transcript_name']}",
             }
-            for entry in existing_report_audio(out_dir)
+            for entry in existing_report_audio(out_dir, report_content_key(report))
         ],
     }
 
@@ -623,7 +624,10 @@ def make_report_router(store: SqliteEventStore, runtime: ConversationRuntime | N
         been generated. Read-only: it never starts a generation run, so the UI
         can call it on every report load."""
         conversation_id = await require_owned_conversation(request, store, conversation_id)
-        return _existing_report_audio_response(conversation_id)
+        report, _follow_ups, _tts, _out_dir = await _resolve_audio_inputs(
+            store, conversation_id, "podcast", []
+        )
+        return _existing_report_audio_response(conversation_id, report)
 
     @router.get("/conversations/{conversation_id}/report/audio/{name}")
     async def report_audio_file(conversation_id: str, name: str, request: Request) -> Response:

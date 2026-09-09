@@ -138,6 +138,36 @@ def test_existing_audio_is_listed_without_regenerating(
     assert client.get(entries[0]["mp3_url"]).status_code == 200
 
 
+def test_a_second_research_run_does_not_inherit_the_first_reports_audio(
+    client: TestClient, store: SqliteEventStore, configure_tts, fake_pipeline
+) -> None:
+    """A conversation can hold more than one report. Restoring the previous
+    run's player onto a new report would be worse than showing none."""
+    configure_tts(_enabled())
+    cid = _create_conv(client)
+    _seed_report(store, cid)
+    assert client.post(f"/conversations/{cid}/report/audio").status_code == 200
+    assert len(client.get(f"/conversations/{cid}/report/audio").json()["audio"]) == 1
+
+    # A second, different report lands on the same conversation.
+    second = _make_report().model_copy(update={"query": "sodium-ion batteries"})
+    loop = asyncio.new_event_loop()
+    try:
+        loop.run_until_complete(store.append(cid, second))
+    finally:
+        loop.close()
+
+    assert client.get(f"/conversations/{cid}/report/audio").json()["audio"] == []
+
+
+def test_listing_audio_without_a_report_is_a_404(
+    client: TestClient, configure_tts, fake_pipeline
+) -> None:
+    configure_tts(_enabled())
+    cid = _create_conv(client)
+    assert client.get(f"/conversations/{cid}/report/audio").status_code == 404
+
+
 def test_listing_a_conversation_with_no_audio_is_empty_not_an_error(
     client: TestClient, store: SqliteEventStore, configure_tts, fake_pipeline
 ) -> None:

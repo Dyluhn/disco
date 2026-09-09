@@ -389,6 +389,18 @@ async def _generate_turn_script(
     return script
 
 
+def report_content_key(report: ReportEvent) -> str:
+    """Identity of the REPORT itself, ignoring which follow-ups were included.
+
+    The artifact cache key mixes in the follow-up selection and the mode, so it
+    cannot answer "is this audio for the report on screen?". A conversation can
+    hold more than one research run, and restoring the previous run's audio
+    onto a new report would be worse than showing no player at all.
+    """
+    seed = report.query + (report.summary or "") + "".join(s.markdown for s in report.sections)
+    return hashlib.sha256(seed.encode()).hexdigest()[:12]
+
+
 def _report_audio_cache_paths(
     report: ReportEvent,
     follow_ups: list[tuple[str, str]] | None,
@@ -704,13 +716,15 @@ def read_report_audio_meta(mp3_path: Path) -> dict[str, str]:
     return {str(k): str(v) for k, v in data.items()} if isinstance(data, dict) else {}
 
 
-def existing_report_audio(out_dir: Path) -> list[dict[str, str]]:
-    """Every overview already generated for one conversation, newest first.
+def existing_report_audio(out_dir: Path, report_key: str) -> list[dict[str, str]]:
+    """Overviews already generated FOR THIS REPORT, newest first.
 
     Used to restore the player on a fresh page load: the artifacts live on the
     data volume, so audio the user generated before a restart (or before
     closing the tab) is still there and must not look like it never happened.
-    Only files this module wrote are matched, and only inside ``out_dir``.
+    Only files this module wrote are matched, only inside ``out_dir``, and only
+    those whose sidecar names the same report -- a second research run in the
+    same conversation must not inherit the first one's audio.
     """
     if not out_dir.is_dir():
         return []
@@ -720,6 +734,8 @@ def existing_report_audio(out_dir: Path) -> list[dict[str, str]]:
         if not transcript_path.is_file():
             continue
         meta = read_report_audio_meta(mp3_path)
+        if meta.get("report_key") != report_key:
+            continue
         parts = mp3_path.stem.split("_")
         mode = meta.get("mode") or (parts[2] if len(parts) > 2 else "podcast")
         found.append(
@@ -823,9 +839,6 @@ async def generate_report_audio(
     script = await _generate_turn_script(overview_text, mode, conversation_id=conversation_id)
     turns = script.turns
     note = script.note
-    if note:
-        await _emit(on_progress, {"stage": "note", "note": note})
-
     await _ensure_voice_model_ready(is_remote, on_progress)
 
     # --- Step 2: synthesize each turn to PCM --------------------------------
@@ -860,7 +873,12 @@ async def generate_report_audio(
         transcript_path,
         mixed_mp3,
         transcript_text,
-        {"mode": mode, "note": note, "source": script.source},
+        {
+            "mode": mode,
+            "note": note,
+            "source": script.source,
+            "report_key": report_content_key(report),
+        },
     )
 
     logger.info(
@@ -885,6 +903,7 @@ __all__ = [
     "_normalize_for_tts",
     "existing_report_audio",
     "generate_report_audio",
+    "report_content_key",
     "read_report_audio_meta",
     "report_audio_cache_dir",
     "remove_report_audio_cache",
