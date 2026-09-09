@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "e08483ac782031c791f230892c4e5fb6b9c78fe4",
+  "source_identity": "81beb0f5f5d24e6b0cdd9fa79308aa52c04f6d8c",
   "collected": {
     "counts": {
-      "packages": 12081,
+      "packages": 12087,
       "harness": 1571,
       "integrations": 9,
       "tests": 424
     },
-    "total": 14085,
+    "total": 14091,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -999,6 +999,7 @@
         "packages/agent-server/tests/test_build_contract_activation.py::test_set_build_kind_evicts_cached_loop_and_executor",
         "packages/agent-server/tests/test_build_contract_activation.py::test_set_build_kind_none_resets_to_custom",
         "packages/agent-server/tests/test_build_contract_activation.py::test_starter_kit_for_resolves_the_contract_starter",
+        "packages/agent-server/tests/test_build_contract_activation.py::test_unmapped_brief_kind_declares_no_delivery_shape_so_preview_survives_finish",
         "packages/agent-server/tests/test_build_kernel_interface.py::test_conversation_control_ops_route_through_disco_kernel",
         "packages/agent-server/tests/test_build_kernel_interface.py::test_disco_kernel_control_ops_delegate_unchanged",
         "packages/agent-server/tests/test_build_kernel_interface.py::test_disco_kernel_satisfies_protocol",
@@ -9924,9 +9925,14 @@
         "packages/tools/tests/test_audio_overview_truncation.py::test_legacy_array_malformed_retry_remains_supported",
         "packages/tools/tests/test_audio_overview_truncation.py::test_length_stop_retries_smaller_batch_without_duplicate_turns",
         "packages/tools/tests/test_audio_overview_truncation.py::test_long_reasoning_script_is_assembled_from_complete_batches",
+        "packages/tools/tests/test_audio_overview_truncation.py::test_over_full_batch_is_trimmed_to_the_agreed_total",
+        "packages/tools/tests/test_audio_overview_truncation.py::test_podcast_mode_total_turns_above_band_is_pinned_not_failed",
+        "packages/tools/tests/test_audio_overview_truncation.py::test_podcast_mode_whole_script_in_one_batch_is_trimmed_not_failed",
         "packages/tools/tests/test_audio_overview_truncation.py::test_repeated_length_stop_fails_actionably_and_bounded",
         "packages/tools/tests/test_audio_overview_truncation.py::test_reported_output_limit_caps_each_segment",
         "packages/tools/tests/test_audio_overview_truncation.py::test_segmented_single_mode_preserves_single_voice_contract",
+        "packages/tools/tests/test_audio_overview_truncation.py::test_short_batch_is_still_rejected",
+        "packages/tools/tests/test_audio_overview_truncation.py::test_single_mode_total_turns_below_band_is_pinned_not_failed",
         "packages/tools/tests/test_audio_overview_truncation.py::test_unknown_output_limit_defers_to_provider",
         "packages/tools/tests/test_behavior_inventory.py::test_browser_classifier_separates_observation_from_interaction",
         "packages/tools/tests/test_behavior_inventory.py::test_context_memory_classifier_is_operation_aware",
@@ -14106,9 +14112,9 @@
     }
   },
   "mapping_static": {
-    "identity": "e08483ac782031c791f230892c4e5fb6b9c78fe4",
+    "identity": "81beb0f5f5d24e6b0cdd9fa79308aa52c04f6d8c",
     "python_test_file_count": 941,
-    "python_static_test_id_count": 11551,
+    "python_static_test_id_count": 11557,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -16965,6 +16971,7 @@
       "packages/agent-server/tests/test_build_contract_activation.py::test_set_build_kind_evicts_cached_loop_and_executor",
       "packages/agent-server/tests/test_build_contract_activation.py::test_set_build_kind_none_resets_to_custom",
       "packages/agent-server/tests/test_build_contract_activation.py::test_starter_kit_for_resolves_the_contract_starter",
+      "packages/agent-server/tests/test_build_contract_activation.py::test_unmapped_brief_kind_declares_no_delivery_shape_so_preview_survives_finish",
       "packages/agent-server/tests/test_build_kernel_interface.py::test_conversation_control_ops_route_through_disco_kernel",
       "packages/agent-server/tests/test_build_kernel_interface.py::test_disco_kernel_control_ops_delegate_unchanged",
       "packages/agent-server/tests/test_build_kernel_interface.py::test_disco_kernel_satisfies_protocol",
@@ -24361,9 +24368,14 @@
       "packages/tools/tests/test_audio_overview_truncation.py::test_legacy_array_malformed_retry_remains_supported",
       "packages/tools/tests/test_audio_overview_truncation.py::test_length_stop_retries_smaller_batch_without_duplicate_turns",
       "packages/tools/tests/test_audio_overview_truncation.py::test_long_reasoning_script_is_assembled_from_complete_batches",
+      "packages/tools/tests/test_audio_overview_truncation.py::test_over_full_batch_is_trimmed_to_the_agreed_total",
+      "packages/tools/tests/test_audio_overview_truncation.py::test_podcast_mode_total_turns_above_band_is_pinned_not_failed",
+      "packages/tools/tests/test_audio_overview_truncation.py::test_podcast_mode_whole_script_in_one_batch_is_trimmed_not_failed",
       "packages/tools/tests/test_audio_overview_truncation.py::test_repeated_length_stop_fails_actionably_and_bounded",
       "packages/tools/tests/test_audio_overview_truncation.py::test_reported_output_limit_caps_each_segment",
       "packages/tools/tests/test_audio_overview_truncation.py::test_segmented_single_mode_preserves_single_voice_contract",
+      "packages/tools/tests/test_audio_overview_truncation.py::test_short_batch_is_still_rejected",
+      "packages/tools/tests/test_audio_overview_truncation.py::test_single_mode_total_turns_below_band_is_pinned_not_failed",
       "packages/tools/tests/test_audio_overview_truncation.py::test_unknown_output_limit_defers_to_provider",
       "packages/tools/tests/test_behavior_inventory.py::test_browser_classifier_separates_observation_from_interaction",
       "packages/tools/tests/test_behavior_inventory.py::test_context_memory_classifier_is_operation_aware",
@@ -26605,8 +26617,8 @@
       "tests/unbiased_gate/test_authorB_models_imagegen.py::test_w50_slides_degrade_to_image_less_when_image_backend_unconfigured",
       "tests/unbiased_gate/test_authorB_models_imagegen.py::test_w50_unconfigured_image_backend_fails_loudly_instead_of_procedural_fallback"
     ],
-    "typescript_test_file_count": 287,
-    "typescript_static_test_id_count": 1484,
+    "typescript_test_file_count": 288,
+    "typescript_static_test_id_count": 1490,
     "typescript_test_files": [
       "frontend/e2e-full/scenarios/click-provenance.smoke.spec.ts",
       "frontend/e2e-full/scenarios/per-surface.full.spec.ts",
@@ -26797,6 +26809,7 @@
       "frontend/src/components/research/deepResearchSurfaceParts/DeepResearchReportView.test.tsx",
       "frontend/src/components/research/deepResearchSurfaceParts/DeepResearchRunView.starting.test.tsx",
       "frontend/src/components/research/groundedAnswer.test.ts",
+      "frontend/src/components/research/needMoreCardParts/audioProgress.test.ts",
       "frontend/src/components/settings/DataSourcesSection.test.tsx",
       "frontend/src/components/settings/ImageGenSection.test.tsx",
       "frontend/src/components/settings/LiveBrowserSection.test.tsx",
@@ -27354,12 +27367,14 @@
       "frontend/src/components/build/ExecutionCanvas.preview.test.tsx::does not claim a server-side artifact has zero bytes",
       "frontend/src/components/build/ExecutionCanvas.preview.test.tsx::does not force Preview when no app or HTML exists",
       "frontend/src/components/build/ExecutionCanvas.preview.test.tsx::drops a relative API prefix from the wildcard preview origin",
+      "frontend/src/components/build/ExecutionCanvas.preview.test.tsx::explains a refused preview capability in plain words instead of only the raw reason code",
       "frontend/src/components/build/ExecutionCanvas.preview.test.tsx::extracts cid8 and maps localhost to .localhost",
       "frontend/src/components/build/ExecutionCanvas.preview.test.tsx::fails closed when canonical capability minting fails",
       "frontend/src/components/build/ExecutionCanvas.preview.test.tsx::keeps the latest app canonical when a file handoff follows it",
       "frontend/src/components/build/ExecutionCanvas.preview.test.tsx::keeps the old host transport isolated when an operator uses it",
       "frontend/src/components/build/ExecutionCanvas.preview.test.tsx::maps IPv6 loopback and fails closed on other bare IPs",
       "frontend/src/components/build/ExecutionCanvas.preview.test.tsx::prepends cid8-port to other hostnames",
+      "frontend/src/components/build/ExecutionCanvas.preview.test.tsx::re-mints when the final seal lands so a capability refused during finalize does not latch",
       "frontend/src/components/build/ExecutionCanvas.preview.test.tsx::retains the last valid frame while the runtime is unavailable",
       "frontend/src/components/build/ExecutionCanvas.preview.test.tsx::serves a server-side HTML artifact through the hardened artifact route",
       "frontend/src/components/build/ExecutionCanvas.preview.test.tsx::shows an honest preparing state until the canonical capability is ready",
@@ -27717,6 +27732,10 @@
       "frontend/src/components/research/deepResearchSurfaceParts/DeepResearchRunView.starting.test.tsx::shows no hold panel when the engine reported no hold",
       "frontend/src/components/research/deepResearchSurfaceParts/DeepResearchRunView.starting.test.tsx::starts live and says what it is waiting for, without a spinner",
       "frontend/src/components/research/groundedAnswer.test.ts::makes cited and reviewed report passages resolvable, cited-first and deduplicated",
+      "frontend/src/components/research/needMoreCardParts/audioProgress.test.ts::keeps the stage and the server detail as the secondary line",
+      "frontend/src/components/research/needMoreCardParts/audioProgress.test.ts::never degrades to a bare stage name when the server sends no message",
+      "frontend/src/components/research/needMoreCardParts/audioProgress.test.ts::shows the server's message rather than the raw stage name",
+      "frontend/src/components/research/needMoreCardParts/audioProgress.test.ts::still special-cases the disabled-in-settings reason",
       "frontend/src/components/settings/DataSourcesSection.test.tsx::exposes SearXNG engine categories only when SearXNG is selected",
       "frontend/src/components/settings/DataSourcesSection.test.tsx::offers exactly the providers that are actually wired \u2014 no false affordances",
       "frontend/src/components/settings/DataSourcesSection.test.tsx::persists Brave with a selected stored credential name",
@@ -30268,8 +30287,8 @@
         ]
       }
     },
-    "vitest_ids": 1423,
-    "vitest_files": 213,
+    "vitest_ids": 1429,
+    "vitest_files": 214,
     "vitest_ids_list": [
       "frontend/src/App.moderesume.test.tsx::A2 \u2014 fresh sessions and resume targets > New preserves the active mode, then a mode chip lands on that mode's splash",
       "frontend/src/App.moderesume.test.tsx::A2 \u2014 fresh sessions and resume targets > does not resume a just-killed conversation id from the mode chip",
@@ -30623,8 +30642,10 @@
       "frontend/src/components/build/ExecutionCanvas.preview.test.tsx::FilesPane \u2014 server-side artifact sizes > shows byte size for event-carried content",
       "frontend/src/components/build/ExecutionCanvas.preview.test.tsx::PreviewPane \u2014 hardened artifact viewer > serves a server-side HTML artifact through the hardened artifact route",
       "frontend/src/components/build/ExecutionCanvas.preview.test.tsx::PreviewPane \u2014 hardened artifact viewer > uses srcdoc only for untrusted imported HTML and never mints runtime access",
+      "frontend/src/components/build/ExecutionCanvas.preview.test.tsx::PreviewPane \u2014 one canonical owned-web surface > explains a refused preview capability in plain words instead of only the raw reason code",
       "frontend/src/components/build/ExecutionCanvas.preview.test.tsx::PreviewPane \u2014 one canonical owned-web surface > fails closed when canonical capability minting fails",
       "frontend/src/components/build/ExecutionCanvas.preview.test.tsx::PreviewPane \u2014 one canonical owned-web surface > keeps the latest app canonical when a file handoff follows it",
+      "frontend/src/components/build/ExecutionCanvas.preview.test.tsx::PreviewPane \u2014 one canonical owned-web surface > re-mints when the final seal lands so a capability refused during finalize does not latch",
       "frontend/src/components/build/ExecutionCanvas.preview.test.tsx::PreviewPane \u2014 one canonical owned-web surface > retains the last valid frame while the runtime is unavailable",
       "frontend/src/components/build/ExecutionCanvas.preview.test.tsx::PreviewPane \u2014 one canonical owned-web surface > shows an honest preparing state until the canonical capability is ready",
       "frontend/src/components/build/ExecutionCanvas.preview.test.tsx::PreviewPane \u2014 one canonical owned-web surface > uses the real canonical frame for Vite",
@@ -30992,6 +31013,10 @@
       "frontend/src/components/research/deepResearchSurfaceParts/DeepResearchRunView.starting.test.tsx::DeepResearchRunView \u2014 the start-up state does not pretend > shows no hold panel when the engine reported no hold",
       "frontend/src/components/research/deepResearchSurfaceParts/DeepResearchRunView.starting.test.tsx::DeepResearchRunView \u2014 the start-up state does not pretend > starts live and says what it is waiting for, without a spinner",
       "frontend/src/components/research/groundedAnswer.test.ts::asGroundedAnswer > makes cited and reviewed report passages resolvable, cited-first and deduplicated",
+      "frontend/src/components/research/needMoreCardParts/audioProgress.test.ts::audio failure copy > keeps the stage and the server detail as the secondary line",
+      "frontend/src/components/research/needMoreCardParts/audioProgress.test.ts::audio failure copy > never degrades to a bare stage name when the server sends no message",
+      "frontend/src/components/research/needMoreCardParts/audioProgress.test.ts::audio failure copy > shows the server's message rather than the raw stage name",
+      "frontend/src/components/research/needMoreCardParts/audioProgress.test.ts::audio failure copy > still special-cases the disabled-in-settings reason",
       "frontend/src/components/settings/DataSourcesSection.test.tsx::DataSourcesSection \u2014 search provider surface > exposes SearXNG engine categories only when SearXNG is selected",
       "frontend/src/components/settings/DataSourcesSection.test.tsx::DataSourcesSection \u2014 search provider surface > offers exactly the providers that are actually wired \u2014 no false affordances",
       "frontend/src/components/settings/DataSourcesSection.test.tsx::DataSourcesSection \u2014 search provider surface > persists Brave with a selected stored credential name",
@@ -31811,6 +31836,7 @@
       "frontend/src/components/research/deepResearchSurfaceParts/DeepResearchReportView.test.tsx",
       "frontend/src/components/research/deepResearchSurfaceParts/DeepResearchRunView.starting.test.tsx",
       "frontend/src/components/research/groundedAnswer.test.ts",
+      "frontend/src/components/research/needMoreCardParts/audioProgress.test.ts",
       "frontend/src/components/settings/DataSourcesSection.test.tsx",
       "frontend/src/components/settings/ImageGenSection.test.tsx",
       "frontend/src/components/settings/LiveBrowserSection.test.tsx",
@@ -39312,6 +39338,49 @@
             "scope": "pytest.fixture"
           }
         ]
+      }
+    },
+    {
+      "package": "PKG-37-UI-FIXES-V50",
+      "root": "packages",
+      "source_identity_before": "e08483ac782031c791f230892c4e5fb6b9c78fe4",
+      "source_identity_after": "81beb0f5f5d24e6b0cdd9fa79308aa52c04f6d8c",
+      "collected_roots": {
+        "packages": {
+          "before_count": 12081,
+          "after_count": 12087,
+          "added_ids": [
+            "packages/agent-server/tests/test_build_contract_activation.py::test_unmapped_brief_kind_declares_no_delivery_shape_so_preview_survives_finish",
+            "packages/tools/tests/test_audio_overview_truncation.py::test_over_full_batch_is_trimmed_to_the_agreed_total",
+            "packages/tools/tests/test_audio_overview_truncation.py::test_podcast_mode_total_turns_above_band_is_pinned_not_failed",
+            "packages/tools/tests/test_audio_overview_truncation.py::test_podcast_mode_whole_script_in_one_batch_is_trimmed_not_failed",
+            "packages/tools/tests/test_audio_overview_truncation.py::test_short_batch_is_still_rejected",
+            "packages/tools/tests/test_audio_overview_truncation.py::test_single_mode_total_turns_below_band_is_pinned_not_failed"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [],
+        "python_static_test_ids": [
+          "packages/agent-server/tests/test_build_contract_activation.py::test_unmapped_brief_kind_declares_no_delivery_shape_so_preview_survives_finish",
+          "packages/tools/tests/test_audio_overview_truncation.py::test_over_full_batch_is_trimmed_to_the_agreed_total",
+          "packages/tools/tests/test_audio_overview_truncation.py::test_podcast_mode_total_turns_above_band_is_pinned_not_failed",
+          "packages/tools/tests/test_audio_overview_truncation.py::test_podcast_mode_whole_script_in_one_batch_is_trimmed_not_failed",
+          "packages/tools/tests/test_audio_overview_truncation.py::test_short_batch_is_still_rejected",
+          "packages/tools/tests/test_audio_overview_truncation.py::test_single_mode_total_turns_below_band_is_pinned_not_failed"
+        ],
+        "typescript_test_files": [
+          "frontend/src/components/research/needMoreCardParts/audioProgress.test.ts"
+        ],
+        "typescript_static_test_ids": [
+          "frontend/src/components/build/ExecutionCanvas.preview.test.tsx::explains a refused preview capability in plain words instead of only the raw reason code",
+          "frontend/src/components/build/ExecutionCanvas.preview.test.tsx::re-mints when the final seal lands so a capability refused during finalize does not latch",
+          "frontend/src/components/research/needMoreCardParts/audioProgress.test.ts::keeps the stage and the server detail as the secondary line",
+          "frontend/src/components/research/needMoreCardParts/audioProgress.test.ts::never degrades to a bare stage name when the server sends no message",
+          "frontend/src/components/research/needMoreCardParts/audioProgress.test.ts::shows the server's message rather than the raw stage name",
+          "frontend/src/components/research/needMoreCardParts/audioProgress.test.ts::still special-cases the disabled-in-settings reason"
+        ],
+        "fixtures": []
       }
     },
     {

@@ -9,9 +9,12 @@ as they were.
 ``_validate_script_batch`` is split into ``_parse_batch_total`` (the
 ``total_turns`` shape/range/consistency checks) and ``_parse_batch_items`` (the
 per-item loop) purely to bring its cyclomatic complexity under budget.
-The one deliberate behavior change since the split: a first-batch
+Two deliberate behavior changes since the split, both so that a driver which
+ignores our batching contract cannot kill the whole overview: a first-batch
 ``total_turns`` outside the mode's band is pinned into the band rather than
-rejected (see ``_parse_batch_total``).
+rejected (``_parse_batch_total``), and an over-full batch is trimmed to the
+turns that fit rather than rejected (``_parse_batch_items``). Short batches,
+non-contiguous indexes and invalid turns are still rejected.
 """
 
 from __future__ import annotations
@@ -198,13 +201,31 @@ def _parse_batch_items(
     items = data.get("turns")
     if not isinstance(items, list):
         return None, "Script batch turns must be a JSON array"
-    expected_count = min(requested_turns, total - start_turn + 1)
-    if len(items) != expected_count:
+    room = total - start_turn + 1
+    expected_count = min(requested_turns, room)
+    if len(items) < expected_count:
         return (
             None,
-            f"Script batch must contain exactly {expected_count} contiguous turns; "
+            f"Script batch must contain at least {expected_count} contiguous turns; "
             f"received {len(items)}",
         )
+    if len(items) > expected_count:
+        # An OVER-full batch is the driver writing more of the script than we
+        # asked for, not a broken answer — deepseek-v4-flash ignores the window
+        # and returns the whole script every time, which used to fail the run
+        # ("must contain exactly 2 contiguous turns; received 19"). The turns
+        # still have to be contiguous from start_turn and individually valid;
+        # keep the ones that fit inside the agreed total and drop the rest.
+        _LOG.warning(
+            "audio turn-script: asked for %d turn(s) from turn %d, driver returned %d; "
+            "keeping %d that fit the agreed total of %d",
+            expected_count,
+            start_turn,
+            len(items),
+            min(len(items), room),
+            total,
+        )
+        items = items[:room]
 
     turns: list[Turn] = []
     for offset, item in enumerate(items):

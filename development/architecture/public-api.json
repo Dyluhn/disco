@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-public-api-v1",
-  "source_identity": "e08483ac782031c791f230892c4e5fb6b9c78fe4",
+  "source_identity": "81beb0f5f5d24e6b0cdd9fa79308aa52c04f6d8c",
   "python_initializers": [
     {
       "path": "packages/agent-server/src/disco/agent_server/__init__.py",
@@ -18935,7 +18935,7 @@
         {
           "kind": "InterfaceDeclaration",
           "name": "AudioStreamEvent",
-          "signature": "export interface AudioStreamEvent { stage?: string; current?: number; total?: number; mp3_url?: string; reason?: string; // W-08: real voice-model download byte counters. downloaded?: number; pct?: number; file_index?: number; file_total?: number; }"
+          "signature": "export interface AudioStreamEvent { stage?: string; current?: number; total?: number; mp3_url?: string; reason?: string; /** Human-readable failure sentence (what failed, why, what to do). */ message?: string; /** Technical failure text behind `message`. */ detail?: string; // W-08: real voice-model download byte counters. downloaded?: number; pct?: number; file_index?: number; file_total?: number; }"
         },
         {
           "kind": "InterfaceDeclaration",
@@ -20839,6 +20839,11 @@
       "public_declarations": [
         {
           "kind": "function",
+          "name": "committedWorkspaceKey",
+          "signature": "export function committedWorkspaceKey(events: AgentEvent[]): string"
+        },
+        {
+          "kind": "function",
           "name": "computeCanEdit",
           "signature": "export function computeCanEdit( hasOnSelectionEdit: boolean, launch: PreviewLaunch | null, untrusted: boolean, displayedVersionSeq: number | null, ): boolean"
         },
@@ -20850,7 +20855,7 @@
         {
           "kind": "function",
           "name": "computeRequestedLaunchKey",
-          "signature": "export function computeRequestedLaunchKey( cid: string | null, generation: string, selectedVersionSeq: number | null, refreshNonce: number, ): string"
+          "signature": "export function computeRequestedLaunchKey( cid: string | null, generation: string, selectedVersionSeq: number | null, refreshNonce: number, committedKey: string, ): string"
         },
         {
           "kind": "function",
@@ -20879,6 +20884,11 @@
         },
         {
           "kind": "function",
+          "name": "isPreviewReasonCode",
+          "signature": "export function isPreviewReasonCode(reason: string): boolean"
+        },
+        {
+          "kind": "function",
           "name": "latestAppDeliverable",
           "signature": "export function latestAppDeliverable(events: AgentEvent[])"
         },
@@ -20896,6 +20906,11 @@
           "kind": "function",
           "name": "previewActiveStatus",
           "signature": "export function previewActiveStatus(status: ConversationStatus): boolean"
+        },
+        {
+          "kind": "function",
+          "name": "previewFailureExplanation",
+          "signature": "export function previewFailureExplanation(reason: string): string"
         },
         {
           "kind": "function",
@@ -21754,8 +21769,13 @@
         },
         {
           "kind": "function",
+          "name": "audioReasonDetail",
+          "signature": "export function audioReasonDetail(reason: string, detail?: string): string | undefined"
+        },
+        {
+          "kind": "function",
           "name": "audioReasonMessage",
-          "signature": "export function audioReasonMessage(reason: string): string"
+          "signature": "export function audioReasonMessage(reason: string, message?: string): string"
         },
         {
           "kind": "function",
@@ -21785,7 +21805,7 @@
         {
           "kind": "TypeAliasDeclaration",
           "name": "AudioState",
-          "signature": "export type AudioState = | { status: \"idle\" } | { status: \"generating\"; progress?: AudioProgress } | { status: \"done\"; audioUrl: string } | { status: \"unavailable\"; reason: string };"
+          "signature": "export type AudioState = | { status: \"idle\" } | { status: \"generating\"; progress?: AudioProgress } | { status: \"done\"; audioUrl: string } /** `reason` is the sentence shown to the operator; `detail` is the * secondary technical line (failing stage + the server's exception text). */ | { status: \"unavailable\"; reason: string; detail?: string };"
         }
       ]
     },
@@ -28385,14 +28405,6 @@
     {
       "surface": "frontend",
       "path": "frontend/src/components/build/canvas/previewPaneParts/helpers.ts",
-      "public_name": "computeRequestedLaunchKey",
-      "target_sha256": "7418f78f8ba27f68e1d0d223db7b84189254c46c22cff644be71a5efb4ca82be",
-      "owner_package": "PKG-12-FE-PREVIEW",
-      "reason": "Epic 12-C (PKG-12-FE-PREVIEW): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
-    },
-    {
-      "surface": "frontend",
-      "path": "frontend/src/components/build/canvas/previewPaneParts/helpers.ts",
       "public_name": "computeRuntimeUnavailable",
       "target_sha256": "8e2a9aaf45abd6557105de5f70827c802e255b4953de4295bacefc370af81db4",
       "owner_package": "PKG-12-FE-PREVIEW",
@@ -28625,14 +28637,6 @@
     {
       "surface": "frontend",
       "path": "frontend/src/api/deepResearch.ts",
-      "public_name": "AudioStreamEvent",
-      "target_sha256": "a031ffd618b75651852fd78314648600d91e4412c8aa7c6945909aaccb487038",
-      "owner_package": "PKG-12-FE-RESEARCH",
-      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
-    },
-    {
-      "surface": "frontend",
-      "path": "frontend/src/api/deepResearch.ts",
       "public_name": "absoluteAudioUrl",
       "target_sha256": "5824a42301098014878811b30e56c5216ba122dbad2ff3363e0348763d6057ce",
       "owner_package": "PKG-12-FE-RESEARCH",
@@ -28857,24 +28861,8 @@
     {
       "surface": "frontend",
       "path": "frontend/src/components/research/needMoreCardParts/audioProgress.ts",
-      "public_name": "AudioState",
-      "target_sha256": "5a8200abc375d29efdee350c3ae8900409c685764e06a4248dbe693712427b37",
-      "owner_package": "PKG-12-FE-RESEARCH",
-      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
-    },
-    {
-      "surface": "frontend",
-      "path": "frontend/src/components/research/needMoreCardParts/audioProgress.ts",
       "public_name": "audioProgressPct",
       "target_sha256": "63a77f8bb89e17ace9e7b704b0460466f6d4150c36cd9efd651d1cc263015a46",
-      "owner_package": "PKG-12-FE-RESEARCH",
-      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
-    },
-    {
-      "surface": "frontend",
-      "path": "frontend/src/components/research/needMoreCardParts/audioProgress.ts",
-      "public_name": "audioReasonMessage",
-      "target_sha256": "ee862ba1a4c6bc007f21a02bd06652ca1d71c579d4c167fcac266a0da2b242a6",
       "owner_package": "PKG-12-FE-RESEARCH",
       "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
     },
@@ -31765,6 +31753,70 @@
       "target_sha256": "9f770fb5fce783535ac560e492b5534fce74d0b4a7fa05dd1236b0eb8358ae2a",
       "owner_package": "PKG-35-DEEP-RESEARCH-CLOSEOUT",
       "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/deepResearch.ts",
+      "public_name": "AudioStreamEvent",
+      "target_sha256": "c1e77723c6c0b91dbe5f18dab2e36115ebd991155e4495bb897468175713da31",
+      "owner_package": "PKG-37-UI-FIXES-V50",
+      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/canvas/previewPaneParts/helpers.ts",
+      "public_name": "committedWorkspaceKey",
+      "target_sha256": "21a5c9426681625289411c3094df7cf2441bd9ac8e29e0851e21fc7c72ad050c",
+      "owner_package": "PKG-37-UI-FIXES-V50",
+      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/canvas/previewPaneParts/helpers.ts",
+      "public_name": "computeRequestedLaunchKey",
+      "target_sha256": "301077f2c7c8643c5bf00f8c5c0530fe0b17d3a11f4951546fac431cad70aa34",
+      "owner_package": "PKG-37-UI-FIXES-V50",
+      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/canvas/previewPaneParts/helpers.ts",
+      "public_name": "isPreviewReasonCode",
+      "target_sha256": "5c4a7f37e3e8088fbd57cc23784a6a9755891b9316638e7fd9781cde39117937",
+      "owner_package": "PKG-37-UI-FIXES-V50",
+      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/canvas/previewPaneParts/helpers.ts",
+      "public_name": "previewFailureExplanation",
+      "target_sha256": "19aae39c90f7170a94ad66af21a0f6a59a33451b099761bd3af114b6df289280",
+      "owner_package": "PKG-37-UI-FIXES-V50",
+      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/needMoreCardParts/audioProgress.ts",
+      "public_name": "AudioState",
+      "target_sha256": "b7e177cc3fd7fe0f9492565e141d00e89f011584d01f0911e449741b62f9e5b9",
+      "owner_package": "PKG-37-UI-FIXES-V50",
+      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/needMoreCardParts/audioProgress.ts",
+      "public_name": "audioReasonDetail",
+      "target_sha256": "91f308272d7a504f309ac16b92580ba8745cd55d6c39cf870d1f0aa8e0f743bb",
+      "owner_package": "PKG-37-UI-FIXES-V50",
+      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/needMoreCardParts/audioProgress.ts",
+      "public_name": "audioReasonMessage",
+      "target_sha256": "4e3bae695c59ea45e310e33fd8721d4a1b6928fd8c4692b70f4226eab221d6c2",
+      "owner_package": "PKG-37-UI-FIXES-V50",
+      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
     }
   ],
   "compatibility_bridges": [],
@@ -32680,6 +32732,58 @@
       "owner_package": "PKG-20-UX-RELIABILITY",
       "accepting_commit": "6761fd10f0bc21ca96124c5a2dd5ac254894f371",
       "accepting_receipt": "2026-07-28/STATUS.md"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/deepResearch.ts",
+      "public_name": "AudioStreamEvent",
+      "owner_package": "PKG-37-UI-FIXES-V50",
+      "accepting_commit": "81beb0f5f5d24e6b0cdd9fa79308aa52c04f6d8c",
+      "accepting_receipt": "PKG-37-UI-FIXES-V50: exact source-backed declaration migration",
+      "declaration_kind": "InterfaceDeclaration",
+      "old_signature": "export interface AudioStreamEvent { stage?: string; current?: number; total?: number; mp3_url?: string; reason?: string; // W-08: real voice-model download byte counters. downloaded?: number; pct?: number; file_index?: number; file_total?: number; }",
+      "new_signature": "export interface AudioStreamEvent { stage?: string; current?: number; total?: number; mp3_url?: string; reason?: string; /** Human-readable failure sentence (what failed, why, what to do). */ message?: string; /** Technical failure text behind `message`. */ detail?: string; // W-08: real voice-model download byte counters. downloaded?: number; pct?: number; file_index?: number; file_total?: number; }",
+      "old_target_sha256": "a031ffd618b75651852fd78314648600d91e4412c8aa7c6945909aaccb487038",
+      "new_target_sha256": "c1e77723c6c0b91dbe5f18dab2e36115ebd991155e4495bb897468175713da31"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/needMoreCardParts/audioProgress.ts",
+      "public_name": "AudioState",
+      "owner_package": "PKG-37-UI-FIXES-V50",
+      "accepting_commit": "81beb0f5f5d24e6b0cdd9fa79308aa52c04f6d8c",
+      "accepting_receipt": "PKG-37-UI-FIXES-V50: exact source-backed declaration migration",
+      "declaration_kind": "TypeAliasDeclaration",
+      "old_signature": "export type AudioState = | { status: \"idle\" } | { status: \"generating\"; progress?: AudioProgress } | { status: \"done\"; audioUrl: string } | { status: \"unavailable\"; reason: string };",
+      "new_signature": "export type AudioState = | { status: \"idle\" } | { status: \"generating\"; progress?: AudioProgress } | { status: \"done\"; audioUrl: string } /** `reason` is the sentence shown to the operator; `detail` is the * secondary technical line (failing stage + the server's exception text). */ | { status: \"unavailable\"; reason: string; detail?: string };",
+      "old_target_sha256": "5a8200abc375d29efdee350c3ae8900409c685764e06a4248dbe693712427b37",
+      "new_target_sha256": "b7e177cc3fd7fe0f9492565e141d00e89f011584d01f0911e449741b62f9e5b9"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/needMoreCardParts/audioProgress.ts",
+      "public_name": "audioReasonMessage",
+      "owner_package": "PKG-37-UI-FIXES-V50",
+      "accepting_commit": "81beb0f5f5d24e6b0cdd9fa79308aa52c04f6d8c",
+      "accepting_receipt": "PKG-37-UI-FIXES-V50: exact source-backed declaration migration",
+      "declaration_kind": "function",
+      "old_signature": "export function audioReasonMessage(reason: string): string",
+      "new_signature": "export function audioReasonMessage(reason: string, message?: string): string",
+      "old_target_sha256": "ee862ba1a4c6bc007f21a02bd06652ca1d71c579d4c167fcac266a0da2b242a6",
+      "new_target_sha256": "4e3bae695c59ea45e310e33fd8721d4a1b6928fd8c4692b70f4226eab221d6c2"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/canvas/previewPaneParts/helpers.ts",
+      "public_name": "computeRequestedLaunchKey",
+      "owner_package": "PKG-37-UI-FIXES-V50",
+      "accepting_commit": "81beb0f5f5d24e6b0cdd9fa79308aa52c04f6d8c",
+      "accepting_receipt": "PKG-37-UI-FIXES-V50: exact source-backed declaration migration",
+      "declaration_kind": "function",
+      "old_signature": "export function computeRequestedLaunchKey( cid: string | null, generation: string, selectedVersionSeq: number | null, refreshNonce: number, ): string",
+      "new_signature": "export function computeRequestedLaunchKey( cid: string | null, generation: string, selectedVersionSeq: number | null, refreshNonce: number, committedKey: string, ): string",
+      "old_target_sha256": "7418f78f8ba27f68e1d0d223db7b84189254c46c22cff644be71a5efb4ca82be",
+      "new_target_sha256": "301077f2c7c8643c5bf00f8c5c0530fe0b17d3a11f4951546fac431cad70aa34"
     },
     {
       "surface": "frontend",
