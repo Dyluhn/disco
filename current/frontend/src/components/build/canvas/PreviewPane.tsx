@@ -14,6 +14,7 @@ import { openFreshPreview } from "@/lib/previewLaunch";
 import type { SelectionRef } from "@/lib/selectionBridge";
 import type { AgentEvent, ConversationStatus } from "@/types/agent";
 import {
+  committedWorkspaceKey,
   computeCanEdit,
   computeMentionEnabled,
   computeRequestedLaunchKey,
@@ -99,7 +100,13 @@ export function PreviewPane({
 
   const generation = previewGeneration(data);
   const selectedTarget = computeSelectedTarget(selectedVersionSeq, currentRouteRef.current, refreshNonce);
-  const requestedLaunchKey = computeRequestedLaunchKey(cid, generation, selectedVersionSeq, refreshNonce);
+  const requestedLaunchKey = computeRequestedLaunchKey(
+    cid,
+    generation,
+    selectedVersionSeq,
+    refreshNonce,
+    committedWorkspaceKey(events),
+  );
 
   const { launch, launchKey, launchVersionSeq, minting, launchFailure, frameReady, setFrameReady } =
     usePreviewLaunch(cid, ownsCanonicalPreview, requestedLaunchKey, selectedTarget, selectedVersionSeq);

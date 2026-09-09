@@ -97,6 +97,21 @@ function version(seq = 1): AgentEvent {
   } as AgentEvent;
 }
 
+function sealedVersion(seq = 1): AgentEvent {
+  return {
+    ...version(seq),
+    id: `sealed-version-${seq}`,
+    final_seal: {
+      schema_version: 1,
+      scope: { namespace: "workspace.tree", identifier: "conv" },
+      terminal_seq: 10,
+      latest_effect_seq: 9,
+      version_seq: seq,
+      tree_digest: `tree-${seq}`,
+    },
+  } as AgentEvent;
+}
+
 const HTML = fileWrite(
   "index.html",
   "<html><body><h1>Canonical Preview</h1></body></html>",
@@ -433,6 +448,47 @@ describe("PreviewPane — one canonical owned-web surface", () => {
     );
     // The code stays visible, but only as a secondary line.
     expect(alert).toHaveTextContent("Reason code: preview_unavailable");
+  });
+
+  // Regression: a run reports FINISHED 1-4s before its final seal is durable, so
+  // a capability minted in that window is correctly refused. Nothing else moved
+  // the launch key afterwards, so the pane stayed on that refusal until someone
+  // pressed Refresh. The seal's arrival must re-mint on its own.
+  it("re-mints when the final seal lands so a capability refused during finalize does not latch", async () => {
+    canonicalPreviewBootstrapUrlMock.mockRejectedValue(
+      new Error('{"detail":{"reason":"preview_unavailable"}}'),
+    );
+    useBuildPreviewMock.mockReturnValue({
+      data: { available: true, status: "running", generation: "pv_sealing" },
+    });
+    const finishing = [HTML, deliverable("site", "index.html", "app"), version(1)];
+    const { rerender } = render(
+      withClient(
+        <PreviewPane events={finishing} status="FINISHED" cid="conv_seal_race" />,
+      ),
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Preview is not available for this run",
+    );
+    expect(screen.queryByTitle("Preview")).not.toBeInTheDocument();
+
+    // The final seal lands a moment later; the capability now mints.
+    canonicalPreviewBootstrapUrlMock.mockResolvedValue({
+      url: "http://127.77.0.2:8000/__disco/preview-auth/conv_seal_race",
+      intent: "canonical:conv_seal_race:/",
+    });
+    rerender(
+      withClient(
+        <PreviewPane
+          events={[...finishing, sealedVersion(1)]}
+          status="FINISHED"
+          cid="conv_seal_race"
+        />,
+      ),
+    );
+
+    expect(await screen.findByTitle("Preview")).toBeInTheDocument();
   });
 });
 

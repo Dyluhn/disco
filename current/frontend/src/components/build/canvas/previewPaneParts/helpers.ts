@@ -132,13 +132,35 @@ export function computeSelectedTarget(
     : refreshTarget("/", refreshNonce);
 }
 
+/** Identity of the run's committed workspace, or "" while none is sealed yet.
+ *
+ * A finished run becomes previewable only once its FINAL SEAL is durable, and
+ * that event lands one to four seconds AFTER the run reports FINISHED. A
+ * capability minted inside that window is correctly refused
+ * (`preview_unavailable`) — but nothing else changes the launch key afterwards,
+ * so the pane latched on that refusal until someone pressed Refresh. Keying the
+ * launch on the seal makes its arrival re-mint on its own. Only the sealed
+ * version counts: per-turn version markers must not churn the live preview. */
+export function committedWorkspaceKey(events: AgentEvent[]): string {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    if (event.kind === "workspace_version" && event.final_seal) {
+      return `sealed:${event.version_seq}`;
+    }
+  }
+  return "";
+}
+
 export function computeRequestedLaunchKey(
   cid: string | null,
   generation: string,
   selectedVersionSeq: number | null,
   refreshNonce: number,
+  committedKey: string,
 ): string {
-  return cid ? `${cid}:${generation}:${selectedVersionSeq ?? "current"}:${refreshNonce}` : "";
+  return cid
+    ? `${cid}:${generation}:${selectedVersionSeq ?? "current"}:${refreshNonce}:${committedKey}`
+    : "";
 }
 
 /** The preview iframe's origin, or null when no launch is minted yet. Distinct
