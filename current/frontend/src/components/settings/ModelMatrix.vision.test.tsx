@@ -99,4 +99,17 @@ describe("ModelMatrix — honest vision guidance", () => {
     ).toBeInTheDocument();
     expect(screen.queryByText(/Primary model is marked text-only/i)).toBeNull();
   });
+
+  it("states the verdict in one line and leaves the how-to to the link", () => {
+    // UI-5: the status carried two extra clauses that only restated the link,
+    // so an informational line ran three rows deep.
+    state.models = [model({ vision_status: "unknown" })];
+
+    render(<ModelMatrix />);
+
+    const status = screen.getByRole("status");
+    expect(status).toHaveTextContent(
+      /^Vision hasn't been verified for Primary model\.\s*Set it in Model library → Image understanding$/,
+    );
+  });
 });

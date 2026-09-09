@@ -156,15 +156,13 @@ function VisualModelGuidance({
       }
       className="grid gap-hair rounded-control border border-warn/40 bg-warn/5 px-body py-inline font-ui text-[0.8rem] leading-snug text-text-muted sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center sm:gap-body"
     >
-      <span>
-        <span className="font-medium text-text">
-          {textOnly
-            ? `${selected?.label ?? target} is marked text-only.`
-            : `Vision hasn't been verified for ${selected?.label ?? target}.`}
-        </span>{" "}
+      {/* One line: the verdict, then the control that changes it. The advice
+          that used to follow ("if it accepts images, confirm that capability…")
+          only restated the link, and pushed a status line onto three rows. */}
+      <span className="font-medium text-text">
         {textOnly
-          ? "Choose an image-capable model or correct this model's capability."
-          : "If it accepts images, confirm that capability; otherwise choose a dedicated visual model."}
+          ? `${selected?.label ?? target} is marked text-only.`
+          : `Vision hasn't been verified for ${selected?.label ?? target}.`}
       </span>
       <a
         href="#model-library"
@@ -176,7 +174,7 @@ function VisualModelGuidance({
         }}
         className="font-medium text-accent hover:underline"
       >
-        Model library → Edit → Image understanding
+        Set it in Model library → Image understanding
       </a>
     </div>
   );
