@@ -623,6 +623,23 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _host_upgrade(compose: _Compose) -> None:
+    """Rebuild the images and put the NEW containers in front of the user.
+
+    The `down` is load-bearing, not tidiness: podman-compose 1.0.6 (Ubuntu
+    24.04) cannot replace a running container on `up`. It rebuilds, then fails
+    with `creating container storage: the container name "disco_frontend_1" is
+    already in use` (exit 125) and restarts the OLD container — an operator who
+    upgrades keeps running the old code. Compose v2 recreates in place, so the
+    removal costs it only the restart it was going to do anyway. `down` without
+    `--volumes` does not touch `disco-data`.
+    """
+    compose.run("build", "--pull", "app-server", "frontend", "sandbox-image")
+    compose.run("down", "--remove-orphans")
+    compose.run("up", "-d")
+    print("Upgrade completed after backup; inspect logs and run disco-verify --quick")
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if args.command == "_archive-create":
@@ -643,9 +660,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         _host_restore(compose, args.archive)
     elif args.command == "upgrade":
         _host_backup(compose, engine, args.backup)
-        compose.run("build", "--pull", "app-server", "frontend", "sandbox-image")
-        compose.run("up", "-d")
-        print("Upgrade completed after backup; inspect logs and run disco-verify --quick")
+        _host_upgrade(compose)
     elif args.command == "uninstall":
         _host_uninstall(
             compose,

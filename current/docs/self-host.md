@@ -176,6 +176,21 @@ podman compose logs app-server agent-server
 podman compose exec agent-server disco-verify --quick
 ```
 
+Without the lifecycle script the update is:
+
+```bash
+git pull
+podman compose down             # or: docker compose down
+podman compose up -d --build
+```
+
+The `down` is required, and `upgrade` runs the same `down` internally for the
+same reason: podman-compose 1.0.6 (Ubuntu 24.04) rebuilds the images on `up`
+but cannot replace a running container — it fails with `the container name
+"disco_frontend_1" is already in use` (exit 125) and restarts the old
+container, so the operator keeps running the old code. `down` removes
+containers only; `disco-data` survives. `down --volumes` deletes it.
+
 Application rollback is a source/image operation. Once a newer version has
 written a schema an older version may not understand, in-place rollback is not
 supported; restore the pre-upgrade archive into a new empty volume with the old

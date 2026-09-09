@@ -328,6 +328,43 @@ curl -s "${AUTH[@]}" -X PUT http://127.0.0.1:8800/api/models/assignments \
 Anthropic, Groq, DeepSeek, Together, Fireworks, Mistral, xAI). Pass the key in
 the request body only — never on a command line that lands in shell history.
 
+### Updating
+
+```bash
+cd disco
+git pull
+podman compose down             # or: docker compose down
+podman compose up -d --build
+```
+
+The `down` is not optional. On `podman-compose` 1.0.6 (the version Ubuntu 24.04
+ships) `podman compose up -d --build` builds the new images and then cannot
+replace the containers that are already running:
+
+```
+Error: creating container storage: the container name "disco_frontend_1" is
+already in use by ... You have to remove that container to be able to reuse
+that name: that name is already in use
+exit code: 125
+```
+
+It then restarts the **old** containers. The command looks like it worked, the
+new images exist, and the stack keeps serving the old code. Compose v2 replaces
+containers in place, so `down` costs it only the restart it was going to do.
+
+`down` removes containers, not data: the `disco-data` volume — database,
+settings, encrypted secrets, projects, skills — survives. Never use `down -v`
+(or `down --volumes`) to update; that deletes it. To take a backup first, use
+the lifecycle command, which now does the whole update itself:
+
+```bash
+.venv/bin/python development/scripts/self_host_data.py upgrade \
+  --backup "$HOME/disco-pre-upgrade-$(date +%Y%m%d).tar.gz"
+```
+
+After either route, re-run the confirmation (`podman ps`) and the proof step
+(`disco-verify --quick`).
+
 Copy `.env.example` to `.env` only when you need to override ports, bind
 addresses, provider keys, or the sandbox socket. The default is local rootless
 Podman. Docker also works and is an explicit override, not automatic; prefer

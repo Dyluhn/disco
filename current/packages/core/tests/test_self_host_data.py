@@ -395,6 +395,23 @@ def test_restore_lets_compose_create_and_then_binds_a_missing_volume(
     assert compose.calls == [("up", "-d", "app-server", "agent-server", "frontend")]
 
 
+def test_upgrade_removes_the_old_containers_before_starting_the_new_images() -> None:
+    """Found on a fresh Ubuntu 24.04 install (2026-09-09): podman-compose 1.0.6
+    rebuilds on `up --build` but cannot replace a running container ("the
+    container name disco_frontend_1 is already in use", exit 125), then restarts
+    the old one — the operator keeps running the old code. `down` first, and
+    never with --volumes, which would delete disco-data."""
+    compose = _FakeCompose()
+
+    lifecycle._host_upgrade(compose)
+
+    assert compose.calls == [
+        ("build", "--pull", "app-server", "frontend", "sandbox-image"),
+        ("down", "--remove-orphans"),
+        ("up", "-d"),
+    ]
+
+
 def test_uninstall_retains_data_unless_exact_confirmation_is_present(monkeypatch) -> None:
     compose = _FakeCompose()
     monkeypatch.setattr(lifecycle, "_volume_exists", lambda *_args: True)
