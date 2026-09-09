@@ -308,4 +308,19 @@ describe("DeepBoundedNotice", () => {
     expect(screen.getByRole("button", { name: /Run on Thorough tier/ })).toBeInTheDocument();
     expect(screen.queryByText(/Exhaustive/)).not.toBeInTheDocument();
   });
+  // UI-20: the four counts alone read as "three quarters of this report is
+  // unsupported"; unresolved is a gap in the evidence, not a finding.
+  it("says what unresolved means next to the counts", () => {
+    render(<DeepBoundedNotice report={makeReport({ meta: { grounding_counts: {
+      supported: 25, contradicted: 7, unresolved: 72, unavailable: 0,
+    } } })} />);
+    expect(
+      screen.getByText(/found no source excerpt to match the sentence against — it is not a contradiction/),
+    ).toBeInTheDocument();
+  });
+
+  it("does not explain unresolved when the run recorded no counts", () => {
+    render(<DeepBoundedNotice report={makeReport({ bounded_by: "turns" })} />);
+    expect(screen.queryByText(/it is not a contradiction/)).not.toBeInTheDocument();
+  });
 });

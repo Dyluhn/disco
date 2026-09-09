@@ -1,30 +1,47 @@
 /**
- * SupportMeter — a compact per-section "N of M claims supported" bar with a
- * 3-segment breakdown (supported / weak / unsupported), colored with the
- * existing text-supported / text-weak / text-unsupported tokens.
+ * SupportMeter — the evidence-check bar: "N of M supported" over a segmented
+ * bar that shows what the rest of the claims actually were.
  *
- * Pure, props-driven — no data fetching. Works with any source of counts.
+ * The bar used to be the only thing beside the number, so a report with 25
+ * supported claims out of 104 read as 79 failures. It is split by the
+ * checker's own four states (supported / possible contradiction / unresolved /
+ * not checked), and the report-level meter names them in a legend — UNRESOLVED
+ * is by far the biggest slice on a normal run and it is not a finding against
+ * the report (UI-20).
+ *
+ * Pure, props-driven — no data fetching.
  */
 
+import type { VerificationStatus } from "@/types/grounded";
+import { CHECK_LABEL, type CheckCounts } from "@/lib/claimCheck";
 import { cn } from "@/lib/cn";
 
 interface SupportMeterProps {
-  supported: number;
-  weak: number;
-  unsupported: number;
-  /** When true, show a quiet "no claim data" label instead of an empty bar. */
+  counts: CheckCounts;
+  /** When set, show this quiet label instead of an empty bar at zero claims. */
   emptyLabel?: string;
+  /** Name the colours underneath. The report header has the width for it; the
+   *  per-section meter sits inline in a heading and does not. */
+  legend?: boolean;
 }
 
-function segmentPct(count: number, total: number): number {
-  if (total <= 0) return 0;
-  return Math.round((count / total) * 100);
+/** Draw order, and the colour each state owns. `unavailable` has no colour of
+ *  its own — nothing was measured, so it reads as the empty part of the bar. */
+const SEGMENTS: Array<{ status: VerificationStatus; bar: string; swatch: string }> = [
+  { status: "supported", bar: "bg-supported", swatch: "bg-supported" },
+  { status: "contradicted", bar: "bg-unsupported", swatch: "bg-unsupported" },
+  { status: "unresolved", bar: "bg-weak", swatch: "bg-weak" },
+  { status: "unavailable", bar: "bg-surface-2", swatch: "bg-surface-2 border border-hairline" },
+];
+
+function total(counts: CheckCounts): number {
+  return counts.supported + counts.contradicted + counts.unresolved + counts.unavailable;
 }
 
-export function SupportMeter({ supported, weak, unsupported, emptyLabel }: SupportMeterProps) {
-  const total = supported + weak + unsupported;
+export function SupportMeter({ counts, emptyLabel, legend = false }: SupportMeterProps) {
+  const claims = total(counts);
 
-  if (total === 0) {
+  if (claims === 0) {
     if (!emptyLabel) return null;
     return (
       <span className="font-ui text-[0.72rem] uppercase tracking-wide text-text-faint">
@@ -33,41 +50,46 @@ export function SupportMeter({ supported, weak, unsupported, emptyLabel }: Suppo
     );
   }
 
-  const pctSupported = segmentPct(supported, total);
-  const pctWeak = segmentPct(weak, total);
-  const pctUnsupported = segmentPct(unsupported, total);
+  const present = SEGMENTS.filter((segment) => counts[segment.status] > 0);
+  const title = present
+    .map((segment) => `${counts[segment.status]} ${CHECK_LABEL[segment.status].toLowerCase()}`)
+    .join(", ");
 
   return (
     <span
-      className="inline-flex items-center gap-inline"
-      title={`${supported} supported, ${weak} weak, ${unsupported} unsupported`}
+      className={cn("inline-flex gap-inline", legend ? "flex-col" : "items-center")}
+      title={title}
     >
-      <span className="font-ui text-[0.72rem] uppercase tracking-wide text-text-muted">
-        {supported} of {total} supported
+      <span className={cn("inline-flex items-center gap-inline", legend && "flex-wrap")}>
+        <span className="font-ui text-[0.72rem] uppercase tracking-wide text-text-muted">
+          {counts.supported} of {claims} supported
+        </span>
+        <span
+          className={cn(
+            "inline-flex overflow-hidden rounded-full bg-surface-2",
+            legend ? "h-1.5 w-28" : "h-1.5 w-14",
+          )}
+          aria-hidden
+        >
+          {present.map((segment, index) => (
+            <span
+              key={segment.status}
+              className={cn("h-full", segment.bar, index > 0 && "border-l border-bg")}
+              style={{ width: `${Math.round((counts[segment.status] / claims) * 100)}%` }}
+            />
+          ))}
+        </span>
       </span>
-      <span
-        className="inline-flex h-1.5 w-14 overflow-hidden rounded-full bg-surface-2"
-        aria-hidden
-      >
-        {pctSupported > 0 && (
-          <span
-            className="h-full bg-supported"
-            style={{ width: `${pctSupported}%` }}
-          />
-        )}
-        {pctWeak > 0 && (
-          <span
-            className={cn("h-full bg-weak", pctSupported > 0 && "border-l border-bg")}
-            style={{ width: `${pctWeak}%` }}
-          />
-        )}
-        {pctUnsupported > 0 && (
-          <span
-            className={cn("h-full bg-unsupported", (pctSupported > 0 || pctWeak > 0) && "border-l border-bg")}
-            style={{ width: `${pctUnsupported}%` }}
-          />
-        )}
-      </span>
+      {legend && (
+        <span className="flex flex-wrap items-center gap-inline font-ui text-[0.68rem] text-text-faint">
+          {present.map((segment) => (
+            <span key={segment.status} className="flex items-center gap-hair">
+              <span className={cn("size-1.5 rounded-full", segment.swatch)} aria-hidden />
+              {counts[segment.status]} {CHECK_LABEL[segment.status].toLowerCase()}
+            </span>
+          ))}
+        </span>
+      )}
     </span>
   );
 }

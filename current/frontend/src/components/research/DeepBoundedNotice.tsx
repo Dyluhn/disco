@@ -23,6 +23,7 @@
 
 import { Info, Layers, Zap } from "lucide-react";
 import { countOf } from "@/lib/deepResearchHeartbeat";
+import { UNRESOLVED_MEANING } from "@/lib/claimCheck";
 import { DEPTH_TIER_LABEL, depthTierLabel } from "@/lib/depthTier";
 import type { ReportEvent } from "@/types/agent";
 
@@ -272,10 +273,21 @@ export function DeepBoundedNotice({ report, onTryExhaustive }: Props) {
             </p>
           )}
           {counts && (
-            <p className="mt-hair font-ui text-[0.82rem] leading-snug text-text-muted">
-              Automated evidence check: {counts.supported} supported, {counts.contradicted} possible contradictions,
-              {" "}{counts.unresolved} unresolved, {counts.unavailable} not checked.
-            </p>
+            <>
+              <p className="mt-hair font-ui text-[0.82rem] leading-snug text-text-muted">
+                Automated evidence check: {counts.supported} supported, {counts.contradicted} possible contradictions,
+                {" "}{counts.unresolved} unresolved, {counts.unavailable} not checked.
+              </p>
+              {/* Without this line the counts read as "three quarters of this
+                  report is unsupported" — which is not what the checker
+                  measured (UI-20). */}
+              <p
+                data-dr-unresolved-meaning=""
+                className="mt-hair font-ui text-[0.78rem] leading-snug text-text-faint"
+              >
+                {UNRESOLVED_MEANING}
+              </p>
+            </>
           )}
           {notes.map((note, index) => (
             <p key={index} className="mt-hair font-ui text-[0.82rem] leading-snug text-text-muted">{note}</p>

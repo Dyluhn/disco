@@ -8,15 +8,9 @@
 
 import { ChevronDown, ChevronRight, ExternalLink } from "lucide-react";
 import { useState } from "react";
+import { CHECK_LABEL } from "@/lib/claimCheck";
 import { cn } from "@/lib/cn";
-import type { Passage, VerifiedClaim, Verdict, VerificationStatus } from "@/types/grounded";
-
-const CHECK_LABEL: Record<VerificationStatus, string> = {
-  supported: "Supported",
-  contradicted: "Possible contradiction",
-  unresolved: "Unresolved",
-  unavailable: "Not checked",
-};
+import type { Passage, VerifiedClaim, Verdict } from "@/types/grounded";
 
 const VERDICT_LABEL: Record<Verdict, string> = {
   supported: "Supported",
