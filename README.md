@@ -266,7 +266,24 @@ echo '{"dns":["1.1.1.1","8.8.8.8"]}' > ~/.config/docker/daemon.json
 systemctl --user restart docker
 ```
 
-The app-server logs print the working UI URL and a one-time admin pairing token.
+The app-server logs print the working UI URL and the admin pairing token. A
+browser on the same machine pairs itself and never asks for it. If it does ask —
+you are opening the UI from another machine, or you cleared the cookie — print
+the token on demand:
+
+```bash
+podman compose exec app-server disco-pairing-token
+```
+
+It is derived from this install's secret rather than minted per boot, so that
+command prints the same token every time. To find it in the boot log instead,
+grep for the banner — `logs | tail` will not do, healthcheck lines push the
+banner out of the last twenty lines within minutes:
+
+```bash
+podman compose logs app-server | grep -A 8 "Disco self-host boot"
+```
+
 Configure a driver model after boot in **Settings -> Models & Providers**, then
 prove the configuration:
 

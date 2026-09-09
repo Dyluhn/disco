@@ -47,9 +47,19 @@ See [Sandbox Image](#sandbox-image) for the rootful alternative and why the
 rootless socket is preferred. Compose prints `pull access denied for
 disco-server` before it builds; that is expected, not a failure.
 
-The app-server logs print the working UI URL and a one-time first-run pairing
-token. On localhost the browser normally pairs automatically; if it asks for a
-token, paste the token from `podman compose logs app-server`.
+The app-server logs print the working UI URL and the first-run pairing token. On
+localhost the browser normally pairs automatically; if it asks for a token,
+print the current one:
+
+```bash
+podman compose exec app-server disco-pairing-token
+```
+
+The token is an HMAC tag over the install secret, not a per-boot random value,
+so it is the same token the banner printed and it survives restarts. In the log
+the banner is reached with `podman compose logs app-server | grep -A 8 "Disco
+self-host boot"`; the last twenty lines are healthcheck noise within minutes of
+boot.
 
 No driver model is bundled and no dead local endpoint is seeded. After the UI
 loads, open **Settings -> Models & Providers**, add an OpenAI-compatible local,
