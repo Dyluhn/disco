@@ -6,15 +6,14 @@ of ``audio_overview`` and imported directly by tests
 (``test_audio_overview_tool.py``), so their names and behavior must stay exactly
 as they were.
 
-``_validate_script_batch`` is split into ``_parse_batch_total`` (the
-``total_turns`` shape/range/consistency checks) and ``_parse_batch_items`` (the
-per-item loop) purely to bring its cyclomatic complexity under budget.
-Two deliberate behavior changes since the split, both so that a driver which
-ignores our batching contract cannot kill the whole overview: a first-batch
-``total_turns`` outside the mode's band is pinned into the band rather than
-rejected (``_parse_batch_total``), and an over-full batch is trimmed to the
-turns that fit rather than rejected (``_parse_batch_items``). Short batches,
-non-contiguous indexes and invalid turns are still rejected.
+``_harvest_turns`` replaces the old strict ``_validate_script_batch``. Batching
+is OUR implementation detail, so the harvester never rejects an answer for
+disagreeing about it: a whole script, a partial batch, a per-batch answer, a
+bare array, extra fields, prose or reasoning around the JSON, renumbered or
+missing indexes, and "Host A"-style speaker labels all harvest to the turns
+they actually contain. The only thing it can return is "no usable turns", and
+the assembly loop answers that by asking again, then by falling back to a
+deterministic report-derived script -- never by failing the overview.
 """
 
 from __future__ import annotations
@@ -22,9 +21,10 @@ from __future__ import annotations
 import json
 import logging
 import re
+from dataclasses import dataclass
 from typing import Any
 
-from ._types import LLMResponse, LLMResponseLike, Turn, _ScriptBatch
+from ._types import LLMResponse, LLMResponseLike, Turn, _turn_band
 
 _LOG = logging.getLogger(__name__)
 
@@ -122,172 +122,150 @@ def _validate_turn_script_single(raw_json: str) -> tuple[list[Turn] | None, str 
     return turns, None
 
 
-def _extract_script_json(text: str) -> str:
-    """Extract the first complete JSON object or array without joining fragments."""
+@dataclass(frozen=True)
+class _Harvest:
+    """What one provider answer actually contained.
 
+    ``turns`` are every usable turn found, in the order they appeared.
+    ``total_hint`` is the driver's own proposed length (already pinned into the
+    mode's band) or ``None``. ``whole_script`` is True when the answer was a
+    bare JSON array -- the legacy "here is the entire script" shape -- so the
+    loop knows not to keep asking for more.
+    """
+
+    turns: list[Turn]
+    total_hint: int | None
+    whole_script: bool
+
+
+def _speaker_for(raw: Any, mode: str, previous: str | None) -> str:
+    """Map whatever the driver called the speaker onto ``A``/``B``.
+
+    Single mode is always ``A``. Otherwise accept ``"A"``/``"b"``/``"Host A"``/
+    ``"speaker_b"``/``"1"``/``"2"``; anything unrecognised alternates away from
+    the previous turn so a dialogue stays a dialogue instead of failing.
+    """
+    if mode == "single":
+        return "A"
+    text = str(raw or "").strip().lower()
+    if text in ("1", "host 1", "speaker 1"):
+        return "A"
+    if text in ("2", "host 2", "speaker 2"):
+        return "B"
+    for ch in reversed(text):
+        if ch in ("a", "b"):
+            return ch.upper()
+    return "B" if previous == "A" else "A"
+
+
+def _turn_from_item(item: Any, mode: str, previous: str | None) -> Turn | None:
+    """One harvested turn, or ``None`` when the item carries no speakable text."""
+    if isinstance(item, str):
+        text = item.strip()
+        return Turn(speaker=_speaker_for(None, mode, previous), text=text) if text else None
+    if not isinstance(item, dict):
+        return None
+    raw_text = item.get("text")
+    if not isinstance(raw_text, str):
+        for key in ("content", "line", "utterance", "dialogue"):
+            candidate = item.get(key)
+            if isinstance(candidate, str):
+                raw_text = candidate
+                break
+    if not isinstance(raw_text, str) or not raw_text.strip():
+        return None
+    speaker_raw = item.get("speaker", item.get("host", item.get("role")))
+    return Turn(speaker=_speaker_for(speaker_raw, mode, previous), text=raw_text.strip())
+
+
+def _items_from_payload(value: Any) -> tuple[list[Any], int | None, bool]:
+    """Find the turn list inside whatever JSON shape came back."""
+    if isinstance(value, list):
+        return value, None, True
+    if not isinstance(value, dict):
+        return [], None, False
+    total = value.get("total_turns")
+    hint = total if isinstance(total, int) and not isinstance(total, bool) else None
+    for key in ("turns", "script", "batch", "dialogue", "lines"):
+        items = value.get(key)
+        if isinstance(items, list):
+            return items, hint, False
+    # A single turn object returned bare (no wrapper list) still carries a turn.
+    if any(k in value for k in ("text", "content", "line", "utterance")):
+        return [value], hint, False
+    return [], hint, False
+
+
+def _json_fragments(text: str) -> list[Any]:
+    """Every top-level JSON value in ``text``, in order.
+
+    Handles prose or a reasoning block around the JSON, a markdown fence, and a
+    TRUNCATED array: when the whole payload will not decode, the individual
+    complete objects inside it still do, so a cut-off answer yields the turns
+    that did arrive instead of nothing.
+    """
     stripped = text.strip()
-    try:
-        value = json.loads(stripped)
-    except json.JSONDecodeError:
-        value = None
-    if isinstance(value, (dict, list)):
-        return stripped
-
+    if not stripped:
+        return []
     decoder = json.JSONDecoder()
-    for index, char in enumerate(stripped):
+    found: list[Any] = []
+    index = 0
+    length = len(stripped)
+    while index < length:
+        char = stripped[index]
         if char not in "[{":
+            index += 1
             continue
         try:
             value, end = decoder.raw_decode(stripped[index:])
         except json.JSONDecodeError:
+            index += 1
             continue
-        if isinstance(value, (dict, list)):
-            return stripped[index : index + end]
-    return stripped
+        found.append(value)
+        index += end
+    return found
 
 
-def _parse_batch_total(
-    data: dict,
-    *,
-    mode: str,
-    start_turn: int,
-    expected_total: int | None,
-) -> tuple[int | None, str | None]:
-    """Validate the batch's ``total_turns`` field: type, consistency with any
-    already-agreed total / the current start_turn, and pin it into the mode's
-    length band. Returns the total to use, or an error string."""
-
-    total = data.get("total_turns")
-    if isinstance(total, bool) or not isinstance(total, int):
-        return None, "Script batch total_turns must be an integer"
-    min_turns, max_turns = (10, 16) if mode == "single" else (12, 20)
-    # The band is OUR length requirement for the finished overview, not the
-    # driver's plan: the model only picks the total on the FIRST batch, and
-    # every batch after that is handed the agreed number verbatim. Rejecting an
-    # out-of-band choice killed the whole audio overview after one correction
-    # attempt on any driver that stubbornly picks its own length (deepseek-v4
-    # -flash on ollama.com does, twice in a row) — so pin the number into the
-    # band and carry on. Drift INSIDE the band is still a real inconsistency
-    # and is still rejected below.
-    clamped = min(max(total, min_turns), max_turns)
-    if clamped != total:
-        _LOG.warning(
-            "audio turn-script: driver chose total_turns=%d outside the %d..%d band "
-            "for mode=%s; pinned to %d",
-            total,
-            min_turns,
-            max_turns,
-            mode,
-            clamped,
-        )
-    if expected_total is not None and clamped != expected_total:
-        return None, f"Script batch changed total_turns from {expected_total} to {total}"
-    if start_turn > clamped:
-        return None, f"Script batch starts at {start_turn} after total_turns={clamped}"
-    return clamped, None
-
-
-def _parse_batch_items(
-    data: dict,
-    *,
-    start_turn: int,
-    requested_turns: int,
-    total: int,
-    mode: str,
-) -> tuple[list[Turn] | None, str | None]:
-    """Validate the batch's ``turns`` array: shape, contiguous indexing, and
-    each turn's own fields."""
-
-    items = data.get("turns")
-    if not isinstance(items, list):
-        return None, "Script batch turns must be a JSON array"
-    room = total - start_turn + 1
-    expected_count = min(requested_turns, room)
-    if len(items) < expected_count:
-        return (
-            None,
-            f"Script batch must contain at least {expected_count} contiguous turns; "
-            f"received {len(items)}",
-        )
-    if len(items) > expected_count:
-        # An OVER-full batch is the driver writing more of the script than we
-        # asked for, not a broken answer — deepseek-v4-flash ignores the window
-        # and returns the whole script every time, which used to fail the run
-        # ("must contain exactly 2 contiguous turns; received 19"). The turns
-        # still have to be contiguous from start_turn and individually valid;
-        # keep the ones that fit inside the agreed total and drop the rest.
-        _LOG.warning(
-            "audio turn-script: asked for %d turn(s) from turn %d, driver returned %d; "
-            "keeping %d that fit the agreed total of %d",
-            expected_count,
-            start_turn,
-            len(items),
-            min(len(items), room),
-            total,
-        )
-        items = items[:room]
-
+def _harvest_turns(text: str, *, mode: str) -> _Harvest:
+    """Take every usable turn out of one provider answer. Never raises."""
+    fragments = _json_fragments(text)
     turns: list[Turn] = []
-    for offset, item in enumerate(items):
-        expected_index = start_turn + offset
-        if not isinstance(item, dict):
-            return None, f"Turn {expected_index} is not an object"
-        index = item.get("index")
-        if index != expected_index:
-            return (
-                None,
-                f"Expected turn index {expected_index}, received {index!r}; "
-                "turns must not be skipped or repeated",
+    hint: int | None = None
+    whole_script = False
+    for fragment in fragments:
+        items, fragment_hint, is_array = _items_from_payload(fragment)
+        if fragment_hint is not None and hint is None:
+            hint = fragment_hint
+        if not items:
+            continue
+        harvested = [
+            turn
+            for turn in (
+                _turn_from_item(item, mode, turns[-1].speaker if turns else None) for item in items
             )
-        speaker = item.get("speaker")
-        if speaker not in ("A", "B"):
-            return None, f"Turn {expected_index}: invalid speaker {speaker!r}"
-        text = item.get("text")
-        if not isinstance(text, str) or not text.strip():
-            return None, f"Turn {expected_index}: text must be a non-empty string"
-        turns.append(Turn(speaker="A" if mode == "single" else speaker, text=text.strip()))
-    return turns, None
-
-
-def _validate_script_batch(
-    raw_json: str,
-    *,
-    mode: str,
-    start_turn: int,
-    requested_turns: int,
-    expected_total: int | None,
-) -> tuple[_ScriptBatch | None, list[Turn] | None, str | None]:
-    """Validate one indexed batch, or an explicit legacy complete-array response."""
-
-    try:
-        data = json.loads(raw_json)
-    except json.JSONDecodeError as exc:
-        return None, None, f"Invalid JSON: {exc}"
-
-    validate_full = _validate_turn_script_single if mode == "single" else _validate_turn_script
-    if isinstance(data, list):
-        if start_turn != 1:
-            return None, None, "Continuation returned an unindexed legacy turn array"
-        legacy_turns, error = validate_full(raw_json)
-        return None, legacy_turns, error
-    if not isinstance(data, dict):
-        return None, None, "Script batch must be a JSON object"
-
-    total, error = _parse_batch_total(
-        data, mode=mode, start_turn=start_turn, expected_total=expected_total
-    )
-    if error is not None:
-        return None, None, error
-    assert total is not None
-
-    turns, error = _parse_batch_items(
-        data, start_turn=start_turn, requested_turns=requested_turns, total=total, mode=mode
-    )
-    if error is not None:
-        return None, None, error
-    assert turns is not None
-
-    return _ScriptBatch(total_turns=total, turns=turns), None, None
+            if turn is not None
+        ]
+        # A fragment that yielded nothing speakable is reasoning noise, not the
+        # script -- it must not claim the "whole script" shape.
+        if not harvested:
+            continue
+        turns.extend(harvested)
+        whole_script = whole_script or is_array
+    if hint is not None:
+        min_turns, max_turns = _turn_band(mode)
+        pinned = min(max(hint, min_turns), max_turns)
+        if pinned != hint:
+            _LOG.info(
+                "audio turn-script: driver proposed total_turns=%d outside the %d..%d "
+                "band for mode=%s; using %d",
+                hint,
+                min_turns,
+                max_turns,
+                mode,
+                pinned,
+            )
+        hint = pinned
+    return _Harvest(turns=turns, total_hint=hint, whole_script=whole_script)
 
 
 def _coerce_llm_response(value: LLMResponseLike) -> LLMResponse:
@@ -309,9 +287,11 @@ def _malformed_retry_payload(payload: dict[str, Any], response: str, error: str)
             {
                 "role": "user",
                 "content": (
-                    f"Your JSON batch was invalid: {error}\n\n"
-                    "Return ONLY a corrected, complete JSON object for the exact indexed "
-                    "batch requested. Do not repeat, skip, or renumber turns."
+                    f"That answer could not be used: {error}\n\n"
+                    "Send the turns again as one JSON object with a "
+                    '"turns" array; every turn needs a "speaker" of '
+                    '"A" or "B" and non-empty "text" to speak. '
+                    "Nothing outside the JSON."
                 ),
             },
         ]

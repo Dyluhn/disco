@@ -8,9 +8,10 @@
  * The `audioReasonMessage` human-message mapping stays UI-side.
  */
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   absoluteAudioUrl,
+  fetchExistingReportAudio,
   requestReportAudioBlocking,
   streamReportAudio,
   type AudioStreamEvent,
@@ -34,8 +35,44 @@ export interface UseAudioOverviewOptions {
 
 export interface UseAudioOverviewResult {
   audio: AudioState;
-  generate: (mode: AudioMode) => Promise<void>;
+  /** Run the pipeline. `force` re-runs it even when the server already holds
+   *  an artifact for this exact report — what "Regenerate" needs, since the
+   *  cache key is a hash of the report and would otherwise hand the same file
+   *  straight back. */
+  generate: (mode: AudioMode, options?: { force?: boolean }) => Promise<void>;
   reset: () => void;
+}
+
+/** Adopt whatever audio the server already holds for this conversation.
+ *
+ * The MP3 and its transcript live on the agent-server's data volume, so an
+ * overview generated earlier survives both a page reload and a server restart.
+ * Without asking on mount, a report that HAD audio came back showing only the
+ * "Audio Overview" button — no player, no Export MP3, no Regenerate — and
+ * pressing the button just handed back the cached file a few seconds later
+ * (UI-42). Only ever moves `idle` → `done`: a run started in the meantime wins.
+ */
+function useRestoreExistingAudio(cid: string, setAudio: (fn: (s: AudioState) => AudioState) => void) {
+  useEffect(() => {
+    let cancelled = false;
+    void fetchExistingReportAudio(cid).then((existing) => {
+      const newest = existing[0];
+      if (cancelled || !newest) return;
+      setAudio((current) =>
+        current.status === "idle"
+          ? {
+              status: "done",
+              audioUrl: absoluteAudioUrl(newest.mp3_url),
+              note: newest.note || undefined,
+              mode: newest.mode === "single" ? "single" : "podcast",
+            }
+          : current,
+      );
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [cid, setAudio]);
 }
 
 /** Build the `onEvent` handler passed to `streamReportAudio`: maps a parsed
@@ -48,7 +85,12 @@ function makeStreamEventHandler(
 ): (ev: AudioStreamEvent) => boolean {
   return (ev: AudioStreamEvent): boolean => {
     if (ev.stage === "done" && ev.mp3_url) {
-      setAudio({ status: "done", audioUrl: absoluteAudioUrl(ev.mp3_url) });
+      setAudio({
+        status: "done",
+        audioUrl: absoluteAudioUrl(ev.mp3_url),
+        note: ev.note || undefined,
+        mode: ev.mode === "single" ? "single" : "podcast",
+      });
       return true;
     }
     if (ev.stage === "error") {
@@ -92,9 +134,10 @@ export function useAudioOverview({
   onModeOpenChange,
 }: UseAudioOverviewOptions): UseAudioOverviewResult {
   const [audio, setAudio] = useState<AudioState>({ status: "idle" });
+  useRestoreExistingAudio(cid, setAudio);
 
   const generate = useCallback(
-    async (mode: AudioMode) => {
+    async (mode: AudioMode, options?: { force?: boolean }) => {
       onModeOpenChange(false);
       setAudio({ status: "generating" });
 
@@ -104,15 +147,22 @@ export function useAudioOverview({
           : undefined;
 
       try {
+        const force = options?.force ?? false;
         const streamed = await streamReportAudio(
           cid,
           mode,
           bodyPayload,
           makeStreamEventHandler(setAudio),
+          force,
         );
         if (!streamed) {
-          const data = await requestReportAudioBlocking(cid, mode, bodyPayload);
-          setAudio({ status: "done", audioUrl: absoluteAudioUrl(data.mp3_url) });
+          const data = await requestReportAudioBlocking(cid, mode, bodyPayload, force);
+          setAudio({
+            status: "done",
+            audioUrl: absoluteAudioUrl(data.mp3_url),
+            note: data.note || undefined,
+            mode,
+          });
         }
       } catch (e: unknown) {
         const reason = e instanceof Error ? e.message : String(e);

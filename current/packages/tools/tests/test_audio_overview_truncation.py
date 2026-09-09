@@ -9,6 +9,20 @@ from typing import Any
 import pytest
 from disco.tools.builtin import audio_overview as audio
 
+# A report in the exact shape `report_to_overview_text` produces, so the
+# deterministic fallback has real headings and sentences to narrate.
+REPORT_TEXT = """Query: solid-state batteries
+
+Executive summary: Cells reached nine hundred cycles. Costs remain high.
+
+Section: Cycle life
+Prototypes held eighty percent capacity after nine hundred cycles. Two labs
+reproduced the result.
+
+Section: Manufacturing cost
+Pilot lines cost four times a lithium-ion line. Nobody has scaled one yet.
+"""
+
 
 def _requested_range(payload: dict[str, Any]) -> tuple[int, int]:
     content = "\n".join(str(message.get("content", "")) for message in payload["messages"])
@@ -131,12 +145,16 @@ async def test_long_reasoning_script_is_assembled_from_complete_batches() -> Non
     )
 
     assert len(payloads) == 3
-    assert len(turns) == 12
-    assert [turn.text.split(":", 1)[0] for turn in turns] == [
-        f"Turn {index}" for index in range(1, 13)
-    ]
     assert all("CITATION-SOURCE-17" in payload["messages"][-1]["content"] for payload in payloads)
-    assert sum(len(turn.text) for turn in turns) > 15_000
+    # All twelve turns were assembled from complete batches; the overview is
+    # then held to its ~9-minute spoken cap by dropping whole turns off the END
+    # (each of these turns is a single 150-word sentence, so there is nothing
+    # to shorten inside one). Nothing is cut mid-turn.
+    assert 0 < len(turns) < 12
+    assert [turn.text.split(":", 1)[0] for turn in turns] == [
+        f"Turn {index}" for index in range(1, len(turns) + 1)
+    ]
+    assert all(turn.text.endswith(".") for turn in turns)
 
 
 @pytest.mark.asyncio
@@ -178,25 +196,33 @@ async def test_segmented_single_mode_preserves_single_voice_contract() -> None:
 
 
 @pytest.mark.asyncio
-async def test_repeated_length_stop_fails_actionably_and_bounded() -> None:
+async def test_repeated_length_stop_falls_back_to_the_report_script() -> None:
+    """A driver that only ever returns truncated output used to kill the
+    overview outright. It now costs a bounded number of shrinking attempts and
+    then the script is built from the report itself, so the user still gets
+    audio and the UI can say where the narration came from."""
     payloads: list[dict[str, Any]] = []
 
     async def call(payload: dict[str, Any]) -> audio.LLMResponse:
         payloads.append(payload)
         return audio.LLMResponse(content="{", finish_reason="length")
 
-    with pytest.raises(audio.AudioScriptGenerationError, match="finish_reason='length'") as exc:
-        await audio._generate_segmented_turn_script(
-            "report", "reasoning-model", mode="podcast", call_llm=call
-        )
+    result = await audio._generate_turn_script_result(
+        REPORT_TEXT, "reasoning-model", mode="podcast", call_llm=call
+    )
 
     assert len(payloads) == 3
     assert [_requested_range(payload) for payload in payloads] == [(1, 4), (1, 2), (1, 1)]
-    assert "no partial artifact" in str(exc.value)
+    assert result.source == "fallback"
+    assert "built straight from the report" in result.note
+    assert [turn.text for turn in result.turns][:2] == [
+        "Here's an overview of the research on solid-state batteries.",
+        "Cells reached nine hundred cycles.",
+    ]
 
 
 @pytest.mark.asyncio
-async def test_duplicate_index_uses_one_normal_malformed_retry() -> None:
+async def test_duplicate_index_costs_no_round_trip() -> None:
     payloads: list[dict[str, Any]] = []
 
     async def call(payload: dict[str, Any]) -> audio.LLMResponse:
@@ -218,30 +244,31 @@ async def test_duplicate_index_uses_one_normal_malformed_retry() -> None:
         "report", "reasoning-model", mode="podcast", call_llm=call
     )
 
+    # The index a driver puts on a turn is bookkeeping we no longer depend on:
+    # position and content decide, so a repeated index costs nothing. Only a
+    # turn whose TEXT was already accepted is dropped.
     assert len(turns) == 12
-    assert len(payloads[1]["messages"]) == 3
-    assert "corrected" in payloads[1]["messages"][-1]["content"]
+    assert len(payloads) == 3  # three clean batches, no correction round-trip
     assert len({turn.text for turn in turns}) == 12
 
 
 @pytest.mark.asyncio
-async def test_changed_total_is_rejected_after_one_bounded_correction() -> None:
+async def test_changed_total_is_a_hint_not_a_contract() -> None:
+    """A driver that revises its own planned length mid-script used to kill the
+    overview. The length is ours: the first proposal sets the target and later
+    disagreement is ignored."""
     payloads: list[dict[str, Any]] = []
 
     async def call(payload: dict[str, Any]) -> audio.LLMResponse:
         payloads.append(payload)
         return _batch_response(payload, total=12 if len(payloads) == 1 else 13)
 
-    with pytest.raises(audio.AudioScriptGenerationError, match="changed total_turns") as exc:
-        await audio._generate_segmented_turn_script(
-            "report", "reasoning-model", mode="podcast", call_llm=call
-        )
+    turns = await audio._generate_segmented_turn_script(
+        "report", "reasoning-model", mode="podcast", call_llm=call
+    )
 
-    assert len(payloads) == 3
-    assert _requested_range(payloads[0]) == (1, 4)
-    assert _requested_range(payloads[1]) == (5, 8)
-    assert len(payloads[2]["messages"]) == 3
-    assert "no partial artifact" in str(exc.value)
+    assert len(turns) == 12
+    assert [_requested_range(p) for p in payloads] == [(1, 4), (5, 8), (9, 12)]
 
 
 @pytest.mark.asyncio
@@ -376,9 +403,10 @@ async def test_over_full_batch_is_trimmed_to_the_agreed_total() -> None:
 
 
 @pytest.mark.asyncio
-async def test_short_batch_is_still_rejected() -> None:
-    """A batch with FEWER turns than requested is a genuine inconsistency and
-    still costs the bounded correction, then fails."""
+async def test_short_batch_is_asked_for_again_not_rejected() -> None:
+    """A driver that under-fills the window used to fail the run after one
+    correction ("must contain at least 4 contiguous turns; received 1"). The
+    window is our bookkeeping: keep the turn, ask for the rest."""
     payloads: list[dict[str, Any]] = []
 
     async def call(payload: dict[str, Any]) -> audio.LLMResponse:
@@ -388,15 +416,16 @@ async def test_short_batch_is_still_rejected() -> None:
             content=json.dumps(
                 {
                     "total_turns": 12,
-                    "turns": [{"index": start, "speaker": "A", "text": "Only one."}],
+                    "turns": [{"index": start, "speaker": "A", "text": f"Turn {start}."}],
                 }
             ),
             finish_reason="stop",
         )
 
-    with pytest.raises(audio.AudioScriptGenerationError, match="at least 4 contiguous turns"):
-        await audio._generate_segmented_turn_script(
-            "report", "reasoning-model", mode="podcast", call_llm=call
-        )
+    turns = await audio._generate_segmented_turn_script(
+        "report", "reasoning-model", mode="podcast", call_llm=call
+    )
 
-    assert len(payloads) == 2  # first attempt + the one bounded correction
+    # One turn per answer, twelve answers, one complete script.
+    assert len(payloads) == 12
+    assert [turn.text for turn in turns] == [f"Turn {i}." for i in range(1, 13)]

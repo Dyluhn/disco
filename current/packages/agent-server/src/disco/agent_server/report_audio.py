@@ -27,10 +27,12 @@ from __future__ import annotations
 
 import hashlib
 import inspect
+import json
 import logging
 import os
 import re
 import shutil
+import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
@@ -74,8 +76,20 @@ class TtsBackendError(Exception):
     unreachable, returns empty audio, or otherwise fails.  Route → 502."""
 
 
+class VoiceModelError(TtsBackendError):
+    """Raised when the first-use voice-model download fails.
+
+    A SUBCLASS of :class:`TtsBackendError` so every existing handler still
+    catches it, but distinct so the route can say "the voice model could not be
+    downloaded" instead of blaming the script stage or the generic backend.
+    """
+
+
 class TurnScriptError(Exception):
-    """Raised when bounded LLM assembly cannot produce a complete turn-script."""
+    """Raised only when there is nothing at all to narrate -- no usable model
+    output AND no report text to build a script from. Every lesser shortfall
+    (short script, unusable answers, an unreachable driver) degrades to the
+    report-derived script instead of failing the overview."""
 
 
 # ---- TTS settings resolution ------------------------------------------------
@@ -328,8 +342,8 @@ async def _generate_turn_script(
     mode: str,
     *,
     conversation_id: str,
-) -> list[Any]:
-    """Generate a complete mode-aware script through the shared batch protocol."""
+) -> Any:
+    """Generate a mode-aware script and say where it came from (``ScriptResult``)."""
 
     llm_url, llm_model, api_key_env, purpose, max_output_tokens = _resolve_report_llm()
     acronym_instruction = {
@@ -353,8 +367,9 @@ async def _generate_turn_script(
             ledger_purpose=f"report_audio.{mode}",
         )
 
+    started = time.monotonic()
     try:
-        return await audio_overview._generate_segmented_turn_script(
+        script = await audio_overview._generate_turn_script_result(
             overview_text,
             llm_model,
             mode=mode,
@@ -364,6 +379,26 @@ async def _generate_turn_script(
         )
     except audio_overview.AudioScriptGenerationError as exc:
         raise TurnScriptError(str(exc)) from exc
+    logger.info(
+        "report audio stage=script mode=%s turns=%d source=%s %.1fs",
+        mode,
+        len(script.turns),
+        script.source,
+        time.monotonic() - started,
+    )
+    return script
+
+
+def report_content_key(report: ReportEvent) -> str:
+    """Identity of the REPORT itself, ignoring which follow-ups were included.
+
+    The artifact cache key mixes in the follow-up selection and the mode, so it
+    cannot answer "is this audio for the report on screen?". A conversation can
+    hold more than one research run, and restoring the previous run's audio
+    onto a new report would be worse than showing no player at all.
+    """
+    seed = report.query + (report.summary or "") + "".join(s.markdown for s in report.sections)
+    return hashlib.sha256(seed.encode()).hexdigest()[:12]
 
 
 def _report_audio_cache_paths(
@@ -433,16 +468,29 @@ async def _ensure_voice_model_ready(is_remote: bool, on_progress: ProgressCallba
     files aren't on disk yet.  Remote backends and warm-cache runs skip this,
     so the UI never shows the false download note.
     """
-    if not is_remote:
-        from . import tts_local
+    if is_remote:
+        return
+    from . import tts_local
 
-        if not tts_local.model_files_present():
-            # Real byte-level download progress (W-08).  ensure_model fetches the
-            # missing weight files BEFORE synthesis and emits per-poll
-            # `downloading_model` events carrying actual downloaded/total/pct — so
-            # the UI shows a GENUINE progress bar, not a static note.  When the
-            # weights are already on disk this whole block is skipped (no event).
-            await tts_local.ensure_model(on_progress=on_progress)
+    if tts_local.model_files_present():
+        return
+    # Real byte-level download progress (W-08).  ensure_model fetches the
+    # missing weight files BEFORE synthesis and emits per-poll
+    # `downloading_model` events carrying actual downloaded/total/pct — so
+    # the UI shows a GENUINE progress bar, not a static note.  When the
+    # weights are already on disk this whole block is skipped (no event).
+    started = time.monotonic()
+    logger.info("report audio stage=voice_model starting first-use download (~0.5 GB)")
+    try:
+        await tts_local.ensure_model(on_progress=on_progress)
+    except Exception as exc:
+        # A failed/interrupted download is its OWN failure, not a script or a
+        # generic backend failure: it used to surface as "unexpected error" on
+        # the stream and as a bare 500 on the blocking POST.
+        raise VoiceModelError(
+            f"the voice model could not be downloaded to this machine: {exc}"
+        ) from exc
+    logger.info("report audio stage=voice_model ready in %.1fs", time.monotonic() - started)
 
 
 async def _synthesize_turn_pcm(
@@ -456,6 +504,8 @@ async def _synthesize_turn_pcm(
     remote_key: str,
     remote_model: str,
     backend: str,
+    fallback_voice: str,
+    used_fallback_voice: set[str],
 ) -> Any | None:
     """Normalize + synthesize one turn to PCM, or return ``None`` if the turn
     is genuinely empty (both normalized and raw text are blank).
@@ -487,26 +537,51 @@ async def _synthesize_turn_pcm(
             turn.text,
         )
         return None
-    try:
+
+    async def _speak(with_voice: str) -> Any:
         if is_remote:
-            pcm = await audio_overview._synthesize_remote(
+            return await audio_overview._synthesize_remote(
                 tts_text,
-                voice,
+                with_voice,
                 remote_base,
                 api_key=remote_key,
                 model=remote_model,
             )
-        else:
-            pcm = await audio_overview._synthesize_local(tts_text, voice)
+        return await audio_overview._synthesize_local(tts_text, with_voice)
+
+    try:
+        pcm = await _speak(voice)
     except httpx.ConnectError as e:
+        # The endpoint is down; another voice would not help.
         raise TtsBackendError(
             f"TTS endpoint unreachable at {remote_base} (turn {index + 1}/{total_turns}): {e}"
         ) from e
     except Exception as e:
-        raise TtsBackendError(
-            f"TTS ({backend}) failed for turn {index + 1}/{total_turns} "
-            f"(speaker {turn.speaker}): {e}"
-        ) from e
+        # A voice the engine does not have (renamed pack, a language it was not
+        # built for) used to end the whole overview. The default voice always
+        # exists, so speak the turn in it and let the caller note the swap.
+        if voice == fallback_voice:
+            raise TtsBackendError(
+                f"TTS ({backend}) failed for turn {index + 1}/{total_turns} "
+                f"(speaker {turn.speaker}): {e}"
+            ) from e
+        logger.warning(
+            "TTS: voice %r failed on turn %d/%d (%s); retrying in the default voice %r",
+            voice,
+            index + 1,
+            total_turns,
+            e,
+            fallback_voice,
+        )
+        try:
+            pcm = await _speak(fallback_voice)
+        except Exception as retry_exc:
+            raise TtsBackendError(
+                f"TTS ({backend}) failed for turn {index + 1}/{total_turns} "
+                f"(speaker {turn.speaker}) in both {voice!r} and the default "
+                f"{fallback_voice!r}: {retry_exc}"
+            ) from retry_exc
+        used_fallback_voice.add(voice)
     size = getattr(pcm, "size", len(pcm) if pcm is not None else 0)
     if pcm is None or size == 0:
         raise TtsBackendError(
@@ -527,10 +602,17 @@ async def _synthesize_turns(
     remote_model: str,
     backend: str,
     on_progress: ProgressCallback | None,
-) -> list[Any]:
-    """Step 2: synthesize each turn to PCM, skipping genuinely-empty turns."""
+) -> tuple[list[Any], str]:
+    """Step 2: synthesize each turn to PCM, skipping genuinely-empty turns.
+
+    Returns ``(pcm_turns, note)`` -- ``note`` is the one plain sentence to show
+    when a configured voice had to be swapped for the default, else empty.
+    """
     pcm_turns: list[Any] = []
     total_turns = len(turns)
+    fallback_voice = voice_a or "af_heart"
+    swapped: set[str] = set()
+    started = time.monotonic()
     for i, turn in enumerate(turns):
         await _emit(
             on_progress,
@@ -547,10 +629,31 @@ async def _synthesize_turns(
             remote_key=remote_key,
             remote_model=remote_model,
             backend=backend,
+            fallback_voice=fallback_voice,
+            used_fallback_voice=swapped,
         )
         if pcm is not None:
             pcm_turns.append(pcm)
-    return pcm_turns
+    logger.info(
+        "report audio stage=synthesis turns=%d spoken=%d backend=%s %.1fs",
+        total_turns,
+        len(pcm_turns),
+        backend,
+        time.monotonic() - started,
+    )
+    if not pcm_turns:
+        raise TtsBackendError(
+            f"TTS ({backend}) produced no audio: all {total_turns} turn(s) of the "
+            "narration script were empty once markdown was stripped"
+        )
+    note = ""
+    if swapped:
+        names = ", ".join(sorted(swapped))
+        note = (
+            f"The voice {names} was not available, so the overview was read in "
+            f"the default voice ({fallback_voice})."
+        )
+    return pcm_turns, note
 
 
 def _build_transcript_text(
@@ -559,6 +662,7 @@ def _build_transcript_text(
     voice_a: str,
     voice_b: str,
     turns: list[Any],
+    note: str = "",
 ) -> str:
     """Step 4: build the transcript markdown.  ``"single"`` mode has no "Host
     A/B" labels — just the spoken text; ``"podcast"`` mode prefixes each turn
@@ -571,6 +675,7 @@ def _build_transcript_text(
             f"Query: {report.query}",
             f"Voice: {voice_a}",
             f"Turns: {len(turns)}",
+            *([f"Note: {note}"] if note else []),
             "",
         ]
         for turn in turns:
@@ -583,6 +688,7 @@ def _build_transcript_text(
             f"Query: {report.query}",
             f"Voices: Host A = {voice_a}, Host B = {voice_b}",
             f"Turns: {len(turns)}",
+            *([f"Note: {note}"] if note else []),
             "",
         ]
         for turn in turns:
@@ -592,17 +698,78 @@ def _build_transcript_text(
     return "\n".join(transcript_lines)
 
 
+def _meta_path(mp3_path: Path) -> Path:
+    return mp3_path.with_suffix(".json")
+
+
+def read_report_audio_meta(mp3_path: Path) -> dict[str, str]:
+    """The sidecar for one generated overview: its mode and its note.
+
+    The note has to survive an agent-server restart -- the browser reloads with
+    no memory of the run, and the artifact on the data volume is the only thing
+    left -- so it is written next to the MP3 rather than held in the process.
+    """
+    try:
+        data = json.loads(_meta_path(mp3_path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return {str(k): str(v) for k, v in data.items()} if isinstance(data, dict) else {}
+
+
+def existing_report_audio(out_dir: Path, report_key: str) -> list[dict[str, str]]:
+    """Overviews already generated FOR THIS REPORT, newest first.
+
+    Used to restore the player on a fresh page load: the artifacts live on the
+    data volume, so audio the user generated before a restart (or before
+    closing the tab) is still there and must not look like it never happened.
+    Only files this module wrote are matched, only inside ``out_dir``, and only
+    those whose sidecar names the same report -- a second research run in the
+    same conversation must not inherit the first one's audio.
+    """
+    if not out_dir.is_dir():
+        return []
+    found: list[tuple[float, dict[str, str]]] = []
+    for mp3_path in out_dir.glob("audio_overview_*.mp3"):
+        transcript_path = mp3_path.with_suffix(".md")
+        if not transcript_path.is_file():
+            continue
+        meta = read_report_audio_meta(mp3_path)
+        if meta.get("report_key") != report_key:
+            continue
+        parts = mp3_path.stem.split("_")
+        mode = meta.get("mode") or (parts[2] if len(parts) > 2 else "podcast")
+        found.append(
+            (
+                mp3_path.stat().st_mtime,
+                {
+                    "mode": mode,
+                    "note": meta.get("note", ""),
+                    "mp3_name": mp3_path.name,
+                    "transcript_name": transcript_path.name,
+                },
+            )
+        )
+    return [entry for _mtime, entry in sorted(found, key=lambda row: row[0], reverse=True)]
+
+
 def _write_audio_artifacts(
-    mp3_path: Path, transcript_path: Path, mixed_mp3: bytes, transcript_text: str
+    mp3_path: Path,
+    transcript_path: Path,
+    mixed_mp3: bytes,
+    transcript_text: str,
+    meta: dict[str, str],
 ) -> None:
     """Step 5: write to the cid-scoped cache dir.  Atomic: write to .part then
     rename, so a partial file is never served."""
     mp3_tmp = mp3_path.with_suffix(mp3_path.suffix + ".part")
     tr_tmp = transcript_path.with_suffix(transcript_path.suffix + ".part")
+    meta_tmp = _meta_path(mp3_path).with_suffix(".json.part")
     mp3_tmp.write_bytes(mixed_mp3)
     tr_tmp.write_text(transcript_text, encoding="utf-8")
+    meta_tmp.write_text(json.dumps(meta), encoding="utf-8")
     mp3_tmp.replace(mp3_path)
     tr_tmp.replace(transcript_path)
+    meta_tmp.replace(_meta_path(mp3_path))
 
 
 async def generate_report_audio(
@@ -615,6 +782,7 @@ async def generate_report_audio(
     resolve_key: Callable[[str | None], str | None] | None = None,
     follow_ups: list[tuple[str, str]] | None = None,
     on_progress: ProgressCallback | None = None,
+    force: bool = False,
 ) -> tuple[Path, Path]:
     """Run the audio-overview pipeline for `report` and write the artifacts into
     `out_dir` (one cid-scoped subdir, created on demand).  Returns
@@ -645,12 +813,17 @@ async def generate_report_audio(
     if mode not in ("podcast", "single"):
         raise ValueError(f"Unknown audio mode {mode!r}; expected 'podcast' or 'single'.")
 
+    run_started = time.monotonic()
     out_dir.mkdir(parents=True, exist_ok=True)
     mp3_path, transcript_path = _report_audio_cache_paths(report, follow_ups, mode, out_dir)
 
     # If a previous run for this conversation already wrote both files, hand
-    # them back verbatim — see `_audio_cache_hit`.
-    if _audio_cache_hit(mp3_path, transcript_path):
+    # them back verbatim — see `_audio_cache_hit`. `force` is what "Regenerate"
+    # presses: the cache key is a hash of the report, so an unchanged report
+    # would otherwise hand back the identical file and nothing would appear to
+    # happen. The rewrite is atomic, so the old artifact stays servable until
+    # the new one lands.
+    if not force and _audio_cache_hit(mp3_path, transcript_path):
         # Cache hit — instant, no synth, no download.  Tell the UI so it shows
         # "ready" rather than a false "downloading voice model…" note (W-08).
         await _emit(on_progress, {"stage": "cache_hit"})
@@ -663,12 +836,13 @@ async def generate_report_audio(
     # --- Step 1: turn-script ------------------------------------------------
     await _emit(on_progress, {"stage": "preparing"})
     overview_text = report_to_overview_text(report, follow_ups)
-    turns = await _generate_turn_script(overview_text, mode, conversation_id=conversation_id)
-
+    script = await _generate_turn_script(overview_text, mode, conversation_id=conversation_id)
+    turns = script.turns
+    note = script.note
     await _ensure_voice_model_ready(is_remote, on_progress)
 
     # --- Step 2: synthesize each turn to PCM --------------------------------
-    pcm_turns = await _synthesize_turns(
+    pcm_turns, voice_note = await _synthesize_turns(
         turns,
         voice_a,
         voice_b,
@@ -680,6 +854,9 @@ async def generate_report_audio(
         on_progress=on_progress,
     )
 
+    if voice_note:
+        note = f"{note} {voice_note}".strip()
+
     # --- Step 3: mix in PCM, encode the whole overview once -----------------
     await _emit(on_progress, {"stage": "mixing"})
     mixed_pcm = mix_pcm(
@@ -688,17 +865,32 @@ async def generate_report_audio(
     mixed_mp3 = encode_mp3(mixed_pcm, sample_rate=audio_overview.TTS_SAMPLE_RATE)
 
     # --- Step 4: build transcript -------------------------------------------
-    transcript_text = _build_transcript_text(mode, report, voice_a, voice_b, turns)
+    transcript_text = _build_transcript_text(mode, report, voice_a, voice_b, turns, note)
 
     # --- Step 5: write to the cid-scoped cache dir --------------------------
-    _write_audio_artifacts(mp3_path, transcript_path, mixed_mp3, transcript_text)
+    _write_audio_artifacts(
+        mp3_path,
+        transcript_path,
+        mixed_mp3,
+        transcript_text,
+        {
+            "mode": mode,
+            "note": note,
+            "source": script.source,
+            "report_key": report_content_key(report),
+        },
+    )
 
     logger.info(
-        "report audio generated: cid-artifact dir=%s mp3=%d bytes turns=%d backend=%s",
+        "report audio generated: cid-artifact dir=%s mp3=%d bytes turns=%d backend=%s "
+        "source=%s total=%.1fs note=%r",
         out_dir,
         len(mixed_mp3),
         len(turns),
         backend,
+        script.source,
+        time.monotonic() - run_started,
+        note,
     )
     return mp3_path, transcript_path
 
@@ -707,8 +899,12 @@ __all__ = [
     "TtsDisabled",
     "TtsBackendError",
     "TurnScriptError",
+    "VoiceModelError",
     "_normalize_for_tts",
+    "existing_report_audio",
     "generate_report_audio",
+    "report_content_key",
+    "read_report_audio_meta",
     "report_audio_cache_dir",
     "remove_report_audio_cache",
     "report_to_overview_text",

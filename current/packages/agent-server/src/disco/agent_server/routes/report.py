@@ -20,8 +20,12 @@ from ..report_audio import (
     TtsBackendError,
     TtsDisabled,
     TurnScriptError,
+    VoiceModelError,
+    existing_report_audio,
     generate_report_audio,
+    read_report_audio_meta,
     report_audio_cache_dir,
+    report_content_key,
 )
 from ..runtime import ConversationRuntime
 from ._common import _AUDIO_MEDIA_TYPES, require_owned_conversation
@@ -82,10 +86,14 @@ _AUDIO_FAILURE_MESSAGES = {
         "Couldn't turn the narration script into speech. "
         "Check the voice backend in Settings → Audio, then try again."
     ),
+    "voice_model": (
+        "Couldn't download the voice model this machine needs the first time "
+        "(about 0.5 GB). Check the server's internet access and try again — "
+        "the download resumes from scratch, nothing was left half-written."
+    ),
     "tts_disabled": "Audio overview is disabled in Settings → Audio — enable it to generate.",
     "internal": (
-        "Audio overview hit an unexpected error and stopped. "
-        "The server log has the full traceback."
+        "Audio overview hit an unexpected error and stopped. The server log has the full traceback."
     ),
 }
 
@@ -101,8 +109,18 @@ def _audio_failure_event(reason: str, detail: str | None) -> dict[str, str]:
 def _audio_generation_failure(
     exc: TtsBackendError | TurnScriptError,
 ) -> dict[str, str]:
-    """Return the stable wire payload for a known audio-generation failure."""
-    reason = "turn_script" if isinstance(exc, TurnScriptError) else "tts_backend"
+    """Return the stable wire payload for a known audio-generation failure.
+
+    ``VoiceModelError`` is checked first: it is a ``TtsBackendError`` subclass,
+    and "check the voice backend in Settings" is the wrong next action when the
+    real problem is that the weights never made it onto the machine.
+    """
+    if isinstance(exc, VoiceModelError):
+        reason = "voice_model"
+    elif isinstance(exc, TurnScriptError):
+        reason = "turn_script"
+    else:
+        reason = "tts_backend"
     return _audio_failure_event(reason, str(exc))
 
 
@@ -338,6 +356,7 @@ async def _report_audio_response(
     conversation_id: str,
     mode: str,
     body: AudioBody,
+    force: bool = False,
 ) -> dict:
     report, follow_ups, tts, out_dir = await _resolve_audio_inputs(
         store, conversation_id, mode, body.follow_up_seqs or []
@@ -350,6 +369,7 @@ async def _report_audio_response(
             out_dir=out_dir,
             mode=mode,
             follow_ups=follow_ups,
+            force=force,
             # Prefer an encrypted-store key for the remote TTS provider; falls
             # back to the env var by name when the runtime/store isn't wired.
             resolve_key=runtime._resolve_secret if runtime is not None else None,
@@ -365,9 +385,22 @@ async def _report_audio_response(
             status_code=502,
             detail={"ok": False, **_audio_generation_failure(exc)},
         ) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        # Was uncaught: the blocking POST answered a bare 500 with no JSON body
+        # and no log line, so the UI printed the transport error and the server
+        # showed nothing. The SSE path already did this; both now agree.
+        _LOG.exception("report audio crashed for %s (mode=%s)", conversation_id, mode)
+        raise HTTPException(
+            status_code=500,
+            detail={"ok": False, **_audio_failure_event("internal", str(exc))},
+        ) from exc
 
     return {
         "ok": True,
+        "mode": mode,
+        "note": read_report_audio_meta(mp3_path).get("note", ""),
         "mp3_url": f"/conversations/{conversation_id}/report/audio/{mp3_path.name}",
         "transcript_url": (f"/conversations/{conversation_id}/report/audio/{transcript_path.name}"),
     }
@@ -379,6 +412,7 @@ async def _report_audio_stream_response(
     conversation_id: str,
     mode: str,
     body: AudioBody,
+    force: bool = False,
 ) -> StreamingResponse:
     report, follow_ups, tts, out_dir = await _resolve_audio_inputs(
         store, conversation_id, mode, body.follow_up_seqs or []
@@ -398,12 +432,15 @@ async def _report_audio_stream_response(
                 out_dir=out_dir,
                 mode=mode,
                 follow_ups=follow_ups,
+                force=force,
                 resolve_key=runtime._resolve_secret if runtime is not None else None,
                 on_progress=_on_progress,
             )
             await queue.put(
                 {
                     "stage": "done",
+                    "mode": mode,
+                    "note": read_report_audio_meta(mp3_path).get("note", ""),
                     "mp3_url": (f"/conversations/{conversation_id}/report/audio/{mp3_path.name}"),
                     "transcript_url": (
                         f"/conversations/{conversation_id}/report/audio/{transcript_path.name}"
@@ -415,9 +452,7 @@ async def _report_audio_stream_response(
         except (TtsBackendError, TurnScriptError) as exc:
             # Was silent: the failure only ever reached the browser, so the
             # server log showed a plain 200 for a run that produced nothing.
-            _LOG.warning(
-                "report audio failed for %s (mode=%s): %s", conversation_id, mode, exc
-            )
+            _LOG.warning("report audio failed for %s (mode=%s): %s", conversation_id, mode, exc)
             await queue.put({"stage": "error", **_audio_generation_failure(exc)})
         except Exception as exc:  # never hang the stream on an unexpected error
             _LOG.exception("report audio crashed for %s (mode=%s)", conversation_id, mode)
@@ -448,6 +483,30 @@ async def _report_audio_stream_response(
             "X-Accel-Buffering": "no",
         },
     )
+
+
+def _existing_report_audio_response(conversation_id: str, report: ReportEvent) -> dict:
+    """What audio already exists for this conversation, newest first.
+
+    The artifacts live on the data volume, so an overview generated before a
+    reload — or before an agent-server restart — is still there. Without this
+    the browser had no way to know, and a report with finished audio came back
+    showing only the "Audio Overview" button (UI-42).
+    """
+    base = f"/conversations/{conversation_id}/report/audio"
+    out_dir = report_audio_cache_dir() / conversation_id
+    return {
+        "ok": True,
+        "audio": [
+            {
+                "mode": entry["mode"],
+                "note": entry["note"],
+                "mp3_url": f"{base}/{entry['mp3_name']}",
+                "transcript_url": f"{base}/{entry['transcript_name']}",
+            }
+            for entry in existing_report_audio(out_dir, report_content_key(report))
+        ],
+    }
 
 
 def _report_audio_file_response(conversation_id: str, name: str) -> Response:
@@ -501,6 +560,7 @@ def make_report_router(store: SqliteEventStore, runtime: ConversationRuntime | N
         conversation_id: str,
         request: Request,
         mode: str = Query("podcast"),
+        force: bool = Query(False),
         body: Annotated[AudioBody, Body()] = _DEFAULT_AUDIO_BODY,
     ) -> dict:
         """Generate (or return the cached) audio overview for the latest Deep
@@ -517,17 +577,21 @@ def make_report_router(store: SqliteEventStore, runtime: ConversationRuntime | N
         includes the follow-up count so different selections produce separate
         cached files.
 
+        ``force=true`` re-runs the pipeline even when a cached artifact for the
+        exact same report already exists — what "Regenerate" presses.
+
         404 → no ReportEvent; 400 → unknown mode; 503 → TTS disabled in
         Settings; 502 → synth/LLM failure. 200 →
         ``{"ok": True, "mp3_url": ..., "transcript_url": ...}``."""
         conversation_id = await require_owned_conversation(request, store, conversation_id)
-        return await _report_audio_response(store, runtime, conversation_id, mode, body)
+        return await _report_audio_response(store, runtime, conversation_id, mode, body, force)
 
     @router.post("/conversations/{conversation_id}/report/audio/stream")
     async def report_audio_stream(
         conversation_id: str,
         request: Request,
         mode: str = Query("podcast"),
+        force: bool = Query(False),
         body: AudioBody | None = None,
     ) -> StreamingResponse:
         """SSE variant of the audio endpoint that streams REAL staged progress
@@ -547,7 +611,23 @@ def make_report_router(store: SqliteEventStore, runtime: ConversationRuntime | N
         (raised before the stream opens)."""
         body = body or AudioBody()
         conversation_id = await require_owned_conversation(request, store, conversation_id)
-        return await _report_audio_stream_response(store, runtime, conversation_id, mode, body)
+        return await _report_audio_stream_response(
+            store, runtime, conversation_id, mode, body, force
+        )
+
+    @router.get("/conversations/{conversation_id}/report/audio")
+    async def report_audio_existing(conversation_id: str, request: Request) -> dict:
+        """List the audio overviews already generated for this conversation.
+
+        200 → ``{"ok": True, "audio": [{"mode", "note", "mp3_url",
+        "transcript_url"}, ...]}``, newest first; an empty list means none has
+        been generated. Read-only: it never starts a generation run, so the UI
+        can call it on every report load."""
+        conversation_id = await require_owned_conversation(request, store, conversation_id)
+        report, _follow_ups, _tts, _out_dir = await _resolve_audio_inputs(
+            store, conversation_id, "podcast", []
+        )
+        return _existing_report_audio_response(conversation_id, report)
 
     @router.get("/conversations/{conversation_id}/report/audio/{name}")
     async def report_audio_file(conversation_id: str, name: str, request: Request) -> Response:

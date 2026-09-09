@@ -30,7 +30,10 @@ export interface AudioProgress {
 export type AudioState =
   | { status: "idle" }
   | { status: "generating"; progress?: AudioProgress }
-  | { status: "done"; audioUrl: string }
+  /** `note` is the one plain sentence about how this overview was made (a
+   *  report-derived fallback script, a swapped voice, a summarised length);
+   *  `mode` is which of the two modes produced it. */
+  | { status: "done"; audioUrl: string; note?: string; mode?: AudioMode }
   /** `reason` is the sentence shown to the operator; `detail` is the
    *  secondary technical line (failing stage + the server's exception text). */
   | { status: "unavailable"; reason: string; detail?: string };
@@ -42,6 +45,9 @@ export function audioReasonMessage(reason: string, message?: string): string {
   if (message) return message;
   if (reason === "tts_disabled") {
     return "Audio overview is disabled in Settings → Audio — enable it to generate.";
+  }
+  if (reason === "voice_model") {
+    return "Couldn't download the voice model this machine needs the first time (about 0.5 GB).";
   }
   return `Audio overview failed at the ${reason} stage.`;
 }

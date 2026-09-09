@@ -25,9 +25,9 @@ export interface AudioSectionProps {
   onModeOpenChange: (open: boolean) => void;
   /** B4: report title/query for a meaningful download filename. */
   reportQuery: string;
-  /** Press "Audio Overview". Owned by the card because the include-follow-ups
-   *  step runs before the mode dialog opens. */
-  onStart: () => void;
+  /** Open the mode picker (via the include-follow-ups step when the report has
+   *  follow-ups). Owned by the parent because that step is the parent's. */
+  onRequestGenerate: () => void;
 }
 
 export function AudioSection({
@@ -36,9 +36,10 @@ export function AudioSection({
   modeOpen,
   onModeOpenChange,
   reportQuery,
-  onStart,
+  onRequestGenerate,
 }: AudioSectionProps) {
   const { audio, generate, reset } = useAudioOverview({ cid, followUpSeqs, onModeOpenChange });
+  const generatedMode = audio.status === "done" ? (audio.mode ?? "podcast") : "podcast";
 
   // B3: AudioModeDialog is ALWAYS rendered (outside the status branches) so
   // it remains reachable after audio is generated, not just in the idle branch.
@@ -60,12 +61,17 @@ export function AudioSection({
         onChoose={generate}
       />
 
-      {/* The offer to make audio, and only while there is none. Once a player
-          is on screen "Audio Overview" and "Regenerate" sat side by side as
-          two buttons for one thing (UI-23); Regenerate is the honest name for
-          the only action left. */}
-      {audio.status === "idle" && (
-        <button type="button" onClick={onStart} className={CTRL_BTN}>
+      {/* UI-23: the trigger lives HERE, not in the parent card, so it can
+          disappear once a player exists. Leaving both "Audio Overview" and
+          "Regenerate" next to a finished player asked the operator to guess
+          which one re-runs it. */}
+      {audio.status !== "done" && audio.status !== "generating" && (
+        <button
+          type="button"
+          onClick={onRequestGenerate}
+          data-disco-control="dr.audio.generate"
+          className={CTRL_BTN}
+        >
           <Headphones className="size-3.5" aria-hidden />
           Audio Overview
         </button>
@@ -75,7 +81,8 @@ export function AudioSection({
 
       {audio.status === "done" && (
         // Real play + export affordances — gated on a real audio URL, never a fake.
-        <div className="flex flex-wrap items-center gap-inline">
+        <div className="flex flex-col gap-hair">
+          <div className="flex flex-wrap items-center gap-inline">
           {/* WALK-14 / D2: custom AudioPlayer instead of native <audio controls> */}
           <AudioPlayer src={audio.audioUrl} className="max-w-[18rem] flex-1" />
           <button
@@ -97,13 +104,32 @@ export function AudioSection({
           </button>
           <button
             type="button"
-            onClick={reset}
+            onClick={() => {
+              // UI-43: this used to call `reset()`, which cleared the card back
+              // to the starting "Audio Overview" button and made the operator
+              // pick the mode again — it never regenerated anything. Re-run the
+              // pipeline in the mode this overview was made in, with progress
+              // in place, and force past the content-hash cache so the artifact
+              // is genuinely replaced.
+              void generate(generatedMode, { force: true });
+            }}
             data-disco-control="dr.audio.regenerate"
             className={CTRL_BTN}
           >
             <Headphones className="size-3.5" aria-hidden />
             Regenerate
           </button>
+          </div>
+          {audio.note && (
+            // How this overview was made, when it was not simply the model's
+            // script read in the configured voices.
+            <span
+              data-tts-note
+              className="font-ui text-[0.73rem] text-text-faint"
+            >
+              {audio.note}
+            </span>
+          )}
         </div>
       )}
 
