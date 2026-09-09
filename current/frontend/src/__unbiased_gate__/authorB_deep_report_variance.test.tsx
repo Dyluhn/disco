@@ -123,6 +123,9 @@ describe("AuthorB unbiased gate — W-11 Deep Research report presentation", () 
     expect(container.textContent).not.toContain("[[p2]]");
     expect(container.textContent).not.toContain("[[p3]]");
     expect(screen.getAllByRole("button", { name: /^Source \d:/ })).toHaveLength(6);
-    expect(screen.getByTitle("1 supported, 1 weak, 0 unsupported")).toBeInTheDocument();
+    // UI-20: the meter names the checker's own states now. These fixture claims
+    // predate `verification_status`, and a bare "weak" verdict is the neutral
+    // measurement the checker calls unresolved.
+    expect(screen.getByTitle("1 supported, 1 unresolved")).toBeInTheDocument();
   });
 });
