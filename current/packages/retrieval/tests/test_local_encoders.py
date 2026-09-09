@@ -1,12 +1,16 @@
 """In-process encoders (fastembed) — wiring + a gated live-model check.
 
-The wiring/conformance tests are pure (no model load). The functional test
-actually runs the ONNX models, so it's skipped when they aren't loadable (no
-fastembed install / no cached model / offline CI) — it runs locally where the
-models are cached.
+The wiring/conformance tests are pure (no model load). The functional tests
+actually run the ONNX models, so each is skipped when the model IT needs isn't
+loadable (no fastembed install / that model not cached / offline CI) — they run
+locally where the models are cached.
 """
 
 from __future__ import annotations
+
+import os
+import tempfile
+from collections.abc import Callable
 
 import pytest
 from disco.core.env import disco_env
@@ -16,8 +20,12 @@ from disco.retrieval.local_encoders import (
     FastEmbedEmbedder,
     FastEmbedNLIVerifier,
     FastEmbedReranker,
+    _embedding,
     _embedding_factory,
+    _reranker,
     _sigmoid,
+    _tier_embed_default,
+    _tier_rerank_default,
 )
 from disco.retrieval.models import Passage
 from disco.retrieval.ranking import Embedder, Reranker
@@ -141,20 +149,45 @@ async def test_rerank_truncates_and_batches_to_bound_memory(monkeypatch):
 # ---- live model behavior (gated: needs the ONNX models loadable) ------------
 
 
-def _models_available() -> bool:
+def _fastembed_cache_dir() -> str:
+    """Mirror of fastembed.common.utils.define_cache_dir's default resolution — read
+    here rather than imported so the gate still works when fastembed isn't installed
+    (one of the cases these tests are supposed to skip on, not error on)."""
+    return os.environ.get("FASTEMBED_CACHE_PATH") or os.path.join(
+        tempfile.gettempdir(), "fastembed_cache"
+    )
+
+
+def _skip_reason(load: Callable[[], object], model_id: str) -> str:
+    """Empty string if `load` succeeds; otherwise a skip reason naming the model.
+
+    Guarding on ONE model made a half-warm cache FAIL instead of skip: with the
+    reranker cached but the embedder missing (e.g. fastembed's default cache under
+    the system temp dir wiped, HF_HUB_OFFLINE=1 blocking the refetch), the embedder
+    test ran anyway and errored. Each live test now gates on the model IT loads, and
+    the reason names that model and the cache dir to look in."""
     try:
-        from disco.retrieval.local_encoders import _reranker
-
-        _reranker()  # loads from cache; raises if unavailable/offline
-        return True
-    except Exception:  # noqa: BLE001
-        return False
-
-
-live = pytest.mark.skipif(not _models_available(), reason="ONNX encoder models not loadable")
+        load()
+    except Exception as exc:  # noqa: BLE001
+        return (
+            f"{model_id} not loadable from fastembed cache {_fastembed_cache_dir()} "
+            f"({type(exc).__name__}: {exc})"
+        )
+    return ""
 
 
-@live
+def _needs(load: Callable[[], object], model_id: str) -> pytest.MarkDecorator:
+    reason = _skip_reason(load, model_id)
+    return pytest.mark.skipif(bool(reason), reason=reason)
+
+
+# Resolved the same way the loaders resolve them, so the reason names the model
+# that was actually looked for (explicit override, else the tier default).
+needs_reranker = _needs(_reranker, disco_env("RERANK_MODEL") or _tier_rerank_default())
+needs_embedder = _needs(_embedding, disco_env("EMBED_MODEL") or _tier_embed_default())
+
+
+@needs_reranker
 async def test_reranker_orders_relevant_passage_first():
     rr = FastEmbedReranker()
     ps = [
@@ -165,7 +198,7 @@ async def test_reranker_orders_relevant_passage_first():
     assert out[0].id == "hit"
 
 
-@live
+@needs_embedder
 async def test_embedder_returns_dense_vectors_and_semantic_order():
     emb = FastEmbedEmbedder()
     v = await emb.embed(["a cat on a mat", "a feline on a rug", "stock market futures"])
