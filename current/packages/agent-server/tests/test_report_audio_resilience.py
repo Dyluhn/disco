@@ -138,11 +138,12 @@ def test_existing_audio_is_listed_without_regenerating(
     assert client.get(entries[0]["mp3_url"]).status_code == 200
 
 
-def test_a_second_research_run_does_not_inherit_the_first_reports_audio(
+def test_a_second_research_run_marks_the_first_reports_audio_as_earlier(
     client: TestClient, store: SqliteEventStore, configure_tts, fake_pipeline
 ) -> None:
-    """A conversation can hold more than one report. Restoring the previous
-    run's player onto a new report would be worse than showing none."""
+    """A conversation can hold more than one report. The previous run's audio
+    must not be passed off as this report's — but it must still be reachable,
+    so it is offered with the note saying where it came from."""
     configure_tts(_enabled())
     cid = _create_conv(client)
     _seed_report(store, cid)
@@ -157,7 +158,13 @@ def test_a_second_research_run_does_not_inherit_the_first_reports_audio(
     finally:
         loop.close()
 
-    assert client.get(f"/conversations/{cid}/report/audio").json()["audio"] == []
+    # The old artifact is still offered — an MP3 on the volume the user cannot
+    # reach is the bug we are fixing — but it is marked, not passed off as this
+    # report's audio.
+    entries = client.get(f"/conversations/{cid}/report/audio").json()["audio"]
+    assert len(entries) == 1
+    assert entries[0]["stale"] is True
+    assert "earlier version of this report" in entries[0]["note"]
 
 
 def test_listing_audio_without_a_report_is_a_404(
@@ -166,6 +173,75 @@ def test_listing_audio_without_a_report_is_a_404(
     configure_tts(_enabled())
     cid = _create_conv(client)
     assert client.get(f"/conversations/{cid}/report/audio").status_code == 404
+
+
+def _write_legacy_artifacts(out_dir: Path, mode: str, digest: str) -> None:
+    """An artifact pair exactly as builds before the sidecar wrote them: an MP3
+    and its transcript, no `.json` beside them, and a hash from whatever cache
+    scheme was current at the time."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / f"audio_overview_{mode}_{digest}.mp3").write_bytes(b"\xff\xfbID3 fake mp3")
+    (out_dir / f"audio_overview_{mode}_{digest}.md").write_text("# Audio Overview Transcript\n")
+
+
+def test_audio_written_before_the_sidecar_existed_is_still_restored(
+    client: TestClient, store: SqliteEventStore, configure_tts, fake_pipeline
+) -> None:
+    """A conversation whose ONLY audio predates this change (no sidecar, and a
+    hash from the older cache scheme). The listing used to come back empty and
+    the page showed just the "Audio Overview" button, even though the MP3 was
+    sitting on the volume — UI-42, unfixed for every overview generated before
+    the sidecar shipped."""
+    configure_tts(_enabled())
+    cid = _create_conv(client)
+    _seed_report(store, cid)
+    cid_dir = fake_pipeline / cid
+    _write_legacy_artifacts(cid_dir, "podcast", "5cd813135d85")
+
+    listing = client.get(f"/conversations/{cid}/report/audio")
+    assert listing.status_code == 200
+    entries = listing.json()["audio"]
+    assert len(entries) == 1
+    assert entries[0]["mode"] == "podcast"  # recovered from the filename
+    assert entries[0]["stale"] is True
+    assert "earlier version of this report" in entries[0]["note"]
+    assert entries[0]["mp3_url"].endswith("audio_overview_podcast_5cd813135d85.mp3")
+    # And it is really servable, so the restored player is not a dead link.
+    assert client.get(entries[0]["mp3_url"]).status_code == 200
+
+
+def test_a_legacy_transcript_with_no_mp3_is_not_listed(
+    client: TestClient, store: SqliteEventStore, configure_tts, fake_pipeline
+) -> None:
+    """The VM directory also held an orphan `_single_*.md` with no MP3 beside
+    it. A player pointing at a file that is not there is worse than no player."""
+    configure_tts(_enabled())
+    cid = _create_conv(client)
+    _seed_report(store, cid)
+    cid_dir = fake_pipeline / cid
+    cid_dir.mkdir(parents=True, exist_ok=True)
+    (cid_dir / "audio_overview_single_5f7a69b8e629.md").write_text("orphan\n")
+
+    assert client.get(f"/conversations/{cid}/report/audio").json()["audio"] == []
+
+
+def test_a_current_artifact_wins_over_a_legacy_one(
+    client: TestClient, store: SqliteEventStore, configure_tts, fake_pipeline
+) -> None:
+    """Once this report has audio of its own, the unprovable older file must
+    not be offered alongside it."""
+    configure_tts(_enabled())
+    cid = _create_conv(client)
+    _seed_report(store, cid)
+    _write_legacy_artifacts(fake_pipeline / cid, "podcast", "5cd813135d85")
+
+    generated = client.post(f"/conversations/{cid}/report/audio?mode=single")
+    assert generated.status_code == 200, generated.text
+
+    entries = client.get(f"/conversations/{cid}/report/audio").json()["audio"]
+    assert len(entries) == 1
+    assert entries[0]["stale"] is False
+    assert entries[0]["mp3_url"] == generated.json()["mp3_url"]
 
 
 def test_listing_a_conversation_with_no_audio_is_empty_not_an_error(

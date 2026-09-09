@@ -517,6 +517,11 @@ export async function requestReportAudioBlocking(
 export interface ExistingReportAudio {
   mode: string;
   note: string;
+  /** True when the server cannot prove this artifact belongs to the report on
+   *  screen — written before the sidecar existed, or by an earlier research run
+   *  in the same conversation. `note` already says so; the flag is for callers
+   *  that want to treat it differently. */
+  stale?: boolean;
   mp3_url: string;
   transcript_url: string;
 }

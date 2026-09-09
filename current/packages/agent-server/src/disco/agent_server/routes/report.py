@@ -501,6 +501,11 @@ def _existing_report_audio_response(conversation_id: str, report: ReportEvent) -
             {
                 "mode": entry["mode"],
                 "note": entry["note"],
+                # True when the artifact cannot be proved to belong to the
+                # report on screen (written before the sidecar existed, or by a
+                # different research run). The player is still restored; the
+                # note says where it came from.
+                "stale": bool(entry["stale"]),
                 "mp3_url": f"{base}/{entry['mp3_name']}",
                 "transcript_url": f"{base}/{entry['transcript_name']}",
             }

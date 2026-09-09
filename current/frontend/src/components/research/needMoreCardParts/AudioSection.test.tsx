@@ -141,6 +141,26 @@ describe("AudioSection", () => {
     );
   });
 
+  it("restores audio from a build that wrote no sidecar, and says where it came from", async () => {
+    // The VM had exactly this: an MP3 pair on the data volume from before the
+    // sidecar shipped, and a page showing only the "Audio Overview" button.
+    fetchExistingReportAudio.mockResolvedValue([
+      {
+        mode: "podcast",
+        stale: true,
+        note: "This audio was made from an earlier version of this report.",
+        mp3_url: "/conversations/conv_bcc478d4/report/audio/audio_overview_podcast_5cd81313.mp3",
+        transcript_url:
+          "/conversations/conv_bcc478d4/report/audio/audio_overview_podcast_5cd81313.md",
+      },
+    ]);
+    renderSection();
+
+    await screen.findByTestId("player");
+    expect(screen.getByRole("button", { name: /Export MP3/i })).toBeTruthy();
+    expect(await screen.findByText(/earlier version of this report/i)).toBeTruthy();
+  });
+
   it("shows the note when the narration was not simply the model's script", async () => {
     fetchExistingReportAudio.mockResolvedValue([
       {
