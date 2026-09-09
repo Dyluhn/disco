@@ -134,6 +134,13 @@ and, more quietly, hands the containers environment values that still read
 when `VAR` is unset and is also one of the service's own environment keys.
 Install `docker-compose` and run `podman compose up -d --build` again.
 
+The repository is private, so `git clone` needs your own GitHub access. Either
+put an SSH key on your account and clone `git@github.com:Dyluhn/disco.git`, or
+create a personal access token with `repo` scope and give it as the password the
+`https://` clone asks for; `gh auth login` sets up either. Without access the
+clone stops at `Repository not found` — GitHub does not distinguish "private"
+from "missing" for a client it does not recognise.
+
 **Rootless Podman** (the path this project's install testing actually covers):
 
 ```bash
@@ -221,16 +228,28 @@ docker compose logs app-server
 Keep both exports set for every later `docker compose` command in this shell, or
 add them to `~/.bashrc` as the installer suggests.
 
-Confirm all four services before going further — a compose provider can report
-success while one image failed to build:
+Confirm the services before going further — a compose provider can report
+success while one image failed to build. Check with `podman ps`, not `compose
+ps`: the two compose providers print different things, and only one of them
+prints health at all.
 
 ```bash
-podman compose ps      # or: docker compose ps
+podman ps --format '{{.Names}} {{.Status}}'     # or: docker ps --format ...
 ```
 
-Expect four rows: `app-server`, `agent-server` and `frontend` **Up (healthy)**,
-and `sandbox-image` **Exited (0)** — that one is correct, it exists only to
-deposit the `disco-sandbox:base` image into your daemon and then stop.
+Expect three running containers — `app-server`, `agent-server` and `frontend` —
+each **Up ... (healthy)**. The names are `disco_app-server_1` under
+podman-compose and `disco-app-server-1` under Compose v2.
+
+A fourth container, `sandbox-image`, is expected to be **Exited (0)**; it exists
+only to deposit the `disco-sandbox:base` image into your daemon and then stops.
+Add `-a` to `podman ps` to see it.
+
+What `podman compose ps` shows instead, and why it is not the check: under
+podman-compose it lists all four containers with health, but under the
+Compose v2 (`docker-compose`) provider — the one Debian 13 uses — it lists three
+rows, hides the exited `sandbox-image`, and never prints `(healthy)` even when
+every healthcheck is passing.
 
 Then open **http://localhost:8088** in a browser.
 
@@ -247,7 +266,24 @@ echo '{"dns":["1.1.1.1","8.8.8.8"]}' > ~/.config/docker/daemon.json
 systemctl --user restart docker
 ```
 
-The app-server logs print the working UI URL and a one-time admin pairing token.
+The app-server logs print the working UI URL and the admin pairing token. A
+browser on the same machine pairs itself and never asks for it. If it does ask —
+you are opening the UI from another machine, or you cleared the cookie — print
+the token on demand:
+
+```bash
+podman compose exec app-server disco-pairing-token
+```
+
+It is derived from this install's secret rather than minted per boot, so that
+command prints the same token every time. To find it in the boot log instead,
+grep for the banner — `logs | tail` will not do, healthcheck lines push the
+banner out of the last twenty lines within minutes:
+
+```bash
+podman compose logs app-server | grep -A 8 "Disco self-host boot"
+```
+
 Configure a driver model after boot in **Settings -> Models & Providers**, then
 prove the configuration:
 
@@ -291,6 +327,86 @@ curl -s "${AUTH[@]}" -X PUT http://127.0.0.1:8800/api/models/assignments \
 `GET /api/providers/presets` lists ready-made base URLs (OpenRouter, OpenAI,
 Anthropic, Groq, DeepSeek, Together, Fireworks, Mistral, xAI). Pass the key in
 the request body only — never on a command line that lands in shell history.
+
+### Updating
+
+```bash
+cd disco
+git pull
+podman compose down             # or: docker compose down
+podman compose up -d --build
+```
+
+The `down` is not optional. On `podman-compose` 1.0.6 (the version Ubuntu 24.04
+ships) `podman compose up -d --build` builds the new images and then cannot
+replace the containers that are already running:
+
+```
+Error: creating container storage: the container name "disco_frontend_1" is
+already in use by ... You have to remove that container to be able to reuse
+that name: that name is already in use
+exit code: 125
+```
+
+It then restarts the **old** containers. The command looks like it worked, the
+new images exist, and the stack keeps serving the old code. Compose v2 replaces
+containers in place, so `down` costs it only the restart it was going to do.
+
+`down` removes containers, not data: the `disco-data` volume — database,
+settings, encrypted secrets, projects, skills — survives. Never use `down -v`
+(or `down --volumes`) to update; that deletes it. To take a backup first, use
+the lifecycle command, which now does the whole update itself:
+
+```bash
+.venv/bin/python development/scripts/self_host_data.py upgrade \
+  --backup "$HOME/disco-pre-upgrade-$(date +%Y%m%d).tar.gz"
+```
+
+After either route, re-run the confirmation (`podman ps`) and the proof step
+(`disco-verify --quick`).
+
+### Starting Disco at boot
+
+Nothing starts a rootless container stack after a reboot on its own —
+`restart: unless-stopped` in the compose file only covers a crash while the
+machine is up. Give the compose project one user unit. Save this as
+`~/.config/systemd/user/disco.service`, replacing `%h/disco` if you cloned
+somewhere else:
+
+```ini
+[Unit]
+Description=Disco (compose project)
+Wants=network-online.target podman.socket
+After=network-online.target podman.socket
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=%h/disco
+Environment=DISCO_SANDBOX_SOCKET=%t/podman/podman.sock
+ExecStart=/usr/bin/podman compose up -d
+ExecStop=/usr/bin/podman compose down
+TimeoutStartSec=0
+
+[Install]
+WantedBy=default.target
+```
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now disco.service
+loginctl enable-linger "$USER"     # already run above; this is what makes it survive logout
+```
+
+`%h` is your home directory and `%t` is `$XDG_RUNTIME_DIR`, so the unit is
+correct at any uid. On the rootless Docker path use `%h/bin/docker compose`
+in both Exec lines and set `Environment=DOCKER_HOST=unix://%t/docker.sock`
+instead of the Podman socket.
+
+Check it with `systemctl --user status disco` after a reboot; `journalctl --user
+-u disco` has the compose output. This is a compose project, so it gets one unit
+that owns the project — `podman generate systemd` writes one unit per container
+(and is deprecated in Podman 5), and Quadlet has no compose equivalent.
 
 Copy `.env.example` to `.env` only when you need to override ports, bind
 addresses, provider keys, or the sandbox socket. The default is local rootless

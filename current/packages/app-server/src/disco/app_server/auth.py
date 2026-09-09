@@ -178,7 +178,7 @@ def _pairing_token_ok(presented: str | None) -> bool:
     return bool(presented and secrets.compare_digest(presented, pairing_token()))
 
 
-def _public_ui_url() -> str:
+def public_ui_url() -> str:
     explicit = (disco_env("PUBLIC_UI_URL") or "").strip()
     if explicit:
         return explicit.rstrip("/")
@@ -189,7 +189,7 @@ def _public_ui_url() -> str:
 
 
 def _print_boot_banner() -> None:
-    ui_url = _public_ui_url()
+    ui_url = public_ui_url()
     pairing_lines = (
         ["  Loopback auto-pair is enabled; no pairing token is printed."]
         if _auto_pair_enabled()

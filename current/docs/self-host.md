@@ -6,6 +6,11 @@ socket is inherited by a fresh install.
 
 ## Quickstart
 
+The repository is private: clone it with your own GitHub access — an SSH key on
+your account (`git@github.com:Dyluhn/disco.git`) or a `repo`-scoped personal
+access token as the password for the `https://` clone. Without access the clone
+stops at `Repository not found`.
+
 ```bash
 sudo apt-get update && sudo apt-get install -y git podman docker-compose   # Debian 13
 # Ubuntu 24.04 instead: ... git podman podman-compose  (its docker-compose is the
@@ -42,9 +47,19 @@ See [Sandbox Image](#sandbox-image) for the rootful alternative and why the
 rootless socket is preferred. Compose prints `pull access denied for
 disco-server` before it builds; that is expected, not a failure.
 
-The app-server logs print the working UI URL and a one-time first-run pairing
-token. On localhost the browser normally pairs automatically; if it asks for a
-token, paste the token from `podman compose logs app-server`.
+The app-server logs print the working UI URL and the first-run pairing token. On
+localhost the browser normally pairs automatically; if it asks for a token,
+print the current one:
+
+```bash
+podman compose exec app-server disco-pairing-token
+```
+
+The token is an HMAC tag over the install secret, not a per-boot random value,
+so it is the same token the banner printed and it survives restarts. In the log
+the banner is reached with `podman compose logs app-server | grep -A 8 "Disco
+self-host boot"`; the last twenty lines are healthcheck noise within minutes of
+boot.
 
 No driver model is bundled and no dead local endpoint is seeded. After the UI
 loads, open **Settings -> Models & Providers**, add an OpenAI-compatible local,
@@ -66,6 +81,45 @@ podman compose exec agent-server disco-verify --quick
 All durable application state lives in the `disco-data` volume. The default
 server image already contains the fastembed ONNX models and Kokoro TTS weights
 under `/opt/disco-cache`, so the `/data` volume does not hide them.
+
+## Start at boot
+
+A rootless compose project does not come back after a reboot on its own:
+`restart: unless-stopped` covers a crash while the machine is up, not a cold
+boot, because no system-wide service owns rootless containers. One user unit
+owns the project. Save as `~/.config/systemd/user/disco.service`:
+
+```ini
+[Unit]
+Description=Disco (compose project)
+Wants=network-online.target podman.socket
+After=network-online.target podman.socket
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=%h/disco
+Environment=DISCO_SANDBOX_SOCKET=%t/podman/podman.sock
+ExecStart=/usr/bin/podman compose up -d
+ExecStop=/usr/bin/podman compose down
+TimeoutStartSec=0
+
+[Install]
+WantedBy=default.target
+```
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now disco.service
+loginctl enable-linger "$USER"
+```
+
+`%h` is the home directory and `%t` is `$XDG_RUNTIME_DIR`, so the unit is
+uid-independent. On rootless Docker use `%h/bin/docker compose` in both Exec
+lines with `Environment=DOCKER_HOST=unix://%t/docker.sock`. `enable-linger` is
+what lets the unit run with nobody logged in — it is already in the Quickstart.
+`podman generate systemd` is not the right tool here: it emits one unit per
+container and is deprecated in Podman 5, and Quadlet has no compose equivalent.
 
 ## Backup and restore
 
@@ -160,6 +214,21 @@ stack:
 podman compose logs app-server agent-server
 podman compose exec agent-server disco-verify --quick
 ```
+
+Without the lifecycle script the update is:
+
+```bash
+git pull
+podman compose down             # or: docker compose down
+podman compose up -d --build
+```
+
+The `down` is required, and `upgrade` runs the same `down` internally for the
+same reason: podman-compose 1.0.6 (Ubuntu 24.04) rebuilds the images on `up`
+but cannot replace a running container — it fails with `the container name
+"disco_frontend_1" is already in use` (exit 125) and restarts the old
+container, so the operator keeps running the old code. `down` removes
+containers only; `disco-data` survives. `down --volumes` deletes it.
 
 Application rollback is a source/image operation. Once a newer version has
 written a schema an older version may not understand, in-place rollback is not
