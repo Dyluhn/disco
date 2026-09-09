@@ -52,7 +52,7 @@ localhost the browser normally pairs automatically; if it asks for a token,
 print the current one:
 
 ```bash
-podman compose exec app-server disco-pairing-token
+podman compose exec app-server python -m disco.app_server.pairing_cli
 ```
 
 The token is an HMAC tag over the install secret, not a per-boot random value,

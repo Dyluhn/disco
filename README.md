@@ -272,7 +272,7 @@ you are opening the UI from another machine, or you cleared the cookie — print
 the token on demand:
 
 ```bash
-podman compose exec app-server disco-pairing-token
+podman compose exec app-server python -m disco.app_server.pairing_cli
 ```
 
 It is derived from this install's secret rather than minted per boot, so that

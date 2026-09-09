@@ -1,4 +1,5 @@
-"""`disco-pairing-token` — the on-demand replacement for hunting the boot banner.
+"""`python -m disco.app_server.pairing_cli` — the on-demand replacement for
+hunting the boot banner.
 
 Found on a fresh self-host install (2026-09-09): the banner with the pairing
 token scrolls out of `compose logs app-server | tail -20` within minutes of
