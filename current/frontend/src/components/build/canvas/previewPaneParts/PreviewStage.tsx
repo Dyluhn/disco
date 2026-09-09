@@ -6,6 +6,7 @@ import { SelectionOverlay } from "@/components/build/canvas/SelectionOverlay";
 import type { ElementSelectState } from "@/hooks/useElementSelect";
 import { formatSelectionContext } from "@/lib/resolvers/appResolver";
 import {
+  isPreviewReasonCode,
   previewStagePlaceholderMessage,
   shouldShowStatusOverlay,
   statusOverlayMessage,
@@ -65,7 +66,7 @@ export function PreviewStage({
           <p className="max-w-measure text-[0.8rem] text-text-faint">
             {previewStagePlaceholderMessage(visibleFailure, dataReason)}
           </p>
-          {visibleFailure && (
+          {visibleFailure && isPreviewReasonCode(visibleFailure) && (
             <p className="font-mono text-[0.7rem] text-text-faint">Reason code: {visibleFailure}</p>
           )}
         </div>

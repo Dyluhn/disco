@@ -1,4 +1,4 @@
-import { previewFailureExplanation } from "./helpers";
+import { isPreviewReasonCode, previewFailureExplanation } from "./helpers";
 
 export function PreviewUnavailable({ reason }: { reason: string | undefined }) {
   return (
@@ -15,7 +15,7 @@ export function PreviewUnavailable({ reason }: { reason: string | undefined }) {
             ? previewFailureExplanation(reason)
             : "A real Preview appears here when this build starts a web runtime."}
         </p>
-        {reason && (
+        {reason && isPreviewReasonCode(reason) && (
           <p className="font-mono text-[0.7rem] text-text-faint">Reason code: {reason}</p>
         )}
       </div>

@@ -225,12 +225,22 @@ export function statusOverlayRole(
   return visibleFailure || runtimeUnavailable ? "alert" : "status";
 }
 
+/** True for a bare backend reason code (`preview_unavailable`) as opposed to a
+ * message already written for a person ("capability unavailable"). Codes are the
+ * only thing that needs translating, and the only thing worth repeating as a
+ * secondary line. */
+export function isPreviewReasonCode(reason: string): boolean {
+  return /^[a-z][a-z0-9_]*$/.test(reason);
+}
+
 /** Plain-words copy for a backend preview reason code: what happened, and what
  * the operator can do about it. The raw code is never the whole message — the
  * surfaces below render it as a separate secondary line so it stays greppable
  * without being the only thing a user is told. An unrecognized code still gets
- * an honest sentence rather than being presented as progress. */
+ * an honest sentence rather than being presented as progress, and a message that
+ * was already human passes through unchanged. */
 export function previewFailureExplanation(reason: string): string {
+  if (!isPreviewReasonCode(reason)) return reason;
   switch (reason) {
     case "preview_unavailable":
       return "Preview is not available for this run: its app server is not running and the finished build has no committed app to serve. Use Download source, or ask the agent to serve the site again.";
@@ -252,7 +262,9 @@ export function statusOverlayMessage(
   runtimeUnavailable: boolean,
   dataReason: string | undefined,
 ): string {
-  if (visibleFailure) return previewFailureExplanation(visibleFailure);
+  if (visibleFailure) {
+    return `Preview update unavailable: ${previewFailureExplanation(visibleFailure)}`;
+  }
   if (runtimeUnavailable) {
     return `Preview runtime is recovering: ${dataReason ?? "server unavailable"}`;
   }
