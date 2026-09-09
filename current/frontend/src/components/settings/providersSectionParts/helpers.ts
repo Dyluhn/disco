@@ -59,3 +59,9 @@ export function keyBadge(provider: ProviderInfo): KeyBadge {
   }
   return { text: "Key stored, not verified", tone: "neutral" };
 }
+
+/** What to offer when a provider's catalogue doesn't report a context window.
+ * 128k is the current table stakes for served models, and the field stays
+ * editable — asking with an empty box made the user guess a number they had no
+ * way to know (UI-3). */
+export const DEFAULT_CONTEXT_WINDOW = 131072;

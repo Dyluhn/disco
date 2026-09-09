@@ -9,7 +9,7 @@ import {
 } from "@/hooks/useModels";
 import type { ModelInfo, ProviderCatalogueModel, ProviderInfo } from "@/types/models";
 import { CatalogueErrorBanner } from "./CatalogueErrorBanner";
-import { errorText } from "./helpers";
+import { DEFAULT_CONTEXT_WINDOW, errorText } from "./helpers";
 import { ModelRow } from "./ModelRow";
 import { FIELD } from "./styles";
 
@@ -58,7 +58,7 @@ export function BrowseProvider({
     const catalogueEntry = enabledByModel.get(m.model_id);
     const nextEnabled = !catalogueEntry;
     if (nextEnabled && m.context_window == null) {
-      setCtxAsk({ modelId: m.model_id, value: "" });
+      setCtxAsk({ modelId: m.model_id, value: String(DEFAULT_CONTEXT_WINDOW) });
       setToggleError(null);
       return;
     }

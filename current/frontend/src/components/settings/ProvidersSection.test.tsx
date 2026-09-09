@@ -79,6 +79,7 @@ let models: Array<{
   context_window: number;
 }>;
 let catalogueFails = false;
+let catalogueOmitsContext = false;
 let createCatalogueOk = true;
 let lastEnableBody: unknown = null;
 let lastCreateBody: Record<string, unknown> | null = null;
@@ -158,6 +159,18 @@ function installFetch() {
           price_out_per_m: 10,
           capabilities: ["vision", "long_context"],
         },
+        ...(catalogueOmitsContext
+          ? [
+              {
+                model_id: "no-context-model",
+                label: "No context model",
+                context_window: null,
+                price_in_per_m: 1,
+                price_out_per_m: 2,
+                capabilities: [],
+              },
+            ]
+          : []),
       ]);
     }
     if (method === "POST" && url === "/api/providers/openai/enable") {
@@ -200,6 +213,7 @@ beforeEach(() => {
   providers = [];
   models = [];
   catalogueFails = false;
+  catalogueOmitsContext = false;
   createCatalogueOk = true;
   lastEnableBody = null;
   lastCreateBody = null;
@@ -370,6 +384,40 @@ describe("ProvidersSection — generic provider objects", () => {
       await screen.findByText(/did not return a usable \/models catalogue/i),
     ).toBeInTheDocument();
     expect(screen.queryByText("No matching models.")).not.toBeInTheDocument();
+  });
+
+  it("prefills 128k when the catalogue reports no context window", async () => {
+    // UI-3: the box opened empty, so enabling a model required knowing 131072.
+    catalogueOmitsContext = true;
+    render(createElement(ProvidersSection), { wrapper: makeWrapper() });
+
+    fireEvent.change(await screen.findByLabelText("Provider preset"), {
+      target: { value: "openai" },
+    });
+    fireEvent.change(screen.getByLabelText("Provider API key"), {
+      target: { value: "sk-live-secret" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Add provider/i }));
+
+    fireEvent.click(
+      await screen.findByRole("switch", { name: /Enable no-context-model/i }),
+    );
+
+    expect(
+      await screen.findByLabelText("Context window for no-context-model"),
+    ).toHaveValue("131072");
+    expect(screen.getByText(/Most current models accept 128k/i)).toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Enable", exact: true }),
+    );
+    await waitFor(() =>
+      expect(lastEnableBody).toEqual({
+        model_id: "no-context-model",
+        label: "No context model",
+        context_window: 131072,
+      }),
+    );
   });
 
   it("renders the failed-/models manual-add path and uses the same enable route", async () => {
