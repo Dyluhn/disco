@@ -739,13 +739,17 @@ def test_lower_deck_embeds_image_assets_into_pptx_and_html():
         ],
     )
 
-    # Without assets → the THEMED ART fallback (2026-07-07: inline SVG replaces
-    # the dead "[image]" box; see test_deck_schema's art-fallback test).
+    # Without assets → no dead "[image]" box. A SIDE slot still gets the themed
+    # inline-SVG art fallback (see test_deck_schema's art-fallback test); a
+    # FULL-BLEED cover instead drops the art entirely and renders the legible
+    # text-only title layout (UI-24) — small white type over a pale generative
+    # wash was unreadable.
     deck_plain = lower_deck(authored)
     assert all(el.image_bytes is None for s in deck_plain.slides for el in s.elements)
     plain_html = render_html(deck_plain)
     assert "[image]" not in plain_html
-    assert "<svg" in plain_html
+    assert '<h1 class="slide-title"' in plain_html
+    assert 'class="slide-image-scrim"' not in plain_html
 
     # With assets keyed by the image slide's index → embedded.
     deck = lower_deck(authored, image_assets={0: png})

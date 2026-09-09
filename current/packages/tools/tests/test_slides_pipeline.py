@@ -744,6 +744,41 @@ def test_full_image_html_uses_scrim_for_text_over_image():
     assert "data:image/png;base64" in html
 
 
+def test_full_image_html_without_art_is_legible_text_only():
+    """UI-24: with no image provider configured a full-bleed slide (slide 1 is
+    always one) has NO art, so it must render as a legible text-only title —
+    solid slide ground, a real 4vw title, full theme contrast — instead of the
+    small white-on-scrim caption stacked over the grey generative-SVG wash."""
+    authored = AuthoredDeck(
+        title="Visual Deck",
+        slides=[
+            AuthoredSlide(
+                type="title",
+                archetype="full_bleed_image",
+                title="Induction vs. Conventional Electric Resistance Cooktops",
+                body=["A practical, evidence-based comparison"],
+                layout_hint="full_image",
+                image_prompt="grainy risograph; subject: Hero; slot: full-bleed background",
+            )
+        ],
+    )
+    # No image_assets -> no image provider was configured.
+    deck = lower_deck(authored, image_assets={})
+    html = render_html(deck)
+
+    # The art scaffolding is gone: no scrim, no wrap, no fallback SVG wash.
+    # (The class names still appear in the always-emitted <style> block; what
+    # matters is that no ELEMENT carries them.)
+    assert 'class="slide-image-scrim"' not in html
+    assert 'class="slide-full-image-wrap"' not in html
+    assert 'class="slide-full-image-copy"' not in html
+    assert "preserveAspectRatio" not in html
+    # ...and the title is a real title, not a 2.5vw heading.
+    assert '<h1 class="slide-title"' in html
+    assert "Induction vs. Conventional Electric Resistance Cooktops" in html
+    assert '<h2 class="slide-heading"' not in html
+
+
 @pytest.mark.asyncio
 async def test_slides_tool_degrades_when_image_gen_unconfigured(tmp_workspace):
     """W-50 end-to-end: SlidesTool._run_c2_pipeline catches ImageGenNotConfigured from
