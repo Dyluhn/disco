@@ -403,6 +403,37 @@ describe("PreviewPane — one canonical owned-web surface", () => {
     expect(screen.queryByTitle("Preview")).not.toBeInTheDocument();
     expect(document.body.innerHTML).not.toContain("preview-app");
   });
+
+  // Regression: a finished static-site Build showed only the bare code
+  // "preview_unavailable" (and, before the mint resolved, kept claiming the
+  // runtime was "Starting…"), so the user was never told what happened or what
+  // to do about it.
+  it("explains a refused preview capability in plain words instead of only the raw reason code", async () => {
+    canonicalPreviewBootstrapUrlMock.mockRejectedValue(
+      new Error('{"detail":{"reason":"preview_unavailable"}}'),
+    );
+    useBuildPreviewMock.mockReturnValue({
+      data: {
+        available: true,
+        status: "running",
+        generation: "pv_finished_static_site",
+      },
+    });
+    render(
+      withClient(
+        <PreviewPane events={[HTML]} status="FINISHED" cid="conv_static_site" />,
+      ),
+    );
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Preview is not available for this run");
+    expect(alert).toHaveTextContent("Download source");
+    expect(alert).not.toHaveTextContent(
+      "Starting the platform-managed application runtime",
+    );
+    // The code stays visible, but only as a secondary line.
+    expect(alert).toHaveTextContent("Reason code: preview_unavailable");
+  });
 });
 
 describe("PreviewPane — hardened artifact viewer", () => {

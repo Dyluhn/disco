@@ -225,12 +225,34 @@ export function statusOverlayRole(
   return visibleFailure || runtimeUnavailable ? "alert" : "status";
 }
 
+/** Plain-words copy for a backend preview reason code: what happened, and what
+ * the operator can do about it. The raw code is never the whole message — the
+ * surfaces below render it as a separate secondary line so it stays greppable
+ * without being the only thing a user is told. An unrecognized code still gets
+ * an honest sentence rather than being presented as progress. */
+export function previewFailureExplanation(reason: string): string {
+  switch (reason) {
+    case "preview_unavailable":
+      return "Preview is not available for this run: its app server is not running and the finished build has no committed app to serve. Use Download source, or ask the agent to serve the site again.";
+    case "preview_authority_unavailable":
+      return "Preview could not be opened because the platform could not establish an isolated preview origin. Try again in a moment.";
+    case "local_preview_origin_pool_exhausted":
+      return "Every isolated preview slot is in use. Close another preview tab, then try again.";
+    case "invalid_preview_path":
+    case "reserved_preview_path":
+    case "preview_target_too_long":
+      return "Preview could not open that address. Reopen Preview from the toolbar to go back to the site root.";
+    default:
+      return "Preview could not be opened for this run. Try Refresh, or ask the agent to serve the site again.";
+  }
+}
+
 export function statusOverlayMessage(
   visibleFailure: string | null,
   runtimeUnavailable: boolean,
   dataReason: string | undefined,
 ): string {
-  if (visibleFailure) return `Preview update unavailable: ${visibleFailure}`;
+  if (visibleFailure) return previewFailureExplanation(visibleFailure);
   if (runtimeUnavailable) {
     return `Preview runtime is recovering: ${dataReason ?? "server unavailable"}`;
   }
@@ -241,5 +263,6 @@ export function previewStagePlaceholderMessage(
   visibleFailure: string | null,
   dataReason: string | undefined,
 ): string {
-  return visibleFailure ?? dataReason ?? "Starting the platform-managed application runtime…";
+  if (visibleFailure) return previewFailureExplanation(visibleFailure);
+  return dataReason ?? "Starting the platform-managed application runtime…";
 }
