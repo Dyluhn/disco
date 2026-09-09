@@ -1,11 +1,32 @@
 import { KeyRound, Trash2 } from "lucide-react";
 import { useMemo, useState } from "react";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { cn } from "@/lib/cn";
 import { useDeleteProvider, useModels, useProviders } from "@/hooks/useModels";
-import type { ModelInfo, ProviderMutationResult } from "@/types/models";
+import type {
+  ModelInfo,
+  ProviderInfo,
+  ProviderMutationResult,
+} from "@/types/models";
 import { AddProviderForm } from "./AddProviderForm";
 import { BrowseProvider } from "./BrowseProvider";
 import { errorText, hostLabel, keyBadge } from "./helpers";
+
+/** What removing this provider actually costs the user, in its own words. The
+ *  server refuses while catalogue models still point at the provider's key, so
+ *  say that rather than promising a removal that will come back 409. */
+function deleteDescription(
+  provider: ProviderInfo,
+  enabledModels: ModelInfo[],
+): string {
+  const host = hostLabel(provider.base_url);
+  if (enabledModels.length === 0) {
+    return `Removes ${host} and its stored key. No catalogue model uses it.`;
+  }
+  const models = enabledModels.map((model) => model.label).join(", ");
+  const count = `${enabledModels.length} enabled model${enabledModels.length === 1 ? "" : "s"}`;
+  return `${host} still has ${count} in the catalogue (${models}). Turn them off under Browse first — the server refuses to remove a provider its models still use.`;
+}
 
 export function GenericProviders() {
   const { data: providers } = useProviders();
@@ -106,11 +127,15 @@ export function GenericProviders() {
                     >
                       {active ? "Close" : "Browse"}
                     </button>
-                    <button
-                      type="button"
-                      aria-label={`Delete ${provider.label}`}
-                      data-disco-control="settings.provider-delete"
-                      onClick={() => {
+                    {/* Removing a provider is as destructive as removing a
+                        model (which already asks), and it takes the stored key
+                        with it — so it asks too, naming what goes. */}
+                    <ConfirmDialog
+                      confirmContext="provider-delete"
+                      title={`Remove ${provider.label}?`}
+                      description={deleteDescription(provider, enabledModels)}
+                      confirmLabel="Remove provider"
+                      onConfirm={() => {
                         setDeleteError(null);
                         remove.mutate(provider.id, {
                           onError: (err) => setDeleteError(errorText(err)),
@@ -120,10 +145,17 @@ export function GenericProviders() {
                             ),
                         });
                       }}
-                      className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-control border border-hairline px-inline py-hair text-text-muted transition-colors hover:border-unsupported/50 hover:text-unsupported lg:min-h-0 lg:min-w-0"
-                    >
-                      <Trash2 className="size-3.5" aria-hidden />
-                    </button>
+                      trigger={
+                        <button
+                          type="button"
+                          aria-label={`Delete ${provider.label}`}
+                          data-disco-control="settings.provider-delete"
+                          className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-control border border-hairline px-inline py-hair text-text-muted transition-colors hover:border-unsupported/50 hover:text-unsupported lg:min-h-0 lg:min-w-0"
+                        >
+                          <Trash2 className="size-3.5" aria-hidden />
+                        </button>
+                      }
+                    />
                   </div>
                 </div>
                 {active && (

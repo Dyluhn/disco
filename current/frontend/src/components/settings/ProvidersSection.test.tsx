@@ -321,6 +321,33 @@ describe("ProvidersSection — generic provider objects", () => {
     expect(screen.queryByText("Key ready")).not.toBeInTheDocument();
   });
 
+  it("asks before removing a provider and says what goes with it", async () => {
+    // UI-37: the trash icon deleted immediately while the model library asked
+    // first — same destructiveness, plus the stored key, so it asks too.
+    providers = [
+      {
+        id: "openai",
+        label: "OpenAI",
+        base_url: "https://api.openai.com/v1",
+        kind: "openai-compat",
+        secret_name: "provider_openai",
+        has_key: true,
+        requires_api_key: true,
+        key_verified: true,
+      },
+    ];
+    render(createElement(ProvidersSection), { wrapper: makeWrapper() });
+
+    fireEvent.click(await screen.findByLabelText("Delete OpenAI"));
+
+    expect(await screen.findByText("Remove OpenAI?")).toBeInTheDocument();
+    expect(
+      screen.getByText(/Removes api\.openai\.com and its stored key/i),
+    ).toBeInTheDocument();
+    // Nothing was deleted by opening the gate.
+    expect(screen.getByText("Key ready")).toBeInTheDocument();
+  });
+
   it("renders the failed-/models manual-add path and uses the same enable route", async () => {
     catalogueFails = true;
     createCatalogueOk = false;
