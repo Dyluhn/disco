@@ -253,7 +253,7 @@ class SandboxSettings(BaseModel):
         Also force `runtime="runsc"` (the gVisor OCI runtime): coercing only the
         backend name while leaving a `runc` runtime would yield a plain-runc
         container *labelled* gVisor — isolation weaker than advertised. The gVisor
-        host contract owns docker_socket, but runsc is the load-bearing bit."""
+        host contract owns docker_socket, but runsc is the essential bit."""
         if isinstance(data, dict):
             b = data.get("backend")
             if isinstance(b, str) and b not in ("gvisor", "local", "podman", "process"):

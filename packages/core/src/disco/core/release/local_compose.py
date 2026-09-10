@@ -7,7 +7,7 @@ release), a `.dockerignore`, a NAMES-ONLY `.env.example`, a `SELFHOST.md`, and
 `release.json` (the canonical serialized spec — the runtime contract the bundle
 was generated from).
 
-Two guarantees carry over from the spec and are load-bearing here:
+Two guarantees carry over from the spec and are essential here:
 
 * SECRET-FREE — the overlay is a pure function of the spec, and the spec records
   env-var NAMES only. Required runtime vars render as `${VAR:?Set VAR — see

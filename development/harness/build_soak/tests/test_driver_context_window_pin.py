@@ -8,7 +8,7 @@ became unfalsifiable-by-configuration rather than false.
 
 These tests pin the two halves that make the mechanism honest: the scenario's
 declaration SELECTS the pinned driver, and the run's own spans PROVE the window
-it actually used. The second half is the load-bearing one — the product resolves
+it actually used. The second half is the essential one — the product resolves
 an unknown `model_override` by falling back to the default driver silently.
 """
 

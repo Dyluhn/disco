@@ -3,7 +3,7 @@
 This document describes what disco v1 does and does **not** protect against, the
 trust boundaries it enforces, and the honest limits of each control. It is written to be
 trusted literally: where a control is partial, aspirational, or off by default, that is
-stated. Every substantive claim cites the file (and line, where load-bearing) that
+stated. Every substantive claim cites the file (and line, where essential) that
 implements it, so a maintainer can verify it.
 
 The operator-facing security narrative lives in

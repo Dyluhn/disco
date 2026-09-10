@@ -1,6 +1,6 @@
 """Wedge-guarded reload + death-vs-transient classification (`ContainerInstance`).
 
-The load-bearing behavior: a raw backend throw usually means the box died, but
+The essential behavior: a raw backend throw usually means the box died, but
 under concurrent load a transient docker/podman API error (a momentary 404
 burst) can look identical. `_classify_failure_async` re-verifies across a
 bounded window before accepting a death verdict, so a live container is never

@@ -170,7 +170,7 @@ async def test_coalesced_catch_up_fires_once_for_three_missed():
 
     assert run_count == 1, (
         f"coalesce policy failed: expected 1 catch-up run but got {run_count}. "
-        "The load-bearing guard: next_run must advance PAST `now`, not one fire at a time."
+        "The essential guard: next_run must advance PAST `now`, not one fire at a time."
     )
     assert events[0].coalesced is True, "catch-up run should be marked coalesced"
 

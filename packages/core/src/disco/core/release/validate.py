@@ -4,7 +4,7 @@ This is the FINISH-SAFE half of the release pipeline: a set of PURE functions th
 decide "can this be released" using only the immutable `ReleaseSpec` and a flat
 view of the workspace file tree (path -> size/content). It never spawns a process,
 never talks to a container engine, never touches the network or disk. That
-constraint is load-bearing: the light plane runs on the finish path where a hang
+constraint is essential: the light plane runs on the finish path where a hang
 or a heavy dependency would be fatal, so it can NEVER grow one — a CI grep over
 this file proves the container-build words are absent.
 

@@ -1,4 +1,4 @@
-"""Build-project persistence — the load-bearing round-trip + graceful failure.
+"""Build-project persistence — the essential round-trip + graceful failure.
 
 The headline assertion (test_workspace_roundtrip): a sandbox is snapshotted to
 disk → a FRESH sandbox is rehydrated from that disk tree → read_file returns
@@ -134,7 +134,7 @@ def test_validate_root_not_writable(tmp_path: Path) -> None:
 
 
 async def test_workspace_roundtrip(tmp_path: Path) -> None:
-    """The load-bearing property: a snapshot followed by a rehydrate into a
+    """The essential property: a snapshot followed by a rehydrate into a
     FRESH sandbox returns exactly the same bytes for every file."""
     payload = {
         "index.html": b"<h1>ok</h1>",
@@ -156,7 +156,7 @@ async def test_workspace_roundtrip(tmp_path: Path) -> None:
     fresh = _FakeSandbox()
     count = await rehydrate_workspace(fresh, store.path_for(cid))
     assert count == len(payload)
-    # the load-bearing assertion: every file's bytes match exactly.
+    # the essential assertion: every file's bytes match exactly.
     for path, expected in payload.items():
         actual = await fresh.read_file(path)
         assert actual == expected, f"{path}: bytes diverged on round-trip"

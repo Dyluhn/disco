@@ -8,7 +8,7 @@ Layout (the chosen design — mirrored 1:1, no zip-per-project):
         workspace/<file tree>
 
 The manifest is the cheap row for the list view (title, file_count, byte total,
-last_snapshot_at); the workspace dir is the load-bearing artifact. Path traversal
+last_snapshot_at); the workspace dir is the essential artifact. Path traversal
 is rejected (no `..`, no absolute child paths).
 
 `validate_root()` returns a typed status the agent-server maps to clear, named

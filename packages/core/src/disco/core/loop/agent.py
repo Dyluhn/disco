@@ -286,7 +286,7 @@ class RouterAgent:
             provider_prefs=provider_prefs,
         )
         ctx = self._build_call_context(overflow_signal)
-        # STREAM the driver call, not `complete()`. This is load-bearing, not an
+        # STREAM the driver call, not `complete()`. This is essential, not an
         # optimization: for large tool-call arguments (e.g. a `file_write` with a big
         # file body), some OpenAI-compatible providers (observed: DeepSeek via
         # OpenRouter/NovitaAI) return EMPTY `arguments` in non-streaming mode but

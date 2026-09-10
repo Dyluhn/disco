@@ -8,7 +8,7 @@ file rewrite is NOT in this set; it lives only in the repair/custom contract sco
 The overlapping legacy creation/edit/design tools are no longer registered on the
 normal Build surface; v2 AppKit tools are registered explicitly by the strict
 AppKit executor path. This module remains for persisted-AppSpec adapter paths and
-keeps the two legacy wrappers that are still load-bearing:
+keeps the two legacy wrappers that are still essential:
 app_set_tweak / app_snapshot_version.
 """
 

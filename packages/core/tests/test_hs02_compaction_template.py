@@ -16,7 +16,7 @@ The three things the test asserts:
       UPDATE-in-place directive, and that directive is observably different
       from the create-fresh one.
   (c) Both directives demand FAILED-approaches preservation (the A-S4
-      guarantee that survived into HS-02 — load-bearing: the agent must
+      guarantee that survived into HS-02 — essential: the agent must
       never lose "things tried and failed + why").
 
 These are binary observables on the built request / the selected
@@ -147,7 +147,7 @@ async def test_prior_anchored_summary_in_messages_selects_update_in_place():
 
 async def test_failed_approaches_preservation_in_both_directives():
     """The A-S4 guarantee carried into HS-02: FAILED approaches (tried and
-    why they failed) are load-bearing — both directives must demand they
+    why they failed) are essential — both directives must demand they
     be preserved. The create-fresh directive folds them under CONSTRAINTS
     (plus a NEXT cross-reference); the update directive demands they be
     appended/updated under CONSTRAINTS or NEXT. Either way, the word

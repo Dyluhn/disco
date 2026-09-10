@@ -291,7 +291,7 @@ def _f9_arg_summary(args: dict | None) -> str:
         # No path — pick the first non-empty string arg in stable key
         # order (deterministic). Falls back to "" for empty args
         # (the pointer template still renders cleanly with an empty
-        # arg summary — the tool name is the load-bearing identifier).
+        # arg summary — the tool name is the essential identifier).
         s = ""
         for k in sorted(args.keys()):
             v = args[k]

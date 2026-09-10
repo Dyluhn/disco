@@ -1,7 +1,7 @@
 """Discovery's default deny for hosts that are unreviewed by construction.
 
 Blind judges read nine research runs (2026-09-04; 778 cited passages) and docked
-citation support every time a report rested a load-bearing claim on one of these
+citation support every time a report rested a central claim on one of these
 hosts — "uses a Reddit thread and an AI-generated wiki for load-bearing claims",
 "leans on LinkedIn posts", "content farms". Seven percent of every citation came
 from them: academia.edu (25), linkedin.com (14), reddit.com (11), and a tail of

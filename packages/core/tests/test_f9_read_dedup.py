@@ -966,7 +966,7 @@ async def test_f9_pure_helper_window_bound_eviction():
 async def test_assist_on_dedup_does_not_lose_prior_observation():
     """The F9 dedup short-circuits the CURRENT call. The PRIOR call's
     ObservationEvent remains in the event store (the prior observation
-    is the load-bearing piece — the model needs to be able to see the
+    is the essential piece — the model needs to be able to see the
     earlier result for the pointer to mean anything). F9 only adds a
     NEW pointer observation; it does NOT remove the prior one.
     """

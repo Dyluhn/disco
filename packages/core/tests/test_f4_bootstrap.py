@@ -199,7 +199,7 @@ async def test_assist_on_turn_one_emits_bootstrap_with_package_json_scripts(tmp_
 
 
 # ---------------------------------------------------------------------------
-# (2) assist ON + turn 2 → no repeat. The once-per-session flag is load-bearing:
+# (2) assist ON + turn 2 → no repeat. The once-per-session flag is essential:
 #     a model that already saw the bootstrap must not see it again on resume.
 # ---------------------------------------------------------------------------
 
@@ -211,7 +211,7 @@ async def test_assist_on_bootstrap_fires_only_on_turn_one_even_with_many_actions
     )
     # Two real actions in the script → the bootstrap fires on turn 1
     # (no actions yet) and NOT on turn 2/3 (actions present). The
-    # once-per-session flag is the load-bearing piece.
+    # once-per-session flag is the essential piece.
     agent = ScriptedAgent(
         [
             action_step("shell", {"command": "echo a"}),

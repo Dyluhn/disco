@@ -107,7 +107,7 @@ ADVERTISING_GRADES: frozenset[EvidenceGrade] = frozenset(
     {EvidenceGrade.SUPPORTED, EvidenceGrade.DEGRADED}
 )
 
-#: The observation outcome each grade requires.  This is the load-bearing map:
+#: The observation outcome each grade requires.  This is the deciding map:
 #: it is what stops a grade from being a free-text opinion about a platform.
 _REQUIRED_OUTCOMES: dict[EvidenceGrade, frozenset[ProbeOutcome]] = {
     EvidenceGrade.SUPPORTED: frozenset({ProbeOutcome.PRESENT}),

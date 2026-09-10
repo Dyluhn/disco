@@ -25,7 +25,7 @@ def strip_think_spans(text: str, *, keep_edge_whitespace: bool = False) -> str:
 
     ``keep_edge_whitespace=True`` preserves leading/trailing whitespace of the
     remainder — for accumulation paths where a trailing cut boundary is
-    load-bearing (e.g. synthesis truncation-continue).
+    essential (e.g. synthesis truncation-continue).
     """
     text = _THINK_SPAN_RE.sub("", text)
     text = _THINK_OPEN_RE.sub("", text)

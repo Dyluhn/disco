@@ -28,7 +28,7 @@ Borrowed (and tightened) from the research recommendation in
 Each is a STRUCTURED, machine-checkable assertion the model can't fake with
 prose. A `command` predicate is the same shape as the agent's own verify
 command (and passes the same hard-deny + confirmation gates) — but the agent
-didn't write it. That's the load-bearing difference.
+didn't write it. That's the essential difference.
 
 # Storage — outside the agent-editable event stream
 

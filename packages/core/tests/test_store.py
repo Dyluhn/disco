@@ -1,6 +1,6 @@
 """EventStore invariant tests — event-state-contract.md §8.1 (+ subscribe).
 
-These prove the load-bearing storage guarantees G1 (monotonic gap-free seq),
+These prove the essential storage guarantees G1 (monotonic gap-free seq),
 G2 (atomic/durable), G4 (idempotency), and append-only-ness, plus the §7
 reconnect/replay subscribe path.
 """

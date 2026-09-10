@@ -132,7 +132,7 @@ def pairing_token() -> str:
     """The first-run admin pairing token — DERIVED from the shared session secret,
     not random per process.
 
-    Two properties this buys, both load-bearing for containerized self-host
+    Two properties this buys, both essential for containerized self-host
     (found live 2026-07-09):
 
       1. IDENTICAL across the app-server and agent-server. Each used to mint its

@@ -1,6 +1,6 @@
 """Host profiles: truthfulness, phase-locality, optionality and compatibility.
 
-This file holds the package's acceptance properties. The load-bearing ones are
+This file holds the package's acceptance properties. The essential ones are
 proved through *resolved production* — the real
 :func:`~disco.core.build_platform.resolver.resolve_build_composition` driving the
 persistent non-web conformance target — rather than against the host profile
@@ -502,7 +502,7 @@ class TestPersistedProfileCompatibility:
         assert descriptor.selectable is True
 
     def test_a_superseded_identity_still_returns_its_own_evidence(self) -> None:
-        """The load-bearing negative: an old ID is never swapped for a new one."""
+        """The essential negative: an old ID is never swapped for a new one."""
         registry = self._registry()
         selected = registry.select(LINUX_HOST_V1.id)
         assert selected.id == LINUX_HOST_V1.id

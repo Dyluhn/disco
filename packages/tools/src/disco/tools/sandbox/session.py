@@ -3,7 +3,7 @@
 tool-sandbox-contract §5: a task gets ONE sandbox, created once and reused by many
 tool calls (`create once → exec many → close`), not a fresh container per command.
 
-The load-bearing behavior (carried lesson #1 from the sandbox arc): a box can die
+The essential behavior (carried lesson #1 from the sandbox arc): a box can die
 MID-SESSION — an OOM kills the WHOLE box, not just the offending command (the VM 202
 finding). When that happens, the session catches it (`SandboxUnavailableError`, the
 typed death signal the backends now raise), RE-CREATES the underlying instance, and

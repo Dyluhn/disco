@@ -82,7 +82,7 @@ or any 4+ digit number — a year, a page citation, a docket, a PMID, a model
 number. A planned query is ISSUED when it carries one that EVERY query it
 matched lacks, and the trail records what it narrowed
 (`narrowing_trail_rows`). Everything else is a rewording and is still refused.
-"Every query it matched" is the load-bearing half: a query that scopes an
+"Every query it matched" is the half that matters: a query that scopes an
 earlier broad one but repeats a later one verbatim reaches exactly what that
 later one already retrieved.
 

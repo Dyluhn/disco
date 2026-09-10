@@ -60,7 +60,7 @@ def _names(tools):
     return {getattr(t, "name", None) for t in tools}
 
 
-# ---- the load-bearing property: the backstop overrides a bad allowlist ------
+# ---- the essential property: the backstop overrides a bad allowlist ------
 
 
 def test_backstop_drops_a_mutating_tool_even_when_the_allowlist_names_it():

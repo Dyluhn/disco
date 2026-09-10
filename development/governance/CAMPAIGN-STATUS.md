@@ -909,7 +909,7 @@ symbols share each name across files; both were measured and corrected.
 
 **Whole-diff practical review: APPROVE.** One independent reviewer over
 `f55efb03..HEAD` (334 files, ~47k insertions) checking the five required
-dimensions. Verdict APPROVE with no material defects. Its load-bearing claims
+dimensions. Verdict APPROVE with no material defects. Its central claims
 were **spot-verified by me** rather than taken on trust:
 
 - governed verification routes to `_governed_non_pass_disposition` *before* any
@@ -1554,7 +1554,7 @@ passed *despite* it, because its summaries happened to carry the strings;
 attempt 5 oscillated 11-and-11 between `Catalog Audit 460000` and
 `Catalog Audited 460000` when they did not. That is the mechanism behind the
 oscillation, and it also explains why the residue bug was accidentally
-load-bearing: raw tool-call fragments replayed the literal strings back to the
+essential: raw tool-call fragments replayed the literal strings back to the
 model, standing in for the requirement it had lost.
 
 Fixed by pinning the task by IDENTITY (first USER message) rather than by
@@ -1996,7 +1996,7 @@ Batch level adds `efficiency_summary` (count/median/p90/p95/max/worst-run per
 metric, overall **and partitioned by scenario family**) and, when an operator
 names one, `efficiency_baseline_comparison`.
 
-Design rules that are load-bearing, not decoration:
+Design rules that are essential, not decoration:
 
 - **Canonical calculations are reused, not restated.** Turn counts come from
   `tool_scope.turn_mode_counts()` — the same mode constants ToolScopeOracle
@@ -2617,7 +2617,7 @@ Owner statement (2026-07-26): effectively unlimited **GLM 5.2** (Ollama Cloud)
 and **DeepSeek V4 Pro** usage; use them wherever they genuinely help. Opus keeps
 task interpretation, architecture, root-cause synthesis, integration, and every
 acceptance verdict. Delegated output is *leads and evidence, never verdicts* —
-spot-verify each load-bearing claim before building on it (this session's
+spot-verify each central claim before building on it (this session's
 discipline, and it caught real errors both directions).
 
 **Mechanics (proven this session):**

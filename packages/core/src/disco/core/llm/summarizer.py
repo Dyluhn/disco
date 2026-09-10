@@ -16,7 +16,7 @@ present in the messages it's handed. When a prior summary is detected, the
 UPDATE-in-place directive is used (merge new progress, restate only changed
 sections, preserve the template) rather than a freeform recap. The FAILED-
 approaches content from the A-S4 contract is preserved — folded into
-CONSTRAINTS/NEXT so it is never lost (load-bearing: prevents the agent from
+CONSTRAINTS/NEXT so it is never lost (essential: prevents the agent from
 repeating work that already failed).
 """
 
@@ -38,7 +38,7 @@ _ANCHORED_HEADINGS: tuple[str, ...] = (
 )
 
 # A-S4 carried forward + HS-02 reshaped: the FAILED-approaches content is
-# load-bearing (prevents the agent from repeating work that already failed) and
+# essential (prevents the agent from repeating work that already failed) and
 # MUST survive every condensation. The anchored template folds it under
 # CONSTRAINTS (preferred home — failures are constraints on the next attempt)
 # and cross-references it from NEXT (unresolved threads often include

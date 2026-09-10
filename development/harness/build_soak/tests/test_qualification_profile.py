@@ -1,6 +1,6 @@
 """Fast qualification profile (F0/F1) — selection, refusal, and non-promotion.
 
-The load-bearing test here is the last one: a qualification batch must be
+The essential test here is the last one: a qualification batch must be
 *structurally* unable to enter promotion accounting. Everything else guards the
 path that reaches it.
 """
@@ -169,7 +169,7 @@ def test_batch_summary_name_rejects_escaping_or_non_json(bad):
         batch_summary_name(bad)
 
 
-# ---- THE load-bearing one --------------------------------------------------
+# ---- THE essential one --------------------------------------------------
 
 
 def test_qualification_evidence_cannot_be_ingested_as_promotion_evidence(tmp_path):

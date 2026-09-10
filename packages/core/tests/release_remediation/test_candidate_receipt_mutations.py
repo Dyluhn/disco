@@ -259,7 +259,7 @@ def test_changed_recovery_file_forces_nonzero(synthetic: dict[str, object]) -> N
 
     The mutation is COMMITTED, so the worktree is clean, and the operator names the
     NEW HEAD, so the identity gate passes too. Only the inventory hash can catch this
-    — proving the hash inventory is load-bearing rather than decoration.
+    — proving the hash inventory is essential rather than decoration.
     """
     repo = synthetic["repo"]
     assert isinstance(repo, Path)

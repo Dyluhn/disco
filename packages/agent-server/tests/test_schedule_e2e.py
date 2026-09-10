@@ -346,7 +346,7 @@ async def test_list_and_delete_schedule():
     assert mgr.delete_schedule(sched.schedule_id, owner_id="local") is False
 
 
-# ---- scenario 5: the LOAD-BEARING re-run test --------------------------------
+# ---- scenario 5: the ESSENTIAL re-run test --------------------------------
 # A schedule that fires but never re-runs the query is a false affordance. The
 # real proof is the ENGINE's own work-gate (_has_unprocessed_user_message): a
 # fired schedule must flip it closed→open by re-injecting the original query.

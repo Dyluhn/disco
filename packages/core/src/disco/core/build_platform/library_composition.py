@@ -55,7 +55,7 @@ MOUNT_FOR_CATEGORY: dict[BuiltinInputCategory, BuiltinInputMount] = {
 
 #: The capability ceiling each trust tier may reach, most authoritative first.
 #:
-#: This is the evaluation that makes ``trust`` load bearing.  ``HOST_POLICY`` is
+#: This is the evaluation that gives ``trust`` its teeth.  ``HOST_POLICY`` is
 #: host-owned material and reaches the full built-in ceiling.  ``TRUSTED_LOCAL``
 #: is owner-installed local material: it may read and write the workspace and
 #: drive interactive display, but not the two capabilities that carry an effect

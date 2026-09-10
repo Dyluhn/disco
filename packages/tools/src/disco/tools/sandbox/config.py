@@ -124,7 +124,7 @@ class SandboxConfig(BaseModel):
     @classmethod
     def _finite_positive_bound(cls, v: float, info: ValidationInfo) -> float:
         # `math.isfinite` rejects NaN/inf (the int fields are already non-finite-proof via
-        # pydantic's int coercion; the float fields — *_cpu — are not, so this is load-bearing).
+        # pydantic's int coercion; the float fields — *_cpu — are not, so this is essential).
         if not math.isfinite(v) or v <= 0:
             raise ValueError(
                 f"{info.field_name} must be a finite positive number (got {v!r}); a "

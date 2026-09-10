@@ -44,7 +44,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     skip/xfail/todo/only *decorators in source text*, and `live` is a selection
     marker applied at collection, not a suppression.
 
-    **The path filter is load bearing, not defensive.** A
+    **The path filter is essential, not defensive.** A
     `pytest_collection_modifyitems` hook in ANY conftest is handed the whole
     session's item list, not just the items under its own directory. The first
     version of this hook omitted the filter and marked all **1253** harness

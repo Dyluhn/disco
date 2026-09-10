@@ -541,7 +541,7 @@ for another; the remote `gvisor` backend avoids that trade. Also be aware that
 `runsc` under a rootless engine currently fails on cgroup delegation
 (`/sys/fs/cgroup/cgroup.subtree_control: permission denied`), and the
 `--runtime-flag ignore-cgroups` workaround disables the memory/CPU/pids limits
-this project treats as load-bearing. That posture is invisible to the container
+this project treats as essential. That posture is invisible to the container
 inspection above — the caps are recorded and simply never enforced — so the
 sandbox instead reads the runtime's registered arguments and logs a loud
 `sandbox.cgroup_enforcement_disabled` error when it finds the flag. It is a

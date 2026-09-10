@@ -301,7 +301,7 @@ class ScheduleManager:
             if now >= next_run:
                 # One or more fires were due — execute exactly ONE (coalesce policy).
                 # Whether it's one fire or N missed fires, we run once and advance
-                # next_run past `now`.  This is the load-bearing coalesce guard.
+                # next_run past `now`.  This is the essential coalesce guard.
                 coalesced = self._was_coalesced(sched, now, next_run)
                 await self._execute_run(sched, coalesced=coalesced)
                 # Advance to the next FUTURE fire (strictly after now).

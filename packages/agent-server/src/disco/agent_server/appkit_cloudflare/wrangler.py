@@ -8,7 +8,7 @@ Cloudflare account in CI. The production implementations live here too but are
 exercised only by the owner's real, documented deploy (Epic M-style live run),
 never by the test suite.
 
-SECRET HANDLING (load-bearing): the API token is injected ONLY through the
+SECRET HANDLING (essential): the API token is injected ONLY through the
 subprocess ENV (``CLOUDFLARE_API_TOKEN``), never as an argv element and never
 logged. ``SubprocessCommandRunner`` returns stdout/stderr to the caller, which
 redacts them before they touch any transcript/record (see ``deploy.py``).

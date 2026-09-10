@@ -1,7 +1,7 @@
 """RP-13 — Clarify gate: the clarify virtual tool yields a gate, answers resume
 planning, and a clarify event is NOT mistaken for a finished plan.
 
-Load-bearing test asserting the engine work-gate behaves correctly.
+Essential test asserting the engine work-gate behaves correctly.
 """
 
 from __future__ import annotations

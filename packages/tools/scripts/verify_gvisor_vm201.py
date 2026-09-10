@@ -92,7 +92,7 @@ async def main() -> None:
         f"timed_out={slow.timed_out} exit={slow.exit_code}",
     )
 
-    # 6: secret non-leak (load-bearing) — env / files / process list are secret-free.
+    # 6: secret non-leak (essential) — env / files / process list are secret-free.
     env = await inst.exec_shell("env", timeout_s=10)
     procs = await inst.exec_shell("ps -e -o args 2>/dev/null || ps", timeout_s=10)
     files = await inst.list_dir(".")

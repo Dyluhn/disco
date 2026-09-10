@@ -216,7 +216,7 @@ def test_volume_backed_persistent_path_survives_down_and_recreate(tmp_path: Path
         assert restart.returncode == 0, f"restart failed:\n{restart.stderr}"
         assert record in _get(port, "/read"), "record lost across `docker compose restart`"
 
-        # (2) survives `down` (WITHOUT -v) + a FRESH recreate — the load-bearing proof:
+        # (2) survives `down` (WITHOUT -v) + a FRESH recreate — the essential proof:
         # a fresh container has a fresh ephemeral layer, so the record can only survive on
         # the named volume that backs /data/app.db.
         down = _compose(project, bundle, "down")

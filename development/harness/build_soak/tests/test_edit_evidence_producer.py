@@ -1,4 +1,4 @@
-"""PKG-03-EDIT-EVIDENCE — the five edit-evidence producers, and the proof each is load-bearing.
+"""PKG-03-EDIT-EVIDENCE — the five edit-evidence producers, and the proof each is essential.
 
 Two things are established here, and the second is the one that matters.
 
@@ -6,7 +6,7 @@ Two things are established here, and the second is the one that matters.
 five P8D oracles from SKIP to an adjudication. Before this package those five had never
 adjudicated in either campaign.
 
-**Load-bearing-ness.** A producer that emits a well-formed slice regardless of what the
+**Whether a producer matters.** A producer that emits a well-formed slice regardless of what the
 product did would turn every one of those adjudications into a rubber stamp. So each
 producer gets a NEGATIVE CONTROL: take the same real capture, nullify exactly the one
 behaviour that producer observes, and assert the oracle's verdict CHANGES. A control that

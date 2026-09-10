@@ -11,7 +11,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-# Network failures that are NEVER load-bearing for "does the app work" — a missing
+# Network failures that are NEVER evidence for "does the app work" — a missing
 # favicon or a blocked analytics beacon must not fail an otherwise-good build.
 _IGNORABLE_NETWORK = (
     "favicon",
@@ -60,7 +60,7 @@ def _console_errors(console: list[dict[str, Any]]) -> list[dict[str, str]]:
             source = _source_of(c)
             text = str(c.get("text", ""))
             # Chromium mirrors failed resource requests into the console. Apply
-            # the same narrow non-load-bearing resource policy used by the
+            # the same narrow non-essential resource policy used by the
             # network classifier, but only to the browser's generic load-error
             # message. A real exception remains an error even if its source URL
             # happens to contain an allowlisted token.

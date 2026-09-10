@@ -1,7 +1,7 @@
 """Autonomous mode (issue A) — the flag must DEFAULT OFF (interactive behavior
 fully preserved) and, when ON, withhold the ask/intake gates from the model's tool set.
 
-These tests pin the load-bearing property Dylan asked to verify: "when autonomous
+These tests pin the essential property Dylan asked to verify: "when autonomous
 mode is off, it actually turns off." We assert the tool schema directly — the
 structural difference between the two modes — for both PLANNING and EXECUTION.
 """

@@ -141,7 +141,7 @@ class BaseEvent(BaseModel):
     agent_view_id: str | None = Field(default=None, min_length=1, max_length=128)
 
     # Free-form, non-semantic metadata (tracing ids, UI hints). VOLATILE.
-    # Never load-bearing for reconstruction or equality.
+    # Never used for reconstruction or equality.
     meta: dict[str, Any] = Field(default_factory=dict)
 
 

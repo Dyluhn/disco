@@ -2,7 +2,7 @@
 
 Proves the agent toolset (shell/file/code-exec) drives the SandboxInstance interface,
 that a timeout is surfaced legibly, that the agent tools are scoped OUT of Research,
-and — the load-bearing carried lesson #1 — that a sandbox dying mid-session is caught,
+and — the essential carried lesson #1 — that a sandbox dying mid-session is caught,
 re-created, and surfaced as a clean error ToolResult (never wedges). All offline; the
 real isolation/limits/secret-non-leak is the live check (verify_agent_tools_local.py).
 """

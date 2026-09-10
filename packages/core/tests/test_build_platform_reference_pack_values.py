@@ -190,7 +190,7 @@ def test_value_surface_is_typed_and_closed() -> None:
 
 def test_mutation_corpus_positive_rejection_depends_on_the_guard() -> None:
     # Without the value-surface classification a latent Reference Pack value
-    # would register, so the binding is load bearing at the production path.
+    # would register, so the binding holds at the production path.
     registry = ReferencePackRegistry()
     with pytest.raises(ReferencePackError, match=r"parameter_smuggling \(R2\)"):
         registry.register(_pack(ReferencePackValues(label=CORPUS_POS["POS-003"]["value"])))

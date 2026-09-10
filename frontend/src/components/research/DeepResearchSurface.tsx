@@ -111,7 +111,7 @@ export function DeepResearchSurface({
   // while a run is live) and a reload then re-enters through
   // `ResumeDeepResearch`, which subscribes and replays history-then-live.
   //
-  // WAITING FOR THE FIRST EVENT is load-bearing, not caution. Moving on the
+  // WAITING FOR THE FIRST EVENT is essential, not caution. Moving on the
   // conversation id alone re-routes the surface while the opening
   // `send_message` is still QUEUED against a socket that has not finished
   // connecting; the unmount closes that socket, the queued frame dies with it,

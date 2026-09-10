@@ -17,7 +17,7 @@ from __future__ import annotations
 # restored here as explicit re-exports in the redundant-alias form (`X as X`),
 # which is ruff's sanctioned re-export marker and needs no per-line suppression.
 #
-# Two of them are load-bearing rather than cosmetic. `subprocess`, `socket` and
+# Two of them are essential rather than cosmetic. `subprocess`, `socket` and
 # `psutil` must stay reachable as `_container.subprocess` / `_container.socket` /
 # `_container.psutil`: `test_sw5_isolation_bounds.py` patches attributes *on those
 # shared module objects* (`_container.subprocess.Popen`,

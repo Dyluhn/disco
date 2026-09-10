@@ -4,7 +4,7 @@ The whole point of going through `SandboxInstance.{list_dir,read_file,write_file
 is that the same code works across local + gVisor (and any future backend) — the
 container-internal `exec` path means we never touch a host path directly, so a
 saved project rehydrates into a *fresh* sandbox on a different backend without
-care for where the original ran. That portability is the load-bearing property.
+care for where the original ran. That portability is the essential property.
 
 Conservative guards (size + depth caps) are guards, not policy — they fail loud
 with a typed error if the agent built something pathologically deep / huge, so

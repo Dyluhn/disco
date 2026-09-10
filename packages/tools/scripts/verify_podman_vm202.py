@@ -6,7 +6,7 @@ keyless over Tailscale SSH via Podman's native remote.
 
 Walks the 8-item checklist: connects keyless (crun rootless), session model (multi-
 exec + workspace persistence via a named volume), sealing (sealed vs granted), the
-LOAD-BEARING limits-bite-through-the-socket guarantee, timeout, image-by-load /
+ESSENTIAL limits-bite-through-the-socket guarantee, timeout, image-by-load /
 never-pull, the secret non-leak headline, and teardown.
 """
 
@@ -97,7 +97,7 @@ async def main() -> None:
     ok("8. close: container removed", gone, "")
     ok("8. close: workspace volume removed", vol_removed, vol_name)
 
-    # 4: limits BITE through the socket (the load-bearing #2 guarantee), isolated box.
+    # 4: limits BITE through the socket (the essential #2 guarantee), isolated box.
     mem_inst = await svc.create(
         SandboxSpec(memory_mb=128), owner_id="local", conversation_id="verify"
     )

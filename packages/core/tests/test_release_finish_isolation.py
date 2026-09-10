@@ -1,7 +1,7 @@
 """WO-10 — the durable finish-path non-regression guard.
 
 The self-host release plane (WO-2..7) is computed ON REQUEST from a project's
-immutable contents; NOTHING about it runs at finish time. The load-bearing
+immutable contents; NOTHING about it runs at finish time. The essential
 guarantee is that the finish path gained **no container-build dependency**: no
 module under ``disco.core.loop.finish`` may import the two container-build
 modules ``disco.core.release.local_compose`` (the compose/Dockerfile emitter) or

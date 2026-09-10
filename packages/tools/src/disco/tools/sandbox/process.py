@@ -281,7 +281,7 @@ class ProcessSandboxInstance:
         # a reserved control port (8000 agent-server / 8800 app-server / 5173 UI)
         # collides with + crashes it. This shell-string scan refuses the COMMON shapes
         # before running, but is trivially bypassable (raw socket.bind, renamed binary)
-        # — the load-bearing Bug-7 fix is that verify no longer targets these ports
+        # — the essential Bug-7 fix is that verify no longer targets these ports
         # (see preview_target.resolve_preview_port); a netns is the robust follow-up.
         # Scoped to this backend only; an isolated container's 8000 is its own.
         #

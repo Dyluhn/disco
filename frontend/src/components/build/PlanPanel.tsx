@@ -185,7 +185,7 @@ export function PlanPanel({
           {plan.context && (
             <details
               className="mt-inline rounded-control border border-hairline bg-surface-2 px-inline py-hair"
-              // Open by default at the gate (the rationale is the user's load-bearing input
+              // Open by default at the gate (the rationale is the user's essential input
               // to the approve/revise decision); collapsed during execution.
               open={gate}
             >

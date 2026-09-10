@@ -626,7 +626,7 @@ def _parser() -> argparse.ArgumentParser:
 def _host_upgrade(compose: _Compose) -> None:
     """Rebuild the images and put the NEW containers in front of the user.
 
-    The `down` is load-bearing, not tidiness: podman-compose 1.0.6 (Ubuntu
+    The `down` is required, not tidiness: podman-compose 1.0.6 (Ubuntu
     24.04) cannot replace a running container on `up`. It rebuilds, then fails
     with `creating container storage: the container name "disco_frontend_1" is
     already in use` (exit 125) and restarts the OLD container — an operator who

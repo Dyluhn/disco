@@ -43,7 +43,7 @@ def service_from_config(cfg: SandboxConfig) -> SandboxService:
     if cfg.backend == "gvisor":
         return GvisorSandboxService(cfg)
     if cfg.backend == "local":
-        # DURABLE #3 FIX (codex-RCA'd, load-bearing): a local PODMAN socket must use the
+        # DURABLE #3 FIX (codex-RCA'd, essential): a local PODMAN socket must use the
         # libpod-native podman CLI path (PodmanSandboxService, `podman --url unix:// exec`),
         # NOT docker-py's /v1.44 docker-COMPAT API. Under concurrent build load the compat
         # `/containers/<id>/exec` endpoint returns spurious 404s for LIVE containers, which the

@@ -573,7 +573,7 @@ def test_generic_notice_exclusion_is_oracle_owned():
 
     from harness.build_soak.oracles.thrash import _longest_identical_streak
 
-    # No silent exclusions: the only load-bearing exclusions are the richer
+    # No silent exclusions: the only essential exclusions are the richer
     # shell/plan renderers, which are proven separately. The generic excluded
     # set is empty, so vacuously every exclusion is owned.
     assert _W39_GENERIC_EXCLUDED == frozenset(), "prefer no silent exclusions"

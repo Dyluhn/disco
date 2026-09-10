@@ -61,7 +61,7 @@ def _all_tools_executor(sandbox):
 
 
 async def test_file_replace_lines_marker_rejected_at_executor_no_mutation():
-    """The load-bearing fix: file_replace_lines is a MUTATOR the Observer-only K1
+    """The essential fix: file_replace_lines is a MUTATOR the Observer-only K1
     guard left exposed on a direct executor path. The executor rejects the copied
     marker recoverably and the file is never touched."""
     original = b"line one\nline two\nline three\n"

@@ -33,7 +33,7 @@ The dispatch is the loop's intercept path: the engine emits the
   2. Exceeding the cap → a refusal ``AgentErrorEvent`` (paired by
      ``call_id``) is emitted; NO successful ``ObservationEvent`` is
      produced (the fan-out was refused, not silently degraded); the
-     cap is the load-bearing piece (a model that hammers the helper
+     cap is the essential piece (a model that hammers the helper
      never gets a single observation back).
   3. The cap is per-run-segment: a fresh ``run()`` resets the counter
      so a new segment gets a fresh budget (a resume/steer is a clean
@@ -248,7 +248,7 @@ async def test_c20_fanout_over_cap_is_refused_no_observation():
     refused with a paired ``AgentErrorEvent`` (the model sees WHY on its
     next turn) AND NO successful ``ObservationEvent`` is produced
     (a refused fan-out is not a silent success). The count cap is the
-    load-bearing piece — without it, a model that hammers the helper
+    essential piece — without it, a model that hammers the helper
     would saturate context with helper round-trips and burn tokens
     forever. With the cap, the Nth + 1 call is refused cleanly."""
     # Script: cap-1 successful dispatches, then a refused (cap+1)th.

@@ -25,7 +25,7 @@ test.describe("Research → sheet block", () => {
     await expect(page.getByText(/saved to the workspace/i)).toBeVisible();
     await expect(page.getByText(/not evaluated/i)).toBeVisible();
 
-    // The load-bearing assertion: NO download button anywhere on the card.
+    // The essential assertion: NO download button anywhere on the card.
     await expect(page.getByRole("button", { name: /download/i })).toHaveCount(0);
 
     // Screenshot the card for the visual-evidence record.

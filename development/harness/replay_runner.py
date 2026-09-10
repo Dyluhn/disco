@@ -26,7 +26,7 @@ from disco.core.events import (
     EventSource,
 )
 
-# Fields that regenerate every run — never load-bearing for semantic equality.
+# Fields that regenerate every run — never part of semantic equality.
 # (BaseEvent: id/timestamp/seq/meta; correlation ids: call_id/action_id/
 # llm_response_id/provider_call_id.) `schema_version` is stable, kept on purpose.
 _VOLATILE = frozenset(

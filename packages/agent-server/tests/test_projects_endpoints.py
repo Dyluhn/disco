@@ -74,7 +74,7 @@ def test_list_projects_reports_not_found_for_missing_path(store):
 
 def test_list_projects_joins_manifests_with_conversation_metadata(store, tmp_path):
     """A project on disk shows up in the list with title from the conversations
-    table — the load-bearing "list-and-reopen" property mirrored from History."""
+    table — the essential "list-and-reopen" property mirrored from History."""
     runtime = _runtime(store, root=str(tmp_path))
     # write a project to disk: manifest + workspace tree
     ps = ProjectStore(str(tmp_path))

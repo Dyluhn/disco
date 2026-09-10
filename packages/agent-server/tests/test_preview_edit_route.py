@@ -182,7 +182,7 @@ def test_serves_stamped_html_with_injected_nonce_script_and_csp(tmp_path) -> Non
 
 
 def test_symlink_escape_is_rejected_404(tmp_path) -> None:
-    """The load-bearing security test: a workspace symlink pointing OUTSIDE the
+    """The essential security test: a workspace symlink pointing OUTSIDE the
     workspace (the classic container `cat -- leak.html` → /etc/passwd escape) must
     NOT be served. The snapshot read resolves the real path and rejects the escape."""
     client, cid = _client(tmp_path, {"index.html": _HTML.encode()})

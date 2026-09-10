@@ -28,7 +28,7 @@ if TYPE_CHECKING:
         """The loop capability this module uses: the event log."""
 
 
-# The load-bearing clause of the reuse escalation, given a name so a test can DERIVE
+# The essential clause of the reuse escalation, given a name so a test can DERIVE
 # it instead of retyping a slice of it (F61, 2026-08-07t; the Attestation-Binding
 # Invariant, F58). It was previously a FRAGMENT of a multi-part concatenation whose
 # whole value is an f-string, so no symbol owned it and the gate was silent about it

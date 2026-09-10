@@ -39,7 +39,7 @@ def collect_host_deny_ips(
 ) -> frozenset[str]:
     """Resolve host-owned addresses before a sandbox network is created.
 
-    The daemon endpoint is always load-bearing: failure to identify it aborts
+    The daemon endpoint is always essential: failure to identify it aborts
     setup. For a local daemon, hostname and outbound-interface discovery add the
     host's other visible addresses. Explicit entries cover additional interfaces
     on remote multi-homed hosts.

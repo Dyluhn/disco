@@ -1,6 +1,6 @@
 """Gather-leg concurrency policy — the RAM-aware OOM guard for EVERY tier.
 
-These lock the load-bearing contract that the OOM peak-memory guard applies on
+These lock the essential contract that the OOM peak-memory guard applies on
 ALL tiers (it is correctness, not a free-tier compensation), that it is
 RAM-derived (big box → effectively unbounded, small box → protected), that the
 `in_process_encoders` flag only TUNES the per-leg estimate (heavier in-process),

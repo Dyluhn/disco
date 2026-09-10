@@ -5,7 +5,7 @@ extract, rerank, NLI) and ONE scripted router dispatched by prompt shape: the
 agentic research loop's turns (brief + searches → readiness), then the whole-report
 writer's single pass and its fixed-rubric review.
 
-Asserts the load-bearing run properties:
+Asserts the essential run properties:
 
   1. A full run produces an executive summary + '## ' sections + a claim
      ledger, and `.to_event()` returns a valid ReportEvent whose cited and

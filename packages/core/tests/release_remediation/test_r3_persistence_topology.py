@@ -8,7 +8,7 @@ These live OUTSIDE the frozen closeout dirs (no ``export_track1_closeout`` marke
 they never perturb the acceptance manifest.
 
 The headline is a MUTATION regression (``test_mutation_...``) proving the fix is
-LOAD-BEARING: restoring the pre-R3 blind ``/data`` root-level fallback in
+ESSENTIAL: restoring the pre-R3 blind ``/data`` root-level fallback in
 ``local_mount_target`` makes the root-file persistence proof fail again — a self-host
 candidate whose emitted volume does NOT contain the declared file.
 """
@@ -136,7 +136,7 @@ def _root_intent(path: str) -> ReleaseIntent:
 
 # The PRE-R3 local_mount_target: a filesystem-ROOT path fell back to a BLIND ``/data``
 # that does not actually contain a root-level file. Kept here ONLY to drive the mutation
-# regression that proves the R3 fix is load-bearing.
+# regression that proves the R3 fix is essential.
 def _old_data_fallback_mount_target(resource: ResourceDecl) -> str:
     url = resource.profiles.local.url
     path = url[len("file:") :] if url.startswith("file:") else url
@@ -310,13 +310,13 @@ def test_multi_consumer_deep_path_with_migration_preserves_isolation() -> None:
         )
 
 
-# ---- the load-bearing MUTATION regression -------------------------------------
+# ---- the essential MUTATION regression -------------------------------------
 
 
 def test_mutation_restoring_data_fallback_breaks_the_persistence_proof(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The fix is LOAD-BEARING: restoring the pre-R3 blind ``/data`` root-level fallback in
+    """The fix is ESSENTIAL: restoring the pre-R3 blind ``/data`` root-level fallback in
     ``local_mount_target`` makes the root-file persistence proof FAIL again.
 
     First (unmutated) the root layout fails closed. Then the OLD ``/data`` fallback is
@@ -352,5 +352,5 @@ def test_mutation_restoring_data_fallback_breaks_the_persistence_proof(
     assert targets == {"/data"}, targets
     assert not _persistent_path_is_backed(targets, "/app.db"), (
         "the mutation must reproduce the defect: /app.db is NOT backed by the /data mount "
-        "— the persistence proof fails, proving the real-parent fix is load-bearing."
+        "— the persistence proof fails, proving the real-parent fix is essential."
     )

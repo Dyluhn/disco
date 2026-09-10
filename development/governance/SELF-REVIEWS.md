@@ -237,7 +237,7 @@ clean at every boundary.
 
 Evidence that it actually worked: one-horizon slice — core and agent-server
 suites exit 0, revert-check fails with the exact intended message. Package A —
-20 tests, F0 exit 0 (~900 tests), and the load-bearing test drives the real
+20 tests, F0 exit 0 (~900 tests), and the essential test drives the real
 `_build_soak_result` over a *passing* qualification batch and proves it finds
 nothing to count. Package B — 6 tests against the real `run_once` hard-cap path
 with a real `ProjectStore` version, six distinct tamper cases each refused.
@@ -262,7 +262,7 @@ variable I tried to poison), costing 27,793 tokens and proving nothing.
 
 Immediate process or technical correction: delegate inventory work by default
 now, in parallel, with numbered questions, a hard line budget, and a
-file:line-or-NOT-FOUND requirement. Verify every load-bearing claim myself
+file:line-or-NOT-FOUND requirement. Verify every central claim myself
 before building on it — which is exactly what caught that `run.py:1190` is
 *correct* despite looking like the P11 bug.
 

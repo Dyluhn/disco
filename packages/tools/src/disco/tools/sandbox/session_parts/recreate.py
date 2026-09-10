@@ -1,6 +1,6 @@
 """Mid-session death recovery (`SandboxSession._recreate`).
 
-The load-bearing behavior (carried lesson #1 from the sandbox arc): a box can
+The essential behavior (carried lesson #1 from the sandbox arc): a box can
 die MID-SESSION — an OOM kills the WHOLE box, not just the offending command
 (the VM 202 finding). `recreate` replaces the dead instance with a fresh one
 and then runs every best-effort recovery hook in order: the owner's

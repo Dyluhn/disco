@@ -117,7 +117,7 @@ Precedence rule: bound design-system templates > starter components > hand-rolli
 
 Domain recipes (deck, doc, PDF, standalone-HTML, PPTX, design-system creation, handoff...) are
 loaded on demand (`read_skill_prompt`) rather than resident. Each skill carries:
-- The **structure** that makes output export/print cleanly (e.g. the doc skill's LOAD-BEARING
+- The **structure** that makes output export/print cleanly (e.g. the doc skill's ESSENTIAL
   print-CSS template with per-rule comments explaining what breaks if changed).
 - Domain role reframing ("you are a presentation designer... boardroom clarity, not a website").
 - Hard numeric floors (min font sizes at 1920×1080; validator enforces ≥24px — a machine-checked
@@ -226,7 +226,7 @@ thesis, plus the wake-only-on-fail economy.)
 | DC artifact contract | P2 Contract Runtime | Contract runtime exists; needs the single-mandated-format + host-assembles-document semantics |
 | Weak template language + streaming hints | P2/P4 | Not built — ours is generic file mutation |
 | dc_* mutation tools, write_file ban on artifacts | P4 Specialized Mutation Tools | TOOL-1 AppKit set exists; needs streaming edit + hot-reload semantics + blunt-tool removal |
-| Skills/recipes on demand | P3 WorkflowPromptPack | WPP built; needs per-domain recipes w/ load-bearing structure + self-failure-mode language |
+| Skills/recipes on demand | P3 WorkflowPromptPack | WPP built; needs per-domain recipes w/ essential structure + self-failure-mode language |
 | ready_for_verification finalizer | P5 Delivery + P6 Finalizers | Built (host-owned finalizer); needs the one-call bundle + silent-on-pass verifier economy |
 | Background verifier subagent, typed verdict | P1 Harness / P6 | Oracles exist headless; the builder/verifier context split + wake-on-fail is the gap |
 | Starter component catalog | P7 Kits | P7 committed (code-gate-pending); compare against deck_stage-class depth |

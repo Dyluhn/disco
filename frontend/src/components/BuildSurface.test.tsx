@@ -95,7 +95,7 @@ describe("Build surface (plan gate → build → action gate)", () => {
     expect(within(gate).getByText(/high risk/i)).toBeInTheDocument();
     expect(within(gate).getByText(/recursive force delete/i)).toBeInTheDocument();
     // FizzBuzz appears in plan text + step labels + terminal output; the terminal
-    // entry is the load-bearing assertion (the canvas shows the real run output).
+    // entry is the essential assertion (the canvas shows the real run output).
     expect(screen.getAllByText(/FizzBuzz/).length).toBeGreaterThanOrEqual(1);
     expect(screen.getByRole("button", { name: /kill the agent/i })).toBeEnabled();
     window.localStorage.removeItem("verboseAgentChat");

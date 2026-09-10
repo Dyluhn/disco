@@ -256,7 +256,7 @@ def test_dockerfile_uses_only_legacy_builder_compatible_instructions(
 
 
 def test_mutation_reintroducing_heredoc_copy_is_caught(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The fix is LOAD-BEARING: with the real materializer the Dockerfile is heredoc-
+    """The fix is ESSENTIAL: with the real materializer the Dockerfile is heredoc-
     free, but reintroducing the old heredoc `COPY <<EOF` form (mutating
     `_entrypoint_install_line`) makes the heredoc detector RED again — the same
     predicate the frozen G12 assertion uses."""

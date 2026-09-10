@@ -4,7 +4,7 @@ Fulfils `SandboxService`/`SandboxInstance` over Podman's NATIVE REMOTE, reached
 keyless over Tailscale SSH. Same interface as the gVisor backend — second transport
 (SSH) + runtime (crun). Shares the lifecycle/jail with `ContainerInstance`.
 
-Three load-bearing Podman constraints:
+Three essential Podman constraints:
 
   1. NATIVE REMOTE over the socket, NEVER a bare-SSH `podman run`. Driving Podman
      THROUGH THE SOCKET means limits are enforced by the `user@` systemd manager; a
@@ -330,7 +330,7 @@ class PodmanSandboxInstance(ContainerInstance):
         ALIVE → this is a TRANSIENT exec error, raise a retryable per-op SandboxError (NO
         recreate). Only a NOT-running / unverifiable container is typed dead. The inspect API
         is reliable here (it's the EXEC that's transiently refused, not inspect), so this
-        re-verify is load-bearing under sustained concurrency. Mirrors the docker-py path's
+        re-verify is essential under sustained concurrency. Mirrors the docker-py path's
         re-verify (`_confidently_alive`)."""
         if rc == 0:
             return

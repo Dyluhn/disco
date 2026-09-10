@@ -157,7 +157,7 @@ class PhaseGateMixin(_ValveHost):
         #     detection. Same predicate `fresh_session` uses a few
         #     lines down. If the model has already taken a real
         #     action we are past turn 1 and the hint is no longer
-        #     load-bearing.
+        #     essential.
         #
         # We re-poll events after the emit so the (d) view
         # materialization below includes the bootstrap on the

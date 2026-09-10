@@ -221,7 +221,7 @@ class _ConversationListingMixin:
         self, *, owner_id: str, limit: int = 50, cursor: str | None = None
     ) -> list[str]:
         # [INTERIOR] v1 cursor = opaque integer offset string. The ownership
-        # filter is the load-bearing part (§6.1): no cross-owner data, ever.
+        # filter is the essential part (§6.1): no cross-owner data, ever.
         offset = int(cursor) if cursor else 0
         rows = self._conn.execute(
             "SELECT conversation_id FROM conversations WHERE owner_id = ? "

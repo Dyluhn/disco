@@ -165,7 +165,7 @@ async def _check_browser_rotation(
         bool(fresh) and all(w == ws2 for w in fresh.values()),
         f"observed {fresh}",
     )
-    # The load-bearing property is that the CURRENT generation publishes and
+    # The essential property is that the CURRENT generation publishes and
     # reads a port file in its OWN tree; R5/R7 already prove it is not using
     # the previous generation's identity. A leftover file in the dead tree is
     # inert residue (nothing reads that path again, and the orphaned root is

@@ -32,7 +32,7 @@ def test_readonly_tool_names_matches_the_classification():
     readonly = ex.readonly_tool_names()
     # Every read-only name we expect (and that's in scope) is reported.
     assert (_EXPECTED_READONLY & in_scope) <= readonly
-    # And NOTHING mutating is ever reported as read-only — the load-bearing half.
+    # And NOTHING mutating is ever reported as read-only — the half that matters.
     assert readonly.isdisjoint(_EXPECTED_MUTATING)
 
 

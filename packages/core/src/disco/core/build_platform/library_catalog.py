@@ -11,7 +11,7 @@ record seams deliberately do not:
 * **Guided authoring.**  Authoring accepts a *raw* user-supplied document and
   classifies it under the frozen ``R-LATENT/v1`` lexicon **before** it is
   coerced into a typed record.  This is where ``R4`` (a structured payload
-  overloaded into a field whose declared shape is scalar) is load bearing: the
+  overloaded into a field whose declared shape is scalar) is essential: the
   typed record cannot even represent that case, so a schema-only defence would
   never exercise the rule the frozen corpus's ``POS-006`` names.
 * **Owned-byte ejection.**  Ejection returns the owned bytes and leaves **no**

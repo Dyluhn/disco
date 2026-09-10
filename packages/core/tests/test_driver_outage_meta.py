@@ -3,7 +3,7 @@
 A provider usage-exhaustion (HTTP 429) that exhausts the driver's bounded
 transient-retry ladder must surface HONESTLY in the UI. The channel is the
 events' documented non-semantic `meta` (events.py: "Free-form, non-semantic
-metadata, UI hints, VOLATILE, never load-bearing"):
+metadata, UI hints, VOLATILE, never essential"):
 
   - the provider adapter records the HTTP status on the typed error as an
     INERT attribute (`LLMTransientError.http_status` — like the existing

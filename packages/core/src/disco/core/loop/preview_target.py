@@ -454,7 +454,7 @@ def reserved_port_command_violation(
     using the process backend for hosted/multi-tenant soak) — tracked as a follow-up.
     The PRIMARY Bug-7 protection is elsewhere and stands on its own: verify no longer
     TARGETS or suggests 8000, and `ensure_preview` remaps it. This scan + `expose_port`
-    refusal are an additional layer, not the load-bearing fix. Runs ONLY on the process
+    refusal are an additional layer, not the essential fix. Runs ONLY on the process
     backend, fails CLOSED on the clear server-bind / port-kill shapes; URL fetches
     (`http://127.0.0.1:8000/...`) are intentionally NOT matched (reading is not the
     crash vector and the gate's own probes never bind)."""

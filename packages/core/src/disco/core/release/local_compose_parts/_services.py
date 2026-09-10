@@ -51,7 +51,7 @@ def _resource_volume_names(spec: ReleaseSpec) -> dict[str, str]:
     """Map each resource id to a UNIQUE compose volume name, ORDER-INDEPENDENTLY
     (WO-C7 §11.9).
 
-    A named volume per distinct persistent path is load-bearing: two resources that
+    A named volume per distinct persistent path is essential: two resources that
     (legally, per the schema) declare the SAME `local.volume` name would otherwise
     collapse to one volume mounted at two locations and silently clobber each other's
     state. On a collision the declared name is disambiguated deterministically by

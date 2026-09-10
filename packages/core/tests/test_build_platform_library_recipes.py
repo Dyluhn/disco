@@ -322,13 +322,13 @@ def test_value_surface_is_typed_and_closed() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Mutation controls — each guard is load bearing
+# Mutation controls — each guard is essential
 # ---------------------------------------------------------------------------
 
 
 def test_mutation_corpus_positive_rejection_depends_on_the_guard() -> None:
     # Without the value-surface classification, a latent Library Recipe value
-    # would register. This proves the R-LATENT/v1 binding is load bearing at the
+    # would register. This proves the R-LATENT/v1 binding is essential at the
     # production registry path, not merely present.
     registry = LibraryRecipeRegistry()
     with pytest.raises(LibraryRecipeError, match=r"parameter_smuggling \(R1\)"):

@@ -161,7 +161,7 @@ def _unknown_actions(events: list, name: str) -> list[ActionEvent]:
 async def test_requery_exhausted_unknown_tool_emits_paired_result_no_abort():
     """The Rung-7 / requery-exhausted path must always pair the unknown
     ActionEvent's tool_call with a result (Observation OR AgentError) —
-    and run() must NOT raise. This is the load-bearing invariant for
+    and run() must NOT raise. This is the essential invariant for
     the provider's wire pairing (F1 cannot fix a missing tool_result).
 
     The ScriptedAgent repeats the unknown tool step until the engine

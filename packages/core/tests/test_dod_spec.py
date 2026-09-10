@@ -17,7 +17,7 @@ The "agent's tool surface" is the registry in `disco.tools.builtin`. By
 construction NO tool in that registry can reach the store's `dod_specs`
 table — the immutability is structural, not gated. Test 2 enumerates the
 agent tools and asserts none of them exposes a way to mutate a stored
-spec. That is the load-bearing check the task brief asks for.
+spec. That is the essential check the task brief asks for.
 """
 
 from __future__ import annotations

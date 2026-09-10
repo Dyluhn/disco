@@ -28,7 +28,7 @@ test.describe("Deep Research → export controls", () => {
     await expect(md).toBeEnabled();
 
     const pdf = page.getByRole("button", { name: /^PDF$/ });
-    // The load-bearing assertion: PDF is NOT a clickable affordance yet.
+    // The essential assertion: PDF is NOT a clickable affordance yet.
     await expect(pdf).toBeDisabled();
     // W-12: DOCX export was removed end to end — no DOCX control renders.
     await expect(page.getByRole("button", { name: /^DOCX$/ })).toHaveCount(0);

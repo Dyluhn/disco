@@ -343,7 +343,7 @@ points the verifier at a port the build cannot own on the shared-net `process` b
 
 > **Bug 7 FIXED** on branch `fix-verify-backend` (Build Soak repair #4). Three fixes keyed off one
 > new shared resolver `disco.core.loop.preview_target` (single source of truth, consumed by BOTH the
-> finish gate in core AND `verify_web_app` in tools). **The PRIMARY, load-bearing fix is #1
+> finish gate in core AND `verify_web_app` in tools). **The PRIMARY, essential fix is #1
 > (verify-retargeting); #2 is best-effort defense-in-depth, NOT a containment guarantee.**
 > 1. **Backend-aware verify target (PRIMARY)** — `resolve_preview_port(host_shared, owned,
 >    conversation_id)`. On a shared-host backend (`process`/`local` — `sandbox.workspace_path` is set)
@@ -367,7 +367,7 @@ points the verifier at a port the build cannot own on the shared-net `process` b
 >    `python -m http.server 8000` shape but is **trivially bypassable** (a raw Python `socket.bind`, a
 >    renamed binary). Per the RCA, shell scanning cannot guarantee "never bind/collide" — the robust
 >    containment is a **network namespace** (or not using the `process` backend for hosted/multi-tenant
->    soak), **tracked as a follow-up**. Containment is not the load-bearing fix; #1 is.
+>    soak), **tracked as a follow-up**. Containment is not the essential fix; #1 is.
 > 3. **Honest unverifiable-finish** — see Bug 6 above (shared root). Regression:
 >    `test_preview_target.py` (resolver returns None on no-conversation-owned port + reserves 5173 +
 >    `explicit_target_allowed`/`target_url_port` + containment units), `test_verify_app.py::`
@@ -798,7 +798,7 @@ Two review rounds converged on **where** the remap may safely live. Review #2 pr
 ALREADY-WRAPPED/arbitrary `exec_shell` string can never be quote/heredoc-aware (`echo '; python3 -m
 http.server 8000'`, a heredoc body, a `python -c` literal all contain a "separator" + serve-shape inside
 quotes), so the remap was **relocated to the model's CLEAN command, before it is tmux-wrapped**:
-- **Remap (load-bearing) — on the clean `shell_exec` command** — `ShellSessionManager.exec`
+- **Remap (essential) — on the clean `shell_exec` command** — `ShellSessionManager.exec`
   (`sandbox/shell_sessions.py`) now calls `remap_reserved_preview_serve` (`preview_target.py`) on the model's
   raw `command` BEFORE wrapping it into `tmux send-keys -l '<command>'`. The matcher is **anchored at the
   START** of that clean command (`^\s*(python -m http.server <reserved>)`) — which is what makes it SAFE
@@ -925,7 +925,7 @@ user-visible preview port and says `shell_kill_process('preview')` to free it (`
 process-backend-only "8000 is platform-owned here; use 8080+; never kill processes or free ports" note would
 require threading backend/isolation-awareness into the (currently backend-agnostic) `PromptLibrary` and
 conditionalizing the port-8000 guidance — engine/prompt-internal sprawl that risks the container story. Left as
-a follow-up; the containment refusal is the load-bearing fix and stands alone.
+a follow-up; the containment refusal is the essential fix and stands alone.
 
 **Must-not-regress (verified).** Normal build commands still reach the launcher (`pytest --version`,
 `npm run build`, a SAFE-port serve `python3 -m http.server 8080`, file ops, installs, `pytest -k kill_switch`,

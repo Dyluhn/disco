@@ -40,7 +40,7 @@ def sha256_file(path: str | Path) -> str:
 @dataclass(frozen=True)
 class EvidenceManifest:
     """The §6 manifest shape. Only `run_id`, `scenario_id`, and `evidence_hashes`
-    are load-bearing for the tamper check; the rest is provenance metadata."""
+    are essential for the tamper check; the rest is provenance metadata."""
 
     run_id: str
     scenario_id: str

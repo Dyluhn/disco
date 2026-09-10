@@ -229,7 +229,7 @@ per-component probe, and eject semantics.*
 
 ## 9. Prior art & market evidence (researched 2026-07-10)
 
-The pattern this doc proposes is not novel — it is the load-bearing architecture
+The pattern this doc proposes is not novel — it is the essential architecture
 of the enterprise low-code tier, and the segment that skipped it produced the
 breaches this tier prevents.
 

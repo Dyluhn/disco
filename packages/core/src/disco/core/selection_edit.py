@@ -1,6 +1,6 @@
 """Selection→scoped-edit directive (P8 — semantic direct manipulation, the wire).
 
-The load-bearing consumer that was missing: it turns a *clicked preview element* +
+The essential consumer that was missing: it turns a *clicked preview element* +
 a user *edit instruction* into a host-owned, precisely-anchored directive the build
 loop applies as a TARGETED edit to exactly that element — never a rewrite.
 

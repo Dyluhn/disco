@@ -2,7 +2,7 @@
 
 One call in, one result out. The loop calls `execute()` per proposed action and
 `available_tools()` to tell the model what it may call; it is unaware of
-sandboxing. The load-bearing guarantee: `execute()` ALWAYS returns a ToolResult
+sandboxing. The essential guarantee: `execute()` ALWAYS returns a ToolResult
 (success or a structured, model-readable failure) and NEVER raises to the loop —
 that's what makes the loop's "exactly one observation per action" hold, and what
 turns malformed tool calls into the auto-repair loop (§3).

@@ -451,7 +451,7 @@ def test_planning_gate_refusal_fixture_is_derived_from_production():
     missing "use a safe read tool (file_read/file_list/search/extract), or "
     "ask/questions_v2 if details are missing." The classifier keys on the needle
     `_PLANNING_TOOL_REFUSAL_NEEDLE`, so the drift never made the gate red — which is
-    exactly why F63 is load-bearing. This test proves the fixture now follows
+    exactly why F63 is essential. This test proves the fixture now follows
     production byte-for-byte at streak=1 (the repetition-aware first refusal) and
     would go red if shortened or decoupled.
     """

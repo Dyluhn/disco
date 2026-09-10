@@ -52,7 +52,7 @@ interface EventBase {
   timestamp?: string;
   /** Free-form, non-semantic metadata (contract §2.1 BaseEvent.meta, VOLATILE —
    *  tracing ids, UI hints such as blocked-landing / driver-outage labels).
-   *  Every wire event carries it; never load-bearing for reconstruction. */
+   *  Every wire event carries it; never used for reconstruction. */
   meta?: Record<string, unknown>;
 }
 

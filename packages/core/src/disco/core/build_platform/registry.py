@@ -421,7 +421,7 @@ class ComponentCatalog:
         implementation: Any,
         expected: ComponentKind,
     ) -> None:
-        """Validate kind/id, THEN claim the key — order is load-bearing.
+        """Validate kind/id, THEN claim the key — order is essential.
 
         A spec that is both the wrong kind and a duplicate id must raise the
         kind error, not the duplicate error; that requires the identity check
