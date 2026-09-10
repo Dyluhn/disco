@@ -5,7 +5,7 @@ import { test, expect } from "@playwright/test";
 // composer. Screenshots at every stage so evidence survives a flaky late step.
 test("P8 click-to-edit through the real UI", async ({ page }) => {
   test.setTimeout(720_000);
-  const shots = "/tmp/claude-1000/-var-home-dylan/aa3c8df1-d803-40e0-89de-d73ae8f27f0e/scratchpad/ui-shots";
+  const shots = test.info().outputDir;
   await page.goto("http://localhost:5173/");
 
   // BUILD surface + a small build.

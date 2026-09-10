@@ -7,7 +7,7 @@ const CID = process.env.P8_CID || "";
 
 test("P8 edit composer — visual evidence on a settled build", async ({ page }) => {
   test.setTimeout(180_000);
-  const shots = "/tmp/claude-1000/-var-home-dylan/aa3c8df1-d803-40e0-89de-d73ae8f27f0e/scratchpad/ui-shots";
+  const shots = test.info().outputDir;
   await page.goto(`http://localhost:5173/build/${CID}`);
   await page.waitForTimeout(4000);
   await page.screenshot({ path: `${shots}/shot-01-resumed.png`, fullPage: true });

@@ -12,7 +12,7 @@ Proves the chain built this session works with a LIVE model (no cassette):
            and the provider ledger is MiniMax-only (0 OpenRouter).
 
 The blank/truncated REFUSAL path is proven deterministically through the real
-loop in current/packages/core/tests/test_export_gate_finish_path.py (a live model won't
+loop in packages/core/tests/test_export_gate_finish_path.py (a live model won't
 emit a blank deck on demand, and facts are stamped from in-memory bytes at
 generation time, so the negative path is fault-injected there — not here).
 
@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import tempfile
 import time
 import urllib.request
 
@@ -32,7 +33,7 @@ AGENT = os.environ.get("DISCO_AGENT_URL", "http://localhost:8000")
 LEDGER = os.environ.get("MINIMAX_RELAY_LOG", "")
 RUN_DIR = os.environ.get(
     "RUN_DIR",
-    "/tmp/claude-1000/-var-home-dylan/aa3c8df1-d803-40e0-89de-d73ae8f27f0e/scratchpad/p10proof",
+    os.path.join(tempfile.gettempdir(), "disco-p10-export-render"),
 )
 BUILD_TIMEOUT_S = int(os.environ.get("P10_BUILD_TIMEOUT_S", "600"))
 _TERMINAL = {"FINISHED", "VERIFIED", "STUCK", "ERROR", "AWAITING_USER", "FAILED", "CANCELLED"}

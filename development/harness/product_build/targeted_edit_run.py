@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import tempfile
 import time
 import urllib.request
 
@@ -22,7 +23,7 @@ AGENT = os.environ.get("DISCO_AGENT_URL", "http://localhost:8000")
 LEDGER = os.environ.get("MINIMAX_RELAY_LOG", "")
 RUN_DIR = os.environ.get(
     "RUN_DIR",
-    "/tmp/claude-1000/-var-home-dylan/c1e33ca0-6ffb-409a-8303-c38c11bb886d/scratchpad/p1blive3b",
+    os.path.join(tempfile.gettempdir(), "disco-targeted-edit"),
 )
 BUILD_TIMEOUT_S = int(os.environ.get("CD9_BUILD_TIMEOUT_S", "420"))
 EDIT_TIMEOUT_S = int(os.environ.get("CD9_EDIT_TIMEOUT_S", "360"))

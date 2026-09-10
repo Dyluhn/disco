@@ -5,7 +5,7 @@ import { test, expect } from "@playwright/test";
 // visible, no dead states.
 test("live build smoke through the real UI", async ({ page }) => {
   test.setTimeout(720_000);
-  const shots = "/tmp/claude-1000/-var-home-dylan/aa3c8df1-d803-40e0-89de-d73ae8f27f0e/scratchpad/ui-shots";
+  const shots = test.info().outputDir;
   await page.goto("http://localhost:5173/");
   await page.screenshot({ path: `${shots}/01-landing.png`, fullPage: false });
 

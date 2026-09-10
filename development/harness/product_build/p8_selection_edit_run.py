@@ -21,6 +21,7 @@ import json
 import os
 import re
 import sys
+import tempfile
 import time
 import urllib.request
 
@@ -31,7 +32,7 @@ WS = AGENT.replace("http", "ws", 1)
 LEDGER = os.environ.get("MINIMAX_RELAY_LOG", "")
 RUN_DIR = os.environ.get(
     "RUN_DIR",
-    "/tmp/claude-1000/-var-home-dylan/aa3c8df1-d803-40e0-89de-d73ae8f27f0e/scratchpad/p8proof",
+    os.path.join(tempfile.gettempdir(), "disco-p8-selection-edit"),
 )
 BUILD_TIMEOUT_S = int(os.environ.get("P8_BUILD_TIMEOUT_S", "480"))
 EDIT_TIMEOUT_S = int(os.environ.get("P8_EDIT_TIMEOUT_S", "420"))
