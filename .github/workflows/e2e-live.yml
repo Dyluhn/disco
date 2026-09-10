@@ -43,7 +43,7 @@ jobs:
         run: uv python install 3.13
 
       - name: Sync Python deps
-        run: uv sync
+        run: uv sync --all-packages --frozen
 
       - name: Set up Node
         uses: actions/setup-node@v4
