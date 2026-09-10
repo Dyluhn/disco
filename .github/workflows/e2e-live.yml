@@ -20,9 +20,12 @@ name: e2e-live (nightly, advisory)
 # environment (DISCO_SECRET_KEY, and any provider keys the configured models use).
 # Without that runner the scheduled job simply doesn't run — it is never faked.
 
+# The nightly `schedule` is GONE as of 2026-09-10. The repository has ZERO
+# self-hosted runners registered, so the 08:00 job could never be picked up and
+# every night produced a red run that said nothing about the tree. Manual
+# dispatch keeps the suite exactly as capable as it was; re-add
+# `schedule: - cron: "0 8 * * *"` the day a `disco-live` runner is registered.
 on:
-  schedule:
-    - cron: "0 8 * * *" # 08:00 UTC nightly
   workflow_dispatch: {} # manual run from the Actions tab
 
 jobs:
