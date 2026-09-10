@@ -570,6 +570,12 @@ PUBLIC_API_MEMBER_NAMES = frozenset(
         "SecretBox",
         "SecretStore",
         "SectionContent",
+        # V51: UI-13 gives every project a short title that is unique per
+        # conversation, so the store gains `update_title_unique`. It is the
+        # first member-transitioned class re-exported from TWO initializers
+        # (`disco.core` and `disco.core.store`), which is why the row COUNT and
+        # the NAME count now differ by one.
+        "SqliteEventStore",
         "WSClientFrame",
     }
 )

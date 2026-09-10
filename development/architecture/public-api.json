@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-public-api-v1",
-  "source_identity": "81beb0f5f5d24e6b0cdd9fa79308aa52c04f6d8c",
+  "source_identity": "731f1c29b44c5654df33486fcfe4382ce6de841b",
   "python_initializers": [
     {
       "path": "packages/agent-server/src/disco/agent_server/__init__.py",
@@ -3904,6 +3904,7 @@
             "async def subscribe(self, conversation_id: str, after_seq: int | None=None) -> AsyncIterator[Event]",
             "async def subscribe_ephemeral(self, conversation_id: str) -> AsyncIterator[dict]",
             "async def update_title(self, conversation_id: str, title: str) -> None",
+            "async def update_title_unique(self, conversation_id: str, title: str) -> str",
             "def __init__(self, path: str | Path=':memory:') -> None",
             "def conversation_appkit_mode_sync(self, conversation_id: str) -> bool | None",
             "def conversation_origin(self, conversation_id: str) -> str | None",
@@ -10938,6 +10939,8 @@
           "fields": [
             "base_url: str",
             "id: str",
+            "key_error: str | None",
+            "key_verified: bool | None",
             "kind: Literal['openai-compat', 'anthropic', 'gemini']",
             "label: str",
             "requires_api_key: bool",
@@ -13162,6 +13165,7 @@
             "async def subscribe(self, conversation_id: str, after_seq: int | None=None) -> AsyncIterator[Event]",
             "async def subscribe_ephemeral(self, conversation_id: str) -> AsyncIterator[dict]",
             "async def update_title(self, conversation_id: str, title: str) -> None",
+            "async def update_title_unique(self, conversation_id: str, title: str) -> str",
             "def __init__(self, path: str | Path=':memory:') -> None",
             "def conversation_appkit_mode_sync(self, conversation_id: str) -> bool | None",
             "def conversation_origin(self, conversation_id: str) -> str | None",
@@ -18909,6 +18913,11 @@
         },
         {
           "kind": "function",
+          "name": "fetchExistingReportAudio",
+          "signature": "export async function fetchExistingReportAudio(cid: string): Promise<ExistingReportAudio[]>"
+        },
+        {
+          "kind": "function",
           "name": "fetchReportExportBlob",
           "signature": "export async function fetchReportExportBlob( cid: string, fmt: \"md\" | \"pdf\", body: string | undefined, ): Promise<Blob>"
         },
@@ -18920,7 +18929,7 @@
         {
           "kind": "function",
           "name": "requestReportAudioBlocking",
-          "signature": "export async function requestReportAudioBlocking( cid: string, mode: string, body: string | undefined, ): Promise<{ mp3_url: string }>"
+          "signature": "export async function requestReportAudioBlocking( cid: string, mode: string, body: string | undefined, force = false, ): Promise<{ mp3_url: string; note?: string; mode?: string }>"
         },
         {
           "kind": "function",
@@ -18930,17 +18939,22 @@
         {
           "kind": "function",
           "name": "streamReportAudio",
-          "signature": "export async function streamReportAudio( cid: string, mode: string, body: string | undefined, onEvent: (ev: AudioStreamEvent) => boolean, ): Promise<boolean>"
+          "signature": "export async function streamReportAudio( cid: string, mode: string, body: string | undefined, onEvent: (ev: AudioStreamEvent) => boolean, force = false, ): Promise<boolean>"
         },
         {
           "kind": "InterfaceDeclaration",
           "name": "AudioStreamEvent",
-          "signature": "export interface AudioStreamEvent { stage?: string; current?: number; total?: number; mp3_url?: string; reason?: string; /** Human-readable failure sentence (what failed, why, what to do). */ message?: string; /** Technical failure text behind `message`. */ detail?: string; // W-08: real voice-model download byte counters. downloaded?: number; pct?: number; file_index?: number; file_total?: number; }"
+          "signature": "export interface AudioStreamEvent { stage?: string; current?: number; total?: number; mp3_url?: string; /** Which mode the finished overview was generated in. */ mode?: string; /** One plain sentence about how the overview was made (a fallback script, a * swapped voice, a summarised length). Empty when nothing notable happened. */ note?: string; reason?: string; /** Human-readable failure sentence (what failed, why, what to do). */ message?: string; /** Technical failure text behind `message`. */ detail?: string; // W-08: real voice-model download byte counters. downloaded?: number; pct?: number; file_index?: number; file_total?: number; }"
         },
         {
           "kind": "InterfaceDeclaration",
           "name": "DeepResearchSubmit",
           "signature": "export interface DeepResearchSubmit { query: string; /** Per-conversation lead-model override (leader pill). null = use default. */ leaderId?: string | null; /** Depth tier (quick / standard_deep / exhaustive). Defaults to standard_deep. */ depthTier?: \"quick\" | \"standard_deep\" | \"exhaustive\"; /** DR-3 recency filter: \"month\" = past 30 days, \"week\" = past 7 days, null = off. */ recencyWindow?: \"month\" | \"week\" | null; /** Per-query research source ids. Empty means use the Settings default. */ sources?: string[]; }"
+        },
+        {
+          "kind": "InterfaceDeclaration",
+          "name": "ExistingReportAudio",
+          "signature": "export interface ExistingReportAudio { mode: string; note: string; /** True when the server cannot prove this artifact belongs to the report on * screen \u2014 written before the sidecar existed, or by an earlier research run * in the same conversation. `note` already says so; the flag is for callers * that want to treat it differently. */ stale?: boolean; mp3_url: string; transcript_url: string; }"
         },
         {
           "kind": "reexport",
@@ -19530,7 +19544,7 @@
         {
           "kind": "function",
           "name": "downloadProject",
-          "signature": "export async function downloadProject(cid: string, binding: DownloadBinding | null): Promise<void>"
+          "signature": "export async function downloadProject( cid: string, binding: DownloadBinding | null, title?: string | null, ): Promise<void>"
         },
         {
           "kind": "function",
@@ -20216,21 +20230,6 @@
           "kind": "function",
           "name": "ActivityFeed",
           "signature": "export function ActivityFeed({ items, conversationId, }: { items: ActivityItem[]; conversationId?: string; })"
-        },
-        {
-          "kind": "function",
-          "name": "FileDownload",
-          "signature": "export function FileDownload({ file, conversationId, }: { file: NonNullable<ActivityItem[\"expandable\"]>[\"file\"]; conversationId: string; })"
-        },
-        {
-          "kind": "function",
-          "name": "SheetDownload",
-          "signature": "export function SheetDownload({ sheet, conversationId, }: { sheet: NonNullable<ActivityItem[\"expandable\"]>[\"sheet\"]; conversationId: string; })"
-        },
-        {
-          "kind": "function",
-          "name": "SlidesDownload",
-          "signature": "export function SlidesDownload({ slides, conversationId, }: { slides: NonNullable<ActivityItem[\"expandable\"]>[\"slides\"]; conversationId: string; })"
         }
       ]
     },
@@ -20405,7 +20404,7 @@
         {
           "kind": "function",
           "name": "ExecutionCanvas",
-          "signature": "export function ExecutionCanvas({ events, status, cid, streamingFile = null, untrusted = false, onSteer, onSelectionEdit, onElementMention, }: { events: AgentEvent[]; status: ConversationStatus; cid: string | null; streamingFile?: StreamingFile | null; /** Third-party events (shared/imported run) \u2192 harden the preview iframe. */ untrusted?: boolean; /** Steer the agent (free-form) from the preview-pane \"Discuss\" affordance. * Undefined when steering isn't available (no conversation / static view). */ onSteer?: (text: string) => void; /** P8 click-to-edit \u2014 submit a selected element's ref + change to the host. */ onSelectionEdit?: ( ref: SelectionRef, instruction: string, humanLabel?: string, ) => void; /** Element mention \u2014 attach the next clicked preview element to the next chat message. */ onElementMention?: (payload: ElementMentionPayload) => void; })"
+          "signature": "export function ExecutionCanvas({ events, status, cid, streamingFile = null, untrusted = false, onSteer, onSelectionEdit, onElementMention, downloadTitle = null, }: { events: AgentEvent[]; status: ConversationStatus; cid: string | null; streamingFile?: StreamingFile | null; /** Third-party events (shared/imported run) \u2192 harden the preview iframe. */ untrusted?: boolean; /** Steer the agent (free-form) from the preview-pane \"Discuss\" affordance. * Undefined when steering isn't available (no conversation / static view). */ onSteer?: (text: string) => void; /** P8 click-to-edit \u2014 submit a selected element's ref + change to the host. */ onSelectionEdit?: ( ref: SelectionRef, instruction: string, humanLabel?: string, ) => void; /** Element mention \u2014 attach the next clicked preview element to the next chat message. */ onElementMention?: (payload: ElementMentionPayload) => void; /** Run title, used to name the zip the Preview pane's failure card offers * (UI-40 naming). Absent in the static run view, which has no conversation. */ downloadTitle?: string | null; })"
         }
       ]
     },
@@ -20516,6 +20515,36 @@
           "kind": "TypeAliasDeclaration",
           "name": "TweakValue",
           "signature": "export type TweakValue = string | number | boolean;"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/build/activityFeedParts/FileDownload.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "FileDownload",
+          "signature": "export function FileDownload({ file, conversationId, }: { file: NonNullable<ActivityItem[\"expandable\"]>[\"file\"]; conversationId: string; })"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/build/activityFeedParts/SheetDownload.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "SheetDownload",
+          "signature": "export function SheetDownload({ sheet, conversationId, }: { sheet: NonNullable<ActivityItem[\"expandable\"]>[\"sheet\"]; conversationId: string; })"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/build/activityFeedParts/SlidesDownload.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "SlidesDownload",
+          "signature": "export function SlidesDownload({ slides, conversationId, }: { slides: NonNullable<ActivityItem[\"expandable\"]>[\"slides\"]; conversationId: string; })"
         }
       ]
     },
@@ -20735,7 +20764,7 @@
         {
           "kind": "function",
           "name": "PreviewPane",
-          "signature": "export function PreviewPane({ status, cid, events, untrusted = false, onSteer, onSelectionEdit, onElementMention, }: { status: ConversationStatus; cid: string | null; events: AgentEvent[]; untrusted?: boolean; onSteer?: (text: string) => void; onSelectionEdit?: (ref: SelectionRef, instruction: string, humanLabel?: string) => void; onElementMention?: (payload: ElementMentionPayload) => void; })"
+          "signature": "export function PreviewPane({ status, cid, events, untrusted = false, onSteer, onSelectionEdit, onElementMention, downloadTitle = null, }: { status: ConversationStatus; cid: string | null; events: AgentEvent[]; untrusted?: boolean; /** Names the SAVED FILE for the failure card's Download source action, the * same way the header's download does (UI-40). Presentation only. */ downloadTitle?: string | null; onSteer?: (text: string) => void; onSelectionEdit?: (ref: SelectionRef, instruction: string, humanLabel?: string) => void; onElementMention?: (payload: ElementMentionPayload) => void; })"
         }
       ]
     },
@@ -20775,12 +20804,32 @@
       ]
     },
     {
+      "path": "frontend/src/components/build/canvas/previewPaneParts/PreviewNotices.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "PreviewNotices",
+          "signature": "export function PreviewNotices({ restoreNotice, selectedVersionSeq, updateError, }: { restoreNotice: { tone: \"success\" | \"error\"; text: string } | null; selectedVersionSeq: number | null; updateError: string | null | undefined; })"
+        }
+      ]
+    },
+    {
       "path": "frontend/src/components/build/canvas/previewPaneParts/PreviewStage.tsx",
       "public_declarations": [
         {
           "kind": "function",
           "name": "PreviewStage",
-          "signature": "export function PreviewStage({ frameRef, launch, onFrameLoad, visibleFailure, dataReason, minting, runtimeUnavailable, frameReady, editMode, untrusted, selection, onSteer, onDisarmEdit, onApplyEdit, }: { frameRef: MutableRefObject<HTMLIFrameElement | null>; launch: PreviewLaunch | null; onFrameLoad: () => void; visibleFailure: string | null; dataReason: string | undefined; minting: boolean; runtimeUnavailable: boolean; frameReady: boolean; editMode: boolean; untrusted: boolean; selection: ElementSelectState; onSteer?: (text: string) => void; onDisarmEdit: () => void; onApplyEdit: (instruction: string) => void; })"
+          "signature": "export function PreviewStage({ frameRef, launch, onFrameLoad, onBootstrapReady, visibleFailure, dataReason, minting, runtimeUnavailable, frameReady, editMode, untrusted, selection, onSteer, onDisarmEdit, onApplyEdit, onRefresh, onDownloadSource, downloadPending, }: { frameRef: MutableRefObject<HTMLIFrameElement | null>; launch: PreviewLaunch | null; onFrameLoad: () => void; onBootstrapReady: () => void; visibleFailure: string | null; dataReason: string | undefined; minting: boolean; runtimeUnavailable: boolean; frameReady: boolean; editMode: boolean; untrusted: boolean; selection: ElementSelectState; onSteer?: (text: string) => void; onDisarmEdit: () => void; onApplyEdit: (instruction: string) => void; onRefresh: () => void; /** Null when there is no conversation to download (the static run view). */ onDownloadSource: (() => void) | null; downloadPending: boolean; })"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/build/canvas/previewPaneParts/PreviewStagePlaceholder.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "PreviewStagePlaceholder",
+          "signature": "export function PreviewStagePlaceholder({ visibleFailure, dataReason, onRefresh, onDownloadSource, downloadPending, }: { visibleFailure: string | null; dataReason: string | undefined; onRefresh: () => void; /** Null when there is no conversation to download (the static run view). */ onDownloadSource: (() => void) | null; downloadPending: boolean; })"
         }
       ]
     },
@@ -20875,7 +20924,7 @@
         {
           "kind": "function",
           "name": "computeVisibleFailure",
-          "signature": "export function computeVisibleFailure( launchFailure: string | null, launchKey: string, requestedLaunchKey: string, ): string | null"
+          "signature": "export function computeVisibleFailure( launchFailure: string | null, launchKey: string, requestedLaunchKey: string, bootstrapFailure: string | null = null, ): string | null"
         },
         {
           "kind": "function",
@@ -20949,6 +20998,11 @@
         },
         {
           "kind": "function",
+          "name": "shouldRenderPreviewFrame",
+          "signature": "export function shouldRenderPreviewFrame( launch: PreviewLaunch | null, visibleFailure: string | null, frameReady: boolean, ): boolean"
+        },
+        {
+          "kind": "function",
           "name": "shouldShowStaticArtifactViewer",
           "signature": "export function shouldShowStaticArtifactViewer( ownsPreview: boolean, artifactSrcDoc: string | null, inlineHtmlArtifact: WorkspaceFile | null, cid: string | null, ): boolean"
         },
@@ -21010,7 +21064,12 @@
         {
           "kind": "InterfaceDeclaration",
           "name": "PreviewLaunchState",
-          "signature": "export interface PreviewLaunchState { launch: PreviewLaunch | null; launchKey: string; launchVersionSeq: number | null; minting: boolean; launchFailure: string | null; frameReady: boolean; setFrameReady: (ready: boolean) => void; }"
+          "signature": "export interface PreviewLaunchState { launch: PreviewLaunch | null; launchKey: string; launchVersionSeq: number | null; minting: boolean; launchFailure: string | null; /** Reason code for a launch that MINTED FINE but whose frame never handed * back its bootstrap handshake. Separate from `launchFailure` on purpose \u2014 * see `computeVisibleFailure`. */ bootstrapFailure: string | null; /** Hand to `PreviewLaunchFrame` as `onBootstrapReady` to disarm the watchdog. */ onBootstrapReady: () => void; frameReady: boolean; setFrameReady: (ready: boolean) => void; }"
+        },
+        {
+          "kind": "variable",
+          "name": "PREVIEW_BOOTSTRAP_TIMEOUT_MS",
+          "signature": "export const PREVIEW_BOOTSTRAP_TIMEOUT_MS = 15_000;"
         }
       ]
     },
@@ -21215,7 +21274,7 @@
         {
           "kind": "function",
           "name": "BuildDeliverableSection",
-          "signature": "export function BuildDeliverableSection({ b, deliverable, download, exportManifest, release, }: { b: BuildController; deliverable: DeliverableView | null; download: ReturnType<typeof useDownloadProject>; exportManifest: ReturnType<typeof useExportManifest>; release: ReturnType<typeof useProjectRelease>; })"
+          "signature": "export function BuildDeliverableSection({ b, deliverable, download, exportManifest, release, downloadTitle = null, }: { b: BuildController; deliverable: DeliverableView | null; download: ReturnType<typeof useDownloadProject>; exportManifest: ReturnType<typeof useExportManifest>; release: ReturnType<typeof useProjectRelease>; /** The run's own title \u2014 names the SAVED ZIP (UI-40), nothing else. */ downloadTitle?: string | null; })"
         }
       ]
     },
@@ -21385,7 +21444,7 @@
         {
           "kind": "function",
           "name": "DeepProgressStrip",
-          "signature": "export function DeepProgressStrip({ brief, trace, stats, status, activity, followUpStatus, collapsedHold = null, onStopHold, }: Props)"
+          "signature": "export function DeepProgressStrip({ brief, trace, stats, status, activity, followUpStatus, collapsedHold = null, onStopHold, connectionState = \"connected\", }: Props)"
         }
       ]
     },
@@ -21515,12 +21574,22 @@
         {
           "kind": "function",
           "name": "NeedMoreCard",
-          "signature": "export function NeedMoreCard({ report, cid, onFollowUp, followUpBusy, followUps = [], }: NeedMoreCardProps)"
+          "signature": "export function NeedMoreCard({ report, cid, onFollowUp, followUpBusy, followUps = [], requestedAction = null, }: NeedMoreCardProps)"
         },
         {
           "kind": "InterfaceDeclaration",
           "name": "NeedMoreCardProps",
-          "signature": "export interface NeedMoreCardProps { /** The finished report (for client-side MD export + audio). */ report: ReportEvent; /** Conversation ID (for server-side PDF export + future audio endpoint). */ cid: string; /** Callback to submit a follow-up question. */ onFollowUp: (question: string) => void; /** True while a follow-up is being submitted. */ followUpBusy: boolean; /** Post-report follow-up Q&A MessageEvents (WALK-20). When non-empty an * \"Include follow-ups?\" modal is shown before Export / Audio so the user can * choose which pairs to include. Empty list = skip the modal. */ followUps?: MessageEvent[]; }"
+          "signature": "export interface NeedMoreCardProps { /** The finished report (for client-side MD export + audio). */ report: ReportEvent; /** Conversation ID (for server-side PDF export + future audio endpoint). */ cid: string; /** Callback to submit a follow-up question. */ onFollowUp: (question: string) => void; /** True while a follow-up is being submitted. */ followUpBusy: boolean; /** Post-report follow-up Q&A MessageEvents (WALK-20). When non-empty an * \"Include follow-ups?\" modal is shown before Export / Audio so the user can * choose which pairs to include. Empty list = skip the modal. */ followUps?: MessageEvent[]; /** A press of the same action from the top bar. */ requestedAction?: ReportAction | null; }"
+        },
+        {
+          "kind": "InterfaceDeclaration",
+          "name": "ReportAction",
+          "signature": "export interface ReportAction { name: ReportActionName; nonce: number; }"
+        },
+        {
+          "kind": "TypeAliasDeclaration",
+          "name": "ReportActionName",
+          "signature": "export type ReportActionName = \"follow_up\" | \"audio\" | \"deck\";"
         }
       ]
     },
@@ -21555,7 +21624,7 @@
         {
           "kind": "function",
           "name": "SupportMeter",
-          "signature": "export function SupportMeter({ supported, weak, unsupported, emptyLabel }: SupportMeterProps)"
+          "signature": "export function SupportMeter({ counts, emptyLabel, legend = false }: SupportMeterProps)"
         }
       ]
     },
@@ -21590,12 +21659,22 @@
       ]
     },
     {
+      "path": "frontend/src/components/research/deepResearchSurfaceParts/DeepResearchExportControls.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "DeepResearchExportControls",
+          "signature": "export function DeepResearchExportControls({ hasReport, exportPending, exportCaps, handleTopBarExport, }: Props)"
+        }
+      ]
+    },
+    {
       "path": "frontend/src/components/research/deepResearchSurfaceParts/DeepResearchReportView.tsx",
       "public_declarations": [
         {
           "kind": "function",
           "name": "DeepResearchReportView",
-          "signature": "export function DeepResearchReportView({ r }: Props)"
+          "signature": "export function DeepResearchReportView({ r, reportAction = null }: Props)"
         }
       ]
     },
@@ -21615,7 +21694,7 @@
         {
           "kind": "function",
           "name": "DeepResearchTopBar",
-          "signature": "export function DeepResearchTopBar({ r, onStandardSearch, handleNewResearch, exportCaps, doneNotify, topBarIncludeOpen, setTopBarIncludeOpen, handleTopBarExport, handleTopBarIncludeConfirm, }: Props)"
+          "signature": "export function DeepResearchTopBar({ r, onStandardSearch, handleNewResearch, exportCaps, doneNotify, topBarIncludeOpen, setTopBarIncludeOpen, handleTopBarExport, handleTopBarIncludeConfirm, requestReportAction, }: Props)"
         }
       ]
     },
@@ -21705,12 +21784,12 @@
         {
           "kind": "function",
           "name": "AudioSection",
-          "signature": "export function AudioSection({ cid, followUpSeqs, modeOpen, onModeOpenChange, reportQuery, }: AudioSectionProps)"
+          "signature": "export function AudioSection({ cid, followUpSeqs, modeOpen, onModeOpenChange, reportQuery, onRequestGenerate, }: AudioSectionProps)"
         },
         {
           "kind": "InterfaceDeclaration",
           "name": "AudioSectionProps",
-          "signature": "export interface AudioSectionProps { cid: string; /** Selected follow-up seqs to include in the audio (WALK-20). */ followUpSeqs?: number[]; /** Controlled: whether the mode-pick dialog is open (parent drives this * when it needs to insert the include-follow-ups step first). */ modeOpen: boolean; onModeOpenChange: (open: boolean) => void; /** B4: report title/query for a meaningful download filename. */ reportQuery: string; }"
+          "signature": "export interface AudioSectionProps { cid: string; /** Selected follow-up seqs to include in the audio (WALK-20). */ followUpSeqs?: number[]; /** Controlled: whether the mode-pick dialog is open (parent drives this * when it needs to insert the include-follow-ups step first). */ modeOpen: boolean; onModeOpenChange: (open: boolean) => void; /** B4: report title/query for a meaningful download filename. */ reportQuery: string; /** Open the mode picker (via the include-follow-ups step when the report has * follow-ups). Owned by the parent because that step is the parent's. */ onRequestGenerate: () => void; }"
         }
       ]
     },
@@ -21805,7 +21884,7 @@
         {
           "kind": "TypeAliasDeclaration",
           "name": "AudioState",
-          "signature": "export type AudioState = | { status: \"idle\" } | { status: \"generating\"; progress?: AudioProgress } | { status: \"done\"; audioUrl: string } /** `reason` is the sentence shown to the operator; `detail` is the * secondary technical line (failing stage + the server's exception text). */ | { status: \"unavailable\"; reason: string; detail?: string };"
+          "signature": "export type AudioState = | { status: \"idle\" } | { status: \"generating\"; progress?: AudioProgress } /** `note` is the one plain sentence about how this overview was made (a * report-derived fallback script, a swapped voice, a summarised length); * `mode` is which of the two modes produced it. */ | { status: \"done\"; audioUrl: string; note?: string; mode?: AudioMode } /** `reason` is the sentence shown to the operator; `detail` is the * secondary technical line (failing stage + the server's exception text). */ | { status: \"unavailable\"; reason: string; detail?: string };"
         }
       ]
     },
@@ -21875,7 +21954,7 @@
         {
           "kind": "InterfaceDeclaration",
           "name": "UseAudioOverviewResult",
-          "signature": "export interface UseAudioOverviewResult { audio: AudioState; generate: (mode: AudioMode) => Promise<void>; reset: () => void; }"
+          "signature": "export interface UseAudioOverviewResult { audio: AudioState; /** Run the pipeline. `force` re-runs it even when the server already holds * an artifact for this exact report \u2014 what \"Regenerate\" needs, since the * cache key is a hash of the report and would otherwise hand the same file * straight back. */ generate: (mode: AudioMode, options?: { force?: boolean }) => Promise<void>; reset: () => void; }"
         }
       ]
     },
@@ -22380,16 +22459,6 @@
       ]
     },
     {
-      "path": "frontend/src/components/settings/imageGenSectionParts/fallbackWarning.ts",
-      "public_declarations": [
-        {
-          "kind": "function",
-          "name": "getFallbackWarning",
-          "signature": "export function getFallbackWarning( data: ImageGenConfig | undefined, orKeyStatus: OpenRouterKeyStatus | undefined, ): string | null"
-        }
-      ]
-    },
-    {
       "path": "frontend/src/components/settings/imageGenSectionParts/fieldsDirty.ts",
       "public_declarations": [
         {
@@ -22416,6 +22485,16 @@
           "kind": "variable",
           "name": "orPrice",
           "signature": "export const orPrice = (m: { price_in_per_m: number; price_out_per_m: number; image_price_per_m?: number; }): string => { if (m.image_price_per_m && m.image_price_per_m > 0) return `$${m.image_price_per_m.toFixed(2)} /M img-tok`; if (m.price_in_per_m > 0 || m.price_out_per_m > 0) return `$${m.price_in_per_m.toFixed(2)} in / $${m.price_out_per_m.toFixed(2)} out /Mtok`; return \"pricing on openrouter.ai\"; };"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/settings/imageGenSectionParts/setupNote.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "getSetupNote",
+          "signature": "export function getSetupNote( data: ImageGenConfig | undefined, orKeyStatus: OpenRouterKeyStatus | undefined, ): string | null"
         }
       ]
     },
@@ -22519,8 +22598,23 @@
         },
         {
           "kind": "function",
+          "name": "keyBadge",
+          "signature": "export function keyBadge(provider: ProviderInfo): KeyBadge"
+        },
+        {
+          "kind": "function",
           "name": "priceLabel",
           "signature": "export function priceLabel(m: ProviderCatalogueModel): string"
+        },
+        {
+          "kind": "TypeAliasDeclaration",
+          "name": "KeyBadge",
+          "signature": "export type KeyBadge = { text: string; tone: \"ok\" | \"bad\" | \"neutral\"; /** the provider's own answer, shown under the row when it refused */ detail?: string; };"
+        },
+        {
+          "kind": "variable",
+          "name": "DEFAULT_CONTEXT_WINDOW",
+          "signature": "export const DEFAULT_CONTEXT_WINDOW = 131072;"
         }
       ]
     },
@@ -23620,7 +23714,7 @@
         {
           "kind": "InterfaceDeclaration",
           "name": "DeepResearchStream",
-          "signature": "export interface DeepResearchStream { status: ConversationStatus; /** The newest status event's detail \u2014 \"killed\", \"stopped\", \"research\", \u2026 \u2014 * or null. Read for the ONE distinction the status cannot carry: a run a * person killed versus a conversation that is merely idle. */ statusDetail: string | null; /** Separate from `status` so the plan-progress UI can stay calm while a * follow-up answer is generating. null when idle; \"follow_up\" during * generation; \"follow_up_complete\" after the answer lands. */ followUpStatus: \"follow_up\" | \"follow_up_complete\" | null; events: AgentEvent[]; error: string | null; /** The terminal failure as fields (why / state / next / allowed + the class * that raised), when the backend named its own boundary. Null for transport * errors and for events written before `ErrorEvent.failure` existed \u2014 * `error` is the fallback then. */ failure: RunFailure | null; /** The model's opening brief \u2014 how it read the question and the angles it * will chase. The FIRST visible output of a gateless run (v2); null until * it lands. */ brief: string | null; /** Live counts for the mono stats strip. */ stats: DeepStats; /** The latest REPORTED fact of each kind (turn / model_activity / search / * observation / phase / review round / hold), each with the instant the * engine reported it. The run UI's honesty rule lives on this: a field is * null because no event set it, and `lastEventAt` is how \"working\" is told * apart from \"silent\" without inferring anything from `status`. */ activity: DeepActivity; /** The activity feed items (reuses ActivityFeed verbatim). */ trace: ActivityItem[]; /** Section placeholders + finalized sections (the assembling report view). */ assembling: AssemblingSection[]; /** The final ReportEvent \u2014 null until the engine emits it. */ report: ReportEvent | null; /** Paused evidence state, kept separate from the finished report. */ checkpoint: ResearchCheckpointEvent | null; /** Three-tier source split (cited / reviewed / discovered). */ sources: SourceTiers; /** Send WS frames to the conversation. */ cancel: () => void; /** Continue a stopped/incomplete run (explicit \u2014 never on open). */ resume: () => void; /** Ask a follow-up question on this conversation \u2014 sends a steer message * that re-kicks the loop with the report's corpus as grounding. */ followUp: (question: string) => void; /** * Mid-run steer: send a steer string to the running DR engine. The server * routes the `steer` WS frame into the DR queue (not the agent loop) when * a DR run is active; the research agent drains it at its next turn * boundary, where it appears as a priority USER STEER line the model acts * on before returning to its own plan. * * Only call while `status === \"RUNNING\"` and the WS is open \u2014 the control * is gated in the surface to enforce this. */ steer: (text: string) => void; /** * D3 inject-source: fold a plaintext snippet into the DR run's corpus. * The server converts the text to a Passage and makes it available to * subsequent section synthesis. URL extraction is a follow-up (v1: text only). * * Only call while `status === \"RUNNING\"`. */ injectSource: (text: string) => void; }"
+          "signature": "export interface DeepResearchStream { status: ConversationStatus; /** The newest status event's detail \u2014 \"killed\", \"stopped\", \"research\", \u2026 \u2014 * or null. Read for the ONE distinction the status cannot carry: a run a * person killed versus a conversation that is merely idle. */ statusDetail: string | null; /** Separate from `status` so the plan-progress UI can stay calm while a * follow-up answer is generating. null when idle; \"follow_up\" during * generation; \"follow_up_complete\" after the answer lands. */ followUpStatus: \"follow_up\" | \"follow_up_complete\" | null; events: AgentEvent[]; error: string | null; /** The terminal failure as fields (why / state / next / allowed + the class * that raised), when the backend named its own boundary. Null for transport * errors and for events written before `ErrorEvent.failure` existed \u2014 * `error` is the fallback then. */ failure: RunFailure | null; /** \"degraded\" once the live socket has stopped delivering and is retrying. * The run view must not keep claiming \"Live\" behind a dead stream. */ connectionState: \"connected\" | \"degraded\"; /** The model's opening brief \u2014 how it read the question and the angles it * will chase. The FIRST visible output of a gateless run (v2); null until * it lands. */ brief: string | null; /** Live counts for the mono stats strip. */ stats: DeepStats; /** The latest REPORTED fact of each kind (turn / model_activity / search / * observation / phase / review round / hold), each with the instant the * engine reported it. The run UI's honesty rule lives on this: a field is * null because no event set it, and `lastEventAt` is how \"working\" is told * apart from \"silent\" without inferring anything from `status`. */ activity: DeepActivity; /** The activity feed items (reuses ActivityFeed verbatim). */ trace: ActivityItem[]; /** Section placeholders + finalized sections (the assembling report view). */ assembling: AssemblingSection[]; /** The final ReportEvent \u2014 null until the engine emits it. */ report: ReportEvent | null; /** Paused evidence state, kept separate from the finished report. */ checkpoint: ResearchCheckpointEvent | null; /** Three-tier source split (cited / reviewed / discovered). */ sources: SourceTiers; /** Send WS frames to the conversation. */ cancel: () => void; /** Continue a stopped/incomplete run (explicit \u2014 never on open). */ resume: () => void; /** Ask a follow-up question on this conversation \u2014 sends a steer message * that re-kicks the loop with the report's corpus as grounding. */ followUp: (question: string) => void; /** * Mid-run steer: send a steer string to the running DR engine. The server * routes the `steer` WS frame into the DR queue (not the agent loop) when * a DR run is active; the research agent drains it at its next turn * boundary, where it appears as a priority USER STEER line the model acts * on before returning to its own plan. * * Only call while `status === \"RUNNING\"` and the WS is open \u2014 the control * is gated in the surface to enforce this. */ steer: (text: string) => void; /** * D3 inject-source: fold a plaintext snippet into the DR run's corpus. * The server converts the text to a Passage and makes it available to * subsequent section synthesis. URL extraction is a follow-up (v1: text only). * * Only call while `status === \"RUNNING\"`. */ injectSource: (text: string) => void; }"
         },
         {
           "kind": "TypeAliasDeclaration",
@@ -23630,7 +23724,7 @@
         {
           "kind": "variable",
           "name": "initial",
-          "signature": "export const initial: RawState = { status: \"IDLE\", statusDetail: null, followUpStatus: null, events: [], error: null, failure: null, };"
+          "signature": "export const initial: RawState = { status: \"IDLE\", statusDetail: null, followUpStatus: null, events: [], error: null, failure: null, connectionState: \"connected\", };"
         }
       ]
     },
@@ -23915,7 +24009,7 @@
         {
           "kind": "function",
           "name": "useProjectManifest",
-          "signature": "export function useProjectManifest(conversationId: string | null)"
+          "signature": "export function useProjectManifest(conversationId: string | null, available = true)"
         },
         {
           "kind": "function",
@@ -24460,6 +24554,31 @@
       ]
     },
     {
+      "path": "frontend/src/lib/claimCheck.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "claimCheckCounts",
+          "signature": "export function claimCheckCounts(claims: VerifiedClaim[]): CheckCounts"
+        },
+        {
+          "kind": "TypeAliasDeclaration",
+          "name": "CheckCounts",
+          "signature": "export type CheckCounts = Record<VerificationStatus, number>;"
+        },
+        {
+          "kind": "variable",
+          "name": "CHECK_LABEL",
+          "signature": "export const CHECK_LABEL: Record<VerificationStatus, string> = { supported: \"Supported\", contradicted: \"Possible contradiction\", unresolved: \"Unresolved\", unavailable: \"Not checked\", };"
+        },
+        {
+          "kind": "variable",
+          "name": "UNRESOLVED_MEANING",
+          "signature": "export const UNRESOLVED_MEANING = \"Unresolved means the checker found no source excerpt to match the sentence \" + \"against \u2014 it is not a contradiction.\";"
+        }
+      ]
+    },
+    {
       "path": "frontend/src/lib/cn.ts",
       "public_declarations": [
         {
@@ -24785,6 +24904,26 @@
       ]
     },
     {
+      "path": "frontend/src/lib/depthTier.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "depthTierLabel",
+          "signature": "export function depthTierLabel(tier: string): string"
+        },
+        {
+          "kind": "TypeAliasDeclaration",
+          "name": "DepthTier",
+          "signature": "export type DepthTier = \"quick\" | \"standard_deep\" | \"exhaustive\";"
+        },
+        {
+          "kind": "variable",
+          "name": "DEPTH_TIER_LABEL",
+          "signature": "export const DEPTH_TIER_LABEL: Record<DepthTier, string> = { quick: \"Quick\", standard_deep: \"Standard\", exhaustive: \"Thorough\", };"
+        }
+      ]
+    },
+    {
       "path": "frontend/src/lib/discoSemanticAttrs.ts",
       "public_declarations": [
         {
@@ -24796,6 +24935,56 @@
           "kind": "variable",
           "name": "DISCO_ATTR",
           "signature": "export const DISCO_ATTR = { FIELD: \"data-disco-field\", SECTION: \"data-disco-section\", FILE: \"data-disco-file\", FLOW: \"data-disco-flow\", SCREEN_LABEL: \"data-disco-screen-label\", COMMENT_ANCHOR: \"data-disco-comment-anchor\", METRIC_ID: \"data-disco-metric-id\", VERSION: \"data-disco-version\", COLLECTION: \"data-disco-collection\", INDEX: \"data-disco-index\", ITEM_KIND: \"data-disco-item-kind\", } as const;"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/lib/documentTitle.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "documentTitle",
+          "signature": "export function documentTitle( pathname: string, mode: Mode, conversationTitle: string | null, ): string"
+        },
+        {
+          "kind": "function",
+          "name": "getConversationTitle",
+          "signature": "export function getConversationTitle(): string | null"
+        },
+        {
+          "kind": "function",
+          "name": "publishConversationTitle",
+          "signature": "export function publishConversationTitle(title: string | null): void"
+        },
+        {
+          "kind": "function",
+          "name": "subscribeConversationTitle",
+          "signature": "export function subscribeConversationTitle(listener: () => void): () => void"
+        },
+        {
+          "kind": "variable",
+          "name": "APP_NAME",
+          "signature": "export const APP_NAME = \"Disco\";"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/lib/downloadFilename.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "projectDownloadBasename",
+          "signature": "export function projectDownloadBasename(cid: string, title?: string | null): string"
+        },
+        {
+          "kind": "function",
+          "name": "shortConversationId",
+          "signature": "export function shortConversationId(cid: string): string"
+        },
+        {
+          "kind": "function",
+          "name": "slugifyTitle",
+          "signature": "export function slugifyTitle(title: string): string"
         }
       ]
     },
@@ -25220,6 +25409,21 @@
       ]
     },
     {
+      "path": "frontend/src/lib/markedDone.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "isMarkedDone",
+          "signature": "export function isMarkedDone(cid: string | null): boolean"
+        },
+        {
+          "kind": "function",
+          "name": "rememberMarkedDone",
+          "signature": "export function rememberMarkedDone(cid: string | null): void"
+        }
+      ]
+    },
+    {
       "path": "frontend/src/lib/previewLaunch.ts",
       "public_declarations": [
         {
@@ -25326,6 +25530,26 @@
           "kind": "function",
           "name": "publishRunStatus",
           "signature": "export function publishRunStatus(status: string | null): void"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/lib/sandboxUrls.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "scrubSandboxUrls",
+          "signature": "export function scrubSandboxUrls(text: string): ScrubbedSummary"
+        },
+        {
+          "kind": "InterfaceDeclaration",
+          "name": "ScrubbedSummary",
+          "signature": "export interface ScrubbedSummary { /** The summary text with every sandbox-local address replaced. */ text: string; /** True when at least one address was replaced \u2014 the caller shows the note. */ replaced: boolean; }"
+        },
+        {
+          "kind": "variable",
+          "name": "SANDBOX_URL_NOTE",
+          "signature": "export const SANDBOX_URL_NOTE = \"Disco replaced a sandbox-only address in this summary \u2014 open the site with the Preview tab or the Open button above.\";"
         }
       ]
     },
@@ -25586,6 +25810,21 @@
           "kind": "InterfaceDeclaration",
           "name": "ThinkSplit",
           "signature": "export interface ThinkSplit { /** The chain-of-thought extracted from `<think>` blocks (may be empty). */ reasoning: string; /** The user-facing answer with all `<think>` blocks removed. */ answer: string; }"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/lib/unverifiedWarning.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "unverifiedWarning",
+          "signature": "export function unverifiedWarning(raw: string): UnverifiedWarning | null"
+        },
+        {
+          "kind": "InterfaceDeclaration",
+          "name": "UnverifiedWarning",
+          "signature": "export interface UnverifiedWarning { /** One short line, safe to render bold at the top of the card. */ headline: string; /** Two plain sentences: what didn't pass, and whether it's still usable. */ body: string; /** The original environment text, verbatim, for the disclosure. */ raw: string; }"
         }
       ]
     },
@@ -26394,7 +26633,7 @@
         {
           "kind": "InterfaceDeclaration",
           "name": "ProviderInfo",
-          "signature": "export interface ProviderInfo { id: string; label: string; base_url: string; kind: ProviderKind; secret_name: string; has_key: boolean; requires_api_key?: boolean; }"
+          "signature": "export interface ProviderInfo { id: string; label: string; base_url: string; kind: ProviderKind; secret_name: string; has_key: boolean; requires_api_key?: boolean; /** `has_key` says a key is STORED; this says whether it WORKS as of the last * /models probe: undefined/null = never probed, true = the provider * answered, false = the provider refused (`key_error` is its answer). */ key_verified?: boolean | null; key_error?: string | null; }"
         },
         {
           "kind": "InterfaceDeclaration",
@@ -27572,14 +27811,6 @@
     },
     {
       "surface": "frontend",
-      "path": "frontend/src/components/buildSurface/BuildDeliverableSection.tsx",
-      "public_name": "BuildDeliverableSection",
-      "target_sha256": "094e59303b81aa87be741defd525b0b4cce4d856aaf1c34511cfacd48f117378",
-      "owner_package": "PKG-12-FE-BUILD",
-      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
-    },
-    {
-      "surface": "frontend",
       "path": "frontend/src/components/buildSurface/BuildEmptyState.tsx",
       "public_name": "BuildEmptyState",
       "target_sha256": "d29dd124f243fdcc1ea5acc285d4bf82017c238697b11e9d39219fd0fdf9b836",
@@ -28332,14 +28563,6 @@
     },
     {
       "surface": "frontend",
-      "path": "frontend/src/components/build/canvas/previewPaneParts/PreviewStage.tsx",
-      "public_name": "PreviewStage",
-      "target_sha256": "ad8e177962ce9585fb085ae26484373b35a9396e8e3793dd0f42859ac5792d74",
-      "owner_package": "PKG-12-FE-PREVIEW",
-      "reason": "Epic 12-C (PKG-12-FE-PREVIEW): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
-    },
-    {
-      "surface": "frontend",
       "path": "frontend/src/components/build/canvas/previewPaneParts/PreviewToolbar.tsx",
       "public_name": "PreviewToolbar",
       "target_sha256": "be44c2df0d1bf97b854fd4a25f5a5519be6389e596a9b7f372434b34a3185c0e",
@@ -28423,14 +28646,6 @@
       "path": "frontend/src/components/build/canvas/previewPaneParts/helpers.ts",
       "public_name": "computeShowPointButton",
       "target_sha256": "3dfa194d9eb860f61f99fb4f738bf7417816bd344d311a4be98efe20cb445cfe",
-      "owner_package": "PKG-12-FE-PREVIEW",
-      "reason": "Epic 12-C (PKG-12-FE-PREVIEW): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
-    },
-    {
-      "surface": "frontend",
-      "path": "frontend/src/components/build/canvas/previewPaneParts/helpers.ts",
-      "public_name": "computeVisibleFailure",
-      "target_sha256": "c22e08dd16fd2ab9d04de4c158f377eae905e6d6eff4d0bf616d4ff637becc19",
       "owner_package": "PKG-12-FE-PREVIEW",
       "reason": "Epic 12-C (PKG-12-FE-PREVIEW): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
     },
@@ -28597,14 +28812,6 @@
     {
       "surface": "frontend",
       "path": "frontend/src/components/build/canvas/previewPaneParts/usePreviewLaunch.ts",
-      "public_name": "PreviewLaunchState",
-      "target_sha256": "f0976f67ac781244d28645b3c084999da024d7bd992713130eea56c77b0d778b",
-      "owner_package": "PKG-12-FE-PREVIEW",
-      "reason": "Epic 12-C (PKG-12-FE-PREVIEW): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
-    },
-    {
-      "surface": "frontend",
-      "path": "frontend/src/components/build/canvas/previewPaneParts/usePreviewLaunch.ts",
       "public_name": "usePreviewLaunch",
       "target_sha256": "c826eba95d4d4bac4dc3a18ba0b66a7dccfab539684e8e824c4a27d0dec17b5a",
       "owner_package": "PKG-12-FE-PREVIEW",
@@ -28652,33 +28859,9 @@
     },
     {
       "surface": "frontend",
-      "path": "frontend/src/api/deepResearch.ts",
-      "public_name": "requestReportAudioBlocking",
-      "target_sha256": "5dbdaa7db68d5dd333b63b44da09f5ba2d9981837727b2903e822607689e553a",
-      "owner_package": "PKG-12-FE-RESEARCH",
-      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
-    },
-    {
-      "surface": "frontend",
-      "path": "frontend/src/api/deepResearch.ts",
-      "public_name": "streamReportAudio",
-      "target_sha256": "6f937524db7838286cdd6a9050ab1a3d9feeb0804170ca8c5dfd94b3156a9949",
-      "owner_package": "PKG-12-FE-RESEARCH",
-      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
-    },
-    {
-      "surface": "frontend",
       "path": "frontend/src/components/research/deepResearchSurfaceParts/DeepResearchComposer.tsx",
       "public_name": "DeepResearchComposer",
       "target_sha256": "676696a285310e7b23882a9ba47a3dd3711c248b7972a51d36e1ae3b4d5f32d9",
-      "owner_package": "PKG-12-FE-RESEARCH",
-      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
-    },
-    {
-      "surface": "frontend",
-      "path": "frontend/src/components/research/deepResearchSurfaceParts/DeepResearchReportView.tsx",
-      "public_name": "DeepResearchReportView",
-      "target_sha256": "a81dce1ecf626b8c849cf64de3e0a5eecc901ee04943123ba87ebf9f32fbb570",
       "owner_package": "PKG-12-FE-RESEARCH",
       "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
     },
@@ -28767,22 +28950,6 @@
       "path": "frontend/src/components/research/needMoreCardParts/AudioProgressRow.tsx",
       "public_name": "AudioProgressRowProps",
       "target_sha256": "bdab64d208ac0c941faef5f206296430a0d11230ba437fec16aa31faa73fd8e6",
-      "owner_package": "PKG-12-FE-RESEARCH",
-      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
-    },
-    {
-      "surface": "frontend",
-      "path": "frontend/src/components/research/needMoreCardParts/AudioSection.tsx",
-      "public_name": "AudioSection",
-      "target_sha256": "0edc177e48130978eccca7958aeeac5a8cb568f3ce155d8a42fb85652465428f",
-      "owner_package": "PKG-12-FE-RESEARCH",
-      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
-    },
-    {
-      "surface": "frontend",
-      "path": "frontend/src/components/research/needMoreCardParts/AudioSection.tsx",
-      "public_name": "AudioSectionProps",
-      "target_sha256": "c5dfb76da036500c831f5b33c0db99a0283b278db3dd8d2c7d8de01e56b4c8f4",
       "owner_package": "PKG-12-FE-RESEARCH",
       "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
     },
@@ -28943,14 +29110,6 @@
       "path": "frontend/src/components/research/needMoreCardParts/useAudioOverview.ts",
       "public_name": "UseAudioOverviewOptions",
       "target_sha256": "41334b10e7dabebe1088111ac0133633bcdf3363d9a8d5fe24777539b7d20e6e",
-      "owner_package": "PKG-12-FE-RESEARCH",
-      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
-    },
-    {
-      "surface": "frontend",
-      "path": "frontend/src/components/research/needMoreCardParts/useAudioOverview.ts",
-      "public_name": "UseAudioOverviewResult",
-      "target_sha256": "9694a90ebc31b9c80cc2613994ebf88908e7346d8a55f4d64e46a886090c5bd6",
       "owner_package": "PKG-12-FE-RESEARCH",
       "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
     },
@@ -29631,14 +29790,6 @@
       "path": "frontend/src/components/settings/imageGenSectionParts/StoredKeyField.tsx",
       "public_name": "StoredKeyField",
       "target_sha256": "a89f59f7c289cd3511c5a1636c5295949a1eb30a780df9bdfc0e605662adb83a",
-      "owner_package": "PKG-12-FE-SETTINGS",
-      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
-    },
-    {
-      "surface": "frontend",
-      "path": "frontend/src/components/settings/imageGenSectionParts/fallbackWarning.ts",
-      "public_name": "getFallbackWarning",
-      "target_sha256": "cd5ceb3fb3881a2dfc9697bd96c31b9c3c0e705dd7b124d72cef0a96a68f07e3",
       "owner_package": "PKG-12-FE-SETTINGS",
       "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
     },
@@ -30532,14 +30683,6 @@
     },
     {
       "surface": "frontend",
-      "path": "frontend/src/components/research/deepResearchSurfaceParts/DeepResearchTopBar.tsx",
-      "public_name": "DeepResearchTopBar",
-      "target_sha256": "2a7adbbbf1f785fd94d8482379ddc6606146e1a08e0f9e623c1b99691a7d564c",
-      "owner_package": "PKG-20-UX-RELIABILITY",
-      "reason": "Post-campaign UX reliability correction: preserve the public surface while adding explicit vision and keyless-provider configuration."
-    },
-    {
-      "surface": "frontend",
       "path": "frontend/src/components/settings/OpenRouterSection.tsx",
       "public_name": "OpenRouterSection",
       "target_sha256": "425ba24415195297b0b5d9a066303e6af6c118aa8489167a3ac3ad1a36263051",
@@ -30573,14 +30716,6 @@
     {
       "surface": "frontend",
       "path": "frontend/src/types/models.ts",
-      "public_name": "ProviderInfo",
-      "target_sha256": "11698811afb3a68235af79f50e966e554aebb32c08a7036b729f11fd9d55c16c",
-      "owner_package": "PKG-20-UX-RELIABILITY",
-      "reason": "Post-campaign UX reliability correction: preserve the public surface while adding explicit vision and keyless-provider configuration."
-    },
-    {
-      "surface": "frontend",
-      "path": "frontend/src/types/models.ts",
       "public_name": "ProviderPatch",
       "target_sha256": "cc602642eb472dd057d22c66159989d19b2585cf1f56119ac7c68d692e2761a1",
       "owner_package": "PKG-20-UX-RELIABILITY",
@@ -30599,14 +30734,6 @@
       "path": "packages/core/src/disco/core/llm/__init__.py",
       "public_name": "ModelEntry",
       "target_sha256": "df4e6e446dfef3a366ce819faa22d1a138151ce5634c2c51f3675f07be5e697b",
-      "owner_package": "PKG-20-UX-RELIABILITY",
-      "reason": "Post-campaign UX reliability correction: preserve the public surface while adding explicit vision and keyless-provider configuration."
-    },
-    {
-      "surface": "python",
-      "path": "packages/core/src/disco/core/llm/__init__.py",
-      "public_name": "ProviderSettings",
-      "target_sha256": "3982cc8eba5f949b3ac0aa326e6c1398dda6a13aff4ab50195b98ca01ad53644",
       "owner_package": "PKG-20-UX-RELIABILITY",
       "reason": "Post-campaign UX reliability correction: preserve the public surface while adding explicit vision and keyless-provider configuration."
     },
@@ -30852,14 +30979,6 @@
     },
     {
       "surface": "frontend",
-      "path": "frontend/src/components/research/DeepProgressStrip.tsx",
-      "public_name": "DeepProgressStrip",
-      "target_sha256": "bd57e931a37f4f284519d0b393b9bf9faa669dc767162af52542f296d60728de",
-      "owner_package": "PKG-35-DEEP-RESEARCH-CLOSEOUT",
-      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
-    },
-    {
-      "surface": "frontend",
       "path": "frontend/src/components/research/DeepReportView.tsx",
       "public_name": "DeepReportView",
       "target_sha256": "28fe2667175d3ab9855e90150da99d9e7617ab72bc8210b45080786dab685876",
@@ -30951,22 +31070,6 @@
       "path": "frontend/src/fixtures/deepResearchTrace.ts",
       "public_name": "fixtureRunningEvents",
       "target_sha256": "1a2f75033bdbe7e1ca46792d3b42491cddc9471b5cb5d889609e5c20b60aaa9e",
-      "owner_package": "PKG-35-DEEP-RESEARCH-CLOSEOUT",
-      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
-    },
-    {
-      "surface": "frontend",
-      "path": "frontend/src/hooks/useDeepResearchStream.ts",
-      "public_name": "DeepResearchStream",
-      "target_sha256": "4121c9dbfdd0331f7191276e02779f69f46ed570907da887a311cd17cb9e9159",
-      "owner_package": "PKG-35-DEEP-RESEARCH-CLOSEOUT",
-      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
-    },
-    {
-      "surface": "frontend",
-      "path": "frontend/src/hooks/useDeepResearchStream.ts",
-      "public_name": "initial",
-      "target_sha256": "970bb154e057238d8971c01172f52c1aacb52265fefeaae33a9e9f2cd39d2cfa",
       "owner_package": "PKG-35-DEEP-RESEARCH-CLOSEOUT",
       "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
     },
@@ -31756,14 +31859,6 @@
     },
     {
       "surface": "frontend",
-      "path": "frontend/src/api/deepResearch.ts",
-      "public_name": "AudioStreamEvent",
-      "target_sha256": "c1e77723c6c0b91dbe5f18dab2e36115ebd991155e4495bb897468175713da31",
-      "owner_package": "PKG-37-UI-FIXES-V50",
-      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
-    },
-    {
-      "surface": "frontend",
       "path": "frontend/src/components/build/canvas/previewPaneParts/helpers.ts",
       "public_name": "committedWorkspaceKey",
       "target_sha256": "21a5c9426681625289411c3094df7cf2441bd9ac8e29e0851e21fc7c72ad050c",
@@ -31797,14 +31892,6 @@
     {
       "surface": "frontend",
       "path": "frontend/src/components/research/needMoreCardParts/audioProgress.ts",
-      "public_name": "AudioState",
-      "target_sha256": "b7e177cc3fd7fe0f9492565e141d00e89f011584d01f0911e449741b62f9e5b9",
-      "owner_package": "PKG-37-UI-FIXES-V50",
-      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
-    },
-    {
-      "surface": "frontend",
-      "path": "frontend/src/components/research/needMoreCardParts/audioProgress.ts",
       "public_name": "audioReasonDetail",
       "target_sha256": "91f308272d7a504f309ac16b92580ba8745cd55d6c39cf870d1f0aa8e0f743bb",
       "owner_package": "PKG-37-UI-FIXES-V50",
@@ -31816,6 +31903,526 @@
       "public_name": "audioReasonMessage",
       "target_sha256": "4e3bae695c59ea45e310e33fd8721d4a1b6928fd8c4692b70f4226eab221d6c2",
       "owner_package": "PKG-37-UI-FIXES-V50",
+      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/deepResearch.ts",
+      "public_name": "AudioStreamEvent",
+      "target_sha256": "d3aa2cbf310e7f311d5da1a8ac5ac46fbd8840ff4e09b0276da13d2d135c6aa2",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/deepResearch.ts",
+      "public_name": "ExistingReportAudio",
+      "target_sha256": "5ee74a3244222ef805f14f9ee181ef82f4330229a936b714b1cae4fd46c59d2d",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/deepResearch.ts",
+      "public_name": "fetchExistingReportAudio",
+      "target_sha256": "b15bbb3a64978ec776d6591bf3ad5f75a8a7e4a1c062885ee30714570ebb6011",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/deepResearch.ts",
+      "public_name": "requestReportAudioBlocking",
+      "target_sha256": "442e62ac18999fca80ed102ce3226b31575a8d8f50a080536501227c1d729cc2",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/deepResearch.ts",
+      "public_name": "streamReportAudio",
+      "target_sha256": "3c051771e86c695a6db2d38225249ea1d2601da1d0c03e11356bd2734f254b97",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/projects.ts",
+      "public_name": "downloadProject",
+      "target_sha256": "fb1ae40e59abe38b5f995e95ec7a95dbfbd3d8b5c4b3ec673763e3ab334d24c6",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/ExecutionCanvas.tsx",
+      "public_name": "ExecutionCanvas",
+      "target_sha256": "76856bf5a0d10b16283d2400a98167a4263f3064f098bc10ecf1a526f6251679",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/activityFeedParts/FileDownload.tsx",
+      "public_name": "FileDownload",
+      "target_sha256": "467f8fa3f7686913d316650d94ff96df552fa6dc86fb7700a25e495ab98898e0",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/activityFeedParts/SheetDownload.tsx",
+      "public_name": "SheetDownload",
+      "target_sha256": "7441fc20e75bd65ee879f3baf91e86ed1edbb4cd55561391f90d724b6262899c",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/activityFeedParts/SlidesDownload.tsx",
+      "public_name": "SlidesDownload",
+      "target_sha256": "da358312a47e87d9c904c62a8a872f5c0dd184f8769fed96b38689e676a9f3a7",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/canvas/PreviewPane.tsx",
+      "public_name": "PreviewPane",
+      "target_sha256": "04d37d50a942d08840b43502288cb8b5c4478b388e94a356fb24303a49dc8705",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/canvas/previewPaneParts/PreviewNotices.tsx",
+      "public_name": "PreviewNotices",
+      "target_sha256": "c72bf3ee7cefde7b6a00e6ce053d33f57ace8076b297fb7efdfa26585adf4e82",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/canvas/previewPaneParts/PreviewStage.tsx",
+      "public_name": "PreviewStage",
+      "target_sha256": "01b0238a5696961f49116d2cf4e5b882f52ecffb1b5fbd7c133c53432bced88c",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/canvas/previewPaneParts/PreviewStagePlaceholder.tsx",
+      "public_name": "PreviewStagePlaceholder",
+      "target_sha256": "7ff5607b1f7a3eb2731b2d5c36cf6c762e90a930f504f9d6f4976bfc6f83e1f5",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/canvas/previewPaneParts/helpers.ts",
+      "public_name": "computeVisibleFailure",
+      "target_sha256": "28f6ab800fee79208a6adf851da33e1a3c26dadd6126d1d7baba0f92a948c00d",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/canvas/previewPaneParts/helpers.ts",
+      "public_name": "shouldRenderPreviewFrame",
+      "target_sha256": "45c3cb6814abd371fcd0646dc210b742af6de5ad6e43a99918c98924df84fc62",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/canvas/previewPaneParts/usePreviewLaunch.ts",
+      "public_name": "PREVIEW_BOOTSTRAP_TIMEOUT_MS",
+      "target_sha256": "72597dccc8b3ed3d8f902d7a55a734ee2d238129ad722f8343b8551303622976",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/canvas/previewPaneParts/usePreviewLaunch.ts",
+      "public_name": "PreviewLaunchState",
+      "target_sha256": "a6b15b79a70f9e8a4dd854d8ee8f64de3e99a5845707cc8b8af15456e4995cc1",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/buildSurface/BuildDeliverableSection.tsx",
+      "public_name": "BuildDeliverableSection",
+      "target_sha256": "f713873129e1bb896233878e71a446edb0f797db28946730db1bb16dd3866114",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/DeepProgressStrip.tsx",
+      "public_name": "DeepProgressStrip",
+      "target_sha256": "153b5afd598be68ba6b7d14a41670d3585bcc2b7923413068bae19bb60e67525",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/NeedMoreCard.tsx",
+      "public_name": "NeedMoreCard",
+      "target_sha256": "99dac6e546fa76810ee3004bdc3279d5b6daddeafaf8b2ea73650a4c4a4f617e",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/NeedMoreCard.tsx",
+      "public_name": "NeedMoreCardProps",
+      "target_sha256": "bcf506006e93875d19acb0b9d3ce40b027fcc31a75c67333bc8887890fcb0dd2",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/NeedMoreCard.tsx",
+      "public_name": "ReportAction",
+      "target_sha256": "fb080952e40264d2139661c1a0fa827b461ed3dfd6b7ba4dfd9f4e041cc25974",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/NeedMoreCard.tsx",
+      "public_name": "ReportActionName",
+      "target_sha256": "eed0c09bfe8c34917edb80827aaf13a54af61132be3351075e35ceba9ff16911",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/SupportMeter.tsx",
+      "public_name": "SupportMeter",
+      "target_sha256": "2cc85b338d4e49aad2684f81e23da3c6ac608a6df53f36214f95ac421d87186c",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/deepResearchSurfaceParts/DeepResearchExportControls.tsx",
+      "public_name": "DeepResearchExportControls",
+      "target_sha256": "d526393e4c1f099f7dfbd858326d19dc2cc3422e393c3d769306c3f73cf6a939",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/deepResearchSurfaceParts/DeepResearchReportView.tsx",
+      "public_name": "DeepResearchReportView",
+      "target_sha256": "c971cde62fd75e5aefd6ee123365acef265634dc83ff7511a07d5c3bc13f32ee",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/deepResearchSurfaceParts/DeepResearchTopBar.tsx",
+      "public_name": "DeepResearchTopBar",
+      "target_sha256": "fe2f566c76b4b69d00c253dd7c6f3e3793a2bd32df4ee1dba4294c10bd276e4a",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/needMoreCardParts/AudioSection.tsx",
+      "public_name": "AudioSection",
+      "target_sha256": "a925c86d901b94a36bcddf877e9f72d9e3d8f04d2da898418c8f1851f2d6aa25",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/needMoreCardParts/AudioSection.tsx",
+      "public_name": "AudioSectionProps",
+      "target_sha256": "6ae7808b6a549a990d1a98c823d00abde1c17dfecd84f5b477f932f933a5536e",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/needMoreCardParts/audioProgress.ts",
+      "public_name": "AudioState",
+      "target_sha256": "47501516cd0a9d44be3617499c416c4e986cf9f354c678cb6f29cb88eb1aecbf",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/needMoreCardParts/useAudioOverview.ts",
+      "public_name": "UseAudioOverviewResult",
+      "target_sha256": "826b23ac59c8addf9c15bf56128c0455cac3d66ba36848789fde103fd35788c2",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/imageGenSectionParts/setupNote.ts",
+      "public_name": "getSetupNote",
+      "target_sha256": "eb6d363db397acf7a04284c1fd20956c723c9b67c231564e6dd3479af915e670",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/providersSectionParts/helpers.ts",
+      "public_name": "DEFAULT_CONTEXT_WINDOW",
+      "target_sha256": "845a4bec81bb8d80eb46ce63fcd8695c37922a3c4339323e3a548a6f1bcb8ed8",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/providersSectionParts/helpers.ts",
+      "public_name": "KeyBadge",
+      "target_sha256": "52174dcaff48f7f04e4458739ae3cbd7718cc014064807bff9cce31d79d3e804",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/providersSectionParts/helpers.ts",
+      "public_name": "keyBadge",
+      "target_sha256": "65d7f440416ced8abb92f2d22ea693d02573eb6e250f4440fd7ce05295c9926f",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/hooks/useDeepResearchStream.ts",
+      "public_name": "DeepResearchStream",
+      "target_sha256": "2f46f3eb8ea4cbdef62c3788106f633036c4209aa5e2ffe3f7614261275361b6",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/hooks/useDeepResearchStream.ts",
+      "public_name": "initial",
+      "target_sha256": "ca4d7d4e14843626d813dec2bdeb84a498fa42d303bc9eaa49e32c2863081e05",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/hooks/useProjects.ts",
+      "public_name": "useProjectManifest",
+      "target_sha256": "a90014eca7e41622af1361a8a60a39b707a55c8b8da61ce3de9514a3d6fa1b22",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/claimCheck.ts",
+      "public_name": "CHECK_LABEL",
+      "target_sha256": "9c71b43616afd9c30284fed1b3d2bc047ae4a4b777e5fda5feedea467d253b70",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/claimCheck.ts",
+      "public_name": "CheckCounts",
+      "target_sha256": "e9686108abce9f321fb7bd3dc5fd52f0ac8c819afca52d48a73f1420ceb9a104",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/claimCheck.ts",
+      "public_name": "UNRESOLVED_MEANING",
+      "target_sha256": "f8be6e8108a2c38e16b7d252e8ba8c6bea4f543b5cdf1f6a36a7a00b9194a055",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/claimCheck.ts",
+      "public_name": "claimCheckCounts",
+      "target_sha256": "6277e551fe537ceeb82ccde0d09c6d1328902f418f312cc6da45b4d23e7f0a6d",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/depthTier.ts",
+      "public_name": "DEPTH_TIER_LABEL",
+      "target_sha256": "c7ce93aab5b72ddf2dbb96524281b0b04f1e12d0c5689b2a6f8b9bae083fcb57",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/depthTier.ts",
+      "public_name": "DepthTier",
+      "target_sha256": "3c2edb236b8d59b9d0fd0a702069e84d7c0388f0684b90cf7e899f456aabcc22",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/depthTier.ts",
+      "public_name": "depthTierLabel",
+      "target_sha256": "4ea85241e229b7ee1b2aa1ef98213d5199b7c763f9a02432bb9c9cf16fe4fabe",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/documentTitle.ts",
+      "public_name": "APP_NAME",
+      "target_sha256": "85e03303add294161bcba165203eb649176296c9b7e7b0051005bc7a407f9468",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/documentTitle.ts",
+      "public_name": "documentTitle",
+      "target_sha256": "def03d53b46e4b1309eb373a2fd555ec77ac95d1487728f835872c74f976f298",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/documentTitle.ts",
+      "public_name": "getConversationTitle",
+      "target_sha256": "6720c85234bdd52fb3a024f5cdb541a109275579d27092eb1fad5bdc61bd1000",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/documentTitle.ts",
+      "public_name": "publishConversationTitle",
+      "target_sha256": "f8bcec3f05dca3ea362da387f3e19d333968153594dada6b0b16ca7d459ddd9a",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/documentTitle.ts",
+      "public_name": "subscribeConversationTitle",
+      "target_sha256": "6eb7527f9e5be9cbb8464df6dc8290d8b534c0a208b7de6c64ac9fec958c24e8",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/downloadFilename.ts",
+      "public_name": "projectDownloadBasename",
+      "target_sha256": "949877934be96d51279382adb597ceb2586b813826515e87ecb2e80a0fcc6d9a",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/downloadFilename.ts",
+      "public_name": "shortConversationId",
+      "target_sha256": "dca4c8bd42aaa744b854326f355395428f5730e4bbb57c4efd025908e452c589",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/downloadFilename.ts",
+      "public_name": "slugifyTitle",
+      "target_sha256": "23376a1ea3ca1fbb2dc3296f551e00aa5b0a60e9b4ef46be11cf21087a5ec5d1",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/markedDone.ts",
+      "public_name": "isMarkedDone",
+      "target_sha256": "ead926e6386a31b9917eb1d09599844e01f832b75404b698ab087c000d98f5ba",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/markedDone.ts",
+      "public_name": "rememberMarkedDone",
+      "target_sha256": "52dff4c2dddbf05064efc01c927e08ade0c4e35b57ba01937a48fa577145789c",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/sandboxUrls.ts",
+      "public_name": "SANDBOX_URL_NOTE",
+      "target_sha256": "f9f57c02a0110f74c863b2e1354db93851370b3fd27cc0892e4f565a0176ce47",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/sandboxUrls.ts",
+      "public_name": "ScrubbedSummary",
+      "target_sha256": "981d85e5ef63734c20fd5354f8a8a4ae79deb6f0390cf1a656d59210b6879985",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/sandboxUrls.ts",
+      "public_name": "scrubSandboxUrls",
+      "target_sha256": "10a18e8735f4d70729fe7838e88b9d10f038a9d31ceee09cb17d134870e4efa9",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/unverifiedWarning.ts",
+      "public_name": "UnverifiedWarning",
+      "target_sha256": "da9fe2738bb6d05a4fdb0e3463a68b9e7f4f7024523462365c7723b1e40fe04e",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/unverifiedWarning.ts",
+      "public_name": "unverifiedWarning",
+      "target_sha256": "81084f57ccfe798fdd14f7f16b300937689ad309e2ecd2a672ada807f775318f",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/models.ts",
+      "public_name": "ProviderInfo",
+      "target_sha256": "73a616dfb54706d3c048f60d964b122b073e792d1dd92bce9a1d9709c328fc83",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
+    },
+    {
+      "surface": "python",
+      "path": "packages/core/src/disco/core/__init__.py",
+      "public_name": "SqliteEventStore",
+      "target_sha256": "0274df4cdfcaeeeb66ed5068cdb76cd1d9ac962d84edf09ed3cfea19dd904cc4",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
+    },
+    {
+      "surface": "python",
+      "path": "packages/core/src/disco/core/llm/__init__.py",
+      "public_name": "ProviderSettings",
+      "target_sha256": "c01dbe20a93e37b71d1b4261559939face437755e93ee152f85bc9322403317d",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
+    },
+    {
+      "surface": "python",
+      "path": "packages/core/src/disco/core/store/__init__.py",
+      "public_name": "SqliteEventStore",
+      "target_sha256": "15c512be6a3d8208ffc7b2dfe76d4a46967c2582b7e5ebe9575243b531354327",
+      "owner_package": "PKG-38-UI-FIXES-V51",
       "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
     }
   ],
@@ -32006,21 +32613,6 @@
     {
       "surface": "python",
       "path": "packages/core/src/disco/core/llm/__init__.py",
-      "public_name": "ProviderSettings",
-      "origin": "disco.core.llm.config.ProviderSettings",
-      "removed_members": [],
-      "added_members": [
-        "requires_api_key: bool"
-      ],
-      "old_signature_sha256": "f6b08f396e4ebb38a0a7d9bd7dc5eb7c43a951c21281a1c012a47e042ce81202",
-      "new_signature_sha256": "c3d73d3005fe52550029bca60d7b0256ff2d2eec5bd64157d6c0ceb2aa877e38",
-      "owner_package": "PKG-20-UX-RELIABILITY",
-      "accepting_commit": "6761fd10f0bc21ca96124c5a2dd5ac254894f371",
-      "accepting_receipt": "2026-07-28/STATUS.md"
-    },
-    {
-      "surface": "python",
-      "path": "packages/core/src/disco/core/llm/__init__.py",
       "public_name": "ModelEntry",
       "origin": "disco.core.llm.config.ModelEntry",
       "removed_members": [],
@@ -32032,6 +32624,52 @@
       "owner_package": "PKG-20-UX-RELIABILITY",
       "accepting_commit": "6761fd10f0bc21ca96124c5a2dd5ac254894f371",
       "accepting_receipt": "2026-07-28/STATUS.md"
+    },
+    {
+      "surface": "python",
+      "path": "packages/core/src/disco/core/__init__.py",
+      "public_name": "SqliteEventStore",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "accepting_commit": "731f1c29b44c5654df33486fcfe4382ce6de841b",
+      "accepting_receipt": "PKG-38-UI-FIXES-V51: exact source-backed declaration migration",
+      "origin": "disco.core.store.sqlite.SqliteEventStore",
+      "removed_members": [],
+      "added_members": [
+        "async def update_title_unique(self, conversation_id: str, title: str) -> str"
+      ],
+      "old_signature_sha256": "1b086b44d654be0db69ccb09da279a2d0c6b142e2e4b39de5ff8a3c352c102a2",
+      "new_signature_sha256": "915116fffc61ab842a23a910d1f407b7195f1db05966bb1402572450c872b09e"
+    },
+    {
+      "surface": "python",
+      "path": "packages/core/src/disco/core/store/__init__.py",
+      "public_name": "SqliteEventStore",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "accepting_commit": "731f1c29b44c5654df33486fcfe4382ce6de841b",
+      "accepting_receipt": "PKG-38-UI-FIXES-V51: exact source-backed declaration migration",
+      "origin": "disco.core.store.sqlite.SqliteEventStore",
+      "removed_members": [],
+      "added_members": [
+        "async def update_title_unique(self, conversation_id: str, title: str) -> str"
+      ],
+      "old_signature_sha256": "1b086b44d654be0db69ccb09da279a2d0c6b142e2e4b39de5ff8a3c352c102a2",
+      "new_signature_sha256": "915116fffc61ab842a23a910d1f407b7195f1db05966bb1402572450c872b09e"
+    },
+    {
+      "surface": "python",
+      "path": "packages/core/src/disco/core/llm/__init__.py",
+      "public_name": "ProviderSettings",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "accepting_commit": "731f1c29b44c5654df33486fcfe4382ce6de841b",
+      "accepting_receipt": "PKG-38-UI-FIXES-V51: exact source-backed declaration migration",
+      "origin": "disco.core.llm.config.ProviderSettings",
+      "removed_members": [],
+      "added_members": [
+        "key_error: str | None",
+        "key_verified: bool | None"
+      ],
+      "old_signature_sha256": "c3d73d3005fe52550029bca60d7b0256ff2d2eec5bd64157d6c0ceb2aa877e38",
+      "new_signature_sha256": "e97150084e7e248b6ffa1d8e17df0081f40eb72fd286bd9ee0c32689d4f2b71b"
     },
     {
       "surface": "python",
@@ -32671,19 +33309,6 @@
     {
       "surface": "frontend",
       "path": "frontend/src/types/models.ts",
-      "public_name": "ProviderInfo",
-      "declaration_kind": "InterfaceDeclaration",
-      "old_signature": "export interface ProviderInfo { id: string; label: string; base_url: string; kind: ProviderKind; secret_name: string; has_key: boolean; }",
-      "new_signature": "export interface ProviderInfo { id: string; label: string; base_url: string; kind: ProviderKind; secret_name: string; has_key: boolean; requires_api_key?: boolean; }",
-      "old_target_sha256": "1efdd0cfd87933cf36ee9b2b81a9839dff334c6cd98414f15c3fffe4539da770",
-      "new_target_sha256": "11698811afb3a68235af79f50e966e554aebb32c08a7036b729f11fd9d55c16c",
-      "owner_package": "PKG-20-UX-RELIABILITY",
-      "accepting_commit": "6761fd10f0bc21ca96124c5a2dd5ac254894f371",
-      "accepting_receipt": "2026-07-28/STATUS.md"
-    },
-    {
-      "surface": "frontend",
-      "path": "frontend/src/types/models.ts",
       "public_name": "ProviderPatch",
       "declaration_kind": "InterfaceDeclaration",
       "old_signature": "export interface ProviderPatch { label?: string; base_url?: string; kind?: ProviderKind; api_key?: string; }",
@@ -32709,19 +33334,6 @@
     },
     {
       "surface": "frontend",
-      "path": "frontend/src/components/research/deepResearchSurfaceParts/DeepResearchTopBar.tsx",
-      "public_name": "DeepResearchTopBar",
-      "declaration_kind": "function",
-      "old_signature": "export function DeepResearchTopBar({ r, handleNewResearch, exportCaps, doneNotify, topBarIncludeOpen, setTopBarIncludeOpen, handleTopBarExport, handleTopBarIncludeConfirm, }: Props)",
-      "new_signature": "export function DeepResearchTopBar({ r, onStandardSearch, handleNewResearch, exportCaps, doneNotify, topBarIncludeOpen, setTopBarIncludeOpen, handleTopBarExport, handleTopBarIncludeConfirm, }: Props)",
-      "old_target_sha256": "dd9c1b0a2224bf4300a80aea3ea8941ea63f956d8641b4b461d8622ea57b7e88",
-      "new_target_sha256": "2a7adbbbf1f785fd94d8482379ddc6606146e1a08e0f9e623c1b99691a7d564c",
-      "owner_package": "PKG-20-UX-RELIABILITY",
-      "accepting_commit": "6761fd10f0bc21ca96124c5a2dd5ac254894f371",
-      "accepting_receipt": "2026-07-28/STATUS.md"
-    },
-    {
-      "surface": "frontend",
       "path": "frontend/src/components/settings/OpenRouterSection.tsx",
       "public_name": "OpenRouterSection",
       "declaration_kind": "function",
@@ -32735,29 +33347,315 @@
     },
     {
       "surface": "frontend",
+      "path": "frontend/src/components/research/needMoreCardParts/AudioSection.tsx",
+      "public_name": "AudioSectionProps",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "accepting_commit": "731f1c29b44c5654df33486fcfe4382ce6de841b",
+      "accepting_receipt": "PKG-38-UI-FIXES-V51: exact source-backed declaration migration",
+      "declaration_kind": "InterfaceDeclaration",
+      "old_signature": "export interface AudioSectionProps { cid: string; /** Selected follow-up seqs to include in the audio (WALK-20). */ followUpSeqs?: number[]; /** Controlled: whether the mode-pick dialog is open (parent drives this * when it needs to insert the include-follow-ups step first). */ modeOpen: boolean; onModeOpenChange: (open: boolean) => void; /** B4: report title/query for a meaningful download filename. */ reportQuery: string; }",
+      "new_signature": "export interface AudioSectionProps { cid: string; /** Selected follow-up seqs to include in the audio (WALK-20). */ followUpSeqs?: number[]; /** Controlled: whether the mode-pick dialog is open (parent drives this * when it needs to insert the include-follow-ups step first). */ modeOpen: boolean; onModeOpenChange: (open: boolean) => void; /** B4: report title/query for a meaningful download filename. */ reportQuery: string; /** Open the mode picker (via the include-follow-ups step when the report has * follow-ups). Owned by the parent because that step is the parent's. */ onRequestGenerate: () => void; }",
+      "old_target_sha256": "c5dfb76da036500c831f5b33c0db99a0283b278db3dd8d2c7d8de01e56b4c8f4",
+      "new_target_sha256": "6ae7808b6a549a990d1a98c823d00abde1c17dfecd84f5b477f932f933a5536e"
+    },
+    {
+      "surface": "frontend",
       "path": "frontend/src/api/deepResearch.ts",
       "public_name": "AudioStreamEvent",
-      "owner_package": "PKG-37-UI-FIXES-V50",
-      "accepting_commit": "81beb0f5f5d24e6b0cdd9fa79308aa52c04f6d8c",
-      "accepting_receipt": "PKG-37-UI-FIXES-V50: exact source-backed declaration migration",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "accepting_commit": "731f1c29b44c5654df33486fcfe4382ce6de841b",
+      "accepting_receipt": "PKG-38-UI-FIXES-V51: exact source-backed declaration migration",
       "declaration_kind": "InterfaceDeclaration",
-      "old_signature": "export interface AudioStreamEvent { stage?: string; current?: number; total?: number; mp3_url?: string; reason?: string; // W-08: real voice-model download byte counters. downloaded?: number; pct?: number; file_index?: number; file_total?: number; }",
-      "new_signature": "export interface AudioStreamEvent { stage?: string; current?: number; total?: number; mp3_url?: string; reason?: string; /** Human-readable failure sentence (what failed, why, what to do). */ message?: string; /** Technical failure text behind `message`. */ detail?: string; // W-08: real voice-model download byte counters. downloaded?: number; pct?: number; file_index?: number; file_total?: number; }",
-      "old_target_sha256": "a031ffd618b75651852fd78314648600d91e4412c8aa7c6945909aaccb487038",
-      "new_target_sha256": "c1e77723c6c0b91dbe5f18dab2e36115ebd991155e4495bb897468175713da31"
+      "old_signature": "export interface AudioStreamEvent { stage?: string; current?: number; total?: number; mp3_url?: string; reason?: string; /** Human-readable failure sentence (what failed, why, what to do). */ message?: string; /** Technical failure text behind `message`. */ detail?: string; // W-08: real voice-model download byte counters. downloaded?: number; pct?: number; file_index?: number; file_total?: number; }",
+      "new_signature": "export interface AudioStreamEvent { stage?: string; current?: number; total?: number; mp3_url?: string; /** Which mode the finished overview was generated in. */ mode?: string; /** One plain sentence about how the overview was made (a fallback script, a * swapped voice, a summarised length). Empty when nothing notable happened. */ note?: string; reason?: string; /** Human-readable failure sentence (what failed, why, what to do). */ message?: string; /** Technical failure text behind `message`. */ detail?: string; // W-08: real voice-model download byte counters. downloaded?: number; pct?: number; file_index?: number; file_total?: number; }",
+      "old_target_sha256": "c1e77723c6c0b91dbe5f18dab2e36115ebd991155e4495bb897468175713da31",
+      "new_target_sha256": "d3aa2cbf310e7f311d5da1a8ac5ac46fbd8840ff4e09b0276da13d2d135c6aa2"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/hooks/useDeepResearchStream.ts",
+      "public_name": "DeepResearchStream",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "accepting_commit": "731f1c29b44c5654df33486fcfe4382ce6de841b",
+      "accepting_receipt": "PKG-38-UI-FIXES-V51: exact source-backed declaration migration",
+      "declaration_kind": "InterfaceDeclaration",
+      "old_signature": "export interface DeepResearchStream { status: ConversationStatus; /** The newest status event's detail \u2014 \"killed\", \"stopped\", \"research\", \u2026 \u2014 * or null. Read for the ONE distinction the status cannot carry: a run a * person killed versus a conversation that is merely idle. */ statusDetail: string | null; /** Separate from `status` so the plan-progress UI can stay calm while a * follow-up answer is generating. null when idle; \"follow_up\" during * generation; \"follow_up_complete\" after the answer lands. */ followUpStatus: \"follow_up\" | \"follow_up_complete\" | null; events: AgentEvent[]; error: string | null; /** The terminal failure as fields (why / state / next / allowed + the class * that raised), when the backend named its own boundary. Null for transport * errors and for events written before `ErrorEvent.failure` existed \u2014 * `error` is the fallback then. */ failure: RunFailure | null; /** The model's opening brief \u2014 how it read the question and the angles it * will chase. The FIRST visible output of a gateless run (v2); null until * it lands. */ brief: string | null; /** Live counts for the mono stats strip. */ stats: DeepStats; /** The latest REPORTED fact of each kind (turn / model_activity / search / * observation / phase / review round / hold), each with the instant the * engine reported it. The run UI's honesty rule lives on this: a field is * null because no event set it, and `lastEventAt` is how \"working\" is told * apart from \"silent\" without inferring anything from `status`. */ activity: DeepActivity; /** The activity feed items (reuses ActivityFeed verbatim). */ trace: ActivityItem[]; /** Section placeholders + finalized sections (the assembling report view). */ assembling: AssemblingSection[]; /** The final ReportEvent \u2014 null until the engine emits it. */ report: ReportEvent | null; /** Paused evidence state, kept separate from the finished report. */ checkpoint: ResearchCheckpointEvent | null; /** Three-tier source split (cited / reviewed / discovered). */ sources: SourceTiers; /** Send WS frames to the conversation. */ cancel: () => void; /** Continue a stopped/incomplete run (explicit \u2014 never on open). */ resume: () => void; /** Ask a follow-up question on this conversation \u2014 sends a steer message * that re-kicks the loop with the report's corpus as grounding. */ followUp: (question: string) => void; /** * Mid-run steer: send a steer string to the running DR engine. The server * routes the `steer` WS frame into the DR queue (not the agent loop) when * a DR run is active; the research agent drains it at its next turn * boundary, where it appears as a priority USER STEER line the model acts * on before returning to its own plan. * * Only call while `status === \"RUNNING\"` and the WS is open \u2014 the control * is gated in the surface to enforce this. */ steer: (text: string) => void; /** * D3 inject-source: fold a plaintext snippet into the DR run's corpus. * The server converts the text to a Passage and makes it available to * subsequent section synthesis. URL extraction is a follow-up (v1: text only). * * Only call while `status === \"RUNNING\"`. */ injectSource: (text: string) => void; }",
+      "new_signature": "export interface DeepResearchStream { status: ConversationStatus; /** The newest status event's detail \u2014 \"killed\", \"stopped\", \"research\", \u2026 \u2014 * or null. Read for the ONE distinction the status cannot carry: a run a * person killed versus a conversation that is merely idle. */ statusDetail: string | null; /** Separate from `status` so the plan-progress UI can stay calm while a * follow-up answer is generating. null when idle; \"follow_up\" during * generation; \"follow_up_complete\" after the answer lands. */ followUpStatus: \"follow_up\" | \"follow_up_complete\" | null; events: AgentEvent[]; error: string | null; /** The terminal failure as fields (why / state / next / allowed + the class * that raised), when the backend named its own boundary. Null for transport * errors and for events written before `ErrorEvent.failure` existed \u2014 * `error` is the fallback then. */ failure: RunFailure | null; /** \"degraded\" once the live socket has stopped delivering and is retrying. * The run view must not keep claiming \"Live\" behind a dead stream. */ connectionState: \"connected\" | \"degraded\"; /** The model's opening brief \u2014 how it read the question and the angles it * will chase. The FIRST visible output of a gateless run (v2); null until * it lands. */ brief: string | null; /** Live counts for the mono stats strip. */ stats: DeepStats; /** The latest REPORTED fact of each kind (turn / model_activity / search / * observation / phase / review round / hold), each with the instant the * engine reported it. The run UI's honesty rule lives on this: a field is * null because no event set it, and `lastEventAt` is how \"working\" is told * apart from \"silent\" without inferring anything from `status`. */ activity: DeepActivity; /** The activity feed items (reuses ActivityFeed verbatim). */ trace: ActivityItem[]; /** Section placeholders + finalized sections (the assembling report view). */ assembling: AssemblingSection[]; /** The final ReportEvent \u2014 null until the engine emits it. */ report: ReportEvent | null; /** Paused evidence state, kept separate from the finished report. */ checkpoint: ResearchCheckpointEvent | null; /** Three-tier source split (cited / reviewed / discovered). */ sources: SourceTiers; /** Send WS frames to the conversation. */ cancel: () => void; /** Continue a stopped/incomplete run (explicit \u2014 never on open). */ resume: () => void; /** Ask a follow-up question on this conversation \u2014 sends a steer message * that re-kicks the loop with the report's corpus as grounding. */ followUp: (question: string) => void; /** * Mid-run steer: send a steer string to the running DR engine. The server * routes the `steer` WS frame into the DR queue (not the agent loop) when * a DR run is active; the research agent drains it at its next turn * boundary, where it appears as a priority USER STEER line the model acts * on before returning to its own plan. * * Only call while `status === \"RUNNING\"` and the WS is open \u2014 the control * is gated in the surface to enforce this. */ steer: (text: string) => void; /** * D3 inject-source: fold a plaintext snippet into the DR run's corpus. * The server converts the text to a Passage and makes it available to * subsequent section synthesis. URL extraction is a follow-up (v1: text only). * * Only call while `status === \"RUNNING\"`. */ injectSource: (text: string) => void; }",
+      "old_target_sha256": "4121c9dbfdd0331f7191276e02779f69f46ed570907da887a311cd17cb9e9159",
+      "new_target_sha256": "2f46f3eb8ea4cbdef62c3788106f633036c4209aa5e2ffe3f7614261275361b6"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/NeedMoreCard.tsx",
+      "public_name": "NeedMoreCardProps",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "accepting_commit": "731f1c29b44c5654df33486fcfe4382ce6de841b",
+      "accepting_receipt": "PKG-38-UI-FIXES-V51: exact source-backed declaration migration",
+      "declaration_kind": "InterfaceDeclaration",
+      "old_signature": "export interface NeedMoreCardProps { /** The finished report (for client-side MD export + audio). */ report: ReportEvent; /** Conversation ID (for server-side PDF export + future audio endpoint). */ cid: string; /** Callback to submit a follow-up question. */ onFollowUp: (question: string) => void; /** True while a follow-up is being submitted. */ followUpBusy: boolean; /** Post-report follow-up Q&A MessageEvents (WALK-20). When non-empty an * \"Include follow-ups?\" modal is shown before Export / Audio so the user can * choose which pairs to include. Empty list = skip the modal. */ followUps?: MessageEvent[]; }",
+      "new_signature": "export interface NeedMoreCardProps { /** The finished report (for client-side MD export + audio). */ report: ReportEvent; /** Conversation ID (for server-side PDF export + future audio endpoint). */ cid: string; /** Callback to submit a follow-up question. */ onFollowUp: (question: string) => void; /** True while a follow-up is being submitted. */ followUpBusy: boolean; /** Post-report follow-up Q&A MessageEvents (WALK-20). When non-empty an * \"Include follow-ups?\" modal is shown before Export / Audio so the user can * choose which pairs to include. Empty list = skip the modal. */ followUps?: MessageEvent[]; /** A press of the same action from the top bar. */ requestedAction?: ReportAction | null; }",
+      "old_target_sha256": "b4844db3f4e6ce42f86bb000d762d53abbeebe0e0942c0230e0be5b8bebc5281",
+      "new_target_sha256": "bcf506006e93875d19acb0b9d3ce40b027fcc31a75c67333bc8887890fcb0dd2"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/canvas/previewPaneParts/usePreviewLaunch.ts",
+      "public_name": "PreviewLaunchState",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "accepting_commit": "731f1c29b44c5654df33486fcfe4382ce6de841b",
+      "accepting_receipt": "PKG-38-UI-FIXES-V51: exact source-backed declaration migration",
+      "declaration_kind": "InterfaceDeclaration",
+      "old_signature": "export interface PreviewLaunchState { launch: PreviewLaunch | null; launchKey: string; launchVersionSeq: number | null; minting: boolean; launchFailure: string | null; frameReady: boolean; setFrameReady: (ready: boolean) => void; }",
+      "new_signature": "export interface PreviewLaunchState { launch: PreviewLaunch | null; launchKey: string; launchVersionSeq: number | null; minting: boolean; launchFailure: string | null; /** Reason code for a launch that MINTED FINE but whose frame never handed * back its bootstrap handshake. Separate from `launchFailure` on purpose \u2014 * see `computeVisibleFailure`. */ bootstrapFailure: string | null; /** Hand to `PreviewLaunchFrame` as `onBootstrapReady` to disarm the watchdog. */ onBootstrapReady: () => void; frameReady: boolean; setFrameReady: (ready: boolean) => void; }",
+      "old_target_sha256": "f0976f67ac781244d28645b3c084999da024d7bd992713130eea56c77b0d778b",
+      "new_target_sha256": "a6b15b79a70f9e8a4dd854d8ee8f64de3e99a5845707cc8b8af15456e4995cc1"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/models.ts",
+      "public_name": "ProviderInfo",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "accepting_commit": "731f1c29b44c5654df33486fcfe4382ce6de841b",
+      "accepting_receipt": "PKG-38-UI-FIXES-V51: exact source-backed declaration migration",
+      "declaration_kind": "InterfaceDeclaration",
+      "old_signature": "export interface ProviderInfo { id: string; label: string; base_url: string; kind: ProviderKind; secret_name: string; has_key: boolean; requires_api_key?: boolean; }",
+      "new_signature": "export interface ProviderInfo { id: string; label: string; base_url: string; kind: ProviderKind; secret_name: string; has_key: boolean; requires_api_key?: boolean; /** `has_key` says a key is STORED; this says whether it WORKS as of the last * /models probe: undefined/null = never probed, true = the provider * answered, false = the provider refused (`key_error` is its answer). */ key_verified?: boolean | null; key_error?: string | null; }",
+      "old_target_sha256": "11698811afb3a68235af79f50e966e554aebb32c08a7036b729f11fd9d55c16c",
+      "new_target_sha256": "73a616dfb54706d3c048f60d964b122b073e792d1dd92bce9a1d9709c328fc83"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/needMoreCardParts/useAudioOverview.ts",
+      "public_name": "UseAudioOverviewResult",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "accepting_commit": "731f1c29b44c5654df33486fcfe4382ce6de841b",
+      "accepting_receipt": "PKG-38-UI-FIXES-V51: exact source-backed declaration migration",
+      "declaration_kind": "InterfaceDeclaration",
+      "old_signature": "export interface UseAudioOverviewResult { audio: AudioState; generate: (mode: AudioMode) => Promise<void>; reset: () => void; }",
+      "new_signature": "export interface UseAudioOverviewResult { audio: AudioState; /** Run the pipeline. `force` re-runs it even when the server already holds * an artifact for this exact report \u2014 what \"Regenerate\" needs, since the * cache key is a hash of the report and would otherwise hand the same file * straight back. */ generate: (mode: AudioMode, options?: { force?: boolean }) => Promise<void>; reset: () => void; }",
+      "old_target_sha256": "9694a90ebc31b9c80cc2613994ebf88908e7346d8a55f4d64e46a886090c5bd6",
+      "new_target_sha256": "826b23ac59c8addf9c15bf56128c0455cac3d66ba36848789fde103fd35788c2"
     },
     {
       "surface": "frontend",
       "path": "frontend/src/components/research/needMoreCardParts/audioProgress.ts",
       "public_name": "AudioState",
-      "owner_package": "PKG-37-UI-FIXES-V50",
-      "accepting_commit": "81beb0f5f5d24e6b0cdd9fa79308aa52c04f6d8c",
-      "accepting_receipt": "PKG-37-UI-FIXES-V50: exact source-backed declaration migration",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "accepting_commit": "731f1c29b44c5654df33486fcfe4382ce6de841b",
+      "accepting_receipt": "PKG-38-UI-FIXES-V51: exact source-backed declaration migration",
       "declaration_kind": "TypeAliasDeclaration",
-      "old_signature": "export type AudioState = | { status: \"idle\" } | { status: \"generating\"; progress?: AudioProgress } | { status: \"done\"; audioUrl: string } | { status: \"unavailable\"; reason: string };",
-      "new_signature": "export type AudioState = | { status: \"idle\" } | { status: \"generating\"; progress?: AudioProgress } | { status: \"done\"; audioUrl: string } /** `reason` is the sentence shown to the operator; `detail` is the * secondary technical line (failing stage + the server's exception text). */ | { status: \"unavailable\"; reason: string; detail?: string };",
-      "old_target_sha256": "5a8200abc375d29efdee350c3ae8900409c685764e06a4248dbe693712427b37",
-      "new_target_sha256": "b7e177cc3fd7fe0f9492565e141d00e89f011584d01f0911e449741b62f9e5b9"
+      "old_signature": "export type AudioState = | { status: \"idle\" } | { status: \"generating\"; progress?: AudioProgress } | { status: \"done\"; audioUrl: string } /** `reason` is the sentence shown to the operator; `detail` is the * secondary technical line (failing stage + the server's exception text). */ | { status: \"unavailable\"; reason: string; detail?: string };",
+      "new_signature": "export type AudioState = | { status: \"idle\" } | { status: \"generating\"; progress?: AudioProgress } /** `note` is the one plain sentence about how this overview was made (a * report-derived fallback script, a swapped voice, a summarised length); * `mode` is which of the two modes produced it. */ | { status: \"done\"; audioUrl: string; note?: string; mode?: AudioMode } /** `reason` is the sentence shown to the operator; `detail` is the * secondary technical line (failing stage + the server's exception text). */ | { status: \"unavailable\"; reason: string; detail?: string };",
+      "old_target_sha256": "b7e177cc3fd7fe0f9492565e141d00e89f011584d01f0911e449741b62f9e5b9",
+      "new_target_sha256": "47501516cd0a9d44be3617499c416c4e986cf9f354c678cb6f29cb88eb1aecbf"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/projects.ts",
+      "public_name": "downloadProject",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "accepting_commit": "731f1c29b44c5654df33486fcfe4382ce6de841b",
+      "accepting_receipt": "PKG-38-UI-FIXES-V51: exact source-backed declaration migration",
+      "declaration_kind": "function",
+      "old_signature": "export async function downloadProject(cid: string, binding: DownloadBinding | null): Promise<void>",
+      "new_signature": "export async function downloadProject( cid: string, binding: DownloadBinding | null, title?: string | null, ): Promise<void>",
+      "old_target_sha256": "0700a3b47178c534580d4be5daf670ba01e5c591fa3feed4c3afb342d08507bb",
+      "new_target_sha256": "fb1ae40e59abe38b5f995e95ec7a95dbfbd3d8b5c4b3ec673763e3ab334d24c6"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/deepResearch.ts",
+      "public_name": "requestReportAudioBlocking",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "accepting_commit": "731f1c29b44c5654df33486fcfe4382ce6de841b",
+      "accepting_receipt": "PKG-38-UI-FIXES-V51: exact source-backed declaration migration",
+      "declaration_kind": "function",
+      "old_signature": "export async function requestReportAudioBlocking( cid: string, mode: string, body: string | undefined, ): Promise<{ mp3_url: string }>",
+      "new_signature": "export async function requestReportAudioBlocking( cid: string, mode: string, body: string | undefined, force = false, ): Promise<{ mp3_url: string; note?: string; mode?: string }>",
+      "old_target_sha256": "5dbdaa7db68d5dd333b63b44da09f5ba2d9981837727b2903e822607689e553a",
+      "new_target_sha256": "442e62ac18999fca80ed102ce3226b31575a8d8f50a080536501227c1d729cc2"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/deepResearch.ts",
+      "public_name": "streamReportAudio",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "accepting_commit": "731f1c29b44c5654df33486fcfe4382ce6de841b",
+      "accepting_receipt": "PKG-38-UI-FIXES-V51: exact source-backed declaration migration",
+      "declaration_kind": "function",
+      "old_signature": "export async function streamReportAudio( cid: string, mode: string, body: string | undefined, onEvent: (ev: AudioStreamEvent) => boolean, ): Promise<boolean>",
+      "new_signature": "export async function streamReportAudio( cid: string, mode: string, body: string | undefined, onEvent: (ev: AudioStreamEvent) => boolean, force = false, ): Promise<boolean>",
+      "old_target_sha256": "6f937524db7838286cdd6a9050ab1a3d9feeb0804170ca8c5dfd94b3156a9949",
+      "new_target_sha256": "3c051771e86c695a6db2d38225249ea1d2601da1d0c03e11356bd2734f254b97"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/needMoreCardParts/AudioSection.tsx",
+      "public_name": "AudioSection",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "accepting_commit": "731f1c29b44c5654df33486fcfe4382ce6de841b",
+      "accepting_receipt": "PKG-38-UI-FIXES-V51: exact source-backed declaration migration",
+      "declaration_kind": "function",
+      "old_signature": "export function AudioSection({ cid, followUpSeqs, modeOpen, onModeOpenChange, reportQuery, }: AudioSectionProps)",
+      "new_signature": "export function AudioSection({ cid, followUpSeqs, modeOpen, onModeOpenChange, reportQuery, onRequestGenerate, }: AudioSectionProps)",
+      "old_target_sha256": "0edc177e48130978eccca7958aeeac5a8cb568f3ce155d8a42fb85652465428f",
+      "new_target_sha256": "a925c86d901b94a36bcddf877e9f72d9e3d8f04d2da898418c8f1851f2d6aa25"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/buildSurface/BuildDeliverableSection.tsx",
+      "public_name": "BuildDeliverableSection",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "accepting_commit": "731f1c29b44c5654df33486fcfe4382ce6de841b",
+      "accepting_receipt": "PKG-38-UI-FIXES-V51: exact source-backed declaration migration",
+      "declaration_kind": "function",
+      "old_signature": "export function BuildDeliverableSection({ b, deliverable, download, exportManifest, release, }: { b: BuildController; deliverable: DeliverableView | null; download: ReturnType<typeof useDownloadProject>; exportManifest: ReturnType<typeof useExportManifest>; release: ReturnType<typeof useProjectRelease>; })",
+      "new_signature": "export function BuildDeliverableSection({ b, deliverable, download, exportManifest, release, downloadTitle = null, }: { b: BuildController; deliverable: DeliverableView | null; download: ReturnType<typeof useDownloadProject>; exportManifest: ReturnType<typeof useExportManifest>; release: ReturnType<typeof useProjectRelease>; /** The run's own title \u2014 names the SAVED ZIP (UI-40), nothing else. */ downloadTitle?: string | null; })",
+      "old_target_sha256": "094e59303b81aa87be741defd525b0b4cce4d856aaf1c34511cfacd48f117378",
+      "new_target_sha256": "f713873129e1bb896233878e71a446edb0f797db28946730db1bb16dd3866114"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/DeepProgressStrip.tsx",
+      "public_name": "DeepProgressStrip",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "accepting_commit": "731f1c29b44c5654df33486fcfe4382ce6de841b",
+      "accepting_receipt": "PKG-38-UI-FIXES-V51: exact source-backed declaration migration",
+      "declaration_kind": "function",
+      "old_signature": "export function DeepProgressStrip({ brief, trace, stats, status, activity, followUpStatus, collapsedHold = null, onStopHold, }: Props)",
+      "new_signature": "export function DeepProgressStrip({ brief, trace, stats, status, activity, followUpStatus, collapsedHold = null, onStopHold, connectionState = \"connected\", }: Props)",
+      "old_target_sha256": "bd57e931a37f4f284519d0b393b9bf9faa669dc767162af52542f296d60728de",
+      "new_target_sha256": "153b5afd598be68ba6b7d14a41670d3585bcc2b7923413068bae19bb60e67525"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/deepResearchSurfaceParts/DeepResearchReportView.tsx",
+      "public_name": "DeepResearchReportView",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "accepting_commit": "731f1c29b44c5654df33486fcfe4382ce6de841b",
+      "accepting_receipt": "PKG-38-UI-FIXES-V51: exact source-backed declaration migration",
+      "declaration_kind": "function",
+      "old_signature": "export function DeepResearchReportView({ r }: Props)",
+      "new_signature": "export function DeepResearchReportView({ r, reportAction = null }: Props)",
+      "old_target_sha256": "a81dce1ecf626b8c849cf64de3e0a5eecc901ee04943123ba87ebf9f32fbb570",
+      "new_target_sha256": "c971cde62fd75e5aefd6ee123365acef265634dc83ff7511a07d5c3bc13f32ee"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/deepResearchSurfaceParts/DeepResearchTopBar.tsx",
+      "public_name": "DeepResearchTopBar",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "accepting_commit": "731f1c29b44c5654df33486fcfe4382ce6de841b",
+      "accepting_receipt": "PKG-38-UI-FIXES-V51: exact source-backed declaration migration",
+      "declaration_kind": "function",
+      "old_signature": "export function DeepResearchTopBar({ r, onStandardSearch, handleNewResearch, exportCaps, doneNotify, topBarIncludeOpen, setTopBarIncludeOpen, handleTopBarExport, handleTopBarIncludeConfirm, }: Props)",
+      "new_signature": "export function DeepResearchTopBar({ r, onStandardSearch, handleNewResearch, exportCaps, doneNotify, topBarIncludeOpen, setTopBarIncludeOpen, handleTopBarExport, handleTopBarIncludeConfirm, requestReportAction, }: Props)",
+      "old_target_sha256": "2a7adbbbf1f785fd94d8482379ddc6606146e1a08e0f9e623c1b99691a7d564c",
+      "new_target_sha256": "fe2f566c76b4b69d00c253dd7c6f3e3793a2bd32df4ee1dba4294c10bd276e4a"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/ExecutionCanvas.tsx",
+      "public_name": "ExecutionCanvas",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "accepting_commit": "731f1c29b44c5654df33486fcfe4382ce6de841b",
+      "accepting_receipt": "PKG-38-UI-FIXES-V51: exact source-backed declaration migration",
+      "declaration_kind": "function",
+      "old_signature": "export function ExecutionCanvas({ events, status, cid, streamingFile = null, untrusted = false, onSteer, onSelectionEdit, onElementMention, }: { events: AgentEvent[]; status: ConversationStatus; cid: string | null; streamingFile?: StreamingFile | null; /** Third-party events (shared/imported run) \u2192 harden the preview iframe. */ untrusted?: boolean; /** Steer the agent (free-form) from the preview-pane \"Discuss\" affordance. * Undefined when steering isn't available (no conversation / static view). */ onSteer?: (text: string) => void; /** P8 click-to-edit \u2014 submit a selected element's ref + change to the host. */ onSelectionEdit?: ( ref: SelectionRef, instruction: string, humanLabel?: string, ) => void; /** Element mention \u2014 attach the next clicked preview element to the next chat message. */ onElementMention?: (payload: ElementMentionPayload) => void; })",
+      "new_signature": "export function ExecutionCanvas({ events, status, cid, streamingFile = null, untrusted = false, onSteer, onSelectionEdit, onElementMention, downloadTitle = null, }: { events: AgentEvent[]; status: ConversationStatus; cid: string | null; streamingFile?: StreamingFile | null; /** Third-party events (shared/imported run) \u2192 harden the preview iframe. */ untrusted?: boolean; /** Steer the agent (free-form) from the preview-pane \"Discuss\" affordance. * Undefined when steering isn't available (no conversation / static view). */ onSteer?: (text: string) => void; /** P8 click-to-edit \u2014 submit a selected element's ref + change to the host. */ onSelectionEdit?: ( ref: SelectionRef, instruction: string, humanLabel?: string, ) => void; /** Element mention \u2014 attach the next clicked preview element to the next chat message. */ onElementMention?: (payload: ElementMentionPayload) => void; /** Run title, used to name the zip the Preview pane's failure card offers * (UI-40 naming). Absent in the static run view, which has no conversation. */ downloadTitle?: string | null; })",
+      "old_target_sha256": "2294067175dcd1fd05fbe69ff7ee4cce1a61e15fa03ba511bad1f1f21427f08a",
+      "new_target_sha256": "76856bf5a0d10b16283d2400a98167a4263f3064f098bc10ecf1a526f6251679"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/NeedMoreCard.tsx",
+      "public_name": "NeedMoreCard",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "accepting_commit": "731f1c29b44c5654df33486fcfe4382ce6de841b",
+      "accepting_receipt": "PKG-38-UI-FIXES-V51: exact source-backed declaration migration",
+      "declaration_kind": "function",
+      "old_signature": "export function NeedMoreCard({ report, cid, onFollowUp, followUpBusy, followUps = [], }: NeedMoreCardProps)",
+      "new_signature": "export function NeedMoreCard({ report, cid, onFollowUp, followUpBusy, followUps = [], requestedAction = null, }: NeedMoreCardProps)",
+      "old_target_sha256": "55bf5f92c812273c295e9bace10e52647eedc1ec42db65ff90edc55099180ea4",
+      "new_target_sha256": "99dac6e546fa76810ee3004bdc3279d5b6daddeafaf8b2ea73650a4c4a4f617e"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/canvas/PreviewPane.tsx",
+      "public_name": "PreviewPane",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "accepting_commit": "731f1c29b44c5654df33486fcfe4382ce6de841b",
+      "accepting_receipt": "PKG-38-UI-FIXES-V51: exact source-backed declaration migration",
+      "declaration_kind": "function",
+      "old_signature": "export function PreviewPane({ status, cid, events, untrusted = false, onSteer, onSelectionEdit, onElementMention, }: { status: ConversationStatus; cid: string | null; events: AgentEvent[]; untrusted?: boolean; onSteer?: (text: string) => void; onSelectionEdit?: (ref: SelectionRef, instruction: string, humanLabel?: string) => void; onElementMention?: (payload: ElementMentionPayload) => void; })",
+      "new_signature": "export function PreviewPane({ status, cid, events, untrusted = false, onSteer, onSelectionEdit, onElementMention, downloadTitle = null, }: { status: ConversationStatus; cid: string | null; events: AgentEvent[]; untrusted?: boolean; /** Names the SAVED FILE for the failure card's Download source action, the * same way the header's download does (UI-40). Presentation only. */ downloadTitle?: string | null; onSteer?: (text: string) => void; onSelectionEdit?: (ref: SelectionRef, instruction: string, humanLabel?: string) => void; onElementMention?: (payload: ElementMentionPayload) => void; })",
+      "old_target_sha256": "ae17f1af2eb0b4291f5e8a131965f71e83e13ca6669f5502432a2ccc2f06c6c8",
+      "new_target_sha256": "04d37d50a942d08840b43502288cb8b5c4478b388e94a356fb24303a49dc8705"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/canvas/previewPaneParts/PreviewStage.tsx",
+      "public_name": "PreviewStage",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "accepting_commit": "731f1c29b44c5654df33486fcfe4382ce6de841b",
+      "accepting_receipt": "PKG-38-UI-FIXES-V51: exact source-backed declaration migration",
+      "declaration_kind": "function",
+      "old_signature": "export function PreviewStage({ frameRef, launch, onFrameLoad, visibleFailure, dataReason, minting, runtimeUnavailable, frameReady, editMode, untrusted, selection, onSteer, onDisarmEdit, onApplyEdit, }: { frameRef: MutableRefObject<HTMLIFrameElement | null>; launch: PreviewLaunch | null; onFrameLoad: () => void; visibleFailure: string | null; dataReason: string | undefined; minting: boolean; runtimeUnavailable: boolean; frameReady: boolean; editMode: boolean; untrusted: boolean; selection: ElementSelectState; onSteer?: (text: string) => void; onDisarmEdit: () => void; onApplyEdit: (instruction: string) => void; })",
+      "new_signature": "export function PreviewStage({ frameRef, launch, onFrameLoad, onBootstrapReady, visibleFailure, dataReason, minting, runtimeUnavailable, frameReady, editMode, untrusted, selection, onSteer, onDisarmEdit, onApplyEdit, onRefresh, onDownloadSource, downloadPending, }: { frameRef: MutableRefObject<HTMLIFrameElement | null>; launch: PreviewLaunch | null; onFrameLoad: () => void; onBootstrapReady: () => void; visibleFailure: string | null; dataReason: string | undefined; minting: boolean; runtimeUnavailable: boolean; frameReady: boolean; editMode: boolean; untrusted: boolean; selection: ElementSelectState; onSteer?: (text: string) => void; onDisarmEdit: () => void; onApplyEdit: (instruction: string) => void; onRefresh: () => void; /** Null when there is no conversation to download (the static run view). */ onDownloadSource: (() => void) | null; downloadPending: boolean; })",
+      "old_target_sha256": "ad8e177962ce9585fb085ae26484373b35a9396e8e3793dd0f42859ac5792d74",
+      "new_target_sha256": "01b0238a5696961f49116d2cf4e5b882f52ecffb1b5fbd7c133c53432bced88c"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/SupportMeter.tsx",
+      "public_name": "SupportMeter",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "accepting_commit": "731f1c29b44c5654df33486fcfe4382ce6de841b",
+      "accepting_receipt": "PKG-38-UI-FIXES-V51: exact source-backed declaration migration",
+      "declaration_kind": "function",
+      "old_signature": "export function SupportMeter({ supported, weak, unsupported, emptyLabel }: SupportMeterProps)",
+      "new_signature": "export function SupportMeter({ counts, emptyLabel, legend = false }: SupportMeterProps)",
+      "old_target_sha256": "5942f4468f8270f318c91ba2c57b9eb30432b19ea5ec35f34732fcb1b16deb0b",
+      "new_target_sha256": "2cc85b338d4e49aad2684f81e23da3c6ac608a6df53f36214f95ac421d87186c"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/canvas/previewPaneParts/helpers.ts",
+      "public_name": "computeVisibleFailure",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "accepting_commit": "731f1c29b44c5654df33486fcfe4382ce6de841b",
+      "accepting_receipt": "PKG-38-UI-FIXES-V51: exact source-backed declaration migration",
+      "declaration_kind": "function",
+      "old_signature": "export function computeVisibleFailure( launchFailure: string | null, launchKey: string, requestedLaunchKey: string, ): string | null",
+      "new_signature": "export function computeVisibleFailure( launchFailure: string | null, launchKey: string, requestedLaunchKey: string, bootstrapFailure: string | null = null, ): string | null",
+      "old_target_sha256": "c22e08dd16fd2ab9d04de4c158f377eae905e6d6eff4d0bf616d4ff637becc19",
+      "new_target_sha256": "28f6ab800fee79208a6adf851da33e1a3c26dadd6126d1d7baba0f92a948c00d"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/hooks/useProjects.ts",
+      "public_name": "useProjectManifest",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "accepting_commit": "731f1c29b44c5654df33486fcfe4382ce6de841b",
+      "accepting_receipt": "PKG-38-UI-FIXES-V51: exact source-backed declaration migration",
+      "declaration_kind": "function",
+      "old_signature": "export function useProjectManifest(conversationId: string | null)",
+      "new_signature": "export function useProjectManifest(conversationId: string | null, available = true)",
+      "old_target_sha256": "b1026ba40b863354f19309543c92a7b0d29c7339d17697b676cf1fd22893e972",
+      "new_target_sha256": "a90014eca7e41622af1361a8a60a39b707a55c8b8da61ce3de9514a3d6fa1b22"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/hooks/useDeepResearchStream.ts",
+      "public_name": "initial",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "accepting_commit": "731f1c29b44c5654df33486fcfe4382ce6de841b",
+      "accepting_receipt": "PKG-38-UI-FIXES-V51: exact source-backed declaration migration",
+      "declaration_kind": "variable",
+      "old_signature": "export const initial: RawState = { status: \"IDLE\", statusDetail: null, followUpStatus: null, events: [], error: null, failure: null, };",
+      "new_signature": "export const initial: RawState = { status: \"IDLE\", statusDetail: null, followUpStatus: null, events: [], error: null, failure: null, connectionState: \"connected\", };",
+      "old_target_sha256": "970bb154e057238d8971c01172f52c1aacb52265fefeaae33a9e9f2cd39d2cfa",
+      "new_target_sha256": "ca4d7d4e14843626d813dec2bdeb84a498fa42d303bc9eaa49e32c2863081e05"
     },
     {
       "surface": "frontend",
@@ -33047,19 +33945,6 @@
     },
     {
       "surface": "frontend",
-      "path": "frontend/src/hooks/useDeepResearchStream.ts",
-      "public_name": "DeepResearchStream",
-      "owner_package": "PKG-35-DEEP-RESEARCH-CLOSEOUT",
-      "accepting_commit": "e0be83fb37b47d0e8e4cbdf9958c5c9c102564bb",
-      "accepting_receipt": "PKG-35-DEEP-RESEARCH-CLOSEOUT: exact source-backed declaration migration",
-      "declaration_kind": "InterfaceDeclaration",
-      "old_signature": "export interface DeepResearchStream { status: ConversationStatus; /** Separate from `status` so the plan-progress UI can stay calm while a * follow-up answer is generating. null when idle; \"follow_up\" during * generation; \"follow_up_complete\" after the answer lands. */ followUpStatus: \"follow_up\" | \"follow_up_complete\" | null; events: AgentEvent[]; error: string | null; /** The proposed plan (sub-questions). Null until decompose completes. */ plan: DeepPlanView | null; /** Per-sub-question progress (1-based index \u2192 state). */ progress: Map<number, StepState>; /** True at AWAITING_PLAN_APPROVAL (drives the plan-edit gate). */ awaitingPlan: boolean; /** Live counts for the mono stats strip. */ stats: DeepStats; /** The activity feed items (reuses ActivityFeed verbatim). */ trace: ActivityItem[]; /** Section placeholders + finalized sections (the assembling report view). */ assembling: AssemblingSection[]; /** The final ReportEvent \u2014 null until the engine emits it. */ report: ReportEvent | null; /** Three-tier source split (cited / reviewed / discovered). */ sources: SourceTiers; /** Send WS frames to the conversation. */ approvePlan: () => void; requestPlan: (text: string) => void; cancel: () => void; /** Continue a stopped/incomplete run (explicit \u2014 never on open). */ resume: () => void; /** Ask a follow-up question on this conversation \u2014 sends a steer message * that re-kicks the loop with the report's corpus as grounding. */ followUp: (question: string) => void; /** * D3 mid-run steer: send a steer string to the running DR engine. The * server routes the `steer` WS frame into the DR queue (not the agent * loop) when a DR run is active; the engine drains it at the next section * boundary and starts a fresh gather leg for the steer topic. * * Only call while `status === \"RUNNING\"` and the WS is open \u2014 the button * is gated in the surface to enforce this. */ steer: (text: string) => void; /** * D3 inject-source: fold a plaintext snippet into the DR run's corpus. * The server converts the text to a Passage and makes it available to * subsequent section synthesis. URL extraction is a follow-up (v1: text only). * * Only call while `status === \"RUNNING\"`. */ injectSource: (text: string) => void; }",
-      "new_signature": "export interface DeepResearchStream { status: ConversationStatus; /** The newest status event's detail \u2014 \"killed\", \"stopped\", \"research\", \u2026 \u2014 * or null. Read for the ONE distinction the status cannot carry: a run a * person killed versus a conversation that is merely idle. */ statusDetail: string | null; /** Separate from `status` so the plan-progress UI can stay calm while a * follow-up answer is generating. null when idle; \"follow_up\" during * generation; \"follow_up_complete\" after the answer lands. */ followUpStatus: \"follow_up\" | \"follow_up_complete\" | null; events: AgentEvent[]; error: string | null; /** The terminal failure as fields (why / state / next / allowed + the class * that raised), when the backend named its own boundary. Null for transport * errors and for events written before `ErrorEvent.failure` existed \u2014 * `error` is the fallback then. */ failure: RunFailure | null; /** The model's opening brief \u2014 how it read the question and the angles it * will chase. The FIRST visible output of a gateless run (v2); null until * it lands. */ brief: string | null; /** Live counts for the mono stats strip. */ stats: DeepStats; /** The latest REPORTED fact of each kind (turn / model_activity / search / * observation / phase / review round / hold), each with the instant the * engine reported it. The run UI's honesty rule lives on this: a field is * null because no event set it, and `lastEventAt` is how \"working\" is told * apart from \"silent\" without inferring anything from `status`. */ activity: DeepActivity; /** The activity feed items (reuses ActivityFeed verbatim). */ trace: ActivityItem[]; /** Section placeholders + finalized sections (the assembling report view). */ assembling: AssemblingSection[]; /** The final ReportEvent \u2014 null until the engine emits it. */ report: ReportEvent | null; /** Paused evidence state, kept separate from the finished report. */ checkpoint: ResearchCheckpointEvent | null; /** Three-tier source split (cited / reviewed / discovered). */ sources: SourceTiers; /** Send WS frames to the conversation. */ cancel: () => void; /** Continue a stopped/incomplete run (explicit \u2014 never on open). */ resume: () => void; /** Ask a follow-up question on this conversation \u2014 sends a steer message * that re-kicks the loop with the report's corpus as grounding. */ followUp: (question: string) => void; /** * Mid-run steer: send a steer string to the running DR engine. The server * routes the `steer` WS frame into the DR queue (not the agent loop) when * a DR run is active; the research agent drains it at its next turn * boundary, where it appears as a priority USER STEER line the model acts * on before returning to its own plan. * * Only call while `status === \"RUNNING\"` and the WS is open \u2014 the control * is gated in the surface to enforce this. */ steer: (text: string) => void; /** * D3 inject-source: fold a plaintext snippet into the DR run's corpus. * The server converts the text to a Passage and makes it available to * subsequent section synthesis. URL extraction is a follow-up (v1: text only). * * Only call while `status === \"RUNNING\"`. */ injectSource: (text: string) => void; }",
-      "old_target_sha256": "872b4510e0b91347acec74c30d76aa27a7f51ceb1b90dc7d3a18003c4868c550",
-      "new_target_sha256": "4121c9dbfdd0331f7191276e02779f69f46ed570907da887a311cd17cb9e9159"
-    },
-    {
-      "surface": "frontend",
       "path": "frontend/src/lib/deepResearchTrace.ts",
       "public_name": "DeepStats",
       "owner_package": "PKG-35-DEEP-RESEARCH-CLOSEOUT",
@@ -33161,19 +34046,6 @@
       "new_signature": "export function DeepBoundedNotice({ report, onTryExhaustive }: Props)",
       "old_target_sha256": "40b06e6a27c595d0ab327d56c84d295e65c0a58893b0384b8de5fbc171d81c0a",
       "new_target_sha256": "9752c509e12f267cbd293ff91c25f1316b637afae1f478e7a0a82ec9c82f925f"
-    },
-    {
-      "surface": "frontend",
-      "path": "frontend/src/components/research/DeepProgressStrip.tsx",
-      "public_name": "DeepProgressStrip",
-      "owner_package": "PKG-35-DEEP-RESEARCH-CLOSEOUT",
-      "accepting_commit": "e0be83fb37b47d0e8e4cbdf9958c5c9c102564bb",
-      "accepting_receipt": "PKG-35-DEEP-RESEARCH-CLOSEOUT: exact source-backed declaration migration",
-      "declaration_kind": "function",
-      "old_signature": "export function DeepProgressStrip({ plan, progress, trace, stats, status, followUpStatus }: Props)",
-      "new_signature": "export function DeepProgressStrip({ brief, trace, stats, status, activity, followUpStatus, collapsedHold = null, onStopHold, }: Props)",
-      "old_target_sha256": "a1f528673edb595b530e14685e39fa963036a51d9c819c77e19af26eab749284",
-      "new_target_sha256": "bd57e931a37f4f284519d0b393b9bf9faa669dc767162af52542f296d60728de"
     },
     {
       "surface": "frontend",
@@ -33317,20 +34189,57 @@
       "new_signature": "export const fixtureRunningEvents: AgentEvent[] = [ userMsg, statusRunning, briefAction, briefMsg, action(\"evt_phase_gather\", 10, \"phase\", { phase: \"gather\", mode: \"agent\", max_turns: 4 }), action(\"evt_search_1_1\", 11, \"search\", { subquestion: subq1, query: \"solid-state battery mass production 2026\", round: 1, rounds_max: 4, }), observation(\"evt_obs_1_1\", 12, \"evt_search_1_1\", \"observation\", true, { subquestion: subq1, round: 1, ok: true, added: 8, total_for_subq: 8, remaining_budget: 32, }), action(\"evt_search_1_2\", 14, \"search\", { subquestion: subq1, query: \"SK On Lexus Mercedes solid-state timeline\", round: 2, rounds_max: 4, }), observation(\"evt_obs_1_2\", 15, \"evt_search_1_2\", \"observation\", true, { subquestion: subq1, round: 2, ok: true, added: 6, total_for_subq: 14, remaining_budget: 26, }), action(\"evt_search_2_1\", 30, \"search\", { subquestion: subq2, query: \"solid-state battery interface stability dendrite suppression\", round: 1, rounds_max: 4, }), observation(\"evt_obs_2_1\", 31, \"evt_search_2_1\", \"observation\", true, { subquestion: subq2, round: 1, ok: true, added: 5, total_for_subq: 5, remaining_budget: 21, }), action(\"evt_search_3_1\", 40, \"search\", { subquestion: subq3, query: \"solid-state battery cost per kWh manufacturing scale economy\", round: 1, rounds_max: 4, }), observation(\"evt_obs_3_1\", 41, \"evt_search_3_1\", \"observation\", true, { subquestion: subq3, round: 1, ok: true, added: 5, total_for_subq: 5, remaining_budget: 16, }), // Writing is ONE whole-report pass (v2), so the writer emits a synthesize // phase + a section_done checkpoint per finalized section \u2014 never a // per-section \"now writing X\" action. action(\"evt_phase_synth_1\", 50, \"phase\", { phase: \"synthesize\", section: 1 }), action(\"evt_secdone_1\", 51, \"section_done\", { section_id: \"s0\", title: subq1, done: 1, }), action(\"evt_phase_synth_2\", 52, \"phase\", { phase: \"synthesize\", section: 2 }), action(\"evt_secdone_2\", 53, \"section_done\", { section_id: \"s1\", title: subq2, done: 2, }), action(\"evt_phase_synth_3\", 54, \"phase\", { phase: \"synthesize\", section: 3 }), action(\"evt_secdone_3\", 55, \"section_done\", { section_id: \"s2\", title: subq3, done: 3, }), action(\"evt_phase_coher\", 60, \"phase\", { phase: \"coherence\" }), ];",
       "old_target_sha256": "79c1fc01dd18735ed6b4d833fb062d25d9549c998ed2d42be034e4cc037c541f",
       "new_target_sha256": "1a2f75033bdbe7e1ca46792d3b42491cddc9471b5cb5d889609e5c20b60aaa9e"
+    }
+  ],
+  "frontend_target_relocations": [
+    {
+      "surface": "frontend",
+      "old_path": "frontend/src/components/build/ActivityFeed.tsx",
+      "old_public_name": "FileDownload",
+      "new_path": "frontend/src/components/build/activityFeedParts/FileDownload.tsx",
+      "new_public_name": "FileDownload",
+      "declaration_kind": "function",
+      "reason": "ActivityFeed.tsx went over its module budget when UI-14/UI-17 grew the activity rows; the three download components moved out to activityFeedParts under the same names and the same props. Nothing about the component changed.",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "accepting_commit": "731f1c29b44c5654df33486fcfe4382ce6de841b",
+      "accepting_receipt": "PKG-38-UI-FIXES-V51: exact frontend public target relocation"
     },
     {
       "surface": "frontend",
-      "path": "frontend/src/hooks/useDeepResearchStream.ts",
-      "public_name": "initial",
-      "owner_package": "PKG-35-DEEP-RESEARCH-CLOSEOUT",
-      "accepting_commit": "e0be83fb37b47d0e8e4cbdf9958c5c9c102564bb",
-      "accepting_receipt": "PKG-35-DEEP-RESEARCH-CLOSEOUT: exact source-backed declaration migration",
-      "declaration_kind": "variable",
-      "old_signature": "export const initial: RawState = { status: \"IDLE\", followUpStatus: null, events: [], pendingPlanId: null, error: null, };",
-      "new_signature": "export const initial: RawState = { status: \"IDLE\", statusDetail: null, followUpStatus: null, events: [], error: null, failure: null, };",
-      "old_target_sha256": "e764df63dc13c06c1ed6981a351bd353e8ccd69a7bbc06135fda960c9f2fa419",
-      "new_target_sha256": "970bb154e057238d8971c01172f52c1aacb52265fefeaae33a9e9f2cd39d2cfa"
+      "old_path": "frontend/src/components/build/ActivityFeed.tsx",
+      "old_public_name": "SheetDownload",
+      "new_path": "frontend/src/components/build/activityFeedParts/SheetDownload.tsx",
+      "new_public_name": "SheetDownload",
+      "declaration_kind": "function",
+      "reason": "Same split. SheetBlock.tsx already imported this component from ActivityFeed and now imports it from its own module; it is still the same component, not a fork.",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "accepting_commit": "731f1c29b44c5654df33486fcfe4382ce6de841b",
+      "accepting_receipt": "PKG-38-UI-FIXES-V51: exact frontend public target relocation"
+    },
+    {
+      "surface": "frontend",
+      "old_path": "frontend/src/components/build/ActivityFeed.tsx",
+      "old_public_name": "SlidesDownload",
+      "new_path": "frontend/src/components/build/activityFeedParts/SlidesDownload.tsx",
+      "new_public_name": "SlidesDownload",
+      "declaration_kind": "function",
+      "reason": "Same split. SlidesBlock.tsx imports it from its own module now; same component, same declared-artifact route.",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "accepting_commit": "731f1c29b44c5654df33486fcfe4382ce6de841b",
+      "accepting_receipt": "PKG-38-UI-FIXES-V51: exact frontend public target relocation"
+    },
+    {
+      "surface": "frontend",
+      "old_path": "frontend/src/components/settings/imageGenSectionParts/fallbackWarning.ts",
+      "old_public_name": "getFallbackWarning",
+      "new_path": "frontend/src/components/settings/imageGenSectionParts/setupNote.ts",
+      "new_public_name": "getSetupNote",
+      "declaration_kind": "function",
+      "reason": "UI-2: an unconfigured optional tier is not a warning. The function takes the same two arguments and still returns one string or null, but it now returns a neutral setup note, so both the module and the function are named for what they produce.",
+      "owner_package": "PKG-38-UI-FIXES-V51",
+      "accepting_commit": "731f1c29b44c5654df33486fcfe4382ce6de841b",
+      "accepting_receipt": "PKG-38-UI-FIXES-V51: exact frontend public target relocation"
     }
   ],
-  "compatibility_rule": "Any deleted or renamed public name, origin, signature, frontend export/type/schema, or contract byte fails. Additions require an owning-package baseline transition; moved implementations retain the old public name through an explicit bridge until PKG-13. A member-level change at an unchanged origin requires an explicit member transition pinning both signature digests and the exact member delta. A frontend declaration change requires an explicit frontend declaration transition pinning both target digests and both declaration texts."
+  "compatibility_rule": "Any deleted or renamed public name, origin, signature, frontend export/type/schema, or contract byte fails. Additions require an owning-package baseline transition; moved implementations retain the old public name through an explicit bridge until PKG-13. A member-level change at an unchanged origin requires an explicit member transition pinning both signature digests and the exact member delta. A frontend declaration change requires an explicit frontend declaration transition pinning both target digests and both declaration texts. A frontend public target that MOVES path or name requires an explicit frontend target relocation naming one live destination of the same declaration kind, one to one."
 }

@@ -1,6 +1,6 @@
 # Current State
 
-Updated 2026-09-08. **Deep Research V48 is landed on main under the owner's written merge authorization.** Report-quality measurement continues by rate; landing did not close it.
+Updated 2026-09-09. **Deep Research V48 is landed on main under the owner's written merge authorization, and V49-V51 have landed on top of it.** Report-quality measurement continues by rate; landing did not close it.
 
 ## Landed state and preservation
 
@@ -9,6 +9,8 @@ Main now carries **V48**, landed from candidate commit 71535d280fa0a364601b31353
 The canonical checkout is /var/home/dylan/projects/disco. Before landing it sat at 39117e8e2f094a0d5a3be502766fa0d5b48863a4 with substantial uncommitted work; all 4,144 original files were fingerprinted, committed to the branch main-dirty-snapshot-2026-09-08 and archived to /var/home/dylan/Archives/recovered/disco-main-dirty-2026-09-08. That work carries no content the landed chain had not already absorbed and evolved past, so nothing was re-applied on top of the landing; f5-pids.txt stays local scratch. The working tree itself was never reset, stashed or cleaned.
 
 The common Deep Research loop uses identical research tools, evidence semantics and finite budgets across configured providers. Adapters translate wire protocols. No individual model or provider account is a product dependency.
+
+Three further landings sit on top of V48, each on the same written owner authorization. **V49** (PKG-36-PORTABILITY-V49, main f856f1ec) is the portability work proven on fresh VMs. **V50** (PKG-37-UI-FIXES-V50, main dc1ca3d0) fixes the build, preview and audio failures the three-VM UI verification found. **V51** (PKG-38-UI-FIXES-V51) is the follow-up pass over audio, build, preview, settings and the README, and it also lands the **rename authority**: the test inventory keys a test on `path::name`, so renaming a test read as deleting one and inventing another, and the only records that could sanction it were a module-split relocation (which rules renames out by contract) and a single-use retirement closeout already spent by V48. `renamed_test_transitions` now records a rename as what it is — old id to new id, same file, one-to-one, the new identity required to exist, counts pinned, and any unmapped deletion still refused. Fourteen V51 renames are recorded under it, each with the behaviour change that made the old name untrue.
 
 ## Resulting behavior
 
@@ -40,6 +42,6 @@ Claude Fable 5.1 completed five exact-model reviews. Astra accepted its trace-ba
 
 The finite retirement and API authority is landed, not merely proposed. It retains the same exact retirement and API scope it was verified with. Its exact source and proposal commits, test-identity delta, validation receipts, review patch and forward/inverse landing proof are indexed in /var/home/dylan/AI-Work/disco-gap-closure-2026-09-05/CLOSEOUT-RECORD.json. Each proof names its source; older versions remain historical evidence. The landing rehearsal verifies all 4,144 preserved original files and checks application to main without modifying it.
 
-The explicit owner instruction required by [the rebaseline procedure](README.md#owner-only-rebaseline-procedure) was given in writing on 2026-09-08: *"after that, you are authorized to merge."* On that instruction the protected seal was rebaselined and V48 was landed on main. The two sealed standards, ENGINEERING-STANDARDS.md and ARCHITECTURE-BOUNDARIES.md, are byte-identical across the rebaseline; only the machinery around them was re-sealed.
+The explicit owner instruction required by [the rebaseline procedure](README.md#owner-only-rebaseline-procedure) was given in writing on 2026-09-08: *"after that, you are authorized to merge."* On that instruction the protected seal was rebaselined and V48 was landed on main. The two sealed standards, ENGINEERING-STANDARDS.md and ARCHITECTURE-BOUNDARIES.md, are byte-identical across the rebaseline; only the machinery around them was re-sealed. The same instruction, with *"you're authorized to push."* and the 2026-09-09 instruction *"fix all the issues that pop up as they occur."*, carries the V49, V50 and V51 rebaselines. Each re-seals only the machinery it changed; the two sealed standards are byte-identical across all four. The protected set is 73 files at V51 — the rename authority module is the one addition, because every `_parts` module of a protected gate is protected.
 
 Report-quality measurement by rate and complete final-source evaluation continue. Engineering verification and this landing do not close them. Release preparation — portability verification on a clean machine — is the next work, and no deployment or public release has been made.

@@ -423,7 +423,13 @@ class TestFrontendDeclarationAuthorized:
         the Python member authority however many rows the latter carries.
         """
         baseline = public_api.load_public_api(REPO_ROOT)
-        assert len(baseline["member_transitions"]) == len(PUBLIC_API_MEMBER_NAMES)
+        # One row per (initializer path, public name), which is one row per NAME
+        # until V51: SqliteEventStore is re-exported from two initializers, so
+        # its one member change is recorded at both of them.
+        assert {row["public_name"] for row in baseline["member_transitions"]} == (
+            PUBLIC_API_MEMBER_NAMES
+        )
+        assert len(baseline["member_transitions"]) == len(PUBLIC_API_MEMBER_NAMES) + 1
         assert all(row["surface"] == "python" for row in baseline["member_transitions"])
         for row in baseline.get("frontend_declaration_transitions", []):
             assert row["surface"] == "frontend"

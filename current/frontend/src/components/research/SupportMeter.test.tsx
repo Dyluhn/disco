@@ -23,6 +23,22 @@ describe("SupportMeter", () => {
     expect(screen.getByText("5 of 5 supported")).toBeInTheDocument();
   });
 
+  it("renders '0 of N supported' when no claim is supported", () => {
+    render(<SupportMeter counts={counts({ contradicted: 3 })} />);
+    expect(screen.getByText("0 of 3 supported")).toBeInTheDocument();
+  });
+
+  it("shows a segment for every state that has claims, including not checked", () => {
+    const { container } = render(
+      <SupportMeter
+        counts={counts({ supported: 2, contradicted: 2, unresolved: 2, unavailable: 2 })}
+      />,
+    );
+    // "not checked" has no colour of its own, so count the bar's own children
+    // rather than matching on class: bg-surface-2 is also the empty bar itself.
+    expect(container.querySelector("[aria-hidden]")?.children).toHaveLength(4);
+  });
+
   it("returns null when total is 0 and no emptyLabel", () => {
     const { container } = render(<SupportMeter counts={counts()} />);
     expect(container.firstChild).toBeNull();

@@ -687,10 +687,18 @@ class TestMappingStatic:
             # `frontend/src/components/research/needMoreCardParts/audioProgress.test.ts`
             # and the existing `frontend/src/components/build/ExecutionCanvas.preview.test.tsx`.
             # +6 collected package ids and +6 TypeScript static ids, 0 removed.
-            "python_test_file_count": 941,
-            "python_static_test_id_count": 11557,
-            "typescript_test_file_count": 288,
-            "typescript_static_test_id_count": 1490,
+            # V51 lands the UI/audio/build/settings/README fixes plus the
+            # rename authority. Six new python test files and twelve new
+            # TypeScript ones; +70 collected package ids, +12 under `tests`
+            # (the rename authority's own adversarial suite). FOURTEEN
+            # identities are RENAMED rather than removed — 7 python, 7
+            # TypeScript, each one-to-one in a file that still exists — and are
+            # recorded in `renamed_test_transitions`; the counts below are net
+            # of them, since a rename removes one identity and adds another.
+            "python_test_file_count": 948,
+            "python_static_test_id_count": 11652,
+            "typescript_test_file_count": 300,
+            "typescript_static_test_id_count": 1581,
         }
         assert mapping["identity"] == baseline["source_identity"]
         assert {key: mapping[key] for key in expected_counts} == expected_counts
@@ -728,7 +736,9 @@ class TestMappingStatic:
         # event_store fixture. The production-readiness wave adds five more
         # (MCP import client, session-hardening client, weak-secret latch reset).
         # V38 isolates the real PDF probe in existing live-retrieval unit fixtures.
-        assert len(fixtures) == 201
+        # V51 adds five: the audio tolerance suite, the preview cockpit port
+        # probes, the pairing-token CLI and the store title-uniqueness suite.
+        assert len(fixtures) == 206
         assert fixtures == sorted(fixtures, key=_canonical_row)
         assert len({_canonical_row(row) for row in fixtures}) == len(fixtures)
         assert all(
@@ -824,12 +834,12 @@ class TestFrontendCollection:
                 len(frontend["vitest_files_list"]),
             )
             == (frontend["vitest_ids"], frontend["vitest_files"])
-            == (1429, 214)
+            == (1535, 226)
         )
         assert frontend["vitest_ids_list"] == sorted(frontend["vitest_ids_list"])
         assert frontend["vitest_files_list"] == sorted(frontend["vitest_files_list"])
-        assert len(set(frontend["vitest_ids_list"])) == 1429
-        assert len(set(frontend["vitest_files_list"])) == 214
+        assert len(set(frontend["vitest_ids_list"])) == 1535
+        assert len(set(frontend["vitest_files_list"])) == 226
         assert set(frontend["playwright_configs"]) == set(test_inventory.PLAYWRIGHT_CONFIGS)
         for config, authority in frontend["playwright_configs"].items():
             assert len(authority["ids"]) == authority["id_count"]
@@ -1124,7 +1134,15 @@ class TestCollectedCounts:
             # `frontend/src/components/research/needMoreCardParts/audioProgress.test.ts`
             # and the existing `frontend/src/components/build/ExecutionCanvas.preview.test.tsx`.
             # +6 collected package ids and +6 TypeScript static ids, 0 removed.
-            "packages": 12087,
+            # V51 lands the UI/audio/build/settings/README fixes plus the
+            # rename authority. Six new python test files and twelve new
+            # TypeScript ones; +70 collected package ids, +12 under `tests`
+            # (the rename authority's own adversarial suite). FOURTEEN
+            # identities are RENAMED rather than removed — 7 python, 7
+            # TypeScript, each one-to-one in a file that still exists — and are
+            # recorded in `renamed_test_transitions`; the counts below are net
+            # of them, since a rename removes one identity and adds another.
+            "packages": 12157,
             # 1288 from PKG-03-EDIT-EVIDENCE: +24 in the `harness` root, the
             # edit-evidence producer acceptance. The new ids land here and not
             # under `packages` because the producer is harness code; the
@@ -1251,11 +1269,17 @@ class TestCollectedCounts:
             # ids plus the F47 extension land under `packages`.
             # Fixture-line ownership adds one architecture fitness id. The
             # typed-field transition regression adds one more architecture id.
-            "tests": 424,
+            # V51 adds the rename authority's adversarial suite,
+            # `tests/architecture/test_test_inventory_renames.py` (+12), plus one
+            # case each in that file and in `test_test_inventory_line_drift.py`
+            # for the two defects the V51 regeneration exposed, and
+            # `tests/architecture/test_frontend_relocations.py` (+14 collected
+            # against +11 static: one case is parametrized four ways): +28.
+            "tests": 452,
         }
         assert set(collected["roots"]) == set(test_inventory.PYTHON_ROOTS)
         assert collected["counts"] == expected
-        assert collected["total"] == 14091 == sum(expected.values())
+        assert collected["total"] == 14189 == sum(expected.values())
         for root in test_inventory.PYTHON_ROOTS:
             ids = collected["roots"][root]
             assert len(ids) == expected[root]
@@ -1271,7 +1295,7 @@ class TestCollectedCounts:
         problems: list[str] = []
         result = test_inventory._check_collected_ids(baseline, REPO_ROOT, problems)
         assert problems == []
-        assert result == {"collected_total": 14091}
+        assert result == {"collected_total": 14189}
 
         drifted = copy.deepcopy(baseline)
         drifted["collected"]["roots"]["tests"] = list(
@@ -1290,9 +1314,9 @@ class TestBaselineValidation:
         assert result == {
             "ok": True,
             "problems": [],
-            "python_static_ids": 11557,
-            "typescript_static_ids": 1490,
-            "collected_total": 14091,
+            "python_static_ids": 11652,
+            "typescript_static_ids": 1581,
+            "collected_total": 14189,
         }
 
         latest_identity = test_inventory.subprocess.check_output(
@@ -1575,6 +1599,7 @@ class TestInventoryRules:
             "additions_allowed_only_when_baseline_updated_in_owning_package": True,
             "real_collection_distinct_from_mapping_static": True,
             "module_splits_require_an_exact_transition_record": True,
+            "renames_require_an_exact_one_to_one_record": True,
         }
 
     def test_additive_transitions_present(
