@@ -324,6 +324,35 @@ def _check_bridge_delta(
             problems.append(f"accepted compatibility bridge changed: {key}")
 
 
+def _check_deletions(
+    previous: dict[str, Any],
+    inventory: dict[str, Any],
+    root: Path,
+    removed: set[TargetKey],
+    current_identities: set[TargetIdentity],
+    current_targets: dict[TargetKey, dict[str, Any]],
+    problems: list[str],
+) -> None:
+    """An identity that leaves the surface needs a relocation or the closeout.
+
+    Split out of :func:`check_regeneration_delta` to keep that function inside
+    its complexity budget once relocations joined the finite closeout as a
+    second way a public target may legitimately disappear.
+    """
+    relocations = _relocations.relocation_authority(inventory, root, problems)
+    sanctioned = _relocations.sanctioned_deletions(relocations, current_targets, problems)
+    relocated_now = {key[:3] for key in removed if key[:3] in sanctioned}
+    deleted = [
+        key for key in removed if key[:3] not in current_identities and key[:3] not in relocated_now
+    ]
+    if deleted:
+        try:
+            _closeout.retired_targets(root, previous, deleted)
+        except (OSError, ValueError, KeyError, RuntimeError) as error:
+            problems.append(f"public API regeneration deletes targets: {sorted(deleted)}; {error}")
+    _relocations.check_relocation_delta(previous, inventory, root, relocated_now, problems)
+
+
 def check_regeneration_delta(
     previous: dict[str, Any],
     inventory: dict[str, Any],
@@ -337,20 +366,9 @@ def check_regeneration_delta(
     added = current_keys - previous_keys
     removed = previous_keys - current_keys
     current_identities = {key[:3] for key in current_keys}
-    relocations = _relocations.relocation_authority(inventory, root, problems)
-    sanctioned = _relocations.sanctioned_deletions(relocations, current_targets, problems)
-    relocated_now = {key[:3] for key in removed if key[:3] in sanctioned}
-    deleted = [
-        key
-        for key in removed
-        if key[:3] not in current_identities and key[:3] not in relocated_now
-    ]
-    if deleted:
-        try:
-            _closeout.retired_targets(root, previous, deleted)
-        except (OSError, ValueError, KeyError, RuntimeError) as error:
-            problems.append(f"public API regeneration deletes targets: {sorted(deleted)}; {error}")
-    _relocations.check_relocation_delta(previous, inventory, root, relocated_now, problems)
+    _check_deletions(
+        previous, inventory, root, removed, current_identities, current_targets, problems
+    )
     changed = {key[:3] for key in removed if key[:3] in current_identities}
     changed_python = {item for item in changed if item[0] == "python"}
     changed_frontend = {item for item in changed if item[0] == "frontend"}
