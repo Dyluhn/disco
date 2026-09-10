@@ -55,10 +55,12 @@ async def test_w08_w09_audio_progress_is_staged_and_download_only_when_needed(
         conversation_id: str,
     ):
         assert conversation_id == "conv_progress"
-        return [
-            audio_overview.Turn(speaker="A", text="Opening finding."),
-            audio_overview.Turn(speaker="B", text="Second finding."),
-        ]
+        return audio_overview.ScriptResult(
+            turns=[
+                audio_overview.Turn(speaker="A", text="Opening finding."),
+                audio_overview.Turn(speaker="B", text="Second finding."),
+            ]
+        )
 
     async def fake_synthesize(_text: str, _voice: str):
         return b"pcm"
