@@ -13,9 +13,12 @@ import App from "@/App";
 // Budgets are widened HERE (scoped to this file) rather than via a global
 // `testTimeout` bump, so every other suite still fails fast on a real hang.
 // Do NOT tighten these back to 3s — that reintroduces the contention flake.
-const FINISH_TIMEOUT = 15_000; // waitFor budget for the run to reach FINISHED
-const TEST_TIMEOUT = 20_000; // per-test ceiling (> FINISH_TIMEOUT, headroom for contention)
-const SURFACE_LOAD_TIMEOUT = 10_000; // cold React.lazy import under parallel hermetic load
+// 2026-09-10: GitHub's hosted ubuntu runner (2 vitest workers, the whole
+// suite at 3x the workstation's wall clock) pushed both reconciles past 15s;
+// the budgets below are sized for that host, and still gate no SLA.
+const FINISH_TIMEOUT = 60_000; // waitFor budget for the run to reach FINISHED
+const TEST_TIMEOUT = 90_000; // per-test ceiling (> FINISH_TIMEOUT, headroom for contention)
+const SURFACE_LOAD_TIMEOUT = 30_000; // cold React.lazy import under parallel hermetic load
 
 describe("Research surface (integration + streaming reconcile)", () => {
   beforeEach(() => {
