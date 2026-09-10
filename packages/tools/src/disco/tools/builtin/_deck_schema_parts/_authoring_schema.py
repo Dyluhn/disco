@@ -57,7 +57,8 @@ SlideArchetype = Literal[
 class ChartSpec(BaseModel):
     """Structured chart payload (wired in C8).
 
-    Field set frozen by the C4 experiment verdict (development/notes/slides-experiment-verdict.md §6).
+    Field set frozen by the C4 experiment verdict
+    (development/notes/slides-experiment-verdict.md §6).
     labels / series have empty-list defaults so ChartSpec(kind=...) is valid with
     no data (c8 rendering handles empty data gracefully with a placeholder shape).
     """
