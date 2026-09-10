@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "731f1c29b44c5654df33486fcfe4382ce6de841b",
+  "source_identity": "d5e30b46322e8199e57dda8edd65b9103b9e45c5",
   "collected": {
     "counts": {
       "packages": 12157,
@@ -14210,7 +14210,7 @@
     }
   },
   "mapping_static": {
-    "identity": "731f1c29b44c5654df33486fcfe4382ce6de841b",
+    "identity": "d5e30b46322e8199e57dda8edd65b9103b9e45c5",
     "python_test_file_count": 948,
     "python_static_test_id_count": 11652,
     "python_test_files": [
@@ -38329,6 +38329,41 @@
         "tests": {
           "before_count": 396,
           "after_count": 396,
+          "added_ids": []
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [],
+        "python_static_test_ids": [],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-39-CI-GREEN",
+      "root": "multiple",
+      "source_identity_before": "731f1c29b44c5654df33486fcfe4382ce6de841b",
+      "source_identity_after": "d5e30b46322e8199e57dda8edd65b9103b9e45c5",
+      "collected_roots": {
+        "packages": {
+          "before_count": 12157,
+          "after_count": 12157,
+          "added_ids": []
+        },
+        "harness": {
+          "before_count": 1571,
+          "after_count": 1571,
+          "added_ids": []
+        },
+        "integrations": {
+          "before_count": 9,
+          "after_count": 9,
+          "added_ids": []
+        },
+        "tests": {
+          "before_count": 452,
+          "after_count": 452,
           "added_ids": []
         }
       },
