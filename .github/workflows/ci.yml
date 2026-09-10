@@ -8,9 +8,24 @@ name: CI
 # blocking — those carry known debt / need external services not present on a
 # vanilla runner.
 
+# `branches: ["**"]` means every branch and NO tags: the governance identity
+# anchor is published as a tag whose tree is empty, and a tag push must not
+# start a run that has no workflow files to run. Release tags are release.yml's
+# job. The schedule + dispatch triggers exist for the advisory job, which is
+# too slow to sit on the push path (see its `if:`).
 on:
   push:
+    branches: ["**"]
   pull_request:
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+# Pushes land in bursts during a landing. Superseding runs on the same branch
+# cancel; main never cancels, because its runs are the record.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   required:
@@ -23,6 +38,9 @@ jobs:
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
 
       - name: Set up Python
         run: uv python install 3.13
@@ -40,6 +58,29 @@ jobs:
       - name: Install frontend deps
         working-directory: current/frontend
         run: npm ci
+
+      # The artifact validators shell out to pdfinfo (test_artifact_validators
+      # asserts a real PDF validates); the hosted image does not ship poppler.
+      - name: System tools for artifact validators
+        run: sudo apt-get update && sudo apt-get install -y poppler-utils
+
+      # Python lint, scoped to the five shipping source roots — the same set
+      # `[tool.pyright] include` names, and the code that actually ships.
+      #
+      # Not the whole tree, and the reason is recorded rather than hidden:
+      # measured 2026-09-10, `ruff check .` reports 134 findings, 121 of them in
+      # tests, dev scripts and the harness. Four of the dirty files
+      # (gen_closeout_acceptance_manifest.py, verify_export_track1_closeout.py,
+      # closeout_pytest_report.py, closeout_manifest_parts/_remediation.py) are
+      # FROZEN closeout acceptance evidence whose bytes are hashed in
+      # current/docs/export-track1-closeout-acceptance.sha256 — reformatting them
+      # is not a cosmetic change, it rewrites an acceptance record. `[tool.ruff]
+      # extend-exclude` already says exactly that about the frozen test dirs.
+      # So this gate is real over the shipping source and silent about a backlog
+      # it must not touch, instead of green over nothing. Widen it by clearing
+      # the backlog, never by adding an ignore.
+      - name: Lint (ruff — shipping source)
+        run: uv run ruff check current/packages/core/src current/packages/retrieval/src current/packages/tools/src current/packages/agent-server/src current/packages/app-server/src
 
       - name: Soak freeze
         run: uv run python development/scripts/check_soak_freeze.py
@@ -120,9 +161,15 @@ jobs:
         working-directory: current/frontend
         run: npx vite build
 
-      - name: Frontend unit tests (vitest)
+      # `npm run test` is bare `vitest run`, which sizes its pool from the host's
+      # CPU count. On the 2-core hosted runner that is fine; the bound is here
+      # because the same suite is flaky when vitest fans out 12 ways on the
+      # workstation, and CI should run the configuration we trust. package.json
+      # is one of the 15 change-controlled contract files, so the bound is
+      # applied at the call site rather than by amending the script.
+      - name: Frontend unit tests (vitest — bounded workers)
         working-directory: current/frontend
-        run: npm run test
+        run: npx vitest run --maxWorkers=2 --minWorkers=1
 
       # Amendment A3 restores the `api/client.ts` funnel with a
       # `no-restricted-imports` boundary rule. A boundary rule that runs only in
@@ -138,6 +185,13 @@ jobs:
     name: advisory (full suite, full tsc)
     runs-on: ubuntu-latest
     continue-on-error: true
+    # NOT on the push path. Measured 2026-09-10, the full pytest step alone
+    # takes 21 minutes, so on every push this job held the CI workflow
+    # `in_progress` for twice as long as the required gate that actually
+    # decides the verdict — and it is `continue-on-error: true`, so none of
+    # that time changed an answer. It keeps its full breadth on the nightly
+    # schedule and on manual dispatch, where the wait costs nobody a review.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -145,12 +199,30 @@ jobs:
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
 
       - name: Set up Python
         run: uv python install 3.13
 
       - name: Sync Python deps
         run: uv sync --all-packages --frozen
+
+      # Node BEFORE pytest. development/tests/architecture drives the pinned
+      # TypeScript compiler out of current/frontend/node_modules; without it
+      # this job reported ~50 FileNotFoundError failures that said nothing
+      # about the tree, only that the job had not installed the frontend.
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: current/frontend/package-lock.json
+
+      - name: Install frontend deps
+        working-directory: current/frontend
+        run: npm ci
 
       - name: Full pytest (incl. integration — needs browser/shell/docker)
         run: uv run pytest
@@ -178,17 +250,6 @@ jobs:
       # certified ids and was named by no Makefile target and no CI step.
       - name: Integrations tests (advisory)
         run: uv run pytest current/integrations
-
-      - name: Set up Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-          cache-dependency-path: current/frontend/package-lock.json
-
-      - name: Install frontend deps
-        working-directory: current/frontend
-        run: npm ci
 
       - name: ESLint (style debt — advisory)
         working-directory: current/frontend
