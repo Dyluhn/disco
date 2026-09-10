@@ -49,14 +49,32 @@ setup, updating, starting at boot, backups, models and hardware.
 
 ## What it looks like
 
-| Search and Deep Research | A finished Build, with its preview |
+| Search and Deep Research | A finished Build, with its live preview |
 |---|---|
-| ![The home screen: one prompt box, Search or Deep Research](docs/assets/screenshots/home.png) | ![A finished Build next to the live preview of the site it made](docs/assets/screenshots/build-preview.png) |
+| ![The home screen: one prompt box, Search or Deep Research](docs/assets/screenshots/home.png) | ![A finished Build beside the preview of the site it made](docs/assets/screenshots/build-preview.png) |
+
+**A Deep Research report** — how the Black Death reshaped Europe's labour market: 54
+searches, 16 sources, every sentence checked against the evidence (37 of 137 supported,
+the rest marked, never hidden). [Dark theme](docs/assets/screenshots/research-report-dark.png).
 
 ![A Deep Research report: the evidence meter, the section outline, cited sentences](docs/assets/screenshots/research-report.png)
 
-Dark theme: [the same report](docs/assets/screenshots/research-report-dark.png). Every
-screenshot is from a stock install on a fresh VM at the commit that shipped it.
+**From that report, without leaving the page:** a slide deck, a print-ready PDF, and a
+spoken overview.
+
+![The nine-slide deck Disco built from the report](docs/assets/showcase/deck.gif)
+
+| [PDF export](docs/assets/showcase/black-death-labour-markets.pdf) | [Single-voice audio overview](docs/assets/showcase/audio-overview-clip.mp3) (5:35; first minute) |
+|---|---|
+| ![The PDF's cover page](docs/assets/showcase/report-pdf-cover.png) | ![The audio overview player at the end of the report](docs/assets/showcase/audio-overview-player.png) |
+
+**A site the Build agent made** from one paragraph — static, no backend, CSS-only imagery:
+[the whole page](docs/assets/screenshots/site-kiln-full.jpg).
+
+![Above the fold of a ceramics studio site the Build agent made](docs/assets/screenshots/site-kiln-fold.jpg)
+
+Every capture is from a stock install on a fresh VM at the commit that shipped it; the
+deck is also exported as [PowerPoint](docs/assets/showcase/black-death-labour-markets.pptx).
 
 ## Surfaces
 

@@ -72,3 +72,14 @@ forgetting is done with **condensation tombstones**, never deletion. That one
 decision buys replay, resume-after-disconnect, audit, and bounded memory — see
 [`event-state-contract.md`](./contracts/event-state-contract.md) §1 for the
 invariants this rests on.
+
+## Showcase
+
+Everything below came out of one stock install on a fresh VM, driven through the browser.
+
+- **Deep Research report** — *How did the Black Death reshape Europe's labour market and wages in the century after 1348?* Standard tier, 22 minutes, 54 searches, 16 sources; 37 of 137 sentences supported by the checker, 4 possible contradictions, 96 unresolved (the checker found no matching excerpt), all shown. Screenshots: [light](assets/screenshots/research-report.png), [dark](assets/screenshots/research-report-dark.png).
+- **PDF export** of that report — [black-death-labour-markets.pdf](assets/showcase/black-death-labour-markets.pdf) (11 pages, A4): [cover](assets/showcase/report-pdf-cover.png), [page 2](assets/showcase/report-pdf-page-2.png).
+- **Slide deck** built from the report by the agent, edited in the inspector, exported as [PowerPoint](assets/showcase/black-death-labour-markets.pptx): [the nine slides](assets/showcase/deck.gif), [the editor](assets/showcase/deck-editor.png), [slide 1](assets/showcase/deck-slide-1.png).
+- **Audio overview**, single voice, bundled Kokoro TTS, 5:35 — [the first minute](assets/showcase/audio-overview-clip.mp3), [the player](assets/showcase/audio-overview-player.png).
+- **A site from the Build agent** — a ceramics studio page from one paragraph, static, CSS-only imagery: [above the fold](assets/screenshots/site-kiln-fold.jpg), [the whole page](assets/screenshots/site-kiln-full.jpg), [the build beside its preview](assets/screenshots/build-preview.png).
+
