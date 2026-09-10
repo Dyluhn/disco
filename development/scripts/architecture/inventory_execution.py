@@ -60,9 +60,9 @@ SANCTIONED_COMMANDS: tuple[dict[str, Any], ...] = (
     {
         "label": "make integrations",
         "source": "Makefile:integrations",
-        "argv": ["-m", "pytest", "--collect-only", "current/integrations"],
+        "argv": ["-m", "pytest", "--collect-only", "integrations"],
         "needs_repo_root_on_path": False,
-        "quote": "uv run pytest current/integrations",
+        "quote": "uv run pytest integrations",
     },
     {
         "label": "ci required unit",

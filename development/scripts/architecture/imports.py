@@ -243,7 +243,7 @@ def _resolve_relative(
 
 
 def _tracked_python(root: Path | None = None) -> list[Path]:
-    """Return tracked .py files under current/packages/ that exist in the working tree."""
+    """Return tracked .py files under packages/ that exist in the working tree."""
     if root is None:
         root = REPO_ROOT
     raw = subprocess.check_output(["git", "-C", str(root), "ls-files", "-z"])
@@ -252,7 +252,7 @@ def _tracked_python(root: Path | None = None) -> list[Path]:
         if not item:
             continue
         rel = item.decode()
-        if rel.endswith(".py") and rel.startswith("current/packages/"):
+        if rel.endswith(".py") and rel.startswith("packages/"):
             path = root / rel
             if path.is_file():
                 result.append(path)

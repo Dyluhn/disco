@@ -21,8 +21,8 @@ from .policy import REPO_ROOT
 # The digest manifest (PROTECTED.sha256) does NOT protect itself.
 # This includes all executable architecture policy implementation bytes.
 PROTECTED: tuple[str, ...] = (
-    "current/docs/governance/ENGINEERING-STANDARDS.md",
-    "current/docs/governance/ARCHITECTURE-BOUNDARIES.md",
+    "development/governance/ENGINEERING-STANDARDS.md",
+    "development/governance/ARCHITECTURE-BOUNDARIES.md",
     "development/architecture/contexts.json",
     "development/architecture/debt.json",
     "development/architecture/policy.json",
@@ -48,7 +48,7 @@ PROTECTED: tuple[str, ...] = (
     "development/scripts/check_inventory_execution.py",
     "development/scripts/check_tool_schemas.py",
     "development/scripts/gen_arch_diagram.py",
-    "current/packages/core/tests/test_build_platform_nonweb_conformance.py",
+    "packages/core/tests/test_build_platform_nonweb_conformance.py",
     "development/scripts/architecture/__init__.py",
     "development/scripts/architecture/policy.py",
     "development/scripts/architecture/budget.py",
@@ -129,11 +129,11 @@ PROTECTED: tuple[str, ...] = (
     "development/scripts/architecture/generate_debt_parts/__init__.py",
     "development/scripts/architecture/generate_debt_parts/location_overrides.py",
     "development/scripts/architecture/generate_debt_parts/resolved_ids.py",
-    "current/docs/governance/SEAL-INVOCATION.json",
+    "development/governance/SEAL-INVOCATION.json",
 )
 
-MANIFEST = "current/docs/governance/PROTECTED.sha256"
-SEAL_INVOCATION = "current/docs/governance/SEAL-INVOCATION.json"
+MANIFEST = "development/governance/PROTECTED.sha256"
+SEAL_INVOCATION = "development/governance/SEAL-INVOCATION.json"
 
 # The ordered commands that SEAL-INVOCATION.json must require.
 ORDERED_COMMANDS = [
@@ -147,7 +147,7 @@ ORDERED_COMMANDS = [
     "uv run python development/scripts/check_test_inventory.py",
     "uv run python development/scripts/check_ci_contract.py",
     "uv run python development/scripts/check_tool_schemas.py",
-    "uv run pytest -q current/packages/core/tests/test_build_platform_nonweb_conformance.py",
+    "uv run pytest -q packages/core/tests/test_build_platform_nonweb_conformance.py",
 ]
 
 PROVISIONING_COMMANDS = [

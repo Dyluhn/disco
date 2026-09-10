@@ -68,8 +68,8 @@ AUTHORITY_PATH = "development/architecture/public-api.json"
 DERIVED_PATHS = {
     AUTHORITY_PATH,
     "development/architecture/test-inventory.json",
-    "current/docs/governance/CAMPAIGN-STATUS.md",
-    "current/docs/governance/PROTECTED.sha256",
+    "development/governance/CAMPAIGN-STATUS.md",
+    "development/governance/PROTECTED.sha256",
 }
 
 TargetKey = tuple[str, str, str, str]

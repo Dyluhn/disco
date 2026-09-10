@@ -1,7 +1,7 @@
 """Comparator between the sealed ordered gate list and the enforced one.
 
 PKG-19-CERT-STRUCTURAL finding **F7**: mutation control M3 deleted the last entry
-of ``ci.ordered_commands`` from the sealed ``current/docs/governance/SEAL-INVOCATION.json``
+of ``ci.ordered_commands`` from the sealed ``development/governance/SEAL-INVOCATION.json``
 and ``check_ci_contract.py`` stayed **green** — it carried its own private copy of
 the order and never read the sealed file. Two authorities, no comparator; the
 same disjoint-contract shape as F2. ``check_governance_seal.py`` pins the sealed
@@ -23,7 +23,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-_NONWEB = "current/packages/core/tests/test_build_platform_nonweb_conformance.py"
+_NONWEB = "packages/core/tests/test_build_platform_nonweb_conformance.py"
 
 # tool_schemas.py must run after check_ci_contract.py and before non-web
 # conformance. It lives here with the ordered-list helpers rather than in
@@ -58,7 +58,7 @@ def check_sealed_ordered_contract(root: Path, enforced: list[str]) -> list[str]:
     never a silent pass, because a comparison against nothing always succeeds.
     This is what makes mutation control M3 load bearing.
     """
-    seal_path = root / "current" / "docs" / "governance" / "SEAL-INVOCATION.json"
+    seal_path = root / "development" / "governance" / "SEAL-INVOCATION.json"
     try:
         sealed_doc = json.loads(seal_path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
@@ -122,7 +122,7 @@ def _check_tool_schemas_position(
     ts_pos = _find_gate_order(commands, [TOOL_SCHEMAS_SCRIPT])[TOOL_SCHEMAS_SCRIPT]
     ci_contract_pos = positions.get("development/scripts/check_ci_contract.py", -1)
     nonweb_pos = positions.get(
-        "current/packages/core/tests/test_build_platform_nonweb_conformance.py", -1
+        "packages/core/tests/test_build_platform_nonweb_conformance.py", -1
     )
     if ts_pos < 0:
         problems.append(f"{label}: missing gate: {TOOL_SCHEMAS_SCRIPT}")

@@ -39,8 +39,8 @@ _ACCEPTED_INVENTORY_SHA256 = "a79cdd6f6f245694bf7266996569e7355b3be4a53f7869eb21
 _DERIVED_PATHS = {
     "development/architecture/public-api.json",
     _INVENTORY_PATH,
-    "current/docs/governance/CAMPAIGN-STATUS.md",
-    "current/docs/governance/PROTECTED.sha256",
+    "development/governance/CAMPAIGN-STATUS.md",
+    "development/governance/PROTECTED.sha256",
 }
 _PKG02_TEST_PATHS = (
     "scripts/architecture/test_inventory.py",

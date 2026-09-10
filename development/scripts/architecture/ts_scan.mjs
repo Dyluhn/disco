@@ -718,7 +718,7 @@ function main() {
 
     return {
       path: rel,
-      root: "current/frontend/src",
+      root: "frontend/src",
       is_test: test,
       physical_loc: physicalLines,
       policy_logical_loc: logical.size,

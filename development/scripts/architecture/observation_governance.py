@@ -18,7 +18,7 @@ _SOURCE_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]*$")
 _ALLOWED_DESCRIPTIVE_CLAUSES = {
     (
         "DM-022",
-        "current/packages/tools/src/disco/tools/projects/store.py",
+        "packages/tools/src/disco/tools/projects/store.py",
         "ProjectStore manifest/version layout",
     ),
 }

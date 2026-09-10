@@ -8,7 +8,7 @@ from typing import Any
 from .imports import build_import_graph, load_contexts
 from .policy import REPO_ROOT
 
-OUT_PATH = REPO_ROOT / "current" / "docs" / "architecture.generated.md"
+OUT_PATH = REPO_ROOT / "docs" / "architecture.generated.md"
 
 
 def render_diagram(root: Path | None = None) -> str:
@@ -97,11 +97,11 @@ def check_diagram(root: Path | None = None) -> dict[str, Any]:
     """Check whether the tracked diagram matches the generated one.
 
     When ``root`` is given, renders the diagram from that root and compares
-    against the root's ``current/docs/architecture.generated.md``.
+    against the root's ``docs/architecture.generated.md``.
     """
     if root is None:
         root = REPO_ROOT
-    out_path = root / "current" / "docs" / "architecture.generated.md"
+    out_path = root / "docs" / "architecture.generated.md"
     generated = render_diagram(root)
     if out_path.is_file():
         existing = out_path.read_text(encoding="utf-8")
@@ -117,11 +117,11 @@ def check_diagram(root: Path | None = None) -> dict[str, Any]:
 def write_diagram(root: Path | None = None) -> str:
     """Write the generated diagram to the tracked path.
 
-    When ``root`` is given, writes to that root's ``current/docs/architecture.generated.md``.
+    When ``root`` is given, writes to that root's ``docs/architecture.generated.md``.
     """
     if root is None:
         root = REPO_ROOT
-    out_path = root / "current" / "docs" / "architecture.generated.md"
+    out_path = root / "docs" / "architecture.generated.md"
     content = render_diagram(root)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(content, encoding="utf-8")

@@ -28,7 +28,7 @@ def tracked_python_files(root: Path | None = None) -> list[Path]:
     if root is None:
         root = REPO_ROOT
     raw = subprocess.check_output(["git", "-C", str(root), "ls-files", "-z"])
-    prefixes = ("current/packages/", "development/harness/", "development/scripts/", "development/tests/")
+    prefixes = ("packages/", "development/harness/", "development/scripts/", "development/tests/")
     result: list[Path] = []
     for item in raw.split(b"\0"):
         if not item:
@@ -175,7 +175,7 @@ def is_test_path(rel: str) -> bool:
 
 def root_name(rel: str) -> str:
     """Return the root name for a relative path."""
-    if rel.startswith("current/packages/"):
+    if rel.startswith("packages/"):
         return "/".join(rel.split("/")[:2])
     return rel.split("/", 1)[0]
 

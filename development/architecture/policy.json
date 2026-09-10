@@ -3,7 +3,7 @@
   "source_identity": "1cf00dbe194a2a276ea1fd17ab74589355f2e0dc",
   "roots": {
     "python": [
-      "current/packages/",
+      "packages/",
       "development/harness/",
       "development/scripts/",
       "development/tests/"
@@ -55,14 +55,14 @@
   "typed_classifications": {
     "protocol_non_violations": [
       {
-        "path": "current/packages/core/src/disco/core/store/base.py",
+        "path": "packages/core/src/disco/core/store/base.py",
         "symbol": "EventStore",
         "rule": "python_service_public_methods_gt_12_candidate",
         "disposition_id": "PY-0664",
         "criterion": "typed Protocol with zero mutable implementation state"
       },
       {
-        "path": "current/packages/agent-server/src/disco/agent_server/build_kernel/base.py",
+        "path": "packages/agent-server/src/disco/agent_server/build_kernel/base.py",
         "symbol": "BuildKernel",
         "rule": "python_service_public_methods_gt_12_candidate",
         "disposition_id": "PY-0188",
@@ -71,7 +71,7 @@
     ],
     "adjudicated_width_non_violations": [
       {
-        "path": "current/packages/tools/src/disco/tools/projects/store.py",
+        "path": "packages/tools/src/disco/tools/projects/store.py",
         "symbol": "ProjectStore",
         "rule": "python_service_public_methods_gt_12_candidate",
         "disposition_id": "PY-0836",
@@ -82,7 +82,7 @@
         "accepting_receipt": "EPIC-10C-ACCEPTANCE-RECEIPT.md"
       },
       {
-        "path": "current/packages/tools/src/disco/tools/sandbox/_container.py",
+        "path": "packages/tools/src/disco/tools/sandbox/_container.py",
         "symbol": "ContainerInstance",
         "rule": "python_service_public_methods_gt_12_candidate",
         "disposition_id": "PY-0846",
@@ -93,7 +93,7 @@
         "accepting_receipt": "EPIC-10C-ACCEPTANCE-RECEIPT.md"
       },
       {
-        "path": "current/packages/tools/src/disco/tools/sandbox/process.py",
+        "path": "packages/tools/src/disco/tools/sandbox/process.py",
         "symbol": "ProcessSandboxInstance",
         "rule": "python_service_public_methods_gt_12_candidate",
         "disposition_id": "PY-0873",
@@ -104,7 +104,7 @@
         "accepting_receipt": "EPIC-10C-ACCEPTANCE-RECEIPT.md"
       },
       {
-        "path": "current/packages/tools/src/disco/tools/sandbox/session.py",
+        "path": "packages/tools/src/disco/tools/sandbox/session.py",
         "symbol": "SandboxSession",
         "rule": "python_service_public_methods_gt_12_candidate",
         "disposition_id": "PY-0877",

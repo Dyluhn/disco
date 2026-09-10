@@ -1,7 +1,7 @@
 """TypeScript/TSX structure scanner for the architecture budget gate.
 
 Uses the locally pinned TypeScript 5.9.3 compiler from
-``current/frontend/node_modules/typescript``. Fails closed if the compiler is absent or
+``frontend/node_modules/typescript``. Fails closed if the compiler is absent or
 mismatched.
 """
 
@@ -13,8 +13,8 @@ from pathlib import Path
 from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-TS_COMPILER_PATH = REPO_ROOT / "current" / "frontend" / "node_modules" / "typescript"
-TS_PACKAGE_JSON = REPO_ROOT / "current" / "frontend" / "node_modules" / "typescript" / "package.json"
+TS_COMPILER_PATH = REPO_ROOT / "frontend" / "node_modules" / "typescript"
+TS_PACKAGE_JSON = REPO_ROOT / "frontend" / "node_modules" / "typescript" / "package.json"
 REQUIRED_TS_VERSION = "5.9.3"
 
 
@@ -26,7 +26,7 @@ def check_compiler() -> str:
     if not TS_PACKAGE_JSON.is_file():
         raise FileNotFoundError(
             f"TypeScript compiler not found at {TS_COMPILER_PATH}. "
-            f"Run `npm ci` in current/frontend/ to install the pinned compiler."
+            f"Run `npm ci` in frontend/ to install the pinned compiler."
         )
     pkg = json.loads(TS_PACKAGE_JSON.read_text(encoding="utf-8"))
     version = pkg.get("version", "")
@@ -36,21 +36,6 @@ def check_compiler() -> str:
             f"got {version}. The production gate must use the pinned compiler."
         )
     return version
-
-
-def tracked_typescript_files(root: Path | None = None) -> list[str]:
-    """Return tracked .ts/.tsx files under current/frontend/src/."""
-    if root is None:
-        root = REPO_ROOT
-    raw = subprocess.check_output(["git", "-C", str(root), "ls-files", "-z"])
-    result: list[str] = []
-    for item in raw.split(b"\0"):
-        if not item:
-            continue
-        rel = item.decode()
-        if rel.startswith("frontend/src/") and (rel.endswith(".ts") or rel.endswith(".tsx")):
-            result.append(rel)
-    return result
 
 
 def scan_typescript(root: Path | None = None) -> dict[str, Any]:

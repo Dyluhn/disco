@@ -20,59 +20,59 @@ from .policy import load_ownership, load_policy
 LEGACY_DISGUISED_COLLABORATORS: dict[tuple[str, str, str], dict[str, str]] = {}
 FROZEN_GENERIC_COLLABORATORS: dict[tuple[str, str, str], str] = {
     (
-        "current/packages/agent-server/src/disco/agent_server/share_service.py",
+        "packages/agent-server/src/disco/agent_server/share_service.py",
         "ShareService",
         "store",
     ): "Any",
     (
-        "current/packages/agent-server/src/disco/agent_server/title_service.py",
+        "packages/agent-server/src/disco/agent_server/title_service.py",
         "TitleService",
         "store",
     ): "Any",
     (
-        "current/packages/agent-server/src/disco/agent_server/verify/host.py",
+        "packages/agent-server/src/disco/agent_server/verify/host.py",
         "HostWebAppVerifier",
         "client",
     ): "Any | None",
     (
-        "current/packages/agent-server/src/disco/agent_server/verify/model_verifier.py",
+        "packages/agent-server/src/disco/agent_server/verify/model_verifier.py",
         "ModelVerifier",
         "router",
     ): "Any",
     (
-        "current/packages/core/src/disco/core/dod_evaluator.py",
+        "packages/core/src/disco/core/dod_evaluator.py",
         "LLMSubjectiveJudge",
         "router",
     ): "Any",
     (
-        "current/packages/tools/src/disco/tools/sandbox/gvisor.py",
+        "packages/tools/src/disco/tools/sandbox/gvisor.py",
         "GvisorSandboxService",
         "client",
     ): "Any | None",
     (
-        "current/packages/tools/src/disco/tools/sandbox/local.py",
+        "packages/tools/src/disco/tools/sandbox/local.py",
         "LocalSandboxService",
         "client",
     ): "Any | None",
     (
-        "current/packages/tools/src/disco/tools/sandbox/podman.py",
+        "packages/tools/src/disco/tools/sandbox/podman.py",
         "PodmanSandboxService",
         "client",
     ): "Any | None",
 }
 FROZEN_GENERIC_SCALAR_PARAMETERS: dict[tuple[str, str, str], str] = {
     (
-        "current/packages/agent-server/src/disco/agent_server/preview_manager.py",
+        "packages/agent-server/src/disco/agent_server/preview_manager.py",
         "PreviewManager",
         "port_pool",
     ): "list[int] | None",
     (
-        "current/packages/core/src/disco/core/loop/engine.py",
+        "packages/core/src/disco/core/loop/engine.py",
         "AgentLoop",
         "stop_hooks",
     ): "list[StopHook] | None",
     (
-        "current/packages/core/src/disco/core/loop/engine.py",
+        "packages/core/src/disco/core/loop/engine.py",
         "AgentLoop",
         "planning_tools",
     ): "frozenset[str]",

@@ -14,7 +14,7 @@ from typing import Any
 from . import _closeout
 from ._constants import ACCEPTED_DIAGRAM_SHA256, SHA256
 
-_DIAGRAM_REL = "current/docs/architecture.generated.md"
+_DIAGRAM_REL = "docs/architecture.generated.md"
 _PKG02_BASE = "1cf00dbe194a2a276ea1fd17ab74589355f2e0dc"
 
 
@@ -33,7 +33,7 @@ def check_contract_file(
     ):
         problems.append(f"invalid contract-file authority: {contract}")
         return
-    path = root / rel
+    path = _resolve(root, rel)
     if not path.is_file():
         problems.append(f"contract file missing: {rel}")
         return
@@ -68,9 +68,10 @@ def check_diagram_transition(
     ):
         problems.append(f"diagram transition accepted authority drift: {transition}")
         return
-    path = root / transition["path"]
+    path = _resolve(root, transition["path"])
     actual = hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else ""
-    contract = contracts.get(transition["path"], {})
+    wanted = _logical(transition["path"])
+    contract = next((row for key, row in contracts.items() if _logical(key) == wanted), {})
     if (
         transition["to_sha256"] != actual
         or contract.get("sha256") != actual
@@ -82,17 +83,17 @@ def check_diagram_transition(
 def contract_snapshot(root: Path, paths: list[str]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for rel in sorted(paths):
-        path = root / rel
+        path = _resolve(root, rel)
         if not path.is_file():
             raise FileNotFoundError(f"contract file missing: {rel}")
         rows.append(
             {
-                "path": rel,
+                "path": path.relative_to(root).as_posix(),
                 "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
                 "bytes": path.stat().st_size,
             }
         )
-    return rows
+    return sorted(rows, key=lambda row: row["path"])
 
 
 def _logical(path: str) -> str:
@@ -101,6 +102,13 @@ def _logical(path: str) -> str:
         if path.startswith(bucket):
             return path[len(bucket) :]
     return path
+
+
+def _resolve(root: Path, rel: str) -> Path:
+    """The file at ``rel``, or at its bucket-normalised path once the tree has
+    moved out from under a stored physical path."""
+    path = root / rel
+    return path if path.is_file() else root / _logical(rel)
 
 
 def _authorize_contract_changes(
@@ -128,11 +136,13 @@ def regenerated_contracts(previous: dict[str, Any], root: Path) -> list[dict[str
     ):
         raise RuntimeError("accepted contract-file paths are invalid")
     actual = contract_snapshot(root, paths)
-    accepted = {row["path"]: row for row in rows}
+    accepted = {_logical(row["path"]): row for row in rows}
     changed = [
         row
         for row in actual
-        if _logical(row["path"]) != _logical(_DIAGRAM_REL) and row != accepted[row["path"]]
+        if _logical(row["path"]) != _logical(_DIAGRAM_REL)
+        and (row["sha256"], row["bytes"])
+        != (accepted[_logical(row["path"])]["sha256"], accepted[_logical(row["path"])]["bytes"])
     ]
     if changed:
         _authorize_contract_changes(root, previous, changed)
@@ -152,8 +162,6 @@ def updated_diagram_transitions(
     ):
         raise RuntimeError("accepted diagram transition authority is missing")
     transition = dict(rows[0])
-    diagram = root / "current" / "docs" / "architecture.generated.md"
-    if not diagram.is_file():
-        diagram = root / "docs" / "architecture.generated.md"
+    diagram = _resolve(root, _DIAGRAM_REL)
     transition["to_sha256"] = hashlib.sha256(diagram.read_bytes()).hexdigest()
     return [transition]

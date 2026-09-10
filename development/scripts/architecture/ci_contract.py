@@ -28,7 +28,7 @@ ORDERED_GATE_SCRIPTS = [
     "development/scripts/check_public_api.py",
     "development/scripts/check_test_inventory.py",
     "development/scripts/check_ci_contract.py",
-    "current/packages/core/tests/test_build_platform_nonweb_conformance.py",
+    "packages/core/tests/test_build_platform_nonweb_conformance.py",
 ]
 
 # The pre-commit front section must include these hooks (same structural order).
@@ -98,9 +98,9 @@ GATE_ARGV: dict[str, list[str]] = {
     "development/scripts/check_tool_schemas.py": [
         "uv", "run", "python", "development/scripts/check_tool_schemas.py",
     ],
-    "current/packages/core/tests/test_build_platform_nonweb_conformance.py": [
+    "packages/core/tests/test_build_platform_nonweb_conformance.py": [
         "uv", "run", "pytest", "-q",
-        "current/packages/core/tests/test_build_platform_nonweb_conformance.py",
+        "packages/core/tests/test_build_platform_nonweb_conformance.py",
     ],
 }
 
@@ -395,9 +395,9 @@ def _check_frontend_npm_ci(steps: list[Any], label: str) -> list[str]:
             continue
         if argv == ["npm", "ci"]:
             npm_positions.append(index)
-            if step.get("working-directory") != "current/frontend":
+            if step.get("working-directory") != "frontend":
                 problems.append(
-                    f"{label} frontend provisioning must run in current/frontend/"
+                    f"{label} frontend provisioning must run in frontend/"
                 )
         if argv in gate_argv:
             gate_positions.append(index)

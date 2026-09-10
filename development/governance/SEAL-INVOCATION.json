@@ -14,7 +14,7 @@
     "uv run python development/scripts/check_test_inventory.py",
     "uv run python development/scripts/check_ci_contract.py",
     "uv run python development/scripts/check_tool_schemas.py",
-    "uv run pytest -q current/packages/core/tests/test_build_platform_nonweb_conformance.py"
+    "uv run pytest -q packages/core/tests/test_build_platform_nonweb_conformance.py"
   ],
   "provisioning_rule": "uv sync --all-packages --frozen must precede the gates in CI and release. Node/npm provisioning must precede the TypeScript architecture scan (check_arch_imports.py). Frontend npm ci must be present.",
   "tool_schemas_rule": "check_tool_schemas.py runs after check_ci_contract.py and before persistent non-web conformance.",
@@ -34,7 +34,7 @@
       "uv run python development/scripts/check_test_inventory.py",
       "uv run python development/scripts/check_ci_contract.py",
       "uv run python development/scripts/check_tool_schemas.py",
-      "uv run pytest -q current/packages/core/tests/test_build_platform_nonweb_conformance.py"
+      "uv run pytest -q packages/core/tests/test_build_platform_nonweb_conformance.py"
     ]
   },
   "release": {
@@ -53,7 +53,7 @@
       "uv run python development/scripts/check_test_inventory.py",
       "uv run python development/scripts/check_ci_contract.py",
       "uv run python development/scripts/check_tool_schemas.py",
-      "uv run pytest -q current/packages/core/tests/test_build_platform_nonweb_conformance.py"
+      "uv run pytest -q packages/core/tests/test_build_platform_nonweb_conformance.py"
     ]
   },
   "precommit": {
