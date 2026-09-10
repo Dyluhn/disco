@@ -697,8 +697,8 @@ class TestMappingStatic:
             # of them, since a rename removes one identity and adds another.
             "python_test_file_count": 948,
             "python_static_test_id_count": 11652,
-            "typescript_test_file_count": 300,
-            "typescript_static_test_id_count": 1581,
+            "typescript_test_file_count": 302,
+            "typescript_static_test_id_count": 1604,
         }
         assert mapping["identity"] == baseline["source_identity"]
         assert {key: mapping[key] for key in expected_counts} == expected_counts
@@ -1315,7 +1315,7 @@ class TestBaselineValidation:
             "ok": True,
             "problems": [],
             "python_static_ids": 11652,
-            "typescript_static_ids": 1581,
+            "typescript_static_ids": 1604,
             "collected_total": 14189,
         }
 

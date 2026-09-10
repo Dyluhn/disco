@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "9e6e84e2b9244afd3dba734a697cb8cd57b999f1",
+  "source_identity": "7c97461a5db32406bc5ba73663a6e543da13f9b6",
   "collected": {
     "counts": {
       "packages": 12157,
@@ -14210,7 +14210,7 @@
     }
   },
   "mapping_static": {
-    "identity": "9e6e84e2b9244afd3dba734a697cb8cd57b999f1",
+    "identity": "7c97461a5db32406bc5ba73663a6e543da13f9b6",
     "python_test_file_count": 948,
     "python_static_test_id_count": 11652,
     "python_test_files": [
@@ -26817,8 +26817,8 @@
       "tests/unbiased_gate/test_authorB_models_imagegen.py::test_w50_slides_degrade_to_image_less_when_image_backend_unconfigured",
       "tests/unbiased_gate/test_authorB_models_imagegen.py::test_w50_unconfigured_image_backend_fails_loudly_instead_of_procedural_fallback"
     ],
-    "typescript_test_file_count": 300,
-    "typescript_static_test_id_count": 1581,
+    "typescript_test_file_count": 302,
+    "typescript_static_test_id_count": 1604,
     "typescript_test_files": [
       "frontend/e2e-full/scenarios/click-provenance.smoke.spec.ts",
       "frontend/e2e-full/scenarios/per-surface.full.spec.ts",
@@ -27119,7 +27119,9 @@
       "frontend/src/views/SpacesView.test.tsx",
       "frontend/src/views/WorkflowReviewPanel.test.tsx",
       "frontend/src/views/history.test.tsx",
-      "frontend/src/views/settings.test.tsx"
+      "frontend/src/views/settings.test.tsx",
+      "sota-scan/test/cluster.test.mjs",
+      "sota-scan/test/report.test.mjs"
     ],
     "typescript_static_test_ids": [
       "frontend/e2e-full/scenarios/click-provenance.smoke.spec.ts::click-provenance smoke \u2014 all 10 evidence records, home-screen control inventory",
@@ -28702,7 +28704,30 @@
       "frontend/src/views/settings.test.tsx::shows the encoder mode as an honest, wired toggle (default bundled-local)",
       "frontend/src/views/settings.test.tsx::skills are a real, persistent subsystem with a working create editor",
       "frontend/src/views/settings.test.tsx::surfaces the local \u2192 tighter-confirmation coupling when local is selected",
-      "frontend/src/views/settings.test.tsx::uses the same current-state plus Configure pattern as other media settings"
+      "frontend/src/views/settings.test.tsx::uses the same current-state plus Configure pattern as other media settings",
+      "sota-scan/test/cluster.test.mjs::absorb gate respects ACCUMULATED size \u2014 a grown cluster does not swallow a peer (regression #2)",
+      "sota-scan/test/cluster.test.mjs::canonical label follows accumulated size after transitive merges (regression #1)",
+      "sota-scan/test/cluster.test.mjs::clusters: the field is NOT one undifferentiated group",
+      "sota-scan/test/cluster.test.mjs::cross-cluster gaps are forced optional/strategic and excluded from the gap count",
+      "sota-scan/test/cluster.test.mjs::direct comparators stay in-cluster; no vector-DB repo is a direct peer",
+      "sota-scan/test/cluster.test.mjs::explainSelection produces an auditable, non-empty rationale",
+      "sota-scan/test/cluster.test.mjs::fixture sanity: 50+ candidates spanning multiple labels",
+      "sota-scan/test/cluster.test.mjs::graceful degradation: a single small cluster (<50 repos) still selects direct peers",
+      "sota-scan/test/cluster.test.mjs::graceful degradation: empty clusters \u2192 flat fallback",
+      "sota-scan/test/cluster.test.mjs::jaccard + tokens behave",
+      "sota-scan/test/cluster.test.mjs::maturityScore is deterministic and ordered by signals",
+      "sota-scan/test/cluster.test.mjs::synonym labels merge into their canonical cluster",
+      "sota-scan/test/cluster.test.mjs::user repo is classified into the fuzzy cluster",
+      "sota-scan/test/cluster.test.mjs::vector-DB repos survive as broader references, not direct gaps",
+      "sota-scan/test/cluster.test.mjs::workflow inlined cluster-core matches lib/cluster.mjs verbatim",
+      "sota-scan/test/report.test.mjs::a frontier scan with no high gaps renders the empty-state line",
+      "sota-scan/test/report.test.mjs::actionable gap list extracts only gap:high items",
+      "sota-scan/test/report.test.mjs::audit trail hyperlinks owner/repo sources to GitHub",
+      "sota-scan/test/report.test.mjs::matrix renders a valid GFM table with aligned, consistent columns",
+      "sota-scan/test/report.test.mjs::renderReport is deterministic \u2014 identical input, identical output",
+      "sota-scan/test/report.test.mjs::report contains the required sections and header metadata",
+      "sota-scan/test/report.test.mjs::reportDomain slugifies the first declared domain",
+      "sota-scan/test/report.test.mjs::summary reflects coverage and edge tallies"
     ],
     "fixtures": [
       {
@@ -43862,6 +43887,47 @@
         "typescript_static_test_ids": [
           "frontend/src/components/research/DeepResearchSurface.test.tsx::keeps the trigger minimal \u2014 one depth token, no recency/source echo",
           "frontend/src/components/states.test.tsx::empty state carries the brand + Latin entry, with NO duplicate mode chips"
+        ],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-43-SOTA-SCAN",
+      "root": "multiple",
+      "source_identity_before": "9e6e84e2b9244afd3dba734a697cb8cd57b999f1",
+      "source_identity_after": "7c97461a5db32406bc5ba73663a6e543da13f9b6",
+      "collected_roots": {},
+      "mapping_static_additions": {
+        "python_test_files": [],
+        "python_static_test_ids": [],
+        "typescript_test_files": [
+          "sota-scan/test/cluster.test.mjs",
+          "sota-scan/test/report.test.mjs"
+        ],
+        "typescript_static_test_ids": [
+          "sota-scan/test/cluster.test.mjs::absorb gate respects ACCUMULATED size \u2014 a grown cluster does not swallow a peer (regression #2)",
+          "sota-scan/test/cluster.test.mjs::canonical label follows accumulated size after transitive merges (regression #1)",
+          "sota-scan/test/cluster.test.mjs::clusters: the field is NOT one undifferentiated group",
+          "sota-scan/test/cluster.test.mjs::cross-cluster gaps are forced optional/strategic and excluded from the gap count",
+          "sota-scan/test/cluster.test.mjs::direct comparators stay in-cluster; no vector-DB repo is a direct peer",
+          "sota-scan/test/cluster.test.mjs::explainSelection produces an auditable, non-empty rationale",
+          "sota-scan/test/cluster.test.mjs::fixture sanity: 50+ candidates spanning multiple labels",
+          "sota-scan/test/cluster.test.mjs::graceful degradation: a single small cluster (<50 repos) still selects direct peers",
+          "sota-scan/test/cluster.test.mjs::graceful degradation: empty clusters \u2192 flat fallback",
+          "sota-scan/test/cluster.test.mjs::jaccard + tokens behave",
+          "sota-scan/test/cluster.test.mjs::maturityScore is deterministic and ordered by signals",
+          "sota-scan/test/cluster.test.mjs::synonym labels merge into their canonical cluster",
+          "sota-scan/test/cluster.test.mjs::user repo is classified into the fuzzy cluster",
+          "sota-scan/test/cluster.test.mjs::vector-DB repos survive as broader references, not direct gaps",
+          "sota-scan/test/cluster.test.mjs::workflow inlined cluster-core matches lib/cluster.mjs verbatim",
+          "sota-scan/test/report.test.mjs::a frontier scan with no high gaps renders the empty-state line",
+          "sota-scan/test/report.test.mjs::actionable gap list extracts only gap:high items",
+          "sota-scan/test/report.test.mjs::audit trail hyperlinks owner/repo sources to GitHub",
+          "sota-scan/test/report.test.mjs::matrix renders a valid GFM table with aligned, consistent columns",
+          "sota-scan/test/report.test.mjs::renderReport is deterministic \u2014 identical input, identical output",
+          "sota-scan/test/report.test.mjs::report contains the required sections and header metadata",
+          "sota-scan/test/report.test.mjs::reportDomain slugifies the first declared domain",
+          "sota-scan/test/report.test.mjs::summary reflects coverage and edge tallies"
         ],
         "fixtures": []
       }
