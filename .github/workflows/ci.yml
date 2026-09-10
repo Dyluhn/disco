@@ -53,10 +53,10 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: current/frontend/package-lock.json
+          cache-dependency-path: frontend/package-lock.json
 
       - name: Install frontend deps
-        working-directory: current/frontend
+        working-directory: frontend
         run: npm ci
 
       # The artifact validators shell out to pdfinfo (test_artifact_validators
@@ -73,14 +73,14 @@ jobs:
       # (gen_closeout_acceptance_manifest.py, verify_export_track1_closeout.py,
       # closeout_pytest_report.py, closeout_manifest_parts/_remediation.py) are
       # FROZEN closeout acceptance evidence whose bytes are hashed in
-      # current/docs/export-track1-closeout-acceptance.sha256 — reformatting them
+      # development/notes/export-track1-closeout-acceptance.sha256 — reformatting them
       # is not a cosmetic change, it rewrites an acceptance record. `[tool.ruff]
       # extend-exclude` already says exactly that about the frozen test dirs.
       # So this gate is real over the shipping source and silent about a backlog
       # it must not touch, instead of green over nothing. Widen it by clearing
       # the backlog, never by adding an ignore.
       - name: Lint (ruff — shipping source)
-        run: uv run ruff check current/packages/core/src current/packages/retrieval/src current/packages/tools/src current/packages/agent-server/src current/packages/app-server/src
+        run: uv run ruff check packages/core/src packages/retrieval/src packages/tools/src packages/agent-server/src packages/app-server/src
 
       - name: Soak freeze
         run: uv run python development/scripts/check_soak_freeze.py
@@ -113,7 +113,7 @@ jobs:
         run: uv run python development/scripts/check_tool_schemas.py
 
       - name: Persistent non-web conformance
-        run: uv run pytest -q current/packages/core/tests/test_build_platform_nonweb_conformance.py
+        run: uv run pytest -q packages/core/tests/test_build_platform_nonweb_conformance.py
 
       # The adversarial suite guarding the seal, ownership and inventory
       # machinery. It is also inside `testpaths`, so the unit-test step below
@@ -131,10 +131,10 @@ jobs:
         run: uv run pytest -m "not integration"
 
       - name: Frontend shipping-file typecheck (honest gate)
-        working-directory: current/frontend
+        working-directory: frontend
         run: npm run typecheck:build
 
-      # PKG-02-GATE-E2ELIVE-TYPECHECK (finding F24). `current/frontend/e2e-live` was
+      # PKG-02-GATE-E2ELIVE-TYPECHECK (finding F24). `frontend/e2e-live` was
       # type-checked by NO tsconfig project: app includes only `src`, node only
       # `vite.config.ts`, build excludes tests, and the root project references
       # just app+node — so the advisory job's `npx tsc -b` could not reach the 38
@@ -149,16 +149,16 @@ jobs:
       # wired-then-silenced.
       # Invoked directly rather than through an npm script, matching how
       # tsconfig.closeout-g11.json is driven (development/scripts/closeout_verify_parts/
-      # _lanes.py). current/frontend/package.json is one of the 15 change-controlled
+      # _lanes.py). frontend/package.json is one of the 15 change-controlled
       # contract files in development/architecture/public-api.json, and non-diagram contract
       # bytes cannot be rebaselined by any sanctioned path — so a dedicated
       # type-check scope is wired at its call sites, never by amending it.
       - name: Frontend live-e2e typecheck (F24 — e2e-live had no project)
-        working-directory: current/frontend
+        working-directory: frontend
         run: npx tsc -p tsconfig.e2e-live.json --noEmit
 
       - name: Frontend production build
-        working-directory: current/frontend
+        working-directory: frontend
         run: npx vite build
 
       # `npm run test` is bare `vitest run`, which sizes its pool from the host's
@@ -168,7 +168,7 @@ jobs:
       # is one of the 15 change-controlled contract files, so the bound is
       # applied at the call site rather than by amending the script.
       - name: Frontend unit tests (vitest — bounded workers)
-        working-directory: current/frontend
+        working-directory: frontend
         run: npx vitest run --maxWorkers=2 --minWorkers=1
 
       # Amendment A3 restores the `api/client.ts` funnel with a
@@ -178,7 +178,7 @@ jobs:
       # precondition: it was verified green BEFORE being made required, never
       # wired-then-silenced. The advisory job keeps its own full-tsc step.
       - name: ESLint (import boundaries + style — required since Epic 12-A)
-        working-directory: current/frontend
+        working-directory: frontend
         run: npm run lint
 
   advisory:
@@ -210,7 +210,7 @@ jobs:
         run: uv sync --all-packages --frozen
 
       # Node BEFORE pytest. development/tests/architecture drives the pinned
-      # TypeScript compiler out of current/frontend/node_modules; without it
+      # TypeScript compiler out of frontend/node_modules; without it
       # this job reported ~50 FileNotFoundError failures that said nothing
       # about the tree, only that the job had not installed the frontend.
       - name: Set up Node
@@ -218,10 +218,10 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: current/frontend/package-lock.json
+          cache-dependency-path: frontend/package-lock.json
 
       - name: Install frontend deps
-        working-directory: current/frontend
+        working-directory: frontend
         run: npm ci
 
       - name: Full pytest (incl. integration — needs browser/shell/docker)
@@ -232,7 +232,7 @@ jobs:
       # and Epic 12-A closed the remaining event-kind and frame-type gaps, so
       # development/harness/tests/test_contract.py is green and its allowlists are empty.
       # That parity is now also enforced fail-closed in the required job by
-      # current/packages/core/tests/test_frontend_contract_parity.py, which reads the TS
+      # packages/core/tests/test_frontend_contract_parity.py, which reads the TS
       # side with the pinned compiler instead of a regex.
       #
       # This job stays advisory for the one KNOWN remaining failure here:
@@ -249,12 +249,12 @@ jobs:
       # PKG-19-CERT-STRUCTURAL finding F2: the `integrations` root carried 9
       # certified ids and was named by no Makefile target and no CI step.
       - name: Integrations tests (advisory)
-        run: uv run pytest current/integrations
+        run: uv run pytest integrations
 
       - name: ESLint (style debt — advisory)
-        working-directory: current/frontend
+        working-directory: frontend
         run: npm run lint
 
       - name: Full project typecheck (includes test files — advisory)
-        working-directory: current/frontend
+        working-directory: frontend
         run: npx tsc -b

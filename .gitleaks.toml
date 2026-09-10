@@ -13,9 +13,9 @@ useDefault = true
 [allowlist]
 description = "Synthetic test fixtures + cassette request-hash keys"
 paths = [
-    '''current/packages/.*/tests/.*''',
-    '''current/frontend/e2e-full/support/.*\.test\.ts''',
-    '''current/frontend/src/.*\.test\.tsx?''',
+    '''packages/.*/tests/.*''',
+    '''frontend/e2e-full/support/.*\.test\.ts''',
+    '''frontend/src/.*\.test\.tsx?''',
     '''development/harness/cassettes/.*\.jsonl''',
     '''\.claude/.*''',
 ]

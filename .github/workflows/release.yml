@@ -29,10 +29,10 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: current/frontend/package-lock.json
+          cache-dependency-path: frontend/package-lock.json
 
       - name: Install frontend deps
-        working-directory: current/frontend
+        working-directory: frontend
         run: npm ci
 
       - name: Soak freeze
@@ -66,7 +66,7 @@ jobs:
         run: uv run python development/scripts/check_tool_schemas.py
 
       - name: Persistent non-web conformance
-        run: uv run pytest -q current/packages/core/tests/test_build_platform_nonweb_conformance.py
+        run: uv run pytest -q packages/core/tests/test_build_platform_nonweb_conformance.py
 
       - name: Python type check
         run: uv run basedpyright
@@ -75,21 +75,21 @@ jobs:
         run: uv run pytest -m "not integration"
 
       - name: Frontend unit suite
-        working-directory: current/frontend
+        working-directory: frontend
         run: npm run test
 
       - name: Frontend shipping-file typecheck
-        working-directory: current/frontend
+        working-directory: frontend
         run: npm run typecheck:build
 
       - name: Frontend production build
-        working-directory: current/frontend
+        working-directory: frontend
         run: npm run build
 
       - name: Package frontend build
         run: |
           mkdir -p release-artifacts
-          tar -C current/frontend/dist -czf "release-artifacts/disco-frontend-dist-${GITHUB_REF_NAME}.tar.gz" .
+          tar -C frontend/dist -czf "release-artifacts/disco-frontend-dist-${GITHUB_REF_NAME}.tar.gz" .
 
       - name: Extract changelog section
         run: |

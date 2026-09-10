@@ -15,7 +15,7 @@ CASSETTE ?= development/harness/cassettes/research_demo.jsonl
 help:
 	@echo "disco runners:"
 	@echo "  make test        unit + harness (contract/fuzz/fault/canary) — fast, hermetic, offline"
-	@echo "  make unit        per-package unit suite only (current/packages/*/tests)"
+	@echo "  make unit        per-package unit suite only (packages/*/tests)"
 	@echo "  make harness     all development/harness/ tests"
 	@echo "  make contract    TS<->Python wire/event contract drift"
 	@echo "  make fuzz        property-based parser fuzzing (hypothesis)"
@@ -51,7 +51,7 @@ harness:
 	uv run pytest development/harness
 
 integrations:
-	uv run pytest current/integrations
+	uv run pytest integrations
 
 contract:
 	uv run pytest development/harness/tests/test_contract.py
@@ -63,10 +63,10 @@ fault:
 	uv run pytest development/harness/tests/test_faults.py
 
 lint:
-	uv run ruff check packages harness
+	uv run ruff check packages development/harness
 
 fmt:
-	uv run ruff format packages harness
+	uv run ruff format packages development/harness
 
 # ---- evals (replay = fast; real = slow, hits services) ---------------------
 

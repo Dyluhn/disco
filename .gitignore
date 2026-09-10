@@ -49,7 +49,7 @@ review-queue/
 /test-record/
 
 # Root-level manual-test scratch (these patterns are ROOT-scoped on purpose — real
-# test_*.py live under current/packages/ and must stay tracked).
+# test_*.py live under packages/ and must stay tracked).
 /run_manual*.py
 /test_*.py
 /validate.py
@@ -75,14 +75,14 @@ disco-config.json.*
 # orchestration scratch (review output, lane diffs, screenshot helper)
 .review/
 *.diff
-current/frontend/_*.mjs
+frontend/_*.mjs
 
 # harness strays — never commit
 /node_modules/
 /workorders/
-current/frontend/_a2harness*
-current/frontend/_a2-deck.json
-current/frontend/_a4_toggle*
+frontend/_a2harness*
+frontend/_a2-deck.json
+frontend/_a4_toggle*
 
 # --- close-out cull (2026-07-07) ---
 test-record/
@@ -91,7 +91,7 @@ disco-config.json*
 disco-approved-origins.json
 tmux-client-*.log
 .env
-current/frontend/.env.development.local
+frontend/.env.development.local
 .bashrc
 .bash_profile
 .zshrc
@@ -108,7 +108,7 @@ current/frontend/.env.development.local
 .wire-dump/
 
 # Our source lives in components/build/ — defend it from a global `build/` rule
-!/current/frontend/src/components/build/
+!/frontend/src/components/build/
 
 # Editor/tooling state and an empty submodule file are not source (PKG-40).
 # These were tracked as 0-byte files; .serena/ is per-machine tool state.

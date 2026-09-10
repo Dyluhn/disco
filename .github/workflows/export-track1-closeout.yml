@@ -116,7 +116,7 @@ jobs:
 
       - name: Install frontend deps
         run: npm ci
-        working-directory: current/frontend
+        working-directory: frontend
 
       - name: Install Playwright Firefox (browser e2e lane)
         # The verifier's browser lane runs the frozen Firefox proofs via
@@ -124,7 +124,7 @@ jobs:
         # present, or the browser lane records browser_run_failed and turns the required
         # check red. Firefox only (headless chromium cannot rasterize text/oklch here).
         run: npx playwright install --with-deps firefox
-        working-directory: current/frontend
+        working-directory: frontend
 
       - name: Acceptance manifest is byte-fresh (frozen-file tamper check)
         run: uv run python development/scripts/gen_closeout_acceptance_manifest.py --check

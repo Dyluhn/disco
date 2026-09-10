@@ -1,6 +1,6 @@
 name: evidence-harness
 
-# The evidence-harness gates (campaign: current/docs/disco-evidence-harness-campaign.md). Two tiers,
+# The evidence-harness gates (campaign: development/notes/disco-evidence-harness-campaign.md). Two tiers,
 # matching the synthesized plan:
 #
 #  - pr-evidence (GitHub-hosted, REQUIRED, deterministic, NO browser): the fast input/output
@@ -52,22 +52,22 @@ jobs:
       - name: System tools for artifact validators
         run: sudo apt-get update && sudo apt-get install -y poppler-utils ffmpeg
 
-      # `packages` has been `current/packages` since the three-bucket restructure;
-      # this step had been exiting 4 (`file or directory not found: packages`) on
-      # every push since, so the whole required tier was red for a path typo.
+      # The test root is `packages` again since PKG-40 flattened `current/`.
+      # This step had exited 4 on a stale path once before; keep it in step
+      # with the layout.
       - name: Boundary contracts (W1/W2/W3/W10)
-        run: uv run pytest current/packages -m boundary_contract -p no:cacheprovider
+        run: uv run pytest packages -m boundary_contract -p no:cacheprovider
 
       - name: Artifact validators + disco-verify runner (W14a/W15)
         run: |
           uv run pytest \
-            current/packages/tools/tests/test_artifact_validators.py \
-            current/packages/tools/tests/test_deck_validators.py \
-            current/packages/tools/tests/test_heavy_validators.py \
-            current/packages/agent-server/tests/test_disco_verify_runner.py \
-            current/packages/core/tests/test_evidence_schema.py \
-            current/packages/agent-server/tests/integration/test_scripted_smoke.py \
-            current/packages/agent-server/tests/test_debug_evidence_route.py \
+            packages/tools/tests/test_artifact_validators.py \
+            packages/tools/tests/test_deck_validators.py \
+            packages/tools/tests/test_heavy_validators.py \
+            packages/agent-server/tests/test_disco_verify_runner.py \
+            packages/core/tests/test_evidence_schema.py \
+            packages/agent-server/tests/integration/test_scripted_smoke.py \
+            packages/agent-server/tests/test_debug_evidence_route.py \
             -p no:cacheprovider
 
       - name: Set up Node
@@ -75,11 +75,11 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: current/frontend/package-lock.json
+          cache-dependency-path: frontend/package-lock.json
 
-      # Same restructure: the frontend is `current/frontend`.
+      # Same restructure: the frontend is `frontend`.
       - name: Frontend event-store replay (W9 — no browser)
-        working-directory: current/frontend
+        working-directory: frontend
         run: |
           npm ci
           npx vitest run --maxWorkers=2 src/lib/buildTrace.replay.test.ts
@@ -108,13 +108,13 @@ jobs:
 
       # Heavy (render-it) validators — these were claimed by the nightly tier but never run.
       - name: Heavy validators (W14b — LibreOffice/poppler render)
-        run: uv run pytest current/packages/tools/tests/test_heavy_validators.py -p no:cacheprovider
+        run: uv run pytest packages/tools/tests/test_heavy_validators.py -p no:cacheprovider
 
       # Requires the workstation dev servers (5173/8000) reachable on this host's
       # localhost (the reverse SSH tunnel). The full Playwright config + live
       # disco-verify scenarios produce dossiers under test-record/.
       - name: Evidence-harness Playwright specs (W11/W12)
-        working-directory: current/frontend
+        working-directory: frontend
         run: |
           npm ci
           npx playwright install firefox chromium
@@ -131,5 +131,5 @@ jobs:
         with:
           name: evidence-dossiers
           path: |
-            current/frontend/test-record/e2e-full/**
+            frontend/test-record/e2e-full/**
             test-record/**
