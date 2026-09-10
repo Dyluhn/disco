@@ -20,7 +20,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT / "development" / "scripts"))
 
 from architecture import test_inventory  # noqa: E402
-from architecture.test_inventory_parts import _renames  # noqa: E402
+from architecture.test_inventory_parts import _renames, _transitions  # noqa: E402
 
 PATH = "packages/tools/tests/test_audio_overview_truncation.py"
 OTHER = "packages/tools/tests/test_audio_overview_integration.py"
@@ -210,3 +210,29 @@ def test_the_shipped_records_are_valid_and_fully_reasoned():
     assert sum(row["renamed_id_count"] for row in rows) == len(pairs)
     assert all(pair["reason"].strip() for pair in pairs)
     assert (len(rows), len(pairs)) == (SHIPPED_RENAME_FILES, SHIPPED_RENAMES)
+
+
+def test_an_earlier_packages_addition_receipt_survives_the_rename():
+    """PKG-37 added a test; PKG-38 renamed it. The receipt must stay as written.
+
+    Rewriting the earlier package's ``added_ids`` to name the new test would be
+    the falsification — that package never added a test by that name. The claim
+    is resolved through the rename map instead, so the identity is still proved
+    to exist under the name it now has.
+    """
+    resolved = _renames.current_identity_map({"renamed_test_transitions": [record([(OLD, NEW)])]})
+    assert resolved == {OLD: NEW}
+
+    problems: list[str] = []
+    _transitions.check_subset("PKG-37.added_ids", [OLD], [NEW], problems, resolved)
+    assert problems == []
+    _transitions.check_subset("PKG-37.added_ids", [OLD], [], problems, resolved)
+    assert problems == [
+        f"PKG-37.added_ids additions are absent from the current inventory: ['{NEW}']"
+    ]
+    # With no map the original exact-presence check is unchanged.
+    strict: list[str] = []
+    _transitions.check_subset("PKG-37.added_ids", [OLD], [NEW], strict)
+    assert strict == [
+        f"PKG-37.added_ids additions are absent from the current inventory: ['{OLD}']"
+    ]

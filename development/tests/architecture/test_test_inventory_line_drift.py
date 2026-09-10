@@ -45,3 +45,32 @@ def test_fixture_line_drift_preserves_historical_owner_without_new_addition():
         and "current inventory" in problem
         for problem in problems
     )
+
+
+def test_marker_line_drift_inside_a_split_file_is_not_growth():
+    """A file with an ``extracted`` record still holds the markers that stayed.
+
+    The record's ``new_paths`` deliberately exclude the file itself, so reading
+    only those reported a marker that merely moved a few lines inside
+    ``test_browser_daemon.py`` as forbidden growth. The row's own path is always
+    a legitimate destination; matching stays one-for-one on the exact identity.
+    """
+    path = "packages/tools/tests/test_browser_daemon.py"
+    shape = {
+        "framework": "pytest",
+        "marker": "pytest.skip",
+        "source": 'pytest.skip("installed Chromium is required")',
+    }
+    previous = {"path": path, "line": 596, **shape}
+    current = {"path": path, "line": 718, **shape}
+    ledger = _splits.SplitLedger(
+        {path: {"new_paths": ["packages/tools/tests/test_browser_daemon_startup.py"]}}
+    )
+
+    drifted = _splits.line_drift_pairs([previous], [current], _splits.MARKER_IDENTITY)
+    assert drifted == [previous]
+    assert _splits.unaccounted_marker_growth([current], drifted, ledger) == []
+
+    # A second marker with no deletion to pair with is still growth.
+    extra = {"path": path, "line": 930, **shape}
+    assert _splits.unaccounted_marker_growth([current, extra], drifted, ledger) == [extra]

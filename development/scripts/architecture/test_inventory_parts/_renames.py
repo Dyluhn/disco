@@ -201,6 +201,36 @@ def identity_problems(
     return problems
 
 
+def current_identity_map(baseline: dict[str, Any]) -> dict[str, str]:
+    """Map every renamed identity to the name it is known by NOW.
+
+    A past package's addition receipt names the identity it actually added.
+    Renaming that test later must not falsify the receipt, and rewriting the
+    receipt to name the new test would be the falsification. So the receipt
+    stays as written and is resolved through this map when the gate asks
+    whether the identity it claims still exists.
+
+    The map is one hop deep on purpose. Obligation 4 keeps a row's old and new
+    identities disjoint, and a rename never leaves its file, so no chain can be
+    recorded today; a landing that needs one will fail closed on that
+    obligation, which is where the design decision belongs.
+
+    Deliberately tolerant of a malformed record: :func:`rename_authority` is
+    the validator and reports those separately, and a resolution that silently
+    does nothing leaves the original strict presence check in force.
+    """
+    rows = baseline.get("renamed_test_transitions")
+    resolved: dict[str, str] = {}
+    for row in rows if isinstance(rows, list) else []:
+        pairs = row.get("renames") if isinstance(row, dict) else None
+        for pair in pairs if isinstance(pairs, list) else []:
+            old_id = pair.get("old_id") if isinstance(pair, dict) else None
+            new_id = pair.get("new_id") if isinstance(pair, dict) else None
+            if isinstance(old_id, str) and isinstance(new_id, str):
+                resolved[old_id] = new_id
+    return resolved
+
+
 class RenameLedger:
     """Accumulates observed renames so pinned counts can be verified."""
 

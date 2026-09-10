@@ -29,6 +29,8 @@ import json
 from collections import Counter
 from typing import Any
 
+from ._renames import current_identity_map
+
 COLLECTED_TRANSITION_KEYS = {"before_count", "after_count", "added_ids"}
 COLLECTED_TRANSITION_OPTIONAL = {"relocated_count", "retired_count", "renamed_count"}
 MAPPING_ADDITION_KEYS = {
@@ -130,8 +132,17 @@ def check_subset(
     additions: list[str],
     current: list[str],
     problems: list[str],
+    renames: dict[str, str] | None = None,
 ) -> None:
-    excess = Counter(additions) - Counter(current)
+    """Every identity a package claims to have added must still exist.
+
+    ``renames`` resolves a claimed identity to the name it is known by now, so
+    a later rename does not falsify an earlier package's addition receipt and
+    the receipt does not have to be rewritten to survive one. Absent a map this
+    is the original exact-presence check.
+    """
+    resolved = additions if not renames else [renames.get(item, item) for item in additions]
+    excess = Counter(resolved) - Counter(current)
     if excess:
         problems.append(
             f"{label} additions are absent from the current inventory: {sorted(excess.elements())}"
@@ -186,7 +197,7 @@ def check_collected_row(
     if not isinstance(current, list):
         problems.append(f"{label} has no current root authority")
         current = []
-    check_subset(f"{label}.added_ids", added, current, problems)
+    check_subset(f"{label}.added_ids", added, current, problems, current_identity_map(baseline))
     if valid_counts and after > len(current):
         problems.append(f"{label}.after_count exceeds current count {len(current)}")
     is_current = transition.get("source_identity_after") == baseline.get("source_identity")
@@ -298,7 +309,7 @@ def check_mapping_additions(
             authority = current.get(key, [])
             if not isinstance(authority, list):
                 authority = []
-        check_subset(label, values, authority, problems)
+        check_subset(label, values, authority, problems, current_identity_map(baseline))
         claim_disjoint(f"mapping_static.{key}", values, claims, problems)
         total += len(values)
     return total

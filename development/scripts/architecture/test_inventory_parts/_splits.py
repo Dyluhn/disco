@@ -478,11 +478,21 @@ def unaccounted_marker_growth(
     Marker growth stays forbidden. A marker that merely reappeared at its new
     home — or at a new line in the same file — is not growth, and is matched
     off against the deletion that explains it, one for one.
+
+    The row's OWN path is always a legitimate destination, split record or not.
+    ``accounted`` mixes relocated rows with line-drifted ones, and a file with
+    an ``extracted`` record still holds the markers that did not move: a marker
+    drifting a few lines inside ``test_browser_daemon.py`` is line drift, and
+    reading only the record's ``new_paths`` reported it as growth. Matching
+    stays one-for-one on the exact ``(framework, marker, source)`` identity, so
+    a real addition — one with no deletion to pair with — is still refused.
     """
     growth = list(additions)
     for previous in accounted:
         record = ledger.record_for(str(previous.get("path"))) if ledger else None
-        paths = set(record["new_paths"]) if record else {previous.get("path")}
+        paths = {previous.get("path")}
+        if record:
+            paths |= set(record["new_paths"])
         for index, current in enumerate(growth):
             if current.get("path") in paths and _identity(current, _MARKER_IDENTITY) == _identity(
                 previous, _MARKER_IDENTITY
