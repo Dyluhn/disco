@@ -102,7 +102,7 @@ class TestProtectedSet:
 
     def test_drifted_implementation_file_detected(self, tmp_path: Path) -> None:
         """A drifted protected implementation file must be detected by check_seal_bytes."""
-        manifest_dir = tmp_path / "docs" / "governance"
+        manifest_dir = tmp_path / "development" / "governance"
         manifest_dir.mkdir(parents=True)
         arch_dir = tmp_path / "development" / "architecture"
         arch_dir.mkdir(parents=True)
@@ -153,7 +153,7 @@ class TestOrderedCommands:
 class TestSealByteDrift:
     def test_seal_rejects_drift(self, tmp_path: Path) -> None:
         """A digest mismatch must fail."""
-        manifest_dir = tmp_path / "docs" / "governance"
+        manifest_dir = tmp_path / "development" / "governance"
         manifest_dir.mkdir(parents=True)
         write(tmp_path / "development" / "architecture" / "policy.json", "{}")
         manifest = f"{'0' * 64}  development/architecture/policy.json\n"
@@ -178,7 +178,7 @@ class TestSealByteDrift:
 
     def test_seal_rejects_stale_entry(self, tmp_path: Path) -> None:
         """A manifest entry for a non-protected file must fail."""
-        manifest_dir = tmp_path / "docs" / "governance"
+        manifest_dir = tmp_path / "development" / "governance"
         manifest_dir.mkdir(parents=True)
         manifest = "abc123  extra/file.py\n"
         write(manifest_dir / "PROTECTED.sha256", manifest)
@@ -193,7 +193,7 @@ class TestSealByteDrift:
 
     def test_seal_rejects_malformed_manifest(self, tmp_path: Path) -> None:
         """A malformed manifest must fail with code 3."""
-        manifest_dir = tmp_path / "docs" / "governance"
+        manifest_dir = tmp_path / "development" / "governance"
         manifest_dir.mkdir(parents=True)
         write(manifest_dir / "PROTECTED.sha256", "not a valid manifest\n")
         result = seal.check_seal_bytes(tmp_path)
@@ -212,7 +212,7 @@ class TestSealByteDrift:
 
     def test_seal_rejects_unsealed_protected_file(self, tmp_path: Path) -> None:
         """A protected file absent from the manifest must fail as unsealed."""
-        manifest_dir = tmp_path / "docs" / "governance"
+        manifest_dir = tmp_path / "development" / "governance"
         manifest_dir.mkdir(parents=True)
         arch_dir = tmp_path / "development" / "architecture"
         arch_dir.mkdir(parents=True)

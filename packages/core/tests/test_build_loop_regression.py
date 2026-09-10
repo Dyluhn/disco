@@ -40,7 +40,7 @@ from build_loop_metrics import (  # noqa: E402
     target_violations,
 )
 
-_GOLDEN_TRACE = _REPO_ROOT / "docs" / "evidence" / "macos-build-trace-6-17-26.txt"
+_GOLDEN_TRACE = _REPO_ROOT / "development" / "notes" / "evidence" / "macos-build-trace-6-17-26.txt"
 
 
 def _golden_metrics():
