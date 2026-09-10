@@ -44,7 +44,7 @@ from _governance import (  # noqa: E402
 FILE_TOOLS = {"Edit", "Write", "NotebookEdit", "MultiEdit"}
 
 # Source prefixes whose mutation should wait for an overdue review.
-SOURCE_PREFIXES = ("current/packages/", "current/frontend/", "development/harness/", "development/scripts/")
+SOURCE_PREFIXES = ("packages/", "frontend/", "development/harness/", "development/scripts/")
 SOURCE_CONFIG = {".importlinter", "pyproject.toml", "uv.lock", "package.json"}
 
 # Best-effort shell mutation signals.  Deliberately simple; see the docstring.
@@ -142,9 +142,9 @@ def main() -> int:
                     f"BLOCKED: {rel} is a change-controlled governance file.\n\n"
                     "It states standards an agent may not silently drift. Editing it "
                     "requires an explicit instruction from the owner and the "
-                    "rebaseline procedure in current/docs/governance/README.md.\n\n"
+                    "rebaseline procedure in development/governance/README.md.\n\n"
                     "If you believe the standard itself is wrong, record the "
-                    "disagreement in current/docs/governance/CAMPAIGN-STATUS.md and continue "
+                    "disagreement in development/governance/CAMPAIGN-STATUS.md and continue "
                     "the campaign under the existing standard."
                 )
 
@@ -156,7 +156,7 @@ def main() -> int:
                     f"BLOCKED: this command appears to modify {hit}, a "
                     "change-controlled governance file.\n\n"
                     "Rebaselining requires an explicit owner instruction and the "
-                    "procedure in current/docs/governance/README.md. "
+                    "procedure in development/governance/README.md. "
                     "development/scripts/check_governance_seal.py verifies the seal regardless of "
                     "how a write is spelled."
                 )
@@ -173,11 +173,11 @@ def main() -> int:
                     f"{rel} is a source path.\n\n"
                     "The review must happen before the next source mutation. Do it "
                     "now:\n"
-                    "  1. Append a complete review to current/docs/governance/SELF-REVIEWS.md "
+                    "  1. Append a complete review to development/governance/SELF-REVIEWS.md "
                     "(every required field answered -- a timestamp is not a review).\n"
-                    "  2. Update current/docs/governance/CAMPAIGN-STATUS.md.\n"
+                    "  2. Update development/governance/CAMPAIGN-STATUS.md.\n"
                     "  3. Record any evidenced pattern in "
-                    "current/docs/governance/RELIABILITY-PATTERNS.md.\n\n"
+                    "development/governance/RELIABILITY-PATTERNS.md.\n\n"
                     "Completing the review advances the schedule automatically and "
                     "unblocks source edits. Then CONTINUE the campaign -- a review is "
                     "not a checkpoint and not permission to stop."

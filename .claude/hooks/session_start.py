@@ -81,7 +81,7 @@ def main() -> int:
     lines.append(
         "Authority order: current code+tests+evidence > ENGINEERING-STANDARDS > "
         "ARCHITECTURE-BOUNDARIES > CAMPAIGN-PLAN > CURRENT-STATE/CAMPAIGN-STATUS. "
-        "See current/docs/governance/README.md. archive/ and archive/docs/ are history only."
+        "See development/governance/README.md."
     )
 
     emit(

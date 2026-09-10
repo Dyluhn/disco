@@ -31,10 +31,10 @@ REVIEW_STATE_FILE = "review_state.json"
 
 SEAL_SCRIPT = "development/scripts/check_governance_seal.py"
 
-SELF_REVIEWS = "current/docs/governance/SELF-REVIEWS.md"
-CAMPAIGN_STATUS = "current/docs/governance/CAMPAIGN-STATUS.md"
-RELIABILITY_PATTERNS = "current/docs/governance/RELIABILITY-PATTERNS.md"
-CURRENT_STATE = "current/docs/governance/CURRENT-STATE.md"
+SELF_REVIEWS = "development/governance/SELF-REVIEWS.md"
+CAMPAIGN_STATUS = "development/governance/CAMPAIGN-STATUS.md"
+RELIABILITY_PATTERNS = "development/governance/RELIABILITY-PATTERNS.md"
+CURRENT_STATE = "development/governance/CURRENT-STATE.md"
 
 # Governance ledgers stay writable even while a review is overdue -- otherwise
 # the agent could not perform the very review that clears the block.
@@ -213,8 +213,8 @@ def protected_paths(root: Path | None = None) -> tuple[str, ...]:
     if module is None or not hasattr(module, "PROTECTED"):
         # Fail safe: if we cannot read the set, protect the known names.
         return (
-            "current/docs/governance/ENGINEERING-STANDARDS.md",
-            "current/docs/governance/ARCHITECTURE-BOUNDARIES.md",
+            "development/governance/ENGINEERING-STANDARDS.md",
+            "development/governance/ARCHITECTURE-BOUNDARIES.md",
         )
     return tuple(module.PROTECTED)
 
