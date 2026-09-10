@@ -42,19 +42,19 @@ _FORCE_VERDICT_RE = re.compile(
 _PYTEST_CURRENT_TEST_BASELINE: frozenset[tuple[str, str]] = frozenset(
     {
         (
-            "current/packages/agent-server/src/disco/agent_server/auth.py",
+            "packages/agent-server/src/disco/agent_server/auth.py",
             'if not os.environ.get("PYTEST_CURRENT_TEST"):',
         ),
         (
-            "current/packages/agent-server/src/disco/agent_server/auth.py",
+            "packages/agent-server/src/disco/agent_server/auth.py",
             'os.environ.get("PYTEST_CURRENT_TEST") and server_host in {"testserver", "test", "t"}',
         ),
         (
-            "current/packages/agent-server/src/disco/agent_server/routes/workflows.py",
+            "packages/agent-server/src/disco/agent_server/routes/workflows.py",
             'if os.environ.get("PYTEST_CURRENT_TEST"):',
         ),
         (
-            "current/packages/app-server/src/disco/app_server/auth.py",
+            "packages/app-server/src/disco/app_server/auth.py",
             'if not os.environ.get("PYTEST_CURRENT_TEST"):',
         ),
     }
@@ -140,7 +140,7 @@ _G18_DIFF_SCAN_SUFFIXES = (".py", ".ts", ".tsx", ".js", ".jsx", ".yml", ".yaml")
 _G18_DIFF_EXEMPT_PREFIXES = (
     "development/scripts/verify_export_track1_closeout.py",
     "development/scripts/gen_closeout_acceptance_manifest.py",
-    "current/packages/agent-server/tests/release_remediation/",
+    "packages/agent-server/tests/release_remediation/",
 )
 
 
@@ -437,7 +437,7 @@ def _frozen_python_test_files(repo: Path) -> list[Path]:
             files.extend(p for p in sorted(base.rglob("*.py")) if "__pycache__" not in p.parts)
     for rel in (
         manifest_mod.LIVE_TEST_FILE,
-        "current/packages/agent-server/tests/integration/_closeout_live_support.py",
+        "packages/agent-server/tests/integration/_closeout_live_support.py",
     ):
         p = repo / rel
         if p.is_file():
@@ -598,7 +598,7 @@ def _scan_campaign_diff_suppressions(
 
 def _observed_command_ids(repo: Path) -> set[str]:
     """The set of command IDs this verifier actually dispatches on this host. The Python
-    lanes always run; the current/frontend/browser/G11 commands run only when node/npm/npx are
+    lanes always run; the frontend/browser/G11 commands run only when node/npm/npx are
     present. On a real acceptance host (all tools present) this equals
     ``manifest_mod.REQUIRED_COMMAND_IDS``; a host missing a toolchain OMITS commands and
     the inventory gate then fails (an acceptance run cannot omit a required command)."""
@@ -640,5 +640,5 @@ def _check_command_inventory(
 
 def _frontend_root(repo):
     """The frontend tree, wherever the three-bucket layout puts it."""
-    bucketed = repo / "current" / "frontend"
+    bucketed = repo / "frontend"
     return bucketed if bucketed.is_dir() else repo / "frontend"

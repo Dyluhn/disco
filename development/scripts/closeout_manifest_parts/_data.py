@@ -37,12 +37,12 @@ from ._remediation import REMEDIATION_V6 as REMEDIATION_V6
 # set matches REALITY on the acceptance branch: three closeout test dirs, the fixture
 # README, the vitest dir, and the Playwright e2e DIR (three ``.spec.ts`` proofs).
 FROZEN_DIR_GLOBS: tuple[str, ...] = (
-    "current/packages/core/tests/export_track1_closeout",
-    "current/packages/tools/tests/export_track1_closeout",
-    "current/packages/agent-server/tests/export_track1_closeout",
-    "current/packages/agent-server/tests/fixtures/export_track1_closeout",
-    "current/frontend/src/test/export-track1-closeout",
-    "current/frontend/e2e/export-track1-closeout",
+    "packages/core/tests/export_track1_closeout",
+    "packages/tools/tests/export_track1_closeout",
+    "packages/agent-server/tests/export_track1_closeout",
+    "packages/agent-server/tests/fixtures/export_track1_closeout",
+    "frontend/src/test/export-track1-closeout",
+    "frontend/e2e/export-track1-closeout",
 )
 FROZEN_FILES: tuple[str, ...] = (
     "development/scripts/verify_export_track1_closeout.py",
@@ -52,40 +52,40 @@ FROZEN_FILES: tuple[str, ...] = (
     # PASSED (JUnit collapses xfail->skipped, hides a non-strict xpass, and omits a vanished
     # test). Frozen so a lane's truth-source cannot be silently weakened.
     "development/scripts/closeout_pytest_report.py",
-    "current/packages/agent-server/tests/integration/test_export_track1_closeout_live.py",
-    "current/packages/agent-server/tests/integration/_closeout_live_support.py",
+    "packages/agent-server/tests/integration/test_export_track1_closeout_live.py",
+    "packages/agent-server/tests/integration/_closeout_live_support.py",
     # acceptance-v5: the capture/structural-rendering regression suite the 2026-07-17
     # owner rulings (A / E) require — proves the exec_env exemption is narrow, ordinary
     # recorded output is still swept, and the structural rendering excludes ONLY
     # externally supplied env (an in-yaml secret still fails). Frozen so the ruled
     # guarantees cannot be silently weakened.
-    "current/packages/agent-server/tests/integration/test_closeout_live_capture_regression.py",
+    "packages/agent-server/tests/integration/test_closeout_live_capture_regression.py",
     ".github/workflows/export-track1-closeout.yml",
-    "current/docs/export-track1-closeout-work-orders.md",
+    "development/notes/export-track1-closeout-work-orders.md",
     # The dedicated tsconfig for the G11 nullable-binding compile lane (acceptance-v4).
-    # The contract file it checks lives under the frozen current/frontend/src/test dir glob.
-    "current/frontend/tsconfig.closeout-g11.json",
+    # The contract file it checks lives under the frozen frontend/src/test dir glob.
+    "frontend/tsconfig.closeout-g11.json",
     # R6 (G18): the owner-approved suppression baseline the anti-bypass diff scanner
     # reads. Freezing it means adding an approved suppression requires a manifest
     # regeneration + re-review (tamper-evident), not a silent edit.
-    "current/docs/export-track1-closeout-suppression-baseline.json",
+    "development/notes/export-track1-closeout-suppression-baseline.json",
 )
 
 # ---- lane definitions (single source of truth; the verifier imports these) ----
 
 # The focused closeout pytest lane (plan §3.2, second command).
 CLOSEOUT_TEST_DIRS: tuple[str, ...] = (
-    "current/packages/core/tests/export_track1_closeout",
-    "current/packages/tools/tests/export_track1_closeout",
-    "current/packages/agent-server/tests/export_track1_closeout",
+    "packages/core/tests/export_track1_closeout",
+    "packages/tools/tests/export_track1_closeout",
+    "packages/agent-server/tests/export_track1_closeout",
 )
 
 # The non-live pytest suite (plan §3.2, first command) — the FULL non-integration
 # tree (the closeout reds run inside it too, so a green run proves nothing regressed).
 NONLIVE_TEST_PATHS: tuple[str, ...] = (
-    "current/packages/core/tests",
-    "current/packages/tools/tests",
-    "current/packages/agent-server/tests",
+    "packages/core/tests",
+    "packages/tools/tests",
+    "packages/agent-server/tests",
 )
 
 # ---- R6 additions (plan §9): the frozen required command inventory (G19 / criterion 3).
@@ -102,21 +102,21 @@ NONLIVE_TEST_PATHS: tuple[str, ...] = (
 # Descriptors use repo/frontend-relative paths for byte-stability across hosts.
 COMMAND_INVENTORY: dict[str, str] = {
     "python_nonlive": (
-        "python -m pytest current/packages/core/tests current/packages/tools/tests "
-        "current/packages/agent-server/tests -o addopts= -m 'not integration' "
+        "python -m pytest packages/core/tests packages/tools/tests "
+        "packages/agent-server/tests -o addopts= -m 'not integration' "
         "-p closeout_pytest_report --closeout-report-json <report> --junitxml"
     ),
     "python_closeout": (
-        "python -m pytest current/packages/core/tests/export_track1_closeout "
-        "current/packages/tools/tests/export_track1_closeout "
-        "current/packages/agent-server/tests/export_track1_closeout -o addopts= "
+        "python -m pytest packages/core/tests/export_track1_closeout "
+        "packages/tools/tests/export_track1_closeout "
+        "packages/agent-server/tests/export_track1_closeout -o addopts= "
         "-m 'export_track1_closeout and not integration' "
         "-p closeout_pytest_report --closeout-report-json <report> --junitxml"
     ),
     "python_closeout_collect": (
-        "python -m pytest current/packages/core/tests/export_track1_closeout "
-        "current/packages/tools/tests/export_track1_closeout "
-        "current/packages/agent-server/tests/export_track1_closeout -o addopts= "
+        "python -m pytest packages/core/tests/export_track1_closeout "
+        "packages/tools/tests/export_track1_closeout "
+        "packages/agent-server/tests/export_track1_closeout -o addopts= "
         "-m 'export_track1_closeout and not integration' --collect-only -q"
     ),
     "frontend_vitest": "npx vitest run src/test/export-track1-closeout --reporter=json",
@@ -128,13 +128,13 @@ COMMAND_INVENTORY: dict[str, str] = {
     ),
     "live_docker": (
         "python -m pytest "
-        "current/packages/agent-server/tests/integration/test_export_track1_closeout_live.py "
+        "packages/agent-server/tests/integration/test_export_track1_closeout_live.py "
         "-o addopts= -m 'export_track1_closeout and integration' -ra "
         "-p closeout_pytest_report --closeout-report-json <report> --junitxml"
     ),
     "live_capture": (
         "python -m pytest "
-        "current/packages/agent-server/tests/integration/test_closeout_live_capture_regression.py "
+        "packages/agent-server/tests/integration/test_closeout_live_capture_regression.py "
         "-o addopts= -m 'export_track1_closeout and integration' -ra "
         "-p closeout_pytest_report --closeout-report-json <report> --junitxml"
     ),

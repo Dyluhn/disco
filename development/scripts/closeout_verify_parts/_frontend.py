@@ -201,7 +201,7 @@ def _run_frontend_lane(
     #     G13(b) call hits exactly this: a fresh empty evidence_dir has no report);
     #   * present report -> green browser only if it EXECUTED and expected>0, unexpected==0,
     #     flaky==0, skipped==0 AND the executed spec set equals the frozen e2e inventory
-    #     (all current/frontend/e2e/export-track1-closeout/*.spec.ts).
+    #     (all frontend/e2e/export-track1-closeout/*.spec.ts).
     # browser_ok is folded into lane.green, so an un-run / failed / partial browser proof
     # can never be a green, gating input to passed:true.
     e2e_dir = repo / manifest_mod.FRONTEND_E2E_DIR
@@ -372,5 +372,5 @@ def _run_browser_e2e(repo: Path, evidence_dir: Path) -> dict[str, object]:
 
 def _frontend_root(repo):
     """The frontend tree, wherever the three-bucket layout puts it."""
-    bucketed = repo / "current" / "frontend"
+    bucketed = repo / "frontend"
     return bucketed if bucketed.is_dir() else repo / "frontend"

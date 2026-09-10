@@ -14,7 +14,7 @@ Lanes (all wired; each is honestly recorded, none is ``not_wired_yet``):
     those) is rejected; a fresh ``--collect-only`` node-ID inventory is compared with
     the FROZEN inventory read FROM THE MANIFEST JSON, so changing pytest discovery
     cannot hide a test.
-  * ``frontend`` — from ``current/frontend/``: the frozen closeout vitest (``--reporter=json``),
+  * ``frontend`` — from ``frontend/``: the frozen closeout vitest (``--reporter=json``),
     ``npm run typecheck:build``, and ``npx vite build`` (plan §3.3). Green iff vitest
     has zero failed/pending/todo AND both typecheck and build exit 0 AND the discovered
     test-file set equals the frozen ``frontend_closeout_inventory`` AND, per file, the

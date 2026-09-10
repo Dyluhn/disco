@@ -50,7 +50,7 @@ Randomized (plan §4 crit 8): every conversation id / title is drawn from the se
 a fixture name, so hard-coding an id/path cannot satisfy it.
 
 Scope note — §10.4 (the UI renders every collision blocker and no self-host command /
-bound bundle action) is a SEPARATE frontend tranche (``current/frontend/**``); it is NOT
+bound bundle action) is a SEPARATE frontend tranche (``frontend/**``); it is NOT
 authored here. This file asserts the API/download side only. The "AppKit entrypoint"
 that plan §10.2 lists among the generated paths is, on this baseline, materialized
 INSIDE the Dockerfile via a ``COPY <<HEREDOC`` (it is not a discrete workspace-

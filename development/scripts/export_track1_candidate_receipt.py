@@ -11,7 +11,7 @@ The corrections it keeps:
 2. PRISTINE   — the worktree must be empty of BOTH tracked modifications AND untracked
                 files (``--untracked-files=all``), so the commit IS what is on disk.
 3. BINDING    — every recovery file is bound by a COMPLETE hash inventory
-                (``current/docs/export-track1-recovery-inventory.json``). Scope is derived from
+                (``development/notes/export-track1-recovery-inventory.json``). Scope is derived from
                 GIT (``base..HEAD``), never a hand-kept list; MISSING / ADDITIONAL /
                 STALE / CHANGED entries are all rejected.
 4. EXTERNAL   — external evidence files (e.g. the 104-case adversarial probe) are
@@ -49,7 +49,7 @@ from pathlib import Path
 from track1_receipt_parts._proof_suites import Check, check_proof_suite_binding, run_proof_tests
 
 REPO = Path(__file__).resolve().parent.parent
-INVENTORY_REL = "current/docs/export-track1-recovery-inventory.json"
+INVENTORY_REL = "development/notes/export-track1-recovery-inventory.json"
 
 
 # ---------------------------------------------------------------------------

@@ -8,7 +8,7 @@
  *
  * `"verified"` IS expressible in the current type: `ReleaseAssessmentState` already
  * includes the verification-lifecycle values (`verifying` | `verified` | `failed`)
- * for forward-compatibility (see `current/frontend/src/types/release.ts`), so this renders a
+ * for forward-compatibility (see `frontend/src/types/release.ts`), so this renders a
  * genuine `verified` `ReleaseResponse` at the real component boundary (the `release`
  * prop) — NOT a mock, and with no `any`-cast to force the state.
  *

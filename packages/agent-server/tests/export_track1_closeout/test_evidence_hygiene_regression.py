@@ -52,7 +52,7 @@ import pytest
 # import mode already exposes sibling test modules. ``importlib.import_module`` (a call,
 # not a top-level ``import`` of code-under-test) keeps this lint-clean.
 _THIS_DIR = Path(__file__).resolve().parent
-_REPO_ROOT = Path(__file__).resolve().parents[5]
+_REPO_ROOT = Path(__file__).resolve().parents[4]
 _SCRIPTS_DIR = _REPO_ROOT / "development" / "scripts"
 for _extra in (_SCRIPTS_DIR, _THIS_DIR):
     if str(_extra) not in sys.path:

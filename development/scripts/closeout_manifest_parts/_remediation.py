@@ -16,14 +16,14 @@ from __future__ import annotations
 # (the verifier gates on `files` + `python_closeout_inventory` + `frontend_closeout_
 # inventory`, never on this), so every node ID is hand-verified against a real
 # `pytest --collect-only` (the machine-truth python_closeout_inventory).
-_R0_AGENT = "current/packages/agent-server/tests/export_track1_closeout"
-_R0_TOOLS = "current/packages/tools/tests/export_track1_closeout"
+_R0_AGENT = "packages/agent-server/tests/export_track1_closeout"
+_R0_TOOLS = "packages/tools/tests/export_track1_closeout"
 REMEDIATION_V6: dict[str, object] = {
     "authored": "2026-07-17",
     "supersedes": "acceptance-v5",
     "authority": (
         "Independent C9 review FAILED the acceptance-v5 candidate a1b5025e "
-        "(evidence: /var/home/dylan/closeout-evidence-archive/"
+        "(evidence: closeout-evidence-archive/"
         "2026-07-17-export-track1-c9-independent/C9-REVIEW.md). This v6 re-freezes the "
         "legitimately-changed frozen files after the bounded C9-01..C9-06 recovery: "
         "C9-01 (real-LibreOffice G17: OPC relationship-integrity pre-check + pinned "
@@ -39,23 +39,23 @@ REMEDIATION_V6: dict[str, object] = {
         "the AppKit generator, session auth, and RBAC were NOT modified."
     ),
     "c9_failure_report": (
-        "/var/home/dylan/closeout-evidence-archive/2026-07-17-export-track1-c9-independent/"
+        "closeout-evidence-archive/2026-07-17-export-track1-c9-independent/"
         "C9-REVIEW.md"
     ),
     "frozen_byte_changes_v5_to_v6": {
-        "current/packages/agent-server/tests/integration/_closeout_live_support.py": {
+        "packages/agent-server/tests/integration/_closeout_live_support.py": {
             "before_v5": "e34e0f1092a9e31b012199df75df26b373fecd26892a2b3c94e7786358cbc093",
             "after_v6": "a41c379ec8920f383b85ddc6f03186ab5ded3e7b40d85f8a870fa51fac5d2378",
             "why": "C9-02 genuine evidence collection (record_bundle_digest, compose-ps / "
             "inspect / cleanup capture) + C9-05 public-only fixture",
         },
-        "current/packages/agent-server/tests/integration/test_export_track1_closeout_live.py": {
+        "packages/agent-server/tests/integration/test_export_track1_closeout_live.py": {
             "before_v5": "920388773bcd14638d2562e813dfa40c835ca163b51433ec3b62c1ce3c4e1676",
             "after_v6": "4dba6fbdb813e31932442784eb10bdf38eb1c59807b323400552d8baff63b7a6",
             "why": "C9-02 record_bundle_digest calls + slug->family map; C9-05 public-only "
             "live test",
         },
-        "current/packages/agent-server/tests/integration/test_closeout_live_capture_regression.py": {
+        "packages/agent-server/tests/integration/test_closeout_live_capture_regression.py": {
             "before_v5": "55bdd6c0357bb9a260fbb5f23e346605200b0bdf03ec0ea8ed320aeeb68bed31",
             "after_v6": "d8db9e62b265bd98842a10af1506cf9a783fe6cce04e1c5f37d1b8f6a1dc192a",
             "why": "C9-03 export_track1_closeout marker so the capture lane is governed",
@@ -98,7 +98,7 @@ REMEDIATION_V5: dict[str, object] = {
         "real .env). The generator/AppKit RBAC/session auth were NOT modified."
     ),
     "frozen_byte_changes_v4_to_v5": {
-        "current/packages/agent-server/tests/integration/_closeout_live_support.py": {
+        "packages/agent-server/tests/integration/_closeout_live_support.py": {
             "before_v4": "ca596d4708bc78742abcc641f95391c9f0015e315410b27ccf45373d15b4c3ba",
             "after_v5": "e34e0f1092a9e31b012199df75df26b373fecd26892a2b3c94e7786358cbc093",
             "why": "rulings A + E: compose(record=) with exec_env as the SOLE "
@@ -106,13 +106,13 @@ REMEDIATION_V5: dict[str, object] = {
             "renders the structural model; http_response/session_cookie_from "
             "helpers; appkit_record_plan additionally derives a valid role",
         },
-        "current/packages/agent-server/tests/integration/test_export_track1_closeout_live.py": {
+        "packages/agent-server/tests/integration/test_export_track1_closeout_live.py": {
             "before_v4": "42dbd6c14ad689c89c9287e410d04874dc0f9b03499b51bfd2da05b85d09a546",
             "after_v5": "920388773bcd14638d2562e813dfa40c835ca163b51433ec3b62c1ce3c4e1676",
             "why": "ruling B(a): AppKit §12.6 exercises the documented session-auth "
             "model end-to-end; docstrings updated to match",
         },
-        "current/packages/agent-server/tests/integration/test_closeout_live_capture_regression.py": {
+        "packages/agent-server/tests/integration/test_closeout_live_capture_regression.py": {
             "before_v4": None,
             "after_v5": "55bdd6c0357bb9a260fbb5f23e346605200b0bdf03ec0ea8ed320aeeb68bed31",
             "why": "NEW frozen file: the seven ruled regressions for A + E (incl. the "
@@ -142,7 +142,7 @@ REMEDIATION_V5: dict[str, object] = {
 REMEDIATION_R0: dict[str, object] = {
     "acceptance_version": "v4",
     "base_candidate": "581d1fbe",
-    "plan_doc": "current/docs/export-track1-closeout-remediation-plan.md",
+    "plan_doc": "development/notes/export-track1-closeout-remediation-plan.md",
     "ratification_status": (
         "[HISTORICAL R0 RECORD — superseded by acceptance-v5; see remediation_v5.] "
         "acceptance-v4 is a CANDIDATE for independent human review. No human has reviewed, "
@@ -203,10 +203,10 @@ REMEDIATION_R0: dict[str, object] = {
         "::test_frontend_lane_unexecuted_browser_must_block_green",
     ],
     "proving_reds_frontend": [
-        "current/frontend/src/test/export-track1-closeout/g08-download-url-binding.test.tsx"
+        "frontend/src/test/export-track1-closeout/g08-download-url-binding.test.tsx"
         "::WO-A (G08) — the download URL binds to the release's version_seq + spec_digest"
         " > carries the SUPPLIED binding [v7 / g08a-0007] on the download URL",
-        "current/frontend/src/test/export-track1-closeout/g08-download-url-binding.test.tsx"
+        "frontend/src/test/export-track1-closeout/g08-download-url-binding.test.tsx"
         "::WO-A (G08) — the download URL binds to the release's version_seq + spec_digest"
         " > carries the SUPPLIED binding [v42 / g08b-0042] on the download URL",
     ],
@@ -227,7 +227,7 @@ REMEDIATION_R0: dict[str, object] = {
     ),
     "proving_reds_compile": [
         {
-            "contract": "current/frontend/src/test/export-track1-closeout/g11-nullable-binding.contract.ts",
+            "contract": "frontend/src/test/export-track1-closeout/g11-nullable-binding.contract.ts",
             "command": "cd frontend && npx tsc -p tsconfig.closeout-g11.json --noEmit",
             "expected_exit": 2,
             "expected_diagnostics": [
@@ -259,7 +259,7 @@ REMEDIATION_R0: dict[str, object] = {
     ),
     "r4_activated_deferred": {
         "G08_e2e": (
-            "current/frontend/e2e/export-track1-closeout/selfhost-download-binding.spec.ts — the "
+            "frontend/e2e/export-track1-closeout/selfhost-download-binding.spec.ts — the "
             "self-host download-binding e2e. RED at reachability today (the candidate/"
             "needs-review SelfHostPanel is unreachable offline, same wall as G09); its "
             "version_seq+spec_digest binding teeth activate once R4 restores reachability. "
@@ -283,7 +283,7 @@ REMEDIATION_R0: dict[str, object] = {
         ),
     },
     "ratified_baseline_suppression": (
-        "current/packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py:349 "
+        "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py:349 "
         "'# noqa: BLE001' (G18) — the SINGLE ratified pre-existing suppression; it "
         "strengthens the test (catches a churner crash). No new suppressions added."
     ),

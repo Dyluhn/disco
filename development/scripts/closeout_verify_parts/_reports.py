@@ -110,9 +110,9 @@ def _junit_reasons(
 # take no allowlist and remain strictly zero-skip (C9-01 reconciliation, 2026-07-17).
 _NONLIVE_BASELINE_ALLOWLIST: dict[str, str] = {
     # Dormant v1.2 router revival harness — documented module-level collection skip.
-    "current/packages/core/tests/test_router_overflow.py": "skipped",
+    "packages/core/tests/test_router_overflow.py": "skipped",
     # Historical stale-upstream xfail, documented in-marker at nightly HEAD b6cc4a1a.
-    "current/packages/core/tests/test_appkit_directory.py"
+    "packages/core/tests/test_appkit_directory.py"
     "::test_unknown_app_kind_lowers_as_lead_gen_byte_identical": "xfailed",
 }
 

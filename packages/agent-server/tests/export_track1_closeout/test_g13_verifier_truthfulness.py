@@ -53,7 +53,7 @@ import pytest
 # resolves its sibling ``gen_closeout_acceptance_manifest`` module (a bare import that
 # relies on development/scripts/ being importable). ``importlib.import_module`` — a call, not a
 # top-level ``import`` after code — keeps this lint-clean without a suppression directive.
-_REPO_ROOT = Path(__file__).resolve().parents[5]
+_REPO_ROOT = Path(__file__).resolve().parents[4]
 _SCRIPTS_DIR = _REPO_ROOT / "development" / "scripts"
 if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
@@ -196,7 +196,7 @@ def test_frontend_lane_unexecuted_browser_must_block_green(tmp_path: Path) -> No
     mirror_repo = tmp_path / "repo"
     evidence_dir = tmp_path / "evidence"
     evidence_dir.mkdir()
-    _mirror_frontend(_REPO_ROOT / "current" / "frontend", mirror_repo / "current" / "frontend", vitest_rel, keep)
+    _mirror_frontend(_REPO_ROOT / "frontend", mirror_repo / "frontend", vitest_rel, keep)
 
     lane = verify._run_frontend_lane(mirror_repo, evidence_dir, frontend_inventory)
     detail = lane.detail

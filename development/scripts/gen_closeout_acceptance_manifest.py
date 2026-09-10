@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate ``current/docs/export-track1-closeout-acceptance.sha256`` — the frozen-harness
+"""Generate ``development/notes/export-track1-closeout-acceptance.sha256`` — the frozen-harness
 SHA-256 manifest + red-test inventory (WO-C0, plan §1.1 / §4.2).
 
 The manifest hashes EVERY frozen acceptance file listed in plan §1.1 EXCEPT itself
@@ -51,7 +51,7 @@ from closeout_manifest_parts._data import REQUIRED_COMMAND_IDS as REQUIRED_COMMA
 # are the directory globs (recursively hashed) and single files that make up the
 # frozen acceptance harness. The manifest itself is EXCLUDED (it cannot hash itself).
 
-MANIFEST_REL = "current/docs/export-track1-closeout-acceptance.sha256"
+MANIFEST_REL = "development/notes/export-track1-closeout-acceptance.sha256"
 
 # The baseline the harness is authored against (plan header).
 BASELINE_SHA = "2ec1ceba08e90bd1f45a19075d76975d44e90b7c"
@@ -63,17 +63,17 @@ ACCEPTANCE_TAG = "export-track1-closeout-acceptance-v6"
 CLOSEOUT_MARKER_NONLIVE = "export_track1_closeout and not integration"
 
 # The live Docker lane (plan §3.4).
-LIVE_TEST_FILE = "current/packages/agent-server/tests/integration/test_export_track1_closeout_live.py"
+LIVE_TEST_FILE = "packages/agent-server/tests/integration/test_export_track1_closeout_live.py"
 CLOSEOUT_MARKER_LIVE = "export_track1_closeout and integration"
 # C9-03: the governed A/E capture-regression lane — a SEPARATE required live selection
 # with its own frozen exact node inventory (missing/skipped/extra/unexecuted is fatal).
 CAPTURE_TEST_FILE = (
-    "current/packages/agent-server/tests/integration/test_closeout_live_capture_regression.py"
+    "packages/agent-server/tests/integration/test_closeout_live_capture_regression.py"
 )
 
 # The frontend lanes (plan §3.3).
-FRONTEND_VITEST_DIR = "current/frontend/src/test/export-track1-closeout"
-FRONTEND_E2E_DIR = "current/frontend/e2e/export-track1-closeout"
+FRONTEND_VITEST_DIR = "frontend/src/test/export-track1-closeout"
+FRONTEND_E2E_DIR = "frontend/e2e/export-track1-closeout"
 
 # NONLIVE_TEST_PATHS (imported above): the non-live pytest suite (plan §3.2, first
 # command) — the FULL non-integration tree (the closeout reds run inside it too, so a
@@ -93,7 +93,7 @@ NONLIVE_MARKER = "not integration"
 # (BASELINE_SHA..HEAD) whose (file, stripped-line) pair is NOT recorded here fails the
 # anti-bypass scanner lane. Frozen (hashed above) so approving a suppression is
 # tamper-evident.
-SUPPRESSION_BASELINE_REL = "current/docs/export-track1-closeout-suppression-baseline.json"
+SUPPRESSION_BASELINE_REL = "development/notes/export-track1-closeout-suppression-baseline.json"
 
 # ---- the anti-bypass operational reading (§4.4) and the red-test inventory (plan
 # §4.2 criterion 3) are imported above (OPERATIONAL_READING, RED_TESTS) from

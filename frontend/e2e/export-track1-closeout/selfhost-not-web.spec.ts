@@ -2,7 +2,7 @@
  * WO-C3 §7.12 — frozen Firefox proof: the `not_web` SelfHostPanel state, in every
  * UI mounting mode (Build surface + Agent surface).
  *
- * FROZEN acceptance path (plan §1.1: `current/frontend/e2e/export-track1-closeout/**`).
+ * FROZEN acceptance path (plan §1.1: `frontend/e2e/export-track1-closeout/**`).
  * Firefox-only (playwright.config.ts) — headless Chromium can't rasterize text/oklch
  * on this host, so visual evidence must come from Firefox.
  *

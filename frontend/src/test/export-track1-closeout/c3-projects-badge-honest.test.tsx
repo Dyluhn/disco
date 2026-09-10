@@ -2,7 +2,7 @@
  * WO-C3 red test — the ProjectsView per-row self-host badge is honest about an
  * UNVERIFIED candidate (§7 acceptance 7, applied to the SECOND UI mounting point).
  *
- * FROZEN acceptance path (plan §1.1: `current/frontend/src/test/export-track1-closeout/**`).
+ * FROZEN acceptance path (plan §1.1: `frontend/src/test/export-track1-closeout/**`).
  * Locked semantic §2.1 / plan §7 (WO-C3) acceptance 7 requires that at EVERY UI
  * mounting point a `candidate` release is presented as explicitly unverified — the
  * row says the bundle has NOT been run and the surface never claims the project is

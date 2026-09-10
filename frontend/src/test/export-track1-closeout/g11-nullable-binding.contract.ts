@@ -3,7 +3,7 @@
  *
  * THE GAP THIS PROVES
  * -------------------
- * The agent-server `/release` model (current/packages/agent-server/.../routes/release.py,
+ * The agent-server `/release` model (packages/agent-server/.../routes/release.py,
  * `class ReleaseResponse`) declares the source binding as NULLABLE for an
  * UNSNAPSHOTTED workspace — a project that has never been committed cannot name a
  * concrete committed source, so all three of these come back `null`:
@@ -12,7 +12,7 @@
  *     version_seq:  int | None    # null when no committed version exists
  *     tree_digest:  str | None    # null when no committed tree can be named
  *
- * The frontend wire type (current/frontend/src/types/release.ts, `ReleaseResponse`) mirrors
+ * The frontend wire type (frontend/src/types/release.ts, `ReleaseResponse`) mirrors
  * ONLY `spec_digest` as nullable. It still types the other two as NON-null:
  *
  *     spec_digest:  string | null   // ✅ matches backend
@@ -44,7 +44,7 @@
  *     cd frontend && npx tsc -p tsconfig.closeout-g11.json --noEmit   # exits NONZERO today
  *
  * It turns GREEN at R4 SOLELY by correcting the PRODUCTION type in
- * current/frontend/src/types/release.ts to mirror the backend —
+ * frontend/src/types/release.ts to mirror the backend —
  *   `version_seq: number | null;`  and  `tree_digest: string | null;`
  * — WITHOUT touching this contract. That self-discrimination (production fix flips
  * red→green; contract edit is forbidden) is what makes the red honest.

@@ -1,6 +1,6 @@
 """Scripted LLM provider — W8 evidence-harness integration layer.
 
-Conforms to the real ``ModelProvider`` protocol (current/packages/core/src/disco/core/llm/provider.py)
+Conforms to the real ``ModelProvider`` protocol (packages/core/src/disco/core/llm/provider.py)
 so it wires through the REAL ``DefaultLLMRouter`` → ``RouterAgent.step()`` boundary,
 NOT by calling internal loop functions directly.
 

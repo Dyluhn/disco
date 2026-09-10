@@ -162,5 +162,5 @@ def _run_capture_lane(
 
 def _frontend_root(repo):
     """The frontend tree, wherever the three-bucket layout puts it."""
-    bucketed = repo / "current" / "frontend"
+    bucketed = repo / "frontend"
     return bucketed if bucketed.is_dir() else repo / "frontend"

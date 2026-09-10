@@ -13,7 +13,7 @@ TOOL boundary (it is not surfaced through ``/release``): the persisted
 least 2. The env/build/toolchain LOWERING behaviour (build args, secret mounts, guards,
 lockfile conflicts, v1-sidecar migration) is asserted through the real ``/release`` +
 ``/download`` routes in
-``current/packages/agent-server/tests/export_track1_closeout/test_c4_env_build_toolchain_matrix.py``.
+``packages/agent-server/tests/export_track1_closeout/test_c4_env_build_toolchain_matrix.py``.
 
 Boundary (plan §1.2 / §4 crit 3): the declaration runs through a REAL
 ``DefaultToolExecutor`` executing the REAL ``ReleaseDeclareTool`` (the public tool

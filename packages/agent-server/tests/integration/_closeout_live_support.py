@@ -2,7 +2,7 @@
 
 FROZEN acceptance support (WO-C0, plan §1.1). This module is imported by the sole
 live-lane test module,
-``current/packages/agent-server/tests/integration/test_export_track1_closeout_live.py``.
+``packages/agent-server/tests/integration/test_export_track1_closeout_live.py``.
 It is deliberately NOT a test module (its name does not match ``test_*``), so pytest
 never collects it directly — it only provides the fixture-workspace builders, the
 real ``/release`` -> bound ``/download`` bundle acquisition, the Docker Compose

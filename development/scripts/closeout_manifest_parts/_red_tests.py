@@ -19,7 +19,7 @@ RED_TESTS: tuple[dict[str, object], ...] = (
         "work_order": "C1",
         "lane": "python-closeout",
         "node_id": (
-            "current/packages/tools/tests/export_track1_closeout/test_c1_intent_store_custom_root.py"
+            "packages/tools/tests/export_track1_closeout/test_c1_intent_store_custom_root.py"
             "::test_release_declare_writes_under_configured_custom_root"
         ),
         "boundary": "real DefaultToolExecutor via ConversationRuntime.execute_disco_tool",
@@ -32,7 +32,7 @@ RED_TESTS: tuple[dict[str, object], ...] = (
         "work_order": "C2",
         "lane": "python-closeout",
         "node_id": (
-            "current/packages/agent-server/tests/export_track1_closeout/test_c2_release_source_binding.py"
+            "packages/agent-server/tests/export_track1_closeout/test_c2_release_source_binding.py"
             "::test_release_never_returns_a_speculative_version_seq"
         ),
         "boundary": "real FastAPI GET /api/projects/{cid}/release router",
@@ -47,7 +47,7 @@ RED_TESTS: tuple[dict[str, object], ...] = (
         "work_order": "C3",
         "lane": "python-closeout",
         "node_id": (
-            "current/packages/agent-server/tests/export_track1_closeout/test_c3_detection_matrix.py"
+            "packages/agent-server/tests/export_track1_closeout/test_c3_detection_matrix.py"
             "::test_negative_matrix_fails_closed_with_exact_blocker[node_undeclared_env]"
         ),
         "boundary": "real FastAPI release router over the negative detection fixture matrix",
@@ -72,7 +72,7 @@ RED_TESTS: tuple[dict[str, object], ...] = (
         "work_order": "C4",
         "lane": "python-closeout",
         "node_id": (
-            "current/packages/agent-server/tests/export_track1_closeout/test_c4_env_build_toolchain_matrix.py"
+            "packages/agent-server/tests/export_track1_closeout/test_c4_env_build_toolchain_matrix.py"
             "::test_secret_build_var_uses_secret_mount_or_fails_closed"
         ),
         "boundary": "real release spec assembly + Compose/Dockerfile emission",
@@ -94,7 +94,7 @@ RED_TESTS: tuple[dict[str, object], ...] = (
         "work_order": "C5",
         "lane": "python-closeout",
         "node_id": (
-            "current/packages/tools/tests/export_track1_closeout/test_c5_injection_reject.py"
+            "packages/tools/tests/export_track1_closeout/test_c5_injection_reject.py"
             "::test_argv_injection_corpus_rejected[start_cmd-cmd_subst]"
         ),
         "boundary": "real release-intent validation at the tool boundary (pre-emission)",
@@ -108,7 +108,7 @@ RED_TESTS: tuple[dict[str, object], ...] = (
         "work_order": "C6",
         "lane": "python-closeout",
         "node_id": (
-            "current/packages/agent-server/tests/export_track1_closeout/test_c6_collision_matrix.py"
+            "packages/agent-server/tests/export_track1_closeout/test_c6_collision_matrix.py"
             "::test_c6_overlay_path_collision_matrix"
         ),
         "boundary": "real release route + zip writer over the overlay-collision matrix",
@@ -123,7 +123,7 @@ RED_TESTS: tuple[dict[str, object], ...] = (
         "work_order": "C7",
         "lane": "python-closeout",
         "node_id": (
-            "current/packages/agent-server/tests/export_track1_closeout/test_c7_topology_matrix.py"
+            "packages/agent-server/tests/export_track1_closeout/test_c7_topology_matrix.py"
             "::test_web_worker_bound_db_env_and_mount_isolated_to_consumer"
         ),
         "boundary": "real multi-service Compose emission (web + worker fixture)",
@@ -136,7 +136,7 @@ RED_TESTS: tuple[dict[str, object], ...] = (
         "work_order": "C8",
         "lane": "live-docker",
         "node_id": (
-            "current/packages/agent-server/tests/integration/test_export_track1_closeout_live.py"
+            "packages/agent-server/tests/integration/test_export_track1_closeout_live.py"
             "::test_live_express_node_bundle_lifecycle"
         ),
         "boundary": (
@@ -154,7 +154,7 @@ RED_TESTS: tuple[dict[str, object], ...] = (
         "work_order": "C3",
         "lane": "frontend",
         "node_id": (
-            "current/frontend/src/test/export-track1-closeout/c3-candidate-copy.test.tsx"
+            "frontend/src/test/export-track1-closeout/c3-candidate-copy.test.tsx"
             "::renders 'Bundle available' + 'Not runtime-verified' and no "
             "case-insensitive 'ready'"
         ),
@@ -169,7 +169,7 @@ RED_TESTS: tuple[dict[str, object], ...] = (
         "work_order": "C6",
         "lane": "frontend",
         "node_id": (
-            "current/frontend/src/test/export-track1-closeout/c6-collision-blockers.test.tsx"
+            "frontend/src/test/export-track1-closeout/c6-collision-blockers.test.tsx"
             "::renders every collision blocker (code + exact path) and only the plain "
             "download"
         ),
@@ -191,7 +191,7 @@ RED_TESTS: tuple[dict[str, object], ...] = (
         "work_order": "R1/G02",
         "lane": "python-closeout",
         "node_id": (
-            "current/packages/agent-server/tests/export_track1_closeout/test_g02_positional_credential.py"
+            "packages/agent-server/tests/export_track1_closeout/test_g02_positional_credential.py"
             "::test_positional_credential_rejected_at_release_declare[leading]"
         ),
         "boundary": (
@@ -212,7 +212,7 @@ RED_TESTS: tuple[dict[str, object], ...] = (
         "work_order": "R2/G04",
         "lane": "python-closeout",
         "node_id": (
-            "current/packages/agent-server/tests/export_track1_closeout/test_g04_interpreted_install.py"
+            "packages/agent-server/tests/export_track1_closeout/test_g04_interpreted_install.py"
             "::test_interpreted_candidate_with_deps_emits_dependency_install_layer"
             "[express_node_no_build]"
         ),
@@ -232,7 +232,7 @@ RED_TESTS: tuple[dict[str, object], ...] = (
         "work_order": "R2/G05",
         "lane": "python-closeout",
         "node_id": (
-            "current/packages/agent-server/tests/export_track1_closeout/test_g05_typed_pnpm_start.py"
+            "packages/agent-server/tests/export_track1_closeout/test_g05_typed_pnpm_start.py"
             "::test_typed_pnpm_start_intent_is_rejected_or_provisions_pnpm"
         ),
         "boundary": (
@@ -252,7 +252,7 @@ RED_TESTS: tuple[dict[str, object], ...] = (
         "work_order": "R2/G06",
         "lane": "python-closeout",
         "node_id": (
-            "current/packages/tools/tests/export_track1_closeout/test_g06_intent_output_dir.py"
+            "packages/tools/tests/export_track1_closeout/test_g06_intent_output_dir.py"
             "::test_declared_static_output_dir_round_trips_into_sidecar"
         ),
         "boundary": (
@@ -273,7 +273,7 @@ RED_TESTS: tuple[dict[str, object], ...] = (
         "work_order": "R3/G07",
         "lane": "python-closeout",
         "node_id": (
-            "current/packages/agent-server/tests/export_track1_closeout/test_g07_root_persistent_path.py"
+            "packages/agent-server/tests/export_track1_closeout/test_g07_root_persistent_path.py"
             "::test_g07_root_persistent_path_backed_or_fails_closed[root-file-app-db]"
         ),
         "boundary": (
@@ -293,7 +293,7 @@ RED_TESTS: tuple[dict[str, object], ...] = (
         "work_order": "R5/G12",
         "lane": "python-closeout",
         "node_id": (
-            "current/packages/agent-server/tests/export_track1_closeout/test_g12_appkit_no_heredoc.py"
+            "packages/agent-server/tests/export_track1_closeout/test_g12_appkit_no_heredoc.py"
             "::test_g12_appkit_dockerfile_has_no_heredoc_copy"
         ),
         "boundary": (
@@ -313,7 +313,7 @@ RED_TESTS: tuple[dict[str, object], ...] = (
         "work_order": "R6/G13",
         "lane": "python-closeout",
         "node_id": (
-            "current/packages/agent-server/tests/export_track1_closeout/test_g13_verifier_truthfulness.py"
+            "packages/agent-server/tests/export_track1_closeout/test_g13_verifier_truthfulness.py"
             "::test_docker_evidence_absent_engine_must_not_claim_live_production"
         ),
         "boundary": (
@@ -342,7 +342,7 @@ RED_TESTS: tuple[dict[str, object], ...] = (
         "work_order": "R4/G08",
         "lane": "frontend",
         "node_id": (
-            "current/frontend/src/test/export-track1-closeout/g08-download-url-binding.test.tsx"
+            "frontend/src/test/export-track1-closeout/g08-download-url-binding.test.tsx"
             "::WO-A (G08) — the download URL binds to the release's version_seq + "
             "spec_digest > carries the SUPPLIED binding ['v7 / g08a-0007'] on the "
             "download URL"
@@ -371,13 +371,13 @@ RED_TESTS: tuple[dict[str, object], ...] = (
     {
         # acceptance-v4 (R0 reopen): the REAL G11 nullable-binding proving red — a
         # dedicated TypeScript COMPILE lane (not vitest transpilation). The frozen
-        # contract file is hashed under the current/frontend/src/test dir glob; the tsconfig is
+        # contract file is hashed under the frontend/src/test dir glob; the tsconfig is
         # a frozen file. Self-discriminating: the R4 production type fix flips it green
         # with no contract edit.
         "work_order": "R4/G11",
         "lane": "frontend-typecheck",
         "node_id": (
-            "current/frontend/src/test/export-track1-closeout/g11-nullable-binding.contract.ts"
+            "frontend/src/test/export-track1-closeout/g11-nullable-binding.contract.ts"
             " (checked by: cd frontend && "
             "npx tsc -p tsconfig.closeout-g11.json --noEmit)"
         ),

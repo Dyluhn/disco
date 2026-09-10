@@ -55,7 +55,7 @@ import pytest
 # resolves its sibling manifest module and as the sibling closeout regressions do.
 # ``importlib.import_module`` (a call, not a top-level import of code-under-test) keeps
 # this lint-clean without a suppression directive.
-_REPO_ROOT = Path(__file__).resolve().parents[5]
+_REPO_ROOT = Path(__file__).resolve().parents[4]
 _SCRIPTS_DIR = _REPO_ROOT / "development" / "scripts"
 if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))

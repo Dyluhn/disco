@@ -2,7 +2,7 @@
  * WO-C3 §7.8 — `needs_review` renders EVERY blocker, NO run command, NO bound
  * self-host action; the PLAIN "Download source" remains present and wired.
  *
- * FROZEN acceptance path (plan §1.1: `current/frontend/src/test/export-track1-closeout/**`).
+ * FROZEN acceptance path (plan §1.1: `frontend/src/test/export-track1-closeout/**`).
  * Locked semantics §2.3/§2.6 + plan §7 (WO-C3) acceptance 8: for a `needs_review`
  * release every blocker is rendered, no run command appears, and a bound self-host
  * download is unavailable — but the plain source download stays available (the

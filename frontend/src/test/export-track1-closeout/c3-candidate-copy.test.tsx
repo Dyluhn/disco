@@ -1,7 +1,7 @@
 /**
  * WO-C3 red test — honest `candidate` copy, rendered through the REAL hook.
  *
- * FROZEN acceptance path (plan §1.1: `current/frontend/src/test/export-track1-closeout/**`).
+ * FROZEN acceptance path (plan §1.1: `frontend/src/test/export-track1-closeout/**`).
  * Locked semantic §2.1 / plan §7 (WO-C3) acceptance 7: for a `candidate` release
  * every UI mounting point must render the "Bundle available" status AND an explicit
  * statement that the bundle has NOT been run, and case-insensitive DOM text must

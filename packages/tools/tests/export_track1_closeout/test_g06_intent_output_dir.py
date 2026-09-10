@@ -21,7 +21,7 @@ performs — so the tool writes to a real temporary default root.
 
 The preserved live reds for this same gap are the
 ``ReleaseIntent(output_dir="dist", ...)`` fixtures in
-``current/packages/agent-server/tests/integration/_closeout_live_support.py`` (which fail at
+``packages/agent-server/tests/integration/_closeout_live_support.py`` (which fail at
 intent CONSTRUCTION on 581dfe); this file pins the property at the ``release_declare``
 TOOL boundary in the non-live lane.
 """
