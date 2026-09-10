@@ -31,7 +31,8 @@ Fail-closed obligations, every one required, no wildcards:
    unique and non-empty; ``old_path`` is never among them;
 5. **no test is lost and none is invented**: every relocated identity keeps
    its exact test name, and each must reappear under one of this record's
-   ``new_paths``.  A rename is not a relocation;
+   ``new_paths``.  A rename is not a relocation — it is the fourth phenomenon,
+   and :mod:`._renames` is the authority for it;
 6. the observed relocation counts equal the pinned counts **exactly**.
    Pinning makes a record a ratchet rather than a waiver — a split cannot
    quietly grow later, exactly as ``observed_at_adjudication`` does for the

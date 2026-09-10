@@ -13,9 +13,14 @@ identity is ``before - relocated + added == after``. The row states its own
 the field is optional and defaults to zero, so the frozen PKG-02-GATE row is
 untouched and every pre-existing row keeps the original strict relation.
 
-A relocation count cannot be inflated to hide a deletion: the deletion itself
-must still pass ``_assert_no_deletions``, which requires a module-split record
-whose pinned per-path counts equal the observed relocations exactly.
+``retired_count`` and ``renamed_count`` join it on the same terms, one term
+per authority that can make an identity disappear: ``before - relocated -
+retired - renamed + added == after``.
+
+None of the three can be inflated to hide a deletion: the deletion itself must
+still pass ``_assert_no_deletions``, which requires a record — a module split,
+the finite retirement closeout, or a :mod:`._renames` one-to-one rename —
+whose pinned counts equal the observed count exactly.
 """
 
 from __future__ import annotations
@@ -25,7 +30,7 @@ from collections import Counter
 from typing import Any
 
 COLLECTED_TRANSITION_KEYS = {"before_count", "after_count", "added_ids"}
-COLLECTED_TRANSITION_OPTIONAL = {"relocated_count", "retired_count"}
+COLLECTED_TRANSITION_OPTIONAL = {"relocated_count", "retired_count", "renamed_count"}
 MAPPING_ADDITION_KEYS = {
     "python_test_files",
     "python_static_test_ids",
@@ -163,6 +168,7 @@ def check_collected_row(
     added = string_additions(row["added_ids"], f"{label}.added_ids", unique=True, problems=problems)
     relocated = _relocated_count(row, label, problems)
     retired = _relocated_count(row, label, problems, "retired_count")
+    renamed = _relocated_count(row, label, problems, "renamed_count")
     before = row["before_count"]
     after = row["after_count"]
     valid_counts = all(
@@ -171,10 +177,10 @@ def check_collected_row(
     )
     if not valid_counts:
         problems.append(f"{label} counts must be non-negative integers")
-    elif before - relocated - retired + len(added) != after:
+    elif before - relocated - retired - renamed + len(added) != after:
         problems.append(
-            f"{label} count/addition mismatch: {before} - {relocated} - {retired} + "
-            f"{len(added)} != {after}"
+            f"{label} count/addition mismatch: {before} - {relocated} - {retired} - "
+            f"{renamed} + {len(added)} != {after}"
         )
     current = baseline.get("collected", {}).get("roots", {}).get(name)
     if not isinstance(current, list):
@@ -257,6 +263,8 @@ def check_null_advance(
             problems.append(f"{label} null advance must not retire a test")
         if row.get("relocated_count", 0):
             problems.append(f"{label} null advance must not relocate a test")
+        if row.get("renamed_count", 0):
+            problems.append(f"{label} null advance must not rename a test")
 
 
 def check_mapping_additions(

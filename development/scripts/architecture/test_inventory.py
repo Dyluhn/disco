@@ -25,7 +25,7 @@ from .inventory_static import (
     scan_mapping_static,
 )
 from .policy import REPO_ROOT, load_json
-from .test_inventory_parts import _retirements, _splits
+from .test_inventory_parts import _renames, _retirements, _splits
 from .test_inventory_parts._rows import (
     LIVE_CONFIGS,
     PLAYWRIGHT_CONFIGS,
@@ -444,6 +444,26 @@ def _split_record_problems(baseline: dict[str, Any], root: Path) -> list[str]:
     return problems + _splits.path_disposition_problems(records, files)
 
 
+def _rename_record_problems(baseline: dict[str, Any], root: Path) -> list[str]:
+    """Validate stored rename records against the live inventory identities."""
+    problems: list[str] = []
+    records = _renames.rename_authority(baseline, root, problems)
+    mapping = baseline.get("mapping_static")
+    if not isinstance(mapping, dict):
+        problems.append("rename records need a mapping_static authority")
+        return problems
+    for files, ids in (
+        ("python_test_files", "python_static_test_ids"),
+        ("typescript_test_files", "typescript_static_test_ids"),
+    ):
+        owned = {path: row for path, row in records.items() if path in set(mapping.get(files, []))}
+        problems += _renames.identity_problems(owned, mapping.get(ids, []))
+    every_file = list(mapping.get("python_test_files", [])) + list(
+        mapping.get("typescript_test_files", [])
+    )
+    return problems + _renames.path_presence_problems(records, every_file)
+
+
 def check_test_inventory(root: Path | None = None) -> dict[str, Any]:
     """Execute every collector and compare all exact identities."""
     resolved_root = REPO_ROOT if root is None else root
@@ -453,6 +473,7 @@ def check_test_inventory(root: Path | None = None) -> dict[str, Any]:
         problems.append("test inventory schema mismatch")
     problems += inventory_static.candidate_inventory_problems(baseline, resolved_root)
     problems += _split_record_problems(baseline, resolved_root)
+    problems += _rename_record_problems(baseline, resolved_root)
     static = _check_mapping_static(baseline, resolved_root, problems)
     _check_frontend_collection(baseline, resolved_root, problems)
     _check_sandbox_deselections(resolved_root, problems)
@@ -497,12 +518,13 @@ def _collected_row(
     added: list[str],
     relocated: int,
     retired: int = 0,
+    renamed: int = 0,
 ) -> dict[str, Any]:
     """Build one collected_roots transition row.
 
-    ``relocated_count`` is emitted only when a relocation actually happened,
-    so a root that merely gained tests keeps the exact shape every accepted
-    row already has.
+    ``relocated_count``, ``retired_count`` and ``renamed_count`` are emitted
+    only when that thing actually happened, so a root that merely gained tests
+    keeps the exact shape every accepted row already has.
     """
     row: dict[str, Any] = {
         "before_count": len(previous),
@@ -513,6 +535,8 @@ def _collected_row(
         row["relocated_count"] = relocated
     if retired:
         row["retired_count"] = retired
+    if renamed:
+        row["renamed_count"] = renamed
     return row
 
 
@@ -534,6 +558,28 @@ def _split_authorizations(
         records, previous_mapping, current_mapping, previous_roots, current_roots
     )
     return authorized, accounted, ledger
+
+
+def _rename_authorizations(
+    root: Path,
+    rename_rows: list[dict[str, Any]],
+    previous_roots: dict[str, list[str]],
+    current_roots: dict[str, list[str]],
+    previous_mapping: dict[str, Any],
+    current_mapping: dict[str, Any],
+) -> tuple[dict[str, set[str]], Any]:
+    """Validate the effective rename records and derive what they allow."""
+    problems: list[str] = []
+    records = _renames.rename_authority({"renamed_test_transitions": rename_rows}, root, problems)
+    problems += _renames.path_presence_problems(
+        records,
+        list(current_mapping["python_test_files"]) + list(current_mapping["typescript_test_files"]),
+    )
+    if problems:
+        raise RuntimeError(f"renamed test transitions are invalid: {problems}")
+    return _renames.build_authorizations(
+        records, previous_mapping, current_mapping, previous_roots, current_roots
+    )
 
 
 def _accepted_authorities(
@@ -582,6 +628,7 @@ def regenerate_inventory(
     accepted_collected_roots: dict[str, list[str]] | None = None,
     accepted_mapping_static: dict[str, Any] | None = None,
     module_split_transitions: list[dict[str, Any]] | None = None,
+    renamed_transitions: list[dict[str, Any]] | None = None,
     null_advance: bool = False,
 ) -> dict[str, Any]:
     """Regenerate after proving the transition from accepted exact authority.
@@ -630,10 +677,16 @@ def regenerate_inventory(
             f"live configs do not select identical {expected_counts} source authority"
         )
 
+    stored = load_test_inventory(resolved_root)
     split_rows = (
-        load_test_inventory(resolved_root).get("module_split_transitions", [])
+        stored.get("module_split_transitions", [])
         if module_split_transitions is None
         else module_split_transitions
+    )
+    rename_rows = (
+        stored.get("renamed_test_transitions", [])
+        if renamed_transitions is None
+        else renamed_transitions
     )
     authorized, accounted_markers, ledger = _split_authorizations(
         resolved_root,
@@ -643,12 +696,20 @@ def regenerate_inventory(
         previous_mapping,
         current_mapping,
     )
+    renamed, rename_ledger = _rename_authorizations(
+        resolved_root,
+        rename_rows,
+        previous_roots,
+        current_roots,
+        previous_mapping,
+        current_mapping,
+    )
     retired = _retirements.regeneration_authorizations(
         resolved_root, previous_identity, package, current_roots, current_mapping, authorized
     )
     explained = {
-        key: authorized.get(key, set()) | retired.get(key, set())
-        for key in authorized.keys() | retired.keys()
+        key: authorized.get(key, set()) | retired.get(key, set()) | renamed.get(key, set())
+        for key in authorized.keys() | retired.keys() | renamed.keys()
     }
     added_by_root = {
         name: _assert_no_deletions(
@@ -692,6 +753,9 @@ def regenerate_inventory(
     count_problems = ledger.count_problems()
     if count_problems:
         raise RuntimeError(f"module split transition counts are not exact: {count_problems}")
+    rename_problems = rename_ledger.count_problems()
+    if rename_problems:
+        raise RuntimeError(f"renamed test counts are not exact: {rename_problems}")
 
     changed_roots = [
         name for name, added in added_by_root.items() if added or explained.get(f"collected.{name}")
@@ -709,6 +773,7 @@ def regenerate_inventory(
                 added_by_root[name],
                 len(authorized.get(f"collected.{name}", ())),
                 len(retired.get(f"collected.{name}", ())),
+                len(renamed.get(f"collected.{name}", ())),
             )
             for name in PYTHON_ROOTS
             # A null advance pins EVERY root, so the row asserts the counts it
@@ -788,9 +853,11 @@ def regenerate_inventory(
             "additions_allowed_only_when_baseline_updated_in_owning_package": True,
             "real_collection_distinct_from_mapping_static": True,
             "module_splits_require_an_exact_transition_record": True,
+            "renames_require_an_exact_one_to_one_record": True,
         },
         "additive_transitions": sorted(transitions, key=lambda item: _canonical_row(item)),
         "module_split_transitions": sorted(split_rows, key=lambda item: item["old_path"]),
+        "renamed_test_transitions": sorted(rename_rows, key=lambda item: item["path"]),
     }
     inventory_static.validate_regenerated_inventory(inventory, resolved_root)
     output = resolved_root / "development" / "architecture" / "test-inventory.json"

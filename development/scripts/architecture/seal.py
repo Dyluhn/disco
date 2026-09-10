@@ -110,6 +110,12 @@ PROTECTED: tuple[str, ...] = (
     "development/scripts/architecture/test_inventory_parts/_splits.py",
     "development/scripts/architecture/test_inventory_parts/_transitions.py",
     "development/scripts/architecture/test_inventory_parts/_retirements.py",
+    # PKG-38-UI-FIXES-V51: the rename authority. A renamed test identity read
+    # as an unexplained deletion, and the only records that could sanction one
+    # were a module-split relocation (which rules renames out by contract) and
+    # the single-use PKG-35 retirement closeout. It decides which deletions may
+    # regenerate the inventory, so it is hash-gated exactly like the others.
+    "development/scripts/architecture/test_inventory_parts/_renames.py",
     # Epic 11-A decomposed generate_debt.py for the same reason (695 of its own
     # 700-line budget, with four sub-epic seals to register). Only frozen DATA
     # moved, but that data decides which rows leave the active ledger, so it is
