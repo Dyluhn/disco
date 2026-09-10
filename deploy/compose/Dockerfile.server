@@ -35,11 +35,11 @@ WORKDIR /app
 # workspace members so dependency and model-asset layers stay cacheable across
 # ordinary source edits. The final sync below still uses --all-packages.
 COPY pyproject.toml uv.lock ./
-COPY current/packages/core/pyproject.toml current/packages/core/pyproject.toml
-COPY current/packages/retrieval/pyproject.toml current/packages/retrieval/pyproject.toml
-COPY current/packages/tools/pyproject.toml current/packages/tools/pyproject.toml
-COPY current/packages/agent-server/pyproject.toml current/packages/agent-server/pyproject.toml
-COPY current/packages/app-server/pyproject.toml current/packages/app-server/pyproject.toml
+COPY packages/core/pyproject.toml packages/core/pyproject.toml
+COPY packages/retrieval/pyproject.toml packages/retrieval/pyproject.toml
+COPY packages/tools/pyproject.toml packages/tools/pyproject.toml
+COPY packages/agent-server/pyproject.toml packages/agent-server/pyproject.toml
+COPY packages/app-server/pyproject.toml packages/app-server/pyproject.toml
 # uv validates every declared member even when its distribution is excluded.
 COPY development/pyproject.toml development/pyproject.toml
 RUN uv sync --frozen --no-dev --all-packages --no-install-workspace
@@ -52,7 +52,7 @@ RUN /app/.venv/bin/python /tmp/prefetch_packaged_assets.py
 # Workspace source: uv builds members editable from src, so the full packages/
 # tree must be present for the final sync. Keep --all-packages: dropping it
 # prunes workspace members from the shared server venv.
-COPY current/packages/ ./current/packages/
+COPY packages/ ./packages/
 
 # Single incantation that lands all 5 members + the agent-server's bundled TTS
 # (kokoro-onnx, lameenc, numpy — now core deps) + weasyprint, and NOT the
@@ -132,14 +132,14 @@ WORKDIR /app
 # against. The .pth files baked by the builder reference /app/packages/*/src,
 # so the source must land at exactly that path.
 COPY --from=builder /app/.venv /app/.venv
-COPY --from=builder /app/current/packages /app/current/packages
+COPY --from=builder /app/packages /app/packages
 COPY --from=builder /opt/disco-cache /opt/disco-cache
 
 # The compose entrypoint (prepares /data, seeds a first-run config, ensures a
 # PMX_SECRET_KEY) and the seed script it calls. compose sets
 # `entrypoint: ["/entrypoint.sh"]` and the entrypoint runs /app/scripts/seed_config.py.
-COPY current/deploy/compose/entrypoint.sh /entrypoint.sh
-COPY current/deploy/compose/healthcheck.py /healthcheck.py
+COPY deploy/compose/entrypoint.sh /entrypoint.sh
+COPY deploy/compose/healthcheck.py /healthcheck.py
 COPY development/scripts/ /app/development/scripts/
 RUN chmod +x /entrypoint.sh
 

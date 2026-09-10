@@ -27,7 +27,7 @@ services:
   sandbox-image:
     build:
       context: .
-      dockerfile: current/deploy/sandbox/Dockerfile
+      dockerfile: deploy/sandbox/Dockerfile
     image: disco-sandbox:base
     entrypoint: ["true"]
     restart: "no"
@@ -35,7 +35,7 @@ services:
   app-server:
     build:
       context: .
-      dockerfile: current/deploy/compose/Dockerfile.server
+      dockerfile: deploy/compose/Dockerfile.server
     image: disco-server
     command: ["python", "-m", "disco.app_server"]
     entrypoint: ["/entrypoint.sh"]
@@ -272,7 +272,7 @@ services:
   frontend:
     build:
       context: .
-      dockerfile: current/frontend/Dockerfile
+      dockerfile: frontend/Dockerfile
     image: disco-frontend
     environment:
       # Blank explicit URLs → env.js defaults to SAME-ORIGIN relative prefixes

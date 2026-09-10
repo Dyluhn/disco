@@ -1,13 +1,13 @@
 # Build context trim for the compose images. The server image needs
-# pyproject.toml, uv.lock, current/packages/, development/scripts/, current/deploy/. The frontend image is
+# pyproject.toml, uv.lock, packages/, development/scripts/, deploy/. The frontend image is
 # built from the repo root because Vite imports two shared JS assets from
-# current/packages/agent-server. Keep local state/secrets out of every image context.
+# packages/agent-server. Keep local state/secrets out of every image context.
 
 # --- heavy / irrelevant ---
 .git
 .venv*
 # Dependency trees must never come from the host. The recursive form also
-# excludes workspace-local symlinks such as current/frontend/node_modules; otherwise
+# excludes workspace-local symlinks such as frontend/node_modules; otherwise
 # COPY can replace the lockfile-installed image dependencies with a dead host
 # path.
 **/node_modules
@@ -35,12 +35,12 @@ secrets.json
 # --- developer scratch / harness / captured runs (not needed at runtime) ---
 .orchestrate
 agent-projects
-test-record
+/test-record
 review-queue
 bakeoff
-harness
+/development/harness
 evals
-prompts
+/prompts
 run_manual*.py
 test_*.py
 *.csv
@@ -49,4 +49,5 @@ validate.py
 
 # --- docs (the image doesn't serve them) ---
 *.md
-docs
+/docs
+/development/notes
