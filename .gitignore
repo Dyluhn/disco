@@ -116,3 +116,10 @@ current/frontend/.env.development.local
 .vscode
 .serena/
 .gitmodules
+
+# Retired history lives on its own pushed branches, not on main (PKG-40).
+# Retrieve with:
+#   git restore --source=archive/pre-v52-20260910 -- archive
+#   git restore --source=evidence/harness-runs-20260910 -- development/harness/runs
+/archive/
+/development/harness/runs/

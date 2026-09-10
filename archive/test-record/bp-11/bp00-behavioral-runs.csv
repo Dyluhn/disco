@@ -1,5 +1,0 @@
-run,conversation,final_status,duration_s,events,screenshot_obs
-2,conv_3b9402aa654b4a43b715db10ce7b6550,ERROR,42,29,0
-3,conv_bc8596a9ac3f43b484aaa47ad8b83372,FINISHED,375,109,15
-4,conv_2927ed545aa347069428766a8514c8fa,FINISHED,105,33,2
-5,conv_c5f4f81c22624a2fac545769f6b300e9,FINISHED,135,28,2
