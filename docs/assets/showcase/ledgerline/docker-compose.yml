@@ -1,0 +1,23 @@
+services:
+  api:
+    build: ./backend
+    container_name: ledgerline-api
+    environment:
+      LEDGERLINE_DB: /data/ledgerline.db
+    volumes:
+      - ledgerline-data:/data
+    expose:
+      - "8000"
+    restart: unless-stopped
+
+  web:
+    build: ./frontend
+    container_name: ledgerline-web
+    depends_on:
+      - api
+    ports:
+      - "8080:80"
+    restart: unless-stopped
+
+volumes:
+  ledgerline-data:

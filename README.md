@@ -68,10 +68,21 @@ spoken overview.
 |---|---|
 | ![The PDF's cover page](docs/assets/showcase/report-pdf-cover.png) | ![The audio overview player at the end of the report](docs/assets/showcase/audio-overview-player.png) |
 
-**A site the Build agent made** from one paragraph — static, no backend, CSS-only imagery:
-[the whole page](docs/assets/screenshots/site-kiln-full.jpg).
+**An app the Build agent made, shipped as a compose stack.** One paragraph asked for
+Ledgerline, a personal expense tracker: a FastAPI + SQLite API, a React/Vite/TypeScript
+front end served by nginx with `/api` proxied, two services and a named volume. The
+downloaded source was brought up on a fresh VM with nothing but
+`docker compose up -d --build`; these are captures of that running stack, not of a preview.
 
-![Above the fold of a ceramics studio site the Build agent made](docs/assets/screenshots/site-kiln-fold.jpg)
+| Dashboard on the running stack | Phone |
+|---|---|
+| ![Ledgerline's dashboard: monthly total, entries, top category, the category chart](docs/assets/showcase/ledgerline/dashboard.png) | ![The same dashboard on a phone](docs/assets/showcase/ledgerline/mobile.png) |
+
+[The whole page](docs/assets/showcase/ledgerline/dashboard-full.png) ·
+[`docker-compose.yml`](docs/assets/showcase/ledgerline/docker-compose.yml) ·
+[the README it wrote](docs/assets/showcase/ledgerline/README.md) ·
+[the agent verifying its own form in a browser mid-build](docs/assets/showcase/ledgerline/agent-verifying-the-form.png).
+A static site from one paragraph, for contrast: [a ceramics studio](docs/assets/screenshots/site-kiln-full.jpg).
 
 Every capture is from a stock install on a fresh VM at the commit that shipped it; the
 deck is also exported as [PowerPoint](docs/assets/showcase/black-death-labour-markets.pptx).
