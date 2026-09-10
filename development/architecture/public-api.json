@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-public-api-v1",
-  "source_identity": "d5e30b46322e8199e57dda8edd65b9103b9e45c5",
+  "source_identity": "b5351f0d123057be4ba7eb021e9f7592b9447a6a",
   "python_initializers": [
     {
       "path": "packages/agent-server/src/disco/agent_server/__init__.py",
@@ -27144,72 +27144,72 @@
       "bytes": 1873
     },
     {
-      "path": "current/docs/architecture.generated.md",
+      "path": "docs/architecture.generated.md",
       "sha256": "5a5e233f851bb5af9752abadc9718a7c858fa7b803a33ad6b5bac568cd2bb298",
       "bytes": 1547
     },
     {
-      "path": "current/docs/contracts/agent-loop-contract.md",
+      "path": "docs/contracts/agent-loop-contract.md",
       "sha256": "ea5cbda9d7b0b1380bdeb1ca92067ec8f681d2bce1ce0a306856913f689c442c",
       "bytes": 35520
     },
     {
-      "path": "current/docs/contracts/api-endpoints.md",
+      "path": "docs/contracts/api-endpoints.md",
       "sha256": "4a9d6815cae4bc402204d7425ff13e7cff600e6c833f092faebd323bd2c60c71",
       "bytes": 13726
     },
     {
-      "path": "current/docs/contracts/event-state-contract.md",
+      "path": "docs/contracts/event-state-contract.md",
       "sha256": "c85e8ea00466c2a8b5f959481c3c3b1431a990d02dcf1a02cb19661f314ccd27",
       "bytes": 46609
     },
     {
-      "path": "current/docs/contracts/llm-router-contract.md",
+      "path": "docs/contracts/llm-router-contract.md",
       "sha256": "d673dcea780d2444bec5a2d0fd220f0f752adee45e255b74673b24ad161d79bf",
       "bytes": 46977
     },
     {
-      "path": "current/docs/contracts/retrieval-grounding-contract.md",
+      "path": "docs/contracts/retrieval-grounding-contract.md",
       "sha256": "51c3fbafffa4b919f584aa59ab6491938182fe366c79d680f9c26aeacf386061",
       "bytes": 32864
     },
     {
-      "path": "current/docs/contracts/security-analyzer-contract.md",
+      "path": "docs/contracts/security-analyzer-contract.md",
       "sha256": "bf11184e68020a8bf7793c9275a4adecd5dc2898e1f771be908bcca68e6c4244",
       "bytes": 26032
     },
     {
-      "path": "current/docs/contracts/tool-sandbox-contract.md",
+      "path": "docs/contracts/tool-sandbox-contract.md",
       "sha256": "daec69422dc5ce73f455e554be83adfe8e20ed83bc60a8035410cb657cb28566",
       "bytes": 14052
     },
     {
-      "path": "current/frontend/package.json",
+      "path": "frontend/package.json",
       "sha256": "05d4abcb3541e4df0c880d83b060d3991f3bd995f34fdbbdcee1343744469f21",
       "bytes": 2498
     },
     {
-      "path": "current/packages/agent-server/pyproject.toml",
+      "path": "packages/agent-server/pyproject.toml",
       "sha256": "28fc977a39ac9a8ffb4c7208b342d40643ddd3f75296cce4858b414d8d66d7a8",
       "bytes": 2031
     },
     {
-      "path": "current/packages/app-server/pyproject.toml",
+      "path": "packages/app-server/pyproject.toml",
       "sha256": "c564ad35df294a1e154d356a81a127d1d4e72421effee342012a170ff4e25309",
       "bytes": 701
     },
     {
-      "path": "current/packages/core/pyproject.toml",
+      "path": "packages/core/pyproject.toml",
       "sha256": "f6e19661988ac577d19cbf402782e265064d778b46846e30a0ffe816c2b9b6ca",
       "bytes": 1637
     },
     {
-      "path": "current/packages/retrieval/pyproject.toml",
+      "path": "packages/retrieval/pyproject.toml",
       "sha256": "92d0e969852251b2b5d67d4ff0e34413f8a95da7fcc8632a830cf9ea5373bb48",
       "bytes": 898
     },
     {
-      "path": "current/packages/tools/pyproject.toml",
+      "path": "packages/tools/pyproject.toml",
       "sha256": "479387f7d88ed2cdb8b6f5645be7fa44e11bd0b18511f970abbebe5ce616f463",
       "bytes": 1435
     }
