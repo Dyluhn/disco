@@ -120,6 +120,12 @@ Current evidence: /var/home/dylan/AI-Work/disco-gap-closure-2026-09-05/CLOSEOUT-
   outstanding.
   → `development/notes/security/README.md` (state of record).
 
+- **Repository layout is flat as of PKG-40** (`packages/`, `frontend/`, `deploy/`,
+  `docs/`, `development/`). The README-only install was re-run on the
+  verification VMs after the flatten; a fresh-image install on a new machine is
+  still the acceptance test for any later install-path change.
+  → `docs/self-host.md`, `CONTRIBUTING.md` §Landing on main.
+
 - **Only one install path is proven.** Debian, macOS and WSL2 installs are
   untested, as is the anonymous HTTPS clone path; the verified path is
   Ubuntu 24.04 + rootless Docker (PKG-22).
