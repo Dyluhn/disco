@@ -1,9 +1,0 @@
-{
-  "name": "leaky-app",
-  "private": true,
-  "scripts": {
-    "start": "node server.js",
-    "build": "echo building",
-    "migrate": "node migrate.js"
-  }
-}

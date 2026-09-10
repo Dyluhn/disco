@@ -1,8 +1,0 @@
-
-Running 1 test using 1 worker
-
-  ✓  1 [firefox] › e2e-live/dc-01-host-preview.spec.ts:66:1 › Origin-true preview shows the Vite app and successfully fetches the API (16.7m)
-
-  Slow test file: [firefox] › e2e-live/dc-01-host-preview.spec.ts (16.7m)
-  Consider running tests from slow files in parallel. See: https://playwright.dev/docs/test-parallel
-  1 passed (16.7m)

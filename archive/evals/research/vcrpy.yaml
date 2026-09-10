@@ -1,4 +1,0 @@
-# A research eval task — scored on grounding faithfulness + source coverage.
-query: "What is the vcrpy library and what is it used for?"
-min_faithfulness: 0.5      # at least half the answer's claims must verify as supported
-must_cite_domains: []      # (left empty — ddgs results vary; faithfulness is the gate)

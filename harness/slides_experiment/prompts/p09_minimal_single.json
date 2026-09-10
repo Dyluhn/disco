@@ -1,8 +1,0 @@
-{
-  "id": "p09",
-  "category": "simple",
-  "description": "minimal single-message slide request",
-  "goal": "Make a 3-slide deck: slide 1 is a title slide saying 'Q3 Review', slide 2 lists our three wins (closed $2M deal, hired 5 engineers, launched EU region), slide 3 is a thank you slide.",
-  "expected_layouts": ["title", "bullets", "section_header"],
-  "stress": "minimal input — tests if model invents unnecessary structure or keeps it simple"
-}

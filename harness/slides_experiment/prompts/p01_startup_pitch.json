@@ -1,8 +1,0 @@
-{
-  "id": "p01",
-  "category": "narrative/marketing",
-  "description": "startup investor pitch deck",
-  "goal": "Create a 6-slide investor pitch deck for a startup called 'NovaCycle' that makes EV battery recycling efficient using AI. Include: problem (batteries in landfills), solution (AI-optimized recycling process), market size ($50B by 2030), business model (B2B licensing), traction (3 pilots with Tier-1 OEMs), and ask ($8M Series A).",
-  "expected_layouts": ["title", "problem", "solution", "metrics", "traction", "closing"],
-  "stress": "marketing, narrative flow, call-to-action"
-}

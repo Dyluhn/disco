@@ -1,8 +1,0 @@
-{
-  "id": "p05",
-  "category": "marketing",
-  "description": "product launch announcement deck",
-  "goal": "Create a 5-slide product launch deck for 'Disco AI' — an AI research and productivity platform. Slide 1: Title + tagline. Slide 2: The problem — researchers waste 60% of their time finding, reading, and synthesizing information. Slide 3: Product tour — Deep Research (cite-grounded reports), Build (AI that writes and deploys code), Agent (autonomous task runner). Slide 4: Why us — founded by ex-ML researchers, 10x faster than manual research, 94% citation accuracy. Slide 5: Beta invite — early access sign-up with special pricing.",
-  "expected_layouts": ["title", "problem", "product_tour", "why_us", "cta"],
-  "stress": "marketing, feature communication, brand storytelling"
-}

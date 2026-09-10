@@ -1,8 +1,0 @@
-
-Running 2 tests using 1 worker
-
-  ✓  1 [firefox] › e2e-live/bp-00-vision.spec.ts:165:1 › vision run: feed shows browse → visual fix; Preview is readable (809ms)
-  ✓  2 [firefox] › e2e-live/bp-00-vision.spec.ts:219:1 › vision run: final Preview shows the heading readably (504ms)
-
-  2 passed (3.8s)
-EXIT=0
