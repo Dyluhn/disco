@@ -2,6 +2,7 @@ import {
   forwardRef,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   type SyntheticEvent,
   type ComponentPropsWithoutRef,
@@ -54,7 +55,11 @@ const PreviewLaunchFrameInstance = forwardRef<
       [forwardedRef],
     );
 
-    useEffect(() => {
+    // A layout effect, not a passive one: the listener must exist from the
+    // same commit that puts the frame in the DOM. A ready message that lands
+    // before a passive effect runs is lost, the load gate never arms, and a
+    // healthy frame is later treated as never loaded.
+    useLayoutEffect(() => {
       if (!launchIntent) return;
       const handleBootstrapReady = (event: MessageEvent) => {
         if (
