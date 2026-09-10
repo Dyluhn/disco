@@ -40,6 +40,9 @@ def _reset_singletons(monkeypatch):
     monkeypatch.setattr(le, "_embedding_model", None)
     monkeypatch.setattr(le, "_cross_encoder", None)
     monkeypatch.setattr(le, "_embedding_factory", lambda _model_name: _FakeEmbedder)
+    # The loader checks free RAM before it instantiates anything; nothing here
+    # loads a model, so a small CI host must not fail these tests.
+    monkeypatch.setattr(le, "_require_ram", lambda _model_name: None)
 
 
 # ── PMX_EMBED_MODEL ───────────────────────────────────────────────────────────

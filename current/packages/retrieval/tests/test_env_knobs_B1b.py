@@ -47,6 +47,9 @@ def _reset(monkeypatch):
     monkeypatch.setattr(le, "_cross_encoder", None)
     monkeypatch.setattr(le, "_embedding_factory", lambda _model_name: _FakeEmbedder)
     monkeypatch.setattr("fastembed.rerank.cross_encoder.TextCrossEncoder", _FakeEncoder)
+    # The loader checks free RAM before it instantiates anything; nothing here
+    # loads a model, so a small CI host must not fail these tests.
+    monkeypatch.setattr(le, "_require_ram", lambda _model_name: None)
     # Ensure no stale explicit-model vars bleed in from the process env
     monkeypatch.delenv("PMX_EMBED_MODEL", raising=False)
     monkeypatch.delenv("PMX_RERANK_MODEL", raising=False)
