@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/definition-mark-dark.svg">
+    <img src="assets/definition-mark.svg" alt="disco — Latin, verb: I learn; I become acquainted with." width="520">
+  </picture>
+</p>
+
 # What is live, and the known limits
 
 Four surfaces share one event log and one agent core; the README lists them.
@@ -57,7 +64,7 @@ conversation; see
 It is local-first: keep the default loopback binding unless you put your own TLS
 in front of it.
 
-## The load-bearing idea
+## The central idea
 
 The append-only event log is the single source of truth. `State` (what the loop
 knows) and `View` (what the LLM sees) are **pure functions** of the ordered log;

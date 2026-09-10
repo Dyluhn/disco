@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-dark.svg">
+    <img src="docs/assets/logo.svg" alt="Disco." width="260">
+  </picture>
+</p>
+
 # Disco
 
 A self-hosted **Research + Agent + Build** platform: a grounded answer engine, a
@@ -39,6 +46,17 @@ podman compose exec agent-server disco-verify --quick
 [`docs/self-host.md`](./docs/self-host.md) has the rest: the rootless Docker
 path, what each compose provider prints, the headless (no browser) provider
 setup, updating, starting at boot, backups, models and hardware.
+
+## What it looks like
+
+| Search and Deep Research | A finished Build, with its preview |
+|---|---|
+| ![The home screen: one prompt box, Search or Deep Research](docs/assets/screenshots/home.png) | ![A finished Build next to the live preview of the site it made](docs/assets/screenshots/build-preview.png) |
+
+![A Deep Research report: the evidence meter, the section outline, cited sentences](docs/assets/screenshots/research-report.png)
+
+Dark theme: [the same report](docs/assets/screenshots/research-report-dark.png). Every
+screenshot is from a stock install on a fresh VM at the commit that shipped it.
 
 ## Surfaces
 
