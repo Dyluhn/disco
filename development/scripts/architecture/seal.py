@@ -104,6 +104,12 @@ PROTECTED: tuple[str, ...] = (
     # the public-API authority, so it is hash-gated exactly like the other three.
     "development/scripts/architecture/public_api_parts/_frontend.py",
     "development/scripts/architecture/public_api_parts/_members.py",
+    # PKG-38-UI-FIXES-V51 added the fifth authority: a frontend public target
+    # that MOVES path or name read as a deletion, because a TypeScript
+    # re-export cannot keep the old name alive the way a Python __init__.py
+    # can. It decides which frontend deletions may regenerate the authority, so
+    # it is hash-gated exactly like the other four.
+    "development/scripts/architecture/public_api_parts/_relocations.py",
     "development/scripts/architecture/public_api_parts/_surface.py",
     "development/scripts/architecture/test_inventory_parts/__init__.py",
     "development/scripts/architecture/test_inventory_parts/_rows.py",

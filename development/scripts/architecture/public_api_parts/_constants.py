@@ -49,6 +49,18 @@ DECLARATION_FIELDS = {
     "accepting_commit",
     "accepting_receipt",
 }
+RELOCATION_FIELDS = {
+    "surface",
+    "old_path",
+    "old_public_name",
+    "new_path",
+    "new_public_name",
+    "declaration_kind",
+    "reason",
+    "owner_package",
+    "accepting_commit",
+    "accepting_receipt",
+}
 ACCEPTED_DIAGRAM_SHA256 = (
     "759993f1a3104700efe8f48395923117546bd0fd1ca371681bc2a09fc95b9f26"
 )

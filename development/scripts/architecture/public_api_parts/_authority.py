@@ -18,7 +18,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from . import _closeout, _frontend, _members
+from . import _closeout, _frontend, _members, _relocations
 from ._constants import (
     BRIDGE_FIELDS,
     PACKAGE,
@@ -162,6 +162,8 @@ def check_metadata(
         _check_one_member(record, ("python", path, public_name), targets, problems)
     for (path, public_name), record in declarations.items():
         _frontend.check_one_declaration(record, ("frontend", path, public_name), targets, problems)
+    for _old, record in sorted(_relocations.relocation_authority(baseline, root, problems).items()):
+        _relocations.check_one_relocation(record, targets, problems)
 
 
 def _check_python_change(
@@ -335,12 +337,20 @@ def check_regeneration_delta(
     added = current_keys - previous_keys
     removed = previous_keys - current_keys
     current_identities = {key[:3] for key in current_keys}
-    deleted = [key for key in removed if key[:3] not in current_identities]
+    relocations = _relocations.relocation_authority(inventory, root, problems)
+    sanctioned = _relocations.sanctioned_deletions(relocations, current_targets, problems)
+    relocated_now = {key[:3] for key in removed if key[:3] in sanctioned}
+    deleted = [
+        key
+        for key in removed
+        if key[:3] not in current_identities and key[:3] not in relocated_now
+    ]
     if deleted:
         try:
             _closeout.retired_targets(root, previous, deleted)
         except (OSError, ValueError, KeyError, RuntimeError) as error:
             problems.append(f"public API regeneration deletes targets: {sorted(deleted)}; {error}")
+    _relocations.check_relocation_delta(previous, inventory, root, relocated_now, problems)
     changed = {key[:3] for key in removed if key[:3] in current_identities}
     changed_python = {item for item in changed if item[0] == "python"}
     changed_frontend = {item for item in changed if item[0] == "frontend"}

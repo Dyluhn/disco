@@ -284,6 +284,7 @@ def regenerate_public_api(
     compatibility_bridges: list[dict[str, Any]] | None = None,
     member_transitions: list[dict[str, Any]] | None = None,
     frontend_declaration_transitions: list[dict[str, Any]] | None = None,
+    frontend_target_relocations: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     resolved_root = REPO_ROOT if root is None else root
     source_identity, prior = _regeneration_prior(resolved_root, source_identity)
@@ -322,6 +323,11 @@ def regenerate_public_api(
             "frontend_declaration_transitions",
             frontend_declaration_transitions,
         ),
+        "frontend_target_relocations": _carried(
+            previous,
+            "frontend_target_relocations",
+            frontend_target_relocations,
+        ),
         "compatibility_rule": (
             "Any deleted or renamed public name, origin, signature, frontend "
             "export/type/schema, or contract byte fails. Additions require an "
@@ -331,7 +337,9 @@ def regenerate_public_api(
             "member transition pinning both signature digests and the exact "
             "member delta. A frontend declaration change requires an explicit "
             "frontend declaration transition pinning both target digests and "
-            "both declaration texts."
+            "both declaration texts. A frontend public target that MOVES path "
+            "or name requires an explicit frontend target relocation naming one "
+            "live destination of the same declaration kind, one to one."
         ),
     }
     problems: list[str] = []
