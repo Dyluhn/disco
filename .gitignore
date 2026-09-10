@@ -109,3 +109,10 @@ current/frontend/.env.development.local
 
 # Our source lives in components/build/ — defend it from a global `build/` rule
 !/current/frontend/src/components/build/
+
+# Editor/tooling state and an empty submodule file are not source (PKG-40).
+# These were tracked as 0-byte files; .serena/ is per-machine tool state.
+.idea
+.vscode
+.serena/
+.gitmodules
