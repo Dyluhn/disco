@@ -6,16 +6,52 @@ socket is inherited by a fresh install.
 
 ## Quickstart
 
-The repository is private: clone it with your own GitHub access — an SSH key on
-your account (`git@github.com:Dyluhn/disco.git`) or a `repo`-scoped personal
-access token as the password for the `https://` clone. Without access the clone
-stops at `Repository not found`.
+This is the supported self-host path from a clean checkout. It boots the app,
+agent, frontend, data volume, bundled encoders, and bundled TTS without source
+edits or a required `.env` file:
+
+### Prerequisites
+
+`git`, rootless **Podman**, and a compose provider. Nothing else — no Python, no
+Node, no `uv` on the host; every build happens inside the containers.
 
 ```bash
 sudo apt-get update && sudo apt-get install -y git podman docker-compose   # Debian 13
-# Ubuntu 24.04 instead: ... git podman podman-compose  (its docker-compose is the
-# retired Python v1). See the README Prerequisites note on compose providers —
-# podman-compose 1.3.x drops ${VAR:-default} and mangles ports and environment.
+sudo apt-get update && sudo apt-get install -y git podman podman-compose   # Ubuntu 24.04
+```
+
+Those two are the combinations this project installs and tests on. On any other
+distribution install `git`, `podman`, and a compose provider — prefer **Compose
+v2** (usually packaged as `docker-compose`), and fall back to `podman-compose`
+where Compose v2 is not packaged or is still the retired Python v1, which is the
+case on Ubuntu 24.04.
+
+`podman compose` is a thin wrapper that hands the file to whichever provider it
+finds, and the providers are not equivalent. Installing `docker-compose` does
+not install a Docker daemon and does not change which engine runs the
+containers.
+
+If your provider is `podman-compose` 1.3.x, `podman compose up` fails with
+
+```
+Error: invalid port format - format is [[hostIP:]hostPort:]containerPort
+```
+
+and, more quietly, hands the containers environment values that still read
+`${DISCO_ENCODER_TIER:-full}`. That version does not apply a `${VAR:-default}`
+when `VAR` is unset and is also one of the service's own environment keys.
+Install `docker-compose` and run `podman compose up -d --build` again.
+
+The repository is private, so `git clone` needs your own GitHub access. Either
+put an SSH key on your account and clone `git@github.com:Dyluhn/disco.git`, or
+create a personal access token with `repo` scope and give it as the password the
+`https://` clone asks for; `gh auth login` sets up either. Without access the
+clone stops at `Repository not found` — GitHub does not distinguish "private"
+from "missing" for a client it does not recognise.
+
+**Rootless Podman** (the path this project's install testing actually covers):
+
+```bash
 git clone https://github.com/Dyluhn/disco.git
 cd disco
 systemctl --user daemon-reload
@@ -27,47 +63,178 @@ podman compose up -d --build
 podman compose logs app-server
 ```
 
-Then open **http://localhost:8088** in a browser.
+The two `systemctl --user` lines before `enable-linger` set up the per-user
+services the Podman install just added. Logging out and back in does the same
+thing. Skipping them is the usual cause of
 
-On a Docker host, skip the Podman lines above — `podman.socket` does not exist
-there and the enable step fails — and substitute:
+```
+error running container: from /usr/bin/crun creating container for [...]:
+  sd-bus call: Interactive authentication required.: Permission denied
+```
+
+part-way through the image build — rootless `crun` needs your user's D-Bus, and
+a shell that was already open when Podman was installed does not have it. (On
+Debian 13 a *fresh* login does not have it either until the socket is started
+once.) `enable-linger` then keeps the stack running after you disconnect.
+
+The `export` points the Build sandbox at *your* rootless Podman socket. The
+compose file is written for the compose providers distributions actually ship,
+which substitute variables in a single pass — so its own fallback can only spell
+the literal uid-1000 path, not `$XDG_RUNTIME_DIR`. Exporting it is correct at any
+uid. Keep it exported for every later `podman compose` command in the same shell
+(`logs`, `exec`, `down`).
+
+**Rootless Docker** — do NOT run the Podman lines above; `podman.socket` does not
+exist on a Docker host and the enable step fails. Rootless Docker is not a
+distribution package on Ubuntu; it comes from Docker's own installer, and the
+`apt` line below is only the CLI, the compose plugin and the user-namespace
+tools it needs:
+
+```bash
+sudo apt-get update && sudo apt-get install -y \
+  git curl uidmap dbus-user-session docker-compose-v2
+sudo systemctl disable --now docker.service docker.socket   # the rootful daemon apt pulled in
+systemctl --user daemon-reload && systemctl --user start dbus.socket
+loginctl enable-linger "$USER"
+curl -fsSL https://get.docker.com/rootless | sh
+```
+
+On Ubuntu 23.10 and later that last command stops with
+
+```
+[rootlesskit:parent] error: failed to start the child: fork/exec /proc/self/exe: permission denied
+[ERROR] RootlessKit failed, see the error messages and https://rootlesscontaine.rs/getting-started/common/
+```
+
+because Ubuntu restricts unprivileged user namespaces. The binaries are already
+in place at that point; grant `rootlesskit` the exception and finish:
+
+```bash
+sudo tee /etc/apparmor.d/home."$USER".bin.rootlesskit >/dev/null <<EOF
+abi <abi/4.0>,
+include <tunables/global>
+$HOME/bin/rootlesskit flags=(unconfined) {
+  userns,
+}
+EOF
+sudo systemctl restart apparmor.service
+PATH="$HOME/bin:$PATH" dockerd-rootless-setuptool.sh install
+```
+
+Then point this shell at the rootless daemon and bring the stack up:
 
 ```bash
 export PATH="$HOME/bin:$PATH"
 export DOCKER_HOST="unix://$XDG_RUNTIME_DIR/docker.sock"
+git clone https://github.com/Dyluhn/disco.git
+cd disco
 DISCO_LOCAL_ENGINE=docker DISCO_SANDBOX_SOCKET=$XDG_RUNTIME_DIR/docker.sock \
   docker compose up -d --build
+docker compose logs app-server
 ```
 
-Rootless Docker is not a distribution package on Ubuntu, and Ubuntu 23.10+ needs
-an AppArmor exception for `rootlesskit`. The README's **Rootless Docker** block
-has the whole install, including the error you get without that exception.
+Keep both exports set for every later `docker compose` command in this shell, or
+add them to `~/.bashrc` as the installer suggests.
 
-See [Sandbox Image](#sandbox-image) for the rootful alternative and why the
-rootless socket is preferred. Compose prints `pull access denied for
-disco-server` before it builds; that is expected, not a failure.
+Confirm the services before going further — a compose provider can report
+success while one image failed to build. Check with `podman ps`, not `compose
+ps`: the two compose providers print different things, and only one of them
+prints health at all.
 
-The app-server logs print the working UI URL and the first-run pairing token. On
-localhost the browser normally pairs automatically; if it asks for a token,
-print the current one:
+```bash
+podman ps --format '{{.Names}} {{.Status}}'     # or: docker ps --format ...
+```
+
+Expect three running containers — `app-server`, `agent-server` and `frontend` —
+each **Up ... (healthy)**. The names are `disco_app-server_1` under
+podman-compose and `disco-app-server-1` under Compose v2.
+
+A fourth container, `sandbox-image`, is expected to be **Exited (0)**; it exists
+only to deposit the `disco-sandbox:base` image into your daemon and then stops.
+Add `-a` to `podman ps` to see it.
+
+What `podman compose ps` shows instead, and why it is not the check: under
+podman-compose it lists all four containers with health, but under the
+Compose v2 (`docker-compose`) provider — the one Debian 13 uses — it lists three
+rows, hides the exited `sandbox-image`, and never prints `(healthy)` even when
+every healthcheck is passing.
+
+Then open **http://localhost:8088** in a browser.
+
+Two things Docker prints that look like failures and are not. Compose attempts a
+registry pull before it builds, so `Error: pull access denied for disco-server`
+scrolls past on every `up --build` — the build then runs normally. And if the
+build dies within about 20 seconds on a `dns error` reaching a package index,
+that is rootless Docker's network namespace failing to reach systemd-resolved's
+loopback stub, not a problem with disco; give the daemon explicit resolvers:
+
+```bash
+mkdir -p ~/.config/docker
+echo '{"dns":["1.1.1.1","8.8.8.8"]}' > ~/.config/docker/daemon.json
+systemctl --user restart docker
+```
+
+The app-server logs print the working UI URL and the admin pairing token. A
+browser on the same machine pairs itself and never asks for it. If it does ask —
+you are opening the UI from another machine, or you cleared the cookie — print
+the token on demand:
 
 ```bash
 podman compose exec app-server python -m disco.app_server.pairing_cli
 ```
 
-The token is an HMAC tag over the install secret, not a per-boot random value,
-so it is the same token the banner printed and it survives restarts. In the log
-the banner is reached with `podman compose logs app-server | grep -A 8 "Disco
-self-host boot"`; the last twenty lines are healthcheck noise within minutes of
-boot.
+It is derived from this install's secret rather than minted per boot, so that
+command prints the same token every time. To find it in the boot log instead,
+grep for the banner — `logs | tail` will not do, healthcheck lines push the
+banner out of the last twenty lines within minutes:
 
-No driver model is bundled and no dead local endpoint is seeded. After the UI
-loads, open **Settings -> Models & Providers**, add an OpenAI-compatible local,
-LAN, or paid endpoint, set it as **Default primary**, then prove it:
+```bash
+podman compose logs app-server | grep -A 8 "Disco self-host boot"
+```
+
+Configure a driver model after boot in **Settings -> Models & Providers**, then
+prove the configuration:
 
 ```bash
 podman compose exec agent-server disco-verify --quick
 ```
+
+### Configuring the driver model without a browser
+
+A headless server has no Settings page. The app-server API on port 8800 does the
+same three things the Settings screen does. Adding a *provider* is the whole
+job: it stores the key encrypted and approves the endpoint's origin for egress
+in one call. (Storing a bare secret and hand-writing a model entry does not
+work — a model whose `api_key_env` names a plain environment variable has that
+reference quarantined, and the request then goes out unauthenticated.)
+
+```bash
+# Pair once. On a loopback-bound install (the default) no token is needed.
+CSRF=$(curl -s -c /tmp/disco.jar -H 'Origin: http://127.0.0.1:8800' \
+        -H 'Content-Type: application/json' -d '{}' \
+        http://127.0.0.1:8800/api/auth/mint | python3 -c 'import json,sys;print(json.load(sys.stdin)["csrf_token"])')
+AUTH=(-b /tmp/disco.jar -H "Origin: http://127.0.0.1:8800" -H "X-Disco-CSRF: $CSRF" -H 'Content-Type: application/json')
+
+# 1. the provider — label, OpenAI-compatible base URL, and the key.
+curl -s "${AUTH[@]}" -X POST http://127.0.0.1:8800/api/providers -d "{
+  \"label\": \"My Provider\", \"base_url\": \"https://example.com/v1\",
+  \"kind\": \"openai-compat\", \"api_key\": \"$YOUR_KEY\", \"requires_api_key\": true}"
+# -> {"provider":{"id":"my-provider",...},"catalogue_ok":true}
+
+# 2. see what it serves, and enable the one you want to drive the loop.
+curl -s "${AUTH[@]}" http://127.0.0.1:8800/api/providers/my-provider/models
+curl -s "${AUTH[@]}" -X POST http://127.0.0.1:8800/api/providers/my-provider/enable \
+  -d '{"model_id": "<served-model-id>", "context_window": 131072}'
+# -> the catalogue, including "prov-my-provider-<served-model-id>"
+
+# 3. make it the default driver.
+curl -s "${AUTH[@]}" -X PUT http://127.0.0.1:8800/api/models/assignments \
+  -d '{"default_model": "prov-my-provider-<served-model-id>"}'
+```
+
+`GET /api/providers/presets` lists ready-made base URLs (OpenRouter, OpenAI,
+Anthropic, Groq, DeepSeek, Together, Fireworks, Mistral, xAI). Pass the key in
+the request body only — never on a command line that lands in shell history.
 
 ## Services
 
@@ -434,6 +601,39 @@ docker build \
   -t disco-server:lite \
   -f deploy/compose/Dockerfile.server .
 ```
+
+## Providers
+
+Disco has keyless defaults for retrieval and local artifact services. The driver
+LLM is intentionally not bundled; point it at a model endpoint you run or a paid
+OpenAI-compatible API.
+
+| Capability | Keyless default | Self-host option | Paid/BYO-key option |
+|---|---|---|---|
+| Driver LLM | OpenAI-compatible local endpoint, if you run one | Ollama, llama.cpp, vLLM, LM Studio | Any OpenAI-compatible endpoint configured in Settings |
+| Search | DuckDuckGo via `ddgs` | SearXNG | Tavily or Brave |
+| Extraction | Local HTTP fetch/readability | Crawl4AI | Firecrawl |
+| Embeddings/rerank/NLI | Bundled ONNX CPU encoders | Remote encoder/NLI endpoints | OpenAI-compatible embedding endpoints where configured |
+| TTS | Bundled Kokoro ONNX | Speaches/OpenAI-compatible TTS | OpenAI-compatible TTS |
+| Image generation | None bundled | ComfyUI | OpenAI-compatible image API or OpenRouter |
+| App deploy | Local export and dry-run plan | Cloudflare account connected by owner | Cloudflare API token, owner-gated |
+
+Provider keys are read from encrypted Settings secrets first, then matching
+environment variables such as `DISCO_OPENROUTER_API_KEY`, `TAVILY_API_KEY`,
+`BRAVE_API_KEY`, `FIRECRAWL_API_KEY`, or `OPENAI_API_KEY`.
+
+## Hardware
+
+- **Basic research/dev:** 8 GB RAM is workable with `DISCO_ENCODER_TIER=lite`.
+  The lite encoder tier downloads about 0.15 GB of ONNX models.
+- **Full local retrieval quality:** use `DISCO_ENCODER_TIER=full` on a box with
+  at least 16 GB RAM; the full encoder tier is roughly 4 GB of model weights.
+- **Useful local agent driver:** use a 24-32B-class instruction model with a
+  32k+ context window, served by Ollama, llama.cpp, vLLM, LM Studio, or a LAN
+  endpoint. Smaller CPU-only models are suitable only for smoke tests.
+- **Build isolation:** Docker or rootless Podman is recommended for real Build
+  runs. The `process` sandbox is a convenience for local development only.
+- **Windows:** use WSL2 or Docker.
 
 ## MCP servers
 

@@ -139,7 +139,7 @@ make fault         # fault/chaos injection
 ```
 
 Or invoke pytest directly: `uv run pytest`. Async tests run without per-test
-decorators (`asyncio_mode = "auto"`); `testpaths = ["packages"]`.
+decorators (`asyncio_mode = "auto"`); `testpaths = ["packages", "development/tests/architecture", "development/tests/unbiased_gate"]`.
 
 Live/heavy targets (need real config, secrets, or a running instance — kept out of
 `make test` on purpose):
@@ -175,8 +175,8 @@ npm run test:e2e   # Playwright E2E
   code defines enums as `(str, Enum)` and the source mirrors it verbatim.
 
 ```bash
-make lint          # uv run ruff check packages harness
-make fmt           # uv run ruff format packages harness
+make lint          # uv run ruff check packages development/harness
+make fmt           # uv run ruff format packages development/harness
 ```
 
 The frontend lints with `npm run lint` (eslint).
@@ -222,6 +222,42 @@ This project verifies against reality, not against green checkmarks:
 - **No cheap workarounds.** Never hardcode state to make a test pass; if a path isn't
   wired, flag the gap explicitly rather than papering over it. Don't ship UI that looks
   usable but does nothing.
+
+## Landing on main (maintainers)
+
+`main` only ever moves to a **landing head**, and the shape is fixed by the
+sealed authorities (`development/architecture/test-inventory.json`,
+`public-api.json`, `development/governance/PROTECTED.sha256`):
+
+1. **Candidate chain P** — the reviewed commits, pushed on their branch. Every
+   gate except the two lineage-checked ones (public API, test inventory) must be
+   green on P; GitHub's required job shows exactly that on a branch.
+2. **Source commit S** — one commit with parent P carrying the mutable status
+   docs (`development/governance/CURRENT-STATE.md`, `LAUNCH-CHECKLIST.md`) and
+   nothing under the derived paths. Push it on its own branch and keep it: the
+   authorities cite S by hash and a clone must resolve it.
+3. **Regenerate against S** (HEAD must be S): the test inventory with the
+   package label (`regenerate_inventory(root, S, package=..., null_advance=True)`
+   when the package adds no test id; renames and module splits need their
+   transition records), then the public API (`regenerate_public_api` with any
+   additive, member, declaration or relocation records the package needs), then
+   `gen_arch_diagram.py --check`. A delta the records do not explain is a stop.
+4. **Rebaseline the seal** on that single command only, owner-authorized:
+   `DISCO_GOVERNANCE_REBASELINE=1 uv run python development/scripts/check_governance_seal.py --rebaseline`,
+   then `check_governance_seal.py` clean. Quote the owner's written authorization
+   in the landing commit.
+5. **Landing head L** — S's tree plus the regenerated derived files, committed
+   with **parent P** (`git commit-tree`), so S and L are siblings. Run the twelve
+   gates and the receipts (backend, full unit, lint, types, architecture,
+   imports, diagram, architecture tests, frontend) on L and keep the job/log/
+   result files in the ledger.
+6. **Move main**: fast-forward `main` to L, push `main` and S's branch. The
+   required job on `main` must be green; that run is the record.
+
+Commits cited by the authorities that are not on any branch are anchored by the
+tag `governance/authority-commit-anchors` (an empty-tree commit whose parents
+are those commits). If a landing cites a commit that will not stay on a pushed
+branch, add it to that anchor.
 
 ## Commit & PR conventions
 
