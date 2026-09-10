@@ -874,7 +874,11 @@ class TestFrontendPublicApi:
         # (tapTarget, useScrollFade, ScrollFade). 407 after the composer redesign
         # (SearchTypeSlider, DriverModelNotice, focusModelControl). 409 after the
         # production-readiness wave (McpImportBox, passageNormalize). All additive.
-        assert len(live["frontend_modules"]) == 419
+        # 432 after V51: the audio, preview and settings work added modules and
+        # split three download components and the image-gen setup note out of
+        # their oversized parents. All additive at the module level; the four
+        # moved public targets carry frontend target relocations.
+        assert len(live["frontend_modules"]) == 432
         assert len(authority["contract_files"]) == 2
         assert all(set(row) == {"path", "sha256", "bytes"} for row in authority["contract_files"])
         assert module == {
@@ -954,7 +958,9 @@ class TestFrontendPublicApi:
             "member transition pinning both signature digests and the exact "
             "member delta. A frontend declaration change requires an explicit "
             "frontend declaration transition pinning both target digests and "
-            "both declaration texts."
+            "both declaration texts. A frontend public target that MOVES path "
+            "or name requires an explicit frontend target relocation naming one "
+            "live destination of the same declaration kind, one to one."
         )
         # No longer empty as of Epic 10-D: every added public target carries an
         # owning-package transition, and the two accepted member-level changes
@@ -978,7 +984,9 @@ class TestFrontendPublicApi:
         # correction adds the explicit capability fields on ProviderSettings
         # and ModelEntry; records policy adds Entity; MCP diagnostics add McpPool;
         # the launch closeout widens WSClientFrame's `type` Literal with the
-        # explicit accept_finished stop-intent frame.
+        # explicit accept_finished stop-intent frame; V51 adds
+        # SqliteEventStore.update_title_unique at both initializers that
+        # re-export it and ProviderSettings' two key-status fields.
         assert (
             {row["public_name"] for row in baseline["member_transitions"]}
             == PUBLIC_API_MEMBER_NAMES
