@@ -283,3 +283,25 @@ By contributing, you agree your contributions are licensed under the project's
 standing promise back to you: **the license will never change.** disco will not
 be relicensed to a source-available or commercial license, so your contribution stays
 Apache-2.0 forever (see the README's License section).
+
+## Benchmarks against the field: sota-scan
+
+`/sota-scan` (a project skill under `.claude/skills/`, vendored from
+[MerlijnW70/sota-scan](https://github.com/MerlijnW70/sota-scan)) benchmarks this
+repository against real projects in the same domain and writes a cited capability
+matrix and a ranked gap list to `.sota/`. The exported scorecard is
+`.sota/report.<domain>.md`; regenerate it with
+`node development/sota-scan/scripts/sota-report.mjs --report` and verify it is
+current with `--check`. See `development/sota-scan/VENDORED.md`.
+
+## Repository research: DeepGit
+
+`.mcp.json` registers [DeepGit](https://github.com/zamalali/DeepGit) (MIT), an
+agentic GitHub research engine, as an MCP server for Claude Code sessions in this
+repository, pinned to a commit and launched with `uvx`. It reads `GITHUB_API_KEY`
+(a token with public-repo read access), `LLM_PROVIDER` (default `groq`) and the
+matching provider key (`GROQ_API_KEY`) from your environment; nothing is stored in
+the repository. Tools: `find_repositories`, `find_repositories_json`,
+`deep_research`, `check_setup`. To give Disco's own Agent surface the same
+capability, add it in **Settings → MCP** as a stdio server — see
+`docs/self-host.md` § MCP servers.

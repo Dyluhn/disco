@@ -69,7 +69,7 @@ add more:
 
 ## Navigating the code (use the symbol graph, not grep)
 
-This repo is wired for **Serena** — an LSP-backed code-navigation MCP server
+This repo also registers **DeepGit** (repository research, pinned in `.mcp.json`; needs `GITHUB_API_KEY` and an LLM provider key in your environment) and ships the **`/sota-scan`** project skill (`.claude/skills/sota-scan`, results in `.sota/`). This repo is wired for **Serena** — an LSP-backed code-navigation MCP server
 (config in `.mcp.json`; it indexes all Python under `packages/*/src` into
 `.serena/cache/`). When its tools are available (any Claude Code session started
 in this directory, and the subagents it spawns), **prefer them over `grep`/`rg`

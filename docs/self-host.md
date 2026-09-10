@@ -641,6 +641,15 @@ Both MCP transports are served by the `agent-server` container. Add servers in
 **Settings -> MCP**; each one passes two approvals (the config/origin approval,
 then a tool-schema approval) before any tool becomes callable.
 
+**Example — DeepGit, GitHub repository research (stdio).** In **Settings -> MCP**
+add a stdio server with command `uvx` and arguments
+`--from git+https://github.com/zamalali/DeepGit@206f634acd7b3d28603caf4b8cfb27418bdc0a61 deepgit-mcp`,
+and set `GITHUB_API_KEY` (public-repo read), `LLM_PROVIDER` (`groq`, `openai`,
+`anthropic` or `vertex_ai`) and that provider's key in the server's environment.
+The agent-server image must be able to run `uvx` and reach GitHub; the tools it
+gains are `find_repositories`, `find_repositories_json` and `deep_research`. The
+same server is registered for Claude Code sessions in `.mcp.json`.
+
 **Remote (`streamable_http`).** The URL must be reachable *from the agent-server
 container* — see [Reaching a service running on the host
 machine](#reaching-a-service-running-on-the-host-machine) if the server runs on

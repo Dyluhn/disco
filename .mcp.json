@@ -12,6 +12,19 @@
         "--project",
         "."
       ]
+    },
+    "deepgit": {
+      "command": "uvx",
+      "args": [
+        "--from",
+        "git+https://github.com/zamalali/DeepGit@206f634acd7b3d28603caf4b8cfb27418bdc0a61",
+        "deepgit-mcp"
+      ],
+      "env": {
+        "GITHUB_API_KEY": "${GITHUB_API_KEY}",
+        "LLM_PROVIDER": "${DEEPGIT_LLM_PROVIDER:-groq}",
+        "GROQ_API_KEY": "${GROQ_API_KEY}"
+      }
     }
   }
 }
