@@ -841,10 +841,14 @@ async def test_run_with_persistence_emits_error_and_skips_loop_on_dead_driver():
     rt = ConversationRuntime(store, router=DefaultLLMRouter(_cfg(), {"fake": _FakeProvider()}))
     rt.settings._set_surface("c1", "build")
 
-    async def _fail(cid, **kw):
+    async def _fail(cid, *, override=None, role=ModelRole.AGENT_DRIVER):
         return "Driver 'm' unreachable: connection error: refused"
 
-    rt._preflight_driver = _fail  # type: ignore[assignment]
+    # The run supervisor consults the preflight object directly, not the
+    # runtime's _preflight_driver wrapper. Patching the wrapper left the real
+    # check in place; it passed here only because the sandbox preflight fails
+    # on a host without a sandbox and happens to say "unreachable" too.
+    rt._driver_preflight.check = _fail  # type: ignore[method-assign]
 
     class _Loop:
         def __init__(self):
