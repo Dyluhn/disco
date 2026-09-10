@@ -3,7 +3,7 @@
 # This is a *virtual* uv project: it is never built or installed itself
 # (`tool.uv.package = false`). It exists to (a) declare the workspace members
 # and (b) hold the shared dev toolchain so a single `uv sync` provisions the
-# whole monorepo. Each real package lives under current/packages/* and is its own
+# whole monorepo. Each real package lives under packages/* and is its own
 # separately-versioned distribution, mirroring the four-layer topology in
 # basis-of-design.md §5 (core -> tools -> agent-server -> app-server).
 [project]
@@ -19,7 +19,7 @@ package = false
 [tool.uv.workspace]
 # `development` is the harness member (development-only, never published); it is
 # what makes `import harness` resolve without a PYTHONPATH. See development/pyproject.toml.
-members = ["current/packages/*", "development"]
+members = ["packages/*", "development"]
 
 [dependency-groups]
 # Shared dev toolchain for every member package.
@@ -37,17 +37,17 @@ dev = [
     # BP-08 process backend: ProcessKernel launches the host `python3` kernelspec
     # via jupyter_client.AsyncKernelManager — ipykernel provides that kernelspec.
     # Without it every host-side kernel test fails at launch (the container image
-    # installs its own ipykernel in current/deploy/sandbox/Dockerfile).
+    # installs its own ipykernel in deploy/sandbox/Dockerfile).
     "ipykernel>=6.29",
     # BP-08 acceptance 2(e): the plots integration test renders a real matplotlib
     # figure on the PROCESS backend (the container image stays matplotlib-free —
-    # the decided option in current/deploy/sandbox/Dockerfile).
+    # the decided option in deploy/sandbox/Dockerfile).
     "matplotlib>=3.9",
     "numpy>=2.0",
     # BP-04 browser daemon: the host-side integration test runs the REAL
     # _browser_daemon.py as a subprocess, which imports playwright and drives
     # Chromium (one-time `playwright install chromium` fetches the browser).
-    # The container image installs its own in current/deploy/sandbox/Dockerfile.
+    # The container image installs its own in deploy/sandbox/Dockerfile.
     "playwright>=1.45",
     "httpx2>=2.5.0",
 ]
@@ -71,8 +71,8 @@ asyncio_default_fixture_loop_scope = "function"
 # certifies are the ids a default run executes; the execution-coverage gate
 # (development/scripts/architecture/inventory_execution.py) now fails if that ever diverges
 # again for any directory.
-testpaths = ["current/packages", "development/tests/architecture", "development/tests/unbiased_gate"]
-# PKG-19-CERT-STRUCTURAL finding F2: six modules under current/packages/agent-server/tests
+testpaths = ["packages", "development/tests/architecture", "development/tests/unbiased_gate"]
+# PKG-19-CERT-STRUCTURAL finding F2: six modules under packages/agent-server/tests
 # import `harness.*` / `packages.*`, which resolve only with the repository root
 # importable. The Makefile passed PYTHONPATH=. to the development/harness/contract/fuzz/fault
 # targets but NOT to `unit`, so the repository's own hermetic entrypoint
@@ -80,7 +80,7 @@ testpaths = ["current/packages", "development/tests/architecture", "development/
 # collection` while the sealed inventory went on certifying the 62 ids inside
 # them. Setting it here fixes every invocation at once rather than one Makefile
 # target at a time, and needs no root conftest.py.
-pythonpath = [".", "development", "current"]
+pythonpath = [".", "development"]
 markers = [
     "integration",
     # W7: fast input/output boundary CONTRACTS (W1 sandbox-error typing, W2 task supervision,
@@ -99,7 +99,7 @@ markers = [
     # focused suite is selected with `-m "export_track1_closeout and not integration"`
     # (the live Docker proof adds `and integration`). Registered here so the closeout
     # tests are never a typo'd/unknown marker silently deselected. See
-    # current/docs/export-track1-closeout-work-orders.md §3.2/§4.
+    # development/notes/export-track1-closeout-work-orders.md §3.2/§4.
     "export_track1_closeout",
 ]
 # EPIC H (P2): DESELECT the live sandbox-isolation escape suite by default (jail safety —
@@ -118,10 +118,10 @@ target-version = "py312"
 # the root fix — the formatter must not be able to reach frozen bytes at all.
 # New code does not go in these directories, so nothing is left unformatted.
 extend-exclude = [
-    "current/packages/agent-server/tests/export_track1_closeout",
-    "current/packages/core/tests/export_track1_closeout",
-    "current/packages/agent-server/tests/integration/_closeout_live_support.py",
-    "current/packages/agent-server/tests/integration/test_export_track1_closeout_live.py",
+    "packages/agent-server/tests/export_track1_closeout",
+    "packages/core/tests/export_track1_closeout",
+    "packages/agent-server/tests/integration/_closeout_live_support.py",
+    "packages/agent-server/tests/integration/test_export_track1_closeout_live.py",
 ]
 
 [tool.ruff.lint]
@@ -134,11 +134,11 @@ ignore = ["UP042"]
 
 [tool.pyright]
 include = [
-    "current/packages/core/src",
-    "current/packages/retrieval/src",
-    "current/packages/tools/src",
-    "current/packages/agent-server/src",
-    "current/packages/app-server/src",
+    "packages/core/src",
+    "packages/retrieval/src",
+    "packages/tools/src",
+    "packages/agent-server/src",
+    "packages/app-server/src",
 ]
 exclude = ["**/__pycache__", "**/tests", "**/.venv", "archived God files"]
 pythonVersion = "3.13"
@@ -147,11 +147,11 @@ venv = ".venv"
 extraPaths = [
     # harness/ lives under development/ after the three-bucket restructure
     "development",
-    "current/packages/core/src",
-    "current/packages/retrieval/src",
-    "current/packages/tools/src",
-    "current/packages/agent-server/src",
-    "current/packages/app-server/src",
+    "packages/core/src",
+    "packages/retrieval/src",
+    "packages/tools/src",
+    "packages/agent-server/src",
+    "packages/app-server/src",
 ]
 typeCheckingMode = "standard"
 reportMissingImports = true

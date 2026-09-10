@@ -593,7 +593,7 @@ wheels = [
 [[package]]
 name = "disco-agent-server"
 version = "0.1.0"
-source = { editable = "current/packages/agent-server" }
+source = { editable = "packages/agent-server" }
 dependencies = [
     { name = "cronsim" },
     { name = "disco-core" },
@@ -614,9 +614,9 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "cronsim", specifier = ">=2.6" },
-    { name = "disco-core", editable = "current/packages/core" },
-    { name = "disco-retrieval", editable = "current/packages/retrieval" },
-    { name = "disco-tools", editable = "current/packages/tools" },
+    { name = "disco-core", editable = "packages/core" },
+    { name = "disco-retrieval", editable = "packages/retrieval" },
+    { name = "disco-tools", editable = "packages/tools" },
     { name = "fastapi", specifier = ">=0.110" },
     { name = "idna", specifier = ">=3.10" },
     { name = "kokoro-onnx", specifier = ">=0.4" },
@@ -632,7 +632,7 @@ requires-dist = [
 [[package]]
 name = "disco-app-server"
 version = "0.1.0"
-source = { editable = "current/packages/app-server" }
+source = { editable = "packages/app-server" }
 dependencies = [
     { name = "disco-core" },
     { name = "fastapi" },
@@ -642,7 +642,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "disco-core", editable = "current/packages/core" },
+    { name = "disco-core", editable = "packages/core" },
     { name = "fastapi", specifier = ">=0.110" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "uvicorn", specifier = ">=0.30" },
@@ -651,7 +651,7 @@ requires-dist = [
 [[package]]
 name = "disco-core"
 version = "0.1.0"
-source = { editable = "current/packages/core" }
+source = { editable = "packages/core" }
 dependencies = [
     { name = "cronsim" },
     { name = "cryptography" },
@@ -675,7 +675,7 @@ source = { editable = "development" }
 [[package]]
 name = "disco-retrieval"
 version = "0.1.0"
-source = { editable = "current/packages/retrieval" }
+source = { editable = "packages/retrieval" }
 dependencies = [
     { name = "disco-core" },
     { name = "fastembed" },
@@ -690,7 +690,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "disco-core", editable = "current/packages/core" },
+    { name = "disco-core", editable = "packages/core" },
     { name = "fastembed", specifier = ">=0.8" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "huggingface-hub", specifier = ">=0.20" },
@@ -704,7 +704,7 @@ requires-dist = [
 [[package]]
 name = "disco-tools"
 version = "0.1.0"
-source = { editable = "current/packages/tools" }
+source = { editable = "packages/tools" }
 dependencies = [
     { name = "disco-core" },
     { name = "docker", extra = ["ssh"] },
@@ -724,7 +724,7 @@ browser = [
 
 [package.metadata]
 requires-dist = [
-    { name = "disco-core", editable = "current/packages/core" },
+    { name = "disco-core", editable = "packages/core" },
     { name = "docker", extras = ["ssh"], specifier = ">=7" },
     { name = "jupyter-client" },
     { name = "mcp", specifier = ">=1.27.2,<2" },
