@@ -32,7 +32,7 @@ const API = process.env.DISCO_RELIABILITY_AGENT_URL ?? "http://127.0.0.1:8000";
 // die with `ModuleNotFoundError`.
 const REPO_ROOT =
   process.env.PMX_REPO_ROOT ??
-  path.resolve(path.dirname(new URL(import.meta.url).pathname), "../../..");
+  path.resolve(path.dirname(new URL(import.meta.url).pathname), "../..");
 // relay WRITES MINIMAX_RELAY_LOG (minimax_relay.py); primary, with PMX_RELAY_LOG legacy alias.
 // DISCO_PROVIDER_LEDGER is the GOVERNED runner's ledger var — without it a governed run reads
 // no ledger, skips as "relay down", and the provider-identity assertions never adjudicate.

@@ -19,7 +19,7 @@ import {
 // with a spawn ENOENT that carries no status, no signal and empty stdout/stderr,
 // which is why the oracle step reported nothing at all. Fallout from the
 // archive/current/development restructure moving the frontend down a level.
-const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const PYTHON = process.env.PMX_VENV_PY ?? path.join(REPO, ".venv/bin/python3");
 const QUESTION =
   "Compare the practical security and portability tradeoffs of WebAssembly runtimes " +

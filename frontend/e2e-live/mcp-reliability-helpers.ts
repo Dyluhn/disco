@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 // output. `harness` is not an installed distribution either — pytest reaches it
 // through `pythonpath = [".", "development", "current"]` in pyproject.toml,
 // which is pytest-only, so a subprocess needs `development` on PYTHONPATH.
-const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const FIXTURE_PYTHONPATH = [path.join(REPO, "development"), process.env.PYTHONPATH]
   .filter(Boolean)
   .join(path.delimiter);

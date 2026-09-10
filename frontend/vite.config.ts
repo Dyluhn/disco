@@ -55,7 +55,11 @@ export default defineConfig({
     },
   },
   server: {
-    fs: { allow: [resolve(__dirname, ".."), __dirname, DEPENDENCY_ROOT] },
+    // The two shared JS assets come from packages/agent-server; allow exactly
+    // that subtree rather than the whole repository root.
+    fs: {
+      allow: [resolve(__dirname, "..", "packages", "agent-server"), __dirname, DEPENDENCY_ROOT],
+    },
     ...(RELIABILITY_APP_PROXY && RELIABILITY_AGENT_PROXY
       ? {
           // Live reliability uses the same single-front-door shape as the

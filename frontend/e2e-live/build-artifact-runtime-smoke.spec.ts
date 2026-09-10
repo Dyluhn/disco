@@ -43,7 +43,7 @@ const API = process.env.DISCO_RELIABILITY_AGENT_URL ?? "http://127.0.0.1:8000";
 // levels up; `../..` landed on `current/`, which made every PYTHONPATH entry
 // below point at a `current/current/...` that does not exist and the classifier
 // die with `ModuleNotFoundError`.
-const REPO_ROOT = process.env.PMX_REPO_ROOT ?? path.resolve(__dirname, "../../..");
+const REPO_ROOT = process.env.PMX_REPO_ROOT ?? path.resolve(__dirname, "../..");
 // The relay WRITES MINIMAX_RELAY_LOG (minimax_relay.py); accept it as primary, keep PMX_RELAY_LOG
 // as a legacy alias so the relay-ledger source can never silently drift to empty (-> a false skip).
 // DISCO_PROVIDER_LEDGER is the isolated stack's native ledger and carries the same {host,model}
