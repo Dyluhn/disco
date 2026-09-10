@@ -13,12 +13,14 @@ name: export-track1-closeout
 # failure so a reviewer can inspect the machine-readable manifest for the exact
 # candidate SHA (plan §1.4). Exit code is truth.
 
-# The acceptance job needs a self-hosted runner labelled `self-hosted, docker,
-# export-track1-closeout` — a real Docker Engine + Compose v2 for the live lane
-# and Node for the frontend lane. The repository has ZERO self-hosted runners
-# registered, so on `push` this workflow could not start a job at all: every run
-# ended in a startup failure after 0s with no log to read, on every push, since
-# the runner went away. A gate that cannot execute is not a gate.
+# Two reasons this workflow was red on every push, both fixed 2026-09-10:
+# 1. The job-level `env` read `${{ runner.temp }}`, and the `runner` context is
+#    not available at job level. GitHub rejected the file at parse time, so no
+#    run ever produced a job or a log. The verifier step carries that env now.
+# 2. The acceptance job needs a self-hosted runner labelled `self-hosted, docker,
+#    export-track1-closeout` — a real Docker Engine + Compose v2 for the live
+#    lane and Node for the frontend lane — and the repository has no self-hosted
+#    runners registered. A gate that cannot execute is not a gate.
 #
 # So the split below. `manifest-freshness` is the part of this contract a hosted
 # runner CAN honestly prove — that the frozen acceptance manifest still matches
@@ -93,10 +95,6 @@ jobs:
     # must be present; the verifier's live tests FAIL — never skip — without an engine.
     runs-on: [self-hosted, docker, export-track1-closeout]
     timeout-minutes: 60
-    env:
-      # Evidence lives OUTSIDE the checkout (plan §1.4); the verifier refuses an
-      # in-checkout path. RUNNER_TEMP is a sibling of the workspace.
-      EVIDENCE_DIR: ${{ runner.temp }}/closeout-evidence
     steps:
       - uses: actions/checkout@v4
         with:
@@ -132,6 +130,11 @@ jobs:
         run: uv run python development/scripts/gen_closeout_acceptance_manifest.py --check
 
       - name: Run the wired closeout verifier (all lanes, live + browser required)
+        # Evidence lives OUTSIDE the checkout (plan §1.4); the verifier refuses an
+        # in-checkout path. RUNNER_TEMP is a sibling of the workspace. Step-level
+        # env, because the `runner` context is unavailable at job level.
+        env:
+          EVIDENCE_DIR: ${{ runner.temp }}/closeout-evidence
         run: >-
           uv run python development/scripts/verify_export_track1_closeout.py
           --all --evidence-dir "$EVIDENCE_DIR"
