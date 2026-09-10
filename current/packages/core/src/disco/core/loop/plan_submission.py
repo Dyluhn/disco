@@ -6,8 +6,6 @@ from typing import TYPE_CHECKING, Protocol
 
 from .engine_contracts import (
     _FORCE_SUBMIT_DIAGNOSTIC,
-    _force_submit_directive,
-    _force_submit_repeats,
     _INVALID_PLAN_DONE_CONDITION_CAP,
     ConversationStatus,
     Disp,
@@ -19,6 +17,8 @@ from .engine_contracts import (
     PlanStep,
     StatusEvent,
     ToolCall,
+    _force_submit_directive,
+    _force_submit_repeats,
     preflight_plan_revision,
     signals,
     validate_plan_conditions,

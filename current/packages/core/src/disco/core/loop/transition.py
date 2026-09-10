@@ -6,7 +6,6 @@ from typing import TYPE_CHECKING
 
 from .engine_contracts import (
     _LOG,
-    _midstep_steer_refusal,
     _TERMINAL_FOR_NOW,
     ActionEvent,
     AgentErrorEvent,
@@ -18,6 +17,7 @@ from .engine_contracts import (
     Event,
     OperatingMode,
     StatusEvent,
+    _midstep_steer_refusal,
     cast,
     is_finish_tool_name,
 )

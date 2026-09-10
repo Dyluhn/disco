@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Protocol
 
 from .engine_contracts import (
-    _midstep_steer_refusal,
     ActionEvent,
     AgentErrorEvent,
     AgentStep,
@@ -18,6 +17,7 @@ from .engine_contracts import (
     MessageEvent,
     OperatingMode,
     StatusEvent,
+    _midstep_steer_refusal,
     signals,
 )
 

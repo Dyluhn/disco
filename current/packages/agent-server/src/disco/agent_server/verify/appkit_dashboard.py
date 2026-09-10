@@ -340,7 +340,10 @@ def main() -> None:
     ap.add_argument(
         "--e2e-root",
         default=None,
-        help="optional UI evidence root (current/frontend/test-record/e2e-full) for screenshot links",
+        help=(
+            "optional UI evidence root (current/frontend/test-record/e2e-full) "
+            "for screenshot links"
+        ),
     )
     args = ap.parse_args()
     summary = generate_dashboard(

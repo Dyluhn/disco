@@ -210,7 +210,8 @@ async def exec_command(
         exit_code=None,
         output=cleaned_running[-shell_sessions._EXEC_RETURN_CHARS :],
         note=(
-            f"still running after 15s in session {getattr(manager, 'session_id', '') or full[:40]!r}"
+            "still running after 15s in session "
+            f"{getattr(manager, 'session_id', '') or full[:40]!r}"
             " — use shell_view / shell_wait"
         ),
     )

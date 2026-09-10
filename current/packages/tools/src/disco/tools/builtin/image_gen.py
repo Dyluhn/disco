@@ -136,6 +136,7 @@ from .image_gen_parts._backends import (
     httpx as httpx,
 )
 
+
 def _svg_fallback_hint() -> str:
     """The image-less fallback instruction. Folded from a module constant into
     its single renderer (its two consumers both splice it into f-strings), so no

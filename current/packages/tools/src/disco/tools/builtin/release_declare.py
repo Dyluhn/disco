@@ -54,6 +54,7 @@ from ..anatomy import ToolContext, ToolDef, ToolOutcome
 from ..behavior import declares
 from ..release_intent import ReleaseIntentWriteError
 
+
 # A STATIC, value-free rejection for a command that fails the runtime grammar
 # (WO-C5 §9.11/§9.2/§9.4). It names the RULE and never echoes the offending argv —
 # a rejected token can itself carry a secret, so the tool's output stays hygienic.

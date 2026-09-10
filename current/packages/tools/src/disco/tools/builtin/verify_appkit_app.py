@@ -351,7 +351,8 @@ class VerifyAppKitAppTool:
         description=(
             "STRUCTURALLY verify the generated AppKit lead-gen app and return a STRUCTURED "
             "pass/fail verdict (presence + ordering + parameterization + guard-first; "
-            "local runtime proof lives in current/packages/core/tests/test_workerd_persistence.py). "
+            "local runtime proof lives in "
+            "current/packages/core/tests/test_workerd_persistence.py). "
             "Runs nine checks: "
             "design_lint clean, schema.sql valid (sqlite round-trip + NOT NULL), Drizzle "
             "schema valid (src/db/schema.ts matches schema.sql and package deps exist), worker "

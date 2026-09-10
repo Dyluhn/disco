@@ -106,13 +106,7 @@ from .turn_control_support import (
     _SERVE_DUPLICATE_DIAGNOSTIC as _SERVE_DUPLICATE_DIAGNOSTIC,
 )
 from .turn_control_support import (
-    _serve_handoff_guidance as _serve_handoff_guidance,
-)
-from .turn_control_support import (
     _SERVE_HANDOFF_DIAGNOSTIC as _SERVE_HANDOFF_DIAGNOSTIC,
-)
-from .turn_control_support import (
-    _serve_next_move as _serve_next_move,
 )
 from .turn_control_support import (
     _SERVE_TARGET_SHAPE_DIAGNOSTIC as _SERVE_TARGET_SHAPE_DIAGNOSTIC,
@@ -173,6 +167,12 @@ from .turn_control_support import (
 )
 from .turn_control_support import (
     _serve_duplicate_guidance as _serve_duplicate_guidance,
+)
+from .turn_control_support import (
+    _serve_handoff_guidance as _serve_handoff_guidance,
+)
+from .turn_control_support import (
+    _serve_next_move as _serve_next_move,
 )
 from .turn_control_support import (
     _serve_path_is_workspace_root as _serve_path_is_workspace_root,

@@ -26,10 +26,10 @@ from ...anatomy import ToolContext, ToolDef, ToolOutcome
 from ._canonical import _canonical
 from ._constants import (
     _FS,
-    _pressure_directive,
     _PRESSURE_FILE_THRESHOLD,
     _PRESSURE_HEAD_BUDGET,
     _READ_CHAR_BUDGET,
+    _pressure_directive,
 )
 from ._read_state import _conv_state, record_read
 

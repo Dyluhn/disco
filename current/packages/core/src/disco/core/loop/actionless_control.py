@@ -150,11 +150,10 @@ class ActionlessValveMixin(_ValveHost):
         )
         if completed:
             return await self._completed_via_notify_finish(events)
+        verification = self._loop._finish.verification
         if (
             not pending_revision
-            and await self._loop._finish.verification.maybe_honest_unverifiable_static_actionless_finish(
-                events
-            )
+            and await verification.maybe_honest_unverifiable_static_actionless_finish(events)
         ):
             return True
         if not incomplete:
