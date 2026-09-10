@@ -1,0 +1,27 @@
+{
+  "domain": "self-hosted-ai-workspace",
+  "version": 1,
+  "note": "Table-stakes derived from the direct cluster scanned 2026-09-10: open-webui, LibreChat, Onyx, AnythingLLM, Suna, OpenHands, Open Notebook, Khoj, SurfSense. A capability is table-stakes only if effectively all of them ship it.",
+  "capabilities": [
+    {"id": "one-command-selfhost", "tier": "table-stakes", "test": "a documented single compose command brings the stack up"},
+    {"id": "prebuilt-images", "tier": "table-stakes", "test": "install pulls published container images instead of compiling from source"},
+    {"id": "versioned-releases", "tier": "table-stakes", "test": "tagged releases exist with per-version changelog sections"},
+    {"id": "public-availability", "tier": "table-stakes", "test": "the repo is publicly cloneable by a stranger"},
+    {"id": "docs-site", "tier": "table-stakes", "test": "hosted documentation beyond in-repo markdown"},
+    {"id": "multi-provider-llm", "tier": "table-stakes", "test": "swap between several LLM providers at runtime"},
+    {"id": "local-model-support", "tier": "table-stakes", "test": "runs against a local/OpenAI-compatible endpoint"},
+    {"id": "web-search-grounding", "tier": "table-stakes", "test": "answers can be grounded in live web search"},
+    {"id": "document-rag", "tier": "table-stakes", "test": "upload own documents into a persistent, queryable corpus"},
+    {"id": "mcp-client", "tier": "table-stakes", "test": "connect external MCP servers to extend the action space"},
+    {"id": "conversation-persistence", "tier": "table-stakes", "test": "history persists and a session can be resumed"},
+    {"id": "web-ui", "tier": "table-stakes", "test": "first-party browser UI, not CLI-only"},
+    {"id": "auth", "tier": "table-stakes", "test": "the instance is not open to anyone who reaches the port"},
+    {"id": "sandboxed-code-execution", "tier": "table-stakes", "test": "agent code/shell runs isolated from the host"},
+    {"id": "citation-grounded-answers", "tier": "table-stakes", "test": "claims are tied to retrieved sources"},
+    {"id": "export-artifacts", "tier": "table-stakes", "test": "export results to at least one portable format"},
+    {"id": "multi-user-rbac", "tier": "edge", "test": "multiple accounts with roles/SSO"},
+    {"id": "observability-otel", "tier": "edge", "test": "OpenTelemetry or Prometheus instrumentation"},
+    {"id": "helm-k8s", "tier": "edge", "test": "a maintained Helm chart or k8s manifests"},
+    {"id": "published-quality-benchmark", "tier": "edge", "test": "a published score on a recognized benchmark"}
+  ]
+}

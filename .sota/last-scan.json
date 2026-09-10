@@ -1,0 +1,441 @@
+{
+  "date": "2026-09-10",
+  "mode": "standard",
+  "domains": [
+    "self-hosted-ai-workspace"
+  ],
+  "cluster": "self-hosted-ai-workspace",
+  "cluster_confidence": "high",
+  "rubric_version": 1,
+  "field": [
+    {
+      "repo": "langgenius/dify",
+      "stars": 155329,
+      "pushed": "2026-09-10",
+      "type": "popular",
+      "cluster": "agent-workflow-builder",
+      "role": "reference"
+    },
+    {
+      "repo": "open-webui/open-webui",
+      "stars": 151543,
+      "pushed": "2026-09-10",
+      "type": "popular",
+      "cluster": "self-hosted-ai-workspace",
+      "role": "direct"
+    },
+    {
+      "repo": "langflow-ai/langflow",
+      "stars": 154542,
+      "pushed": "2026-09-10",
+      "type": "popular",
+      "cluster": "agent-workflow-builder",
+      "role": "reference"
+    },
+    {
+      "repo": "infiniflow/ragflow",
+      "stars": 90449,
+      "pushed": "2026-09-10",
+      "type": "technically advanced",
+      "cluster": "rag-engine",
+      "role": "reference"
+    },
+    {
+      "repo": "All-Hands-AI/OpenHands",
+      "stars": 87230,
+      "pushed": "2026-09-10",
+      "type": "canonical",
+      "cluster": "self-hosted-ai-workspace",
+      "role": "direct"
+    },
+    {
+      "repo": "bytedance/deer-flow",
+      "stars": 82209,
+      "pushed": "2026-09-10",
+      "type": "popular",
+      "cluster": "deep-research-agent",
+      "role": "reference"
+    },
+    {
+      "repo": "Mintplex-Labs/anything-llm",
+      "stars": 65876,
+      "pushed": "2026-09-10",
+      "type": "popular",
+      "cluster": "self-hosted-ai-workspace",
+      "role": "direct"
+    },
+    {
+      "repo": "danny-avila/LibreChat",
+      "stars": 42993,
+      "pushed": "2026-09-10",
+      "type": "canonical",
+      "cluster": "self-hosted-ai-workspace",
+      "role": "direct"
+    },
+    {
+      "repo": "lfnovo/open-notebook",
+      "stars": 38534,
+      "pushed": "2026-09-08",
+      "type": "niche-relevant",
+      "cluster": "self-hosted-ai-workspace",
+      "role": "direct"
+    },
+    {
+      "repo": "khoj-ai/khoj",
+      "stars": 37249,
+      "pushed": "2026-08-02",
+      "type": "popular",
+      "cluster": "self-hosted-ai-workspace",
+      "role": "direct"
+    },
+    {
+      "repo": "ItzCrazyKns/Perplexica",
+      "stars": 36696,
+      "pushed": "2026-09-01",
+      "type": "popular",
+      "cluster": "deep-research-agent",
+      "role": "reference"
+    },
+    {
+      "repo": "onyx-dot-app/onyx",
+      "stars": 32012,
+      "pushed": "2026-09-10",
+      "type": "technically advanced",
+      "cluster": "self-hosted-ai-workspace",
+      "role": "direct"
+    },
+    {
+      "repo": "assafelovic/gpt-researcher",
+      "stars": 29395,
+      "pushed": "2026-08-27",
+      "type": "canonical",
+      "cluster": "deep-research-agent",
+      "role": "reference"
+    },
+    {
+      "repo": "letta-ai/letta",
+      "stars": 24692,
+      "pushed": "2026-09-10",
+      "type": "technically advanced",
+      "cluster": "agent-runtime-infra",
+      "role": "excluded"
+    },
+    {
+      "repo": "kortix-ai/suna",
+      "stars": 20195,
+      "pushed": "2026-09-10",
+      "type": "niche-relevant",
+      "cluster": "self-hosted-ai-workspace",
+      "role": "direct"
+    },
+    {
+      "repo": "stackblitz-labs/bolt.diy",
+      "stars": 19864,
+      "pushed": "2026-02-07",
+      "type": "stale-reference",
+      "cluster": "coding-agent-platform",
+      "role": "excluded"
+    },
+    {
+      "repo": "HKUDS/DeepCode",
+      "stars": 16514,
+      "pushed": "2026-09-09",
+      "type": "niche-relevant",
+      "cluster": "coding-agent-platform",
+      "role": "excluded"
+    },
+    {
+      "repo": "MODSetter/SurfSense",
+      "stars": 16117,
+      "pushed": "2026-09-10",
+      "type": "niche-relevant",
+      "cluster": "self-hosted-ai-workspace",
+      "role": "direct"
+    },
+    {
+      "repo": "e2b-dev/E2B",
+      "stars": 13738,
+      "pushed": "2026-09-10",
+      "type": "technically advanced",
+      "cluster": "agent-runtime-infra",
+      "role": "excluded"
+    },
+    {
+      "repo": "langchain-ai/open_deep_research",
+      "stars": 12675,
+      "pushed": "2026-08-10",
+      "type": "stale-reference",
+      "cluster": "deep-research-agent",
+      "role": "excluded",
+      "archived": true
+    },
+    {
+      "repo": "LearningCircuit/local-deep-research",
+      "stars": 9067,
+      "pushed": "2026-09-10",
+      "type": "technically advanced",
+      "cluster": "deep-research-agent",
+      "role": "reference"
+    },
+    {
+      "repo": "miurla/morphic",
+      "stars": 9098,
+      "pushed": "2026-09-10",
+      "type": "niche-relevant",
+      "cluster": "deep-research-agent",
+      "role": "excluded"
+    }
+  ],
+  "matrix": [
+    {
+      "id": "one-command-selfhost",
+      "us": "met",
+      "tier": "table-stakes",
+      "sota": "all 9 direct peers",
+      "reference": "open-webui/open-webui \u2192 docker-compose.yaml",
+      "us_file": "compose.yaml"
+    },
+    {
+      "id": "prebuilt-images",
+      "us": "missing",
+      "tier": "table-stakes",
+      "sota": "all 9 direct peers",
+      "reference": "open-webui/open-webui \u2192 ghcr.io/open-webui/open-webui in docker-compose.yaml",
+      "us_file": "compose.yaml:28,36,273 (all build from source)"
+    },
+    {
+      "id": "versioned-releases",
+      "us": "missing",
+      "tier": "table-stakes",
+      "sota": "all 9 (30+ published releases each)",
+      "reference": "danny-avila/LibreChat \u2192 tagged releases (v0.8.8-rc2)",
+      "us_file": "1 tag v0.1.0 (2026-07-03, pushed) + CHANGELOG.md '## v0.1.0' section; 0 published GitHub releases; 1236 commits on HEAD since the tag"
+    },
+    {
+      "id": "public-availability",
+      "us": "missing",
+      "tier": "table-stakes",
+      "sota": "all 9 direct peers",
+      "reference": "onyx-dot-app/onyx \u2192 public repo",
+      "us_file": "gh api repos/Dyluhn/disco \u2192 private=true"
+    },
+    {
+      "id": "docs-site",
+      "us": "missing",
+      "tier": "table-stakes",
+      "sota": "all 9 have a homepage",
+      "reference": "lfnovo/open-notebook \u2192 open-notebook.ai",
+      "us_file": "docs/*.md only; no homepage"
+    },
+    {
+      "id": "multi-provider-llm",
+      "us": "met",
+      "tier": "table-stakes",
+      "sota": "all 9 direct peers",
+      "reference": "danny-avila/LibreChat \u2192 multi-provider switching",
+      "us_file": "packages/core/src/disco/core/llm/"
+    },
+    {
+      "id": "local-model-support",
+      "us": "met",
+      "tier": "table-stakes",
+      "sota": "all 9 direct peers",
+      "reference": "open-webui/open-webui \u2192 Ollama support",
+      "us_file": "packages/core/src/disco/core/llm/ (llama.cpp + OpenAI-compat)"
+    },
+    {
+      "id": "web-search-grounding",
+      "us": "met",
+      "tier": "table-stakes",
+      "sota": "all 9 direct peers",
+      "reference": "ItzCrazyKns/Perplexica \u2192 search grounding",
+      "us_file": "packages/retrieval/src/disco/retrieval/providers.py"
+    },
+    {
+      "id": "document-rag",
+      "us": "met",
+      "tier": "table-stakes",
+      "sota": "all 9 direct peers",
+      "reference": "Mintplex-Labs/anything-llm \u2192 workspaces",
+      "us_file": "retrieval/vectorstore.py DiskVectorStore + agent_server/uploads_ingest.py"
+    },
+    {
+      "id": "mcp-client",
+      "us": "met",
+      "tier": "table-stakes",
+      "sota": "all 9 direct peers",
+      "reference": "danny-avila/LibreChat \u2192 MCP support",
+      "us_file": "packages/tools/src/disco/tools/mcp/"
+    },
+    {
+      "id": "conversation-persistence",
+      "us": "met",
+      "tier": "table-stakes",
+      "sota": "all 9 direct peers",
+      "reference": "onyx-dot-app/onyx \u2192 chat history",
+      "us_file": "packages/core/src/disco/core/store/ (append-only SQLite)"
+    },
+    {
+      "id": "web-ui",
+      "us": "met",
+      "tier": "table-stakes",
+      "sota": "all 9 direct peers",
+      "reference": "open-webui/open-webui \u2192 web UI",
+      "us_file": "frontend/"
+    },
+    {
+      "id": "auth",
+      "us": "met",
+      "tier": "table-stakes",
+      "sota": "all 9 direct peers",
+      "reference": "danny-avila/LibreChat \u2192 auth",
+      "us_file": "packages/core/src/disco/core/auth.py"
+    },
+    {
+      "id": "sandboxed-code-execution",
+      "us": "met",
+      "tier": "table-stakes",
+      "sota": "OpenHands, Suna",
+      "reference": "All-Hands-AI/OpenHands \u2192 Docker sandbox runtime",
+      "us_file": "tools/sandbox/{process,podman,gvisor,local}.py + egress_proxy.py"
+    },
+    {
+      "id": "citation-grounded-answers",
+      "us": "met",
+      "tier": "table-stakes",
+      "sota": "SurfSense, local-deep-research",
+      "reference": "LearningCircuit/local-deep-research \u2192 citation verification",
+      "us_file": "retrieval/grounding.py + local_nli.py"
+    },
+    {
+      "id": "export-artifacts",
+      "us": "met",
+      "tier": "table-stakes",
+      "sota": "Open Notebook, Onyx",
+      "reference": "lfnovo/open-notebook \u2192 podcast + export",
+      "us_file": "packages/tools/src/disco/tools/builtin/ (PDF/DOCX/pptx/Marp/audio)"
+    },
+    {
+      "id": "multi-user-rbac",
+      "us": "missing",
+      "tier": "edge",
+      "note": "declared out of scope \u2014 single-tenant by design (docs/overview.md)",
+      "sota": "LibreChat, Onyx, open-webui",
+      "reference": "danny-avila/LibreChat \u2192 LDAP/SSO",
+      "us_file": "docs/overview.md \u2014 single-tenant by design"
+    },
+    {
+      "id": "observability-otel",
+      "us": "missing",
+      "tier": "edge",
+      "sota": "Onyx only (OpenHands: 0 hits)",
+      "reference": "onyx-dot-app/onyx \u2192 OpenTelemetry instrumentation",
+      "us_file": "no otel/prometheus in packages/*/src"
+    },
+    {
+      "id": "helm-k8s",
+      "us": "missing",
+      "tier": "edge",
+      "sota": "Onyx, open-webui",
+      "reference": "onyx-dot-app/onyx \u2192 helm/onyx-0.8.22 release",
+      "us_file": "no Chart.yaml in tree"
+    },
+    {
+      "id": "published-quality-benchmark",
+      "us": "partial",
+      "tier": "edge",
+      "note": "eval harness exists (development/harness/eval_runner.py); no published score",
+      "sota": "local-deep-research, OpenHands",
+      "reference": "LearningCircuit/local-deep-research \u2192 ~95% SimpleQA",
+      "us_file": "development/harness/eval_runner.py (no published score)"
+    }
+  ],
+  "coverage": {
+    "met": 12,
+    "total": 16,
+    "pct": 75
+  },
+  "tier": "BEHIND",
+  "gaps_total": 4,
+  "verdict": "The engineering is ahead of its cluster; the distribution is missing entirely. All four table-stakes gaps are release engineering, not capability.",
+  "caveat": "Mode `standard`: 22 repos scanned, saturation reached after 4 query rounds (the final round surfaced only sub-1k-star repos and no new table-stakes capability). Stars and push dates are exact via `gh api` on 2026-09-10, not web-scraped. The matrix is scored against the `self-hosted-ai-workspace` cluster only; capabilities belonging to other clusters are recorded as optional ideas and excluded from coverage and tier. `multi-user-rbac` is listed as edge because docs/overview.md declares Disco single-tenant by design, so it is not counted as a gap. Not verified in this environment: no `uv`, no `.venv` and no container runtime on this host, so no gate or test suite was executed as part of this scan.\n\nCORRECTION (same day, after the initial run): the first pass measured this repository as a SHALLOW clone (254 commits, no tags fetched) and wrongly reported '0 tags, CHANGELOG has only ## Unreleased'. After `git fetch --unshallow` (2498 commits, 11 remote tags) the true state is: tag v0.1.0 exists and is pushed, CHANGELOG.md carries a '## v0.1.0 - 2026-07-03' section, and HEAD is 1236 commits ahead of it. The gap stands \u2014 0 published GitHub releases vs 30+ for every peer \u2014 but the first step changed from 'cut v0.1.0' to 'cut the next tag and publish the draft'. A first pass also reported two required release gates (check_public_api, check_test_inventory) as failing; that was a local-clone artifact, now retracted. The clone had not fetched most of the remote's 572 refs, so authority commits appeared absent. After fetching all refs both gates pass (PUBLIC API OK; TEST INVENTORY OK, 14189 collected IDs), as do all ten gate scripts and the frontend required job (typecheck, 1535 vitest tests, production build).",
+  "edge_coverage": {
+    "met": 0,
+    "total": 4,
+    "pct": 0
+  },
+  "gaps": [
+    {
+      "id": "versioned-releases",
+      "capability": "Versioned releases",
+      "tier": "table-stakes",
+      "gap": "high",
+      "impl": "medium",
+      "effort": "~2h",
+      "why": "Every direct peer ships 30+ published releases. This repo has exactly one tag (v0.1.0, 2026-07-03, pushed to origin) with a matching CHANGELOG section, but zero published GitHub releases and 1236 commits of drift on HEAD since it. A self-hoster still cannot pin a known-good version.",
+      "study": "danny-avila/LibreChat \u2192 tagged releases + per-version changelog",
+      "step": "Cut the next tag for the 1236 commits since v0.1.0: add a '## v0.2.0' section to CHANGELOG.md (promoting the current '## Unreleased' body) and push tag v0.2.0. .github/workflows/release.yml triggers on v*, runs every fitness gate and greps CHANGELOG.md for '^## v?<version>'. Note it only DRAFTS the release \u2014 v0.1.0 produced no published release, so the draft must also be published.",
+      "needs_verification": "Why v0.1.0 yielded no published GitHub release \u2014 whether release.yml ran at all for that tag, or drafted one that was never published. All gates pass, so a tag pushed today would not fail on gate grounds."
+    },
+    {
+      "id": "prebuilt-images",
+      "capability": "Prebuilt container images",
+      "tier": "table-stakes",
+      "gap": "high",
+      "impl": "medium",
+      "effort": "~1d",
+      "why": "The quickstart compiles four images on the user's machine before first light; every peer pulls a published image instead.",
+      "study": "open-webui/open-webui \u2192 ghcr.io/open-webui/open-webui in docker-compose.yaml",
+      "step": "Add a publish-images job to .github/workflows/release.yml using docker/build-push-action against ghcr.io for deploy/compose/Dockerfile.server, frontend/Dockerfile and deploy/sandbox/Dockerfile; then point compose.yaml:39/276 at the published tags.",
+      "needs_verification": "No ghcr.io or docker/build-push reference exists in any workflow today. Confirm the registry namespace and whether the sandbox base image should publish too. Options: A. push all three; B. server+frontend only; C. keep build: as a documented from-source fallback alongside image:."
+    },
+    {
+      "id": "public-availability",
+      "capability": "Public availability",
+      "tier": "table-stakes",
+      "gap": "high",
+      "impl": "medium",
+      "effort": "~2h + review",
+      "why": "The repo carries Apache-2.0, CONTRIBUTING.md, CODE_OF_CONDUCT.md, SECURITY.md and a public-voice README with a clone URL, but is private with 0 stars. Nothing else on this list matters until a stranger can clone it.",
+      "study": "onyx-dot-app/onyx \u2192 public repo + airgap compose variants",
+      "step": "Run a history-wide secret scan (gitleaks or trufflehog over full history, not just HEAD) before flipping visibility; then set repo topics and a homepage.",
+      "needs_verification": "Whether going public is wanted now \u2014 this may be a deliberate hold rather than an oversight."
+    },
+    {
+      "id": "docs-site",
+      "capability": "Hosted docs site",
+      "tier": "table-stakes",
+      "gap": "high",
+      "impl": "high",
+      "effort": "~1d",
+      "why": "All nine direct peers have one. docs/self-host.md is strong but unreachable without cloning, which is currently impossible.",
+      "study": "lfnovo/open-notebook \u2192 open-notebook.ai",
+      "step": "Add .github/workflows/docs.yml publishing docs/ to GitHub Pages (mkdocs-material or Astro Starlight) with docs/self-host.md and docs/overview.md as landing pages; set the repo homepage to it.",
+      "needs_verification": "Gated on public-availability \u2014 Pages from a private repo needs a paid plan."
+    },
+    {
+      "id": "published-quality-benchmark",
+      "capability": "Published quality number",
+      "tier": "edge",
+      "gap": "medium",
+      "impl": "medium",
+      "effort": "~1d",
+      "why": "development/harness/eval_runner.py already scores faithfulness against a versioned corpus with a baseline gate; the number is simply never published.",
+      "study": "LearningCircuit/local-deep-research \u2192 ~95% SimpleQA",
+      "step": "Add a SimpleQA-subset task set in the harness evals/research/ YAML format, run `uv run python -m harness.eval_runner --real`, and put the score, model and date in README.md.",
+      "needs_verification": "The harness scores faithfulness and citation gates, not QA accuracy \u2014 confirm eval_runner can express an exact-match scorer."
+    }
+  ],
+  "cross_cluster_ideas": [
+    {
+      "from_cluster": "rag-engine",
+      "source": "infiniflow/ragflow",
+      "idea": "Layout-aware deep document parsing for PDFs and tables. uploads_ingest.py is deliberately a paragraph/CSV chunker with best-effort PDF \u2014 fine for web-grounded work, thin if user PDFs become a main input."
+    },
+    {
+      "from_cluster": "agent-runtime-infra",
+      "source": "e2b-dev/E2B",
+      "idea": "MicroVM snapshot/restore for sub-second sandbox starts. Disco's gVisor backend already exceeds the field on isolation; this is a latency idea, not a security one."
+    }
+  ]
+}

@@ -3045,3 +3045,25 @@ committed bytes → stack restart onto candidate → manifest attempt-10
 re-signing (all 1-R fields live-read) → F0 → four-suite → F1 (630000) →
 canaries (640000/640001) → pilot 10 (640100–640109) → main 86 (600000–600085)
 + restart 4 + context 10. `.frozen-candidate` updates to this SHA.
+
+## 2026-09-10 — PKG-43-SOTA-SCAN: the repository benchmarked against its field
+
+On the owner's instruction, the `sota-scan` skill (MerlijnW70/sota-scan @ a3fbf07d, MIT)
+is vendored as a project skill and run in `standard` mode. Artifacts at the repo-root
+`.sota/`: `rubric.self-hosted-ai-workspace.json`, `last-scan.json`, and the exported
+`report.self-hosted-ai-workspace.md` (`node development/sota-scan/scripts/sota-report.mjs
+--check` exits 0). Cluster `self-hosted-ai-workspace`, 22 repositories scanned, stars and
+push dates exact via `gh api`.
+
+Result: **BEHIND — 12 of 16 table-stakes met, 0 of 4 edge.** All four gaps are release
+engineering: no published container images, no published releases (one pushed tag,
+v0.1.0, 1,236 commits behind HEAD; `release.yml` has never run because the tag was pushed
+after it was created and the workflow fires on tag push), the repository is private, and
+there is no hosted documentation site. On sandbox isolation, citation verification and
+event-sourced replay no scanned peer is ahead. The scan's first pass, run on a shallow
+clone, briefly reported the two authority gates as failing and "0 tags"; both were clone
+artifacts, corrected in the same run, and the report's disclosures say so.
+
+Also in this package: DeepGit (zamalali/DeepGit @ 206f634a, MIT) is registered in
+`.mcp.json` as a pinned `uvx` MCP server for Claude Code sessions, keys from the
+environment; `docs/self-host.md` shows how to add it to Disco's own Agent surface.
