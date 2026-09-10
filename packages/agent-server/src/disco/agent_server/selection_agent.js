@@ -1,7 +1,7 @@
 /* disco in-frame selection agent — CANONICAL SOURCE (single source of truth).
  *
  * This file is the ONE place the selection-agent IIFE lives. It is consumed by:
- *   - the frontend (current/frontend/src/lib/selectionAgent.ts imports it via Vite `?raw`
+ *   - the frontend (frontend/src/lib/selectionAgent.ts imports it via Vite `?raw`
  *     and re-exports it as SELECTION_AGENT_SCRIPT), and
  *   - the agent-server preview-edit route (routes/preview_edit.py reads it via
  *     importlib.resources as a co-located package asset, mirroring reference.docx).

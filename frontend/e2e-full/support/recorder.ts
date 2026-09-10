@@ -2,7 +2,7 @@
  * Recorder — durable evidence writer for one e2e-full run.
  *
  * Opens a run folder at  test-record/e2e-full/<run-id>/  (relative to CWD,
- * which is the current/frontend/ directory when Playwright is invoked normally).
+ * which is the frontend/ directory when Playwright is invoked normally).
  *
  * evidence-harness-campaign.md W11
  */
@@ -11,7 +11,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { SCHEMA_VERSION, redact } from "./schema";
 
-/** Root for all evidence runs. Relative to the test-runner CWD (current/frontend/). */
+/** Root for all evidence runs. Relative to the test-runner CWD (frontend/). */
 const RECORD_ROOT = path.resolve(process.cwd(), "test-record", "e2e-full");
 
 interface TimelineEntry {

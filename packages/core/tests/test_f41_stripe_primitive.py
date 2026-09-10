@@ -621,7 +621,7 @@ def test_checkout_request_cannot_choose_price_or_amount() -> None:
 
 def test_filled_worker_and_component_parse_as_real_typescript(tmp_path: Path) -> None:
     esbuild = (
-        Path(__file__).resolve().parents[4] / "current" / "frontend" / "node_modules" / ".bin" / "esbuild"
+        Path(__file__).resolve().parents[3] / "frontend" / "node_modules" / ".bin" / "esbuild"
     )
     if not esbuild.exists():
         pytest.skip("repository frontend esbuild is unavailable")

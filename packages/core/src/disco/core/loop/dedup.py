@@ -592,7 +592,7 @@ def _f9_dedupable_read(
 
 # The shell-exec tools whose re-run is a redundant verify when idempotent.
 # Both carry the `command` arg (see ShellTool / ShellExecTool in
-# current/packages/tools/.../builtin). code_exec is intentionally excluded — re-running
+# packages/tools/.../builtin). code_exec is intentionally excluded — re-running
 # code is more often a deliberate re-execution and it uses a different arg key.
 # Bound to the shared owner (2026-08-06x, F47) rather than re-declared, so the
 # memo and the oracle cannot disagree about which tools carry a shell command.

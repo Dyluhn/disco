@@ -206,7 +206,7 @@ async def _render_deck_pdf_in_sandbox(
         if getattr(probe, "exit_code", 1) != 0:
             raise _SofficeUnavailable(
                 "PDF unavailable in this sandbox image — LibreOffice (soffice) is not "
-                "installed. Rebuild/redeploy the sandbox image (current/deploy/sandbox/Dockerfile "
+                "installed. Rebuild/redeploy the sandbox image (deploy/sandbox/Dockerfile "
                 "ships libreoffice-impress) to enable deck PDF export."
             )
         await instance.write_file("_deck.pptx", pptx_bytes)

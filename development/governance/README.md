@@ -81,7 +81,7 @@ not initiate one.
 ```bash
 # 1. Owner explicitly authorises the change and states what changes and why.
 # 2. Edit the sealed file with the guard bypassed for that single command:
-DISCO_GOVERNANCE_REBASELINE=1 $EDITOR current/docs/governance/ENGINEERING-STANDARDS.md
+DISCO_GOVERNANCE_REBASELINE=1 $EDITOR development/governance/ENGINEERING-STANDARDS.md
 # 3. Regenerate the manifest:
 DISCO_GOVERNANCE_REBASELINE=1 .venv/bin/python3 development/scripts/check_governance_seal.py --rebaseline
 # 4. Verify the gate passes and commit the doc + manifest together,

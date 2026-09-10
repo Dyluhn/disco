@@ -92,7 +92,7 @@ def vite() -> str:
         return
     proc = subprocess.Popen(
         ["npm", "run", "dev", "--", "--port", "5174", "--strictPort"],
-        cwd=ROOT / "current" / "frontend",
+        cwd=ROOT / "frontend",
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )

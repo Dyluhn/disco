@@ -334,7 +334,7 @@ def _stripe_section(app: AppSpec) -> Section | None:
 _ENV_NAME_DOC_COMMENT = (
     "  <!--\n"
     "    Payments are NOT wired in this tree ON PURPOSE (fail-closed seam; see\n"
-    "    current/docs/wo-f41-stripe-security-spec.md). The deferred host-side fill keeps\n"
+    "    development/notes/wo-f41-stripe-security-spec.md). The deferred host-side fill keeps\n"
     "    the operator-configured secrets HOST-SIDE ONLY - env NAMES for\n"
     "    reference: STRIPE_RESTRICTED_KEY and STRIPE_WEBHOOK_SECRET. No secret\n"
     "    value, no checkout route, no webhook route belongs in this tree.\n"

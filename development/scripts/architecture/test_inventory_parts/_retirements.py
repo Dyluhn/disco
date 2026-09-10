@@ -49,9 +49,21 @@ def authority(root: Path) -> tuple[dict[str, Any], dict[str, Any]]:
     ) != (BASELINE_COMMIT, BASELINE_SHA256, old["source_identity"], PACKAGE):
         raise RuntimeError("retirement authority source mismatch")
     for path, expected in record.get("marker_source_sha256", {}).items():
-        if hashlib.sha256((root / path).read_bytes()).hexdigest() != expected:
+        if hashlib.sha256(_on_disk(root, path).read_bytes()).hexdigest() != expected:
             raise RuntimeError("approved environmental marker source changed")
     return record, old
+
+
+def _on_disk(root: Path, path: str) -> Path:
+    """The receipt names the path the file had when it was approved; the bytes
+    are what the receipt pins, so a bucket move does not falsify it."""
+    candidate = root / path
+    if candidate.is_file():
+        return candidate
+    for bucket in ("current/", "development/"):
+        if path.startswith(bucket):
+            return root / path[len(bucket):]
+    return candidate
 
 
 def values(roots: dict[str, Any], mapping: dict[str, Any]) -> dict[str, list[Any]]:

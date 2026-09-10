@@ -7,7 +7,7 @@ an oracle would silently mis-adjudicate. The live Playwright harness captures th
 browser data and calls these to serialize ``product-evidence.json`` and
 ``provider-call-ledger.jsonl`` into the run folder.
 
-Two producers feed it: the live browser spec (``current/frontend/e2e-live/``) for the eight
+Two producers feed it: the live browser spec (``frontend/e2e-live/``) for the eight
 browser/lifecycle slices, and ``development/harness/product_build/edit_evidence.py`` for the five
 P8D edit slices (PKG-03-EDIT-EVIDENCE).
 

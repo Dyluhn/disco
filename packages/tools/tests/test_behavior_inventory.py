@@ -162,9 +162,9 @@ def test_opaque_workspace_executors_can_carry_exact_host_mutation_receipts() -> 
 
 
 def test_every_production_tool_constructor_declares_behavior() -> None:
-    repo_root = Path(__file__).resolve().parents[4]
+    repo_root = Path(__file__).resolve().parents[3]
     missing: list[str] = []
-    for path in sorted(repo_root.glob("current/packages/*/src/**/*.py")):
+    for path in sorted(repo_root.glob("packages/*/src/**/*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
@@ -185,9 +185,9 @@ def test_every_production_tool_constructor_declares_behavior() -> None:
 
 
 def test_production_cannot_use_the_unclassified_test_escape() -> None:
-    repo_root = Path(__file__).resolve().parents[4]
+    repo_root = Path(__file__).resolve().parents[3]
     violations: list[str] = []
-    for path in sorted(repo_root.glob("current/packages/*/src/**/*.py")):
+    for path in sorted(repo_root.glob("packages/*/src/**/*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):

@@ -3,7 +3,7 @@
 the real executor against a LOCAL container sandbox (no SSH). Run on a host with a
 local Docker or rootless Podman socket:
 
-  uv run python current/packages/tools/scripts/verify_agent_tools_local.py
+  uv run python packages/tools/scripts/verify_agent_tools_local.py
 
 Defaults to this host's rootless Podman socket; override via the same env the local
 backend uses (PMX_LOCAL_SOCKET / PMX_LOCAL_RUNTIME / PMX_LOCAL_IMAGE).

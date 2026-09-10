@@ -15,7 +15,7 @@ What this proves (when the Kokoro model is present):
 MARKED integration — never runs in the required CI unit gate:
   `pytest -m "not integration" packages ...`
 Run the live suite with:
-  `pytest -m integration current/packages/agent-server/tests/test_report_audio_live.py -v`
+  `pytest -m integration packages/agent-server/tests/test_report_audio_live.py -v`
 
 Environment needs:
   - `kokoro_onnx` and `lameenc` installed (bundled TTS is a core dep — a bare `uv sync` installs it)

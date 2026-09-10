@@ -3,7 +3,7 @@
 For BOTH a weak (assist=True) and a standard (assist=False) policy, every surface
 that expresses the execution tier — badge, loop, executor, tool scope, prompt, and
 wire request — must agree. This is the integration gate described in
-current/docs/disco-assist-policy-refactor-plan.md § "ACCEPTANCE GATES — Consistency".
+development/notes/disco-assist-policy-refactor-plan.md § "ACCEPTANCE GATES — Consistency".
 
 WHEN TO RUN: at integration, after Orders A (loop threading), B (tools/executor
 threading), and C (runtime threading) have landed. The interfaces under test —
@@ -549,8 +549,8 @@ def test_sweep_no_legacy_agent_loop_assist_kwarg_in_runtime() -> None:
     from pathlib import Path
 
     runtime_path = (
-        Path(__file__).parents[4]
-        / "current" / "packages"
+        Path(__file__).parents[3]
+        / "packages"
         / "agent-server"
         / "src"
         / "disco"
@@ -593,8 +593,8 @@ def test_sweep_no_legacy_executor_assist_kwarg_in_runtime() -> None:
     from pathlib import Path
 
     runtime_path = (
-        Path(__file__).parents[4]
-        / "current" / "packages"
+        Path(__file__).parents[3]
+        / "packages"
         / "agent-server"
         / "src"
         / "disco"
@@ -627,8 +627,8 @@ def test_sweep_no_legacy_agent_scope_model_caps_in_runtime() -> None:
     from pathlib import Path
 
     runtime_path = (
-        Path(__file__).parents[4]
-        / "current" / "packages"
+        Path(__file__).parents[3]
+        / "packages"
         / "agent-server"
         / "src"
         / "disco"
@@ -657,8 +657,8 @@ def test_sweep_resolve_policy_is_called_in_runtime_settings() -> None:
     from pathlib import Path
 
     settings_path = (
-        Path(__file__).parents[4]
-        / "current" / "packages"
+        Path(__file__).parents[3]
+        / "packages"
         / "agent-server"
         / "src"
         / "disco"

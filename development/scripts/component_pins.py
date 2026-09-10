@@ -2,7 +2,7 @@
 
 Usage:
     uv run python development/scripts/component_pins.py \
-        current/packages/core/src/disco/core/trusted_components/registry_data/auth-kit/1.0.0
+        packages/core/src/disco/core/trusted_components/registry_data/auth-kit/1.0.0
 
 Pins are NEVER hand-written (spec §6.4): this script rewrites the manifest's
 `files` map to cover every file under core/, using the SAME `pin()` helper the

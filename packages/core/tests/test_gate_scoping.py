@@ -82,7 +82,7 @@ def test_unknown_scope_gates_like_confirm_risky():
 
 
 def test_publish_guard_gates_regardless_of_scope():
-    """current/deploy/publish/release in tool_name → always gate, even in sandbox."""
+    """deploy/publish/release in tool_name → always gate, even in sandbox."""
     p = BlastRadiusConfirm()
     for kw in ("deploy_site", "publish_artifact", "release_package"):
         assert p.should_confirm_action(L, scope="sandbox", tool_name=kw) is True

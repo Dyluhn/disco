@@ -51,7 +51,7 @@ def test_app_auth_ignores_tossed_marker_and_blocks_generated_host_or_cross_alias
         )
         assert denied_mint.status_code == 403
 
-    # Same hostname on the normal split current/frontend/server ports remains valid.
+    # Same hostname on the normal split frontend/server ports remains valid.
     same_host = {"Origin": "http://127.0.0.1:8088", "Host": "127.0.0.1:8800"}
     session = owner.get("/api/auth/session", headers=same_host)
     assert session.status_code == 200

@@ -1073,7 +1073,7 @@ async def test_canonical_loopback_preserves_route_during_real_vite_react_hmr(
     # The frontend tree, wherever the three-bucket layout puts it: the bucketed
     # path is the disk location since the restructure; the bare path is the
     # logical (pre-restructure) fallback.
-    bucketed = Path.cwd() / "current" / "frontend"
+    bucketed = Path.cwd() / "frontend"
     frontend_root = bucketed if bucketed.is_dir() else Path.cwd() / "frontend"
     vite_bin = frontend_root / "node_modules" / ".bin" / "vite"
     # Deliberately NOT a pytest.skip: the inventory authority forbids
@@ -1082,7 +1082,7 @@ async def test_canonical_loopback_preserves_route_during_real_vite_react_hmr(
     # environment, so fail loudly and name the fix.
     assert vite_bin.is_file(), (
         f"frontend node_modules not installed (no {vite_bin}); "
-        "run `npm ci` in current/frontend"
+        "run `npm ci` in frontend"
     )
 
     probe = bind_socket()

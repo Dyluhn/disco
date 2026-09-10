@@ -33,6 +33,6 @@ The authoritative license texts for Debian packages are available in
 `/usr/share/doc/<package>/copyright` inside the image. Python package metadata is
 under the installed `.dist-info` directories in the server virtualenv.
 
-If the default encoder tier changes, update this file and `current/docs/self-host.md` in
+If the default encoder tier changes, update this file and `docs/self-host.md` in
 the same patch. In particular, do not make the CC-BY-NC Jina reranker the
 default for a commercially usable image.

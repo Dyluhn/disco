@@ -341,7 +341,7 @@ def main() -> None:
         "--e2e-root",
         default=None,
         help=(
-            "optional UI evidence root (current/frontend/test-record/e2e-full) "
+            "optional UI evidence root (frontend/test-record/e2e-full) "
             "for screenshot links"
         ),
     )

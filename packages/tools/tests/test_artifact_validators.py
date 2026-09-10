@@ -13,7 +13,7 @@ from disco.tools.verify.artifact_validators import (
 
 def test_validate_pdf_ok():
     """Test that a valid PDF returns an empty problems list."""
-    result = validate_pdf("current/packages/tools/tests/fixtures/artifacts/sample_report.pdf")
+    result = validate_pdf("packages/tools/tests/fixtures/artifacts/sample_report.pdf")
     assert result == []
 
 

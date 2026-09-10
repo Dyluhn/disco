@@ -441,7 +441,7 @@ def test_release_is_idempotent_and_spawns_no_subprocess(store, tmp_path, monkeyp
 
 
 def test_release_endpoint_is_documented():
-    doc = (Path(__file__).resolve().parents[4] / "current" / "docs" / "contracts" / "api-endpoints.md").read_text()
+    doc = (Path(__file__).resolve().parents[3] / "docs" / "contracts" / "api-endpoints.md").read_text()
     assert "/api/projects/{id}/release" in doc
 
 

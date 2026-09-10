@@ -34,7 +34,7 @@ _FORBIDDEN = frozenset(
     }
 )
 
-# ``current/packages/core/src`` — the import root every scanned module name is relative to.
+# ``packages/core/src`` — the import root every scanned module name is relative to.
 _CORE_SRC = Path(__file__).resolve().parents[1] / "src"
 _FINISH_DIR = _CORE_SRC / "disco" / "core" / "loop" / "finish"
 

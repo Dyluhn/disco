@@ -2,7 +2,7 @@
 
 Proves the gate policy on a state-changing surface (the headline, DC-03 contract):
 a risky action that runs INSIDE the sandbox auto-approves (confinement is the blast
-radius) and is stamped `auto_approved: sandboxed`; a publish-class action (current/deploy/
+radius) and is stamped `auto_approved: sandboxed`; a publish-class action (deploy/
 publish/release) ALWAYS pauses at WAITING_FOR_CONFIRMATION regardless of scope —
 confirm runs exactly it, reject denies without executing. Plus: the kill switch
 revokes caps + tears down the sandbox, and the Research surface stays ungated.

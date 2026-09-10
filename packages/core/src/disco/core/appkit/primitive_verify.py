@@ -138,7 +138,7 @@ def _check_worker_contract(
         "insert in a non-dead position; GET /api/leads + /admin "
         "early-return 401 as the first guard statement before any read; "
         "Bearer-checked + fail-closed on missing ADMIN_TOKEN. Local runtime "
-        "proof lives in current/packages/core/tests/test_workerd_persistence.py; "
+        "proof lives in packages/core/tests/test_workerd_persistence.py; "
         "hosted Cloudflare deploy remains owner-gated."
         if ok
         else "; ".join(reasons)

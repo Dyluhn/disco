@@ -717,8 +717,8 @@ def _dotenv_escape(value: str) -> str:
 
 
 def _repo_root() -> Path:
-    # current/packages/agent-server/src/disco/agent_server/stripe_verification/evidence.py
-    return Path(__file__).resolve().parents[7]
+    # packages/agent-server/src/disco/agent_server/stripe_verification/evidence.py
+    return Path(__file__).resolve().parents[6]
 
 
 def _bin_name(name: str) -> str:

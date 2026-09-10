@@ -1,7 +1,7 @@
 # Sandbox base image — `disco-sandbox:base`
 
 The image the gVisor / Podman / local container backends run agent code in
-(`current/packages/tools/.../sandbox/`). It is the **source-of-truth copy** of the
+(`packages/tools/.../sandbox/`). It is the **source-of-truth copy** of the
 Dockerfile that previously lived only on the sandbox host (`/opt/sandbox/Dockerfile`
 on VM 201) — keep them in sync.
 
@@ -56,7 +56,7 @@ Each container backend has its OWN image store — build the image in every one 
 use (the backend never pulls):
 
 - **gVisor** (`backend="gvisor"`) → VM 201's Docker: `cd /opt/sandbox && docker build -t disco-sandbox:base .`
-- **local** (`backend="local"`) → the workstation's rootless Podman: `podman build -t disco-sandbox:base -f current/deploy/sandbox/Dockerfile current/deploy/sandbox/`
+- **local** (`backend="local"`) → the workstation's rootless Podman: `podman build -t disco-sandbox:base -f deploy/sandbox/Dockerfile deploy/sandbox/`
 - **process** (`backend="process"`) → no image; runs on the HOST, so it uses the host's own `node`/`python3`.
 - **podman** (remote) → build on that host's Podman when provisioned.
 

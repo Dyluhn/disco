@@ -24,7 +24,7 @@ Host scope (deliberate): `lead_gen` and legacy fallback kinds keep the original
 `POST /api/<table>` form route; `records` apps use `POST /api/forms/<form_id>` so
 records keeps exclusive ownership of `/api/<table>` CRUD routes. `directory` is
 still refused because it is a static site with no D1/Worker data plane; silently
-adding a form there would require upgrading the app shape and all current/deploy/verify
+adding a form there would require upgrading the app shape and all deploy/verify
 contracts, not just folding a section. `hello` is also refused: it is the
 mount-proof primitive.
 

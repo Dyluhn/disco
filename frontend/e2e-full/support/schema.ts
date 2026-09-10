@@ -1,5 +1,5 @@
 /**
- * Evidence/correlation schema — TypeScript mirror of current/packages/core/src/disco/core/evidence/schema.py
+ * Evidence/correlation schema — TypeScript mirror of packages/core/src/disco/core/evidence/schema.py
  *
  * Keep in sync with the Python source of truth.  This file defines data shapes
  * only; no HTTP/WS wiring lives here.

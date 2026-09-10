@@ -134,7 +134,7 @@ def compute_mcp_proxy_env(
     the default (matches the new default sandbox posture). open (explicit
     PMX_BUILD_EGRESS=open) → None (direct). host comes from
     PMX_MCP_EGRESS_PROXY_HOST (default loopback). See
-    current/docs/workorders/RP-05b-orchestrator-proxy-decision.md.
+    development/notes/workorders/RP-05b-orchestrator-proxy-decision.md.
 
     `origin_approved` is the operator-approval bypass. The shipped Compose
     stack runs NO egress sidecar (the proxy is created per-sandbox, with a
@@ -424,7 +424,7 @@ class McpHttpConnector:
         RP-05b §2: under the `filtered` posture a NON-approved caller still gets
         the proxy env, so an off-allowlist host is denied 403 rather than dialed
         directly. `open` posture → None (direct). See
-        current/docs/workorders/RP-05b-orchestrator-proxy-decision.md.
+        development/notes/workorders/RP-05b-orchestrator-proxy-decision.md.
         """
         approved = bool(srv.url) and self.origin_approved(name, srv)
         if srv.url and not approved:

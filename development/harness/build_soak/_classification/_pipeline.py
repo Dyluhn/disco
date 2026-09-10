@@ -36,24 +36,24 @@ from ._tool_scope_proof import tool_scope_from_inspect
 # Advisory only — surfaced to the repair loop, never adjudicated on.
 _LIKELY_FILES: dict[str, list[str]] = {
     fc.NO_REPLAN_AFTER_REVISION: [
-        "current/packages/core/src/disco/core/loop/plans.py",
-        "current/packages/core/src/disco/core/loop/engine.py",
-        "current/packages/agent-server/src/disco/agent_server/control_ops.py",
+        "packages/core/src/disco/core/loop/plans.py",
+        "packages/core/src/disco/core/loop/engine.py",
+        "packages/agent-server/src/disco/agent_server/control_ops.py",
     ],
     fc.WRITE_TOOL_ATTEMPTED_IN_PLANNING: [
-        "current/packages/core/src/disco/core/loop/engine.py",
-        "current/packages/core/src/disco/core/loop/driver.py",
+        "packages/core/src/disco/core/loop/engine.py",
+        "packages/core/src/disco/core/loop/driver.py",
     ],
     fc.WRITE_TOOL_ALLOWED_IN_PLANNING: [
-        "current/packages/core/src/disco/core/loop/engine.py",
-        "current/packages/core/src/disco/core/loop/driver.py",
+        "packages/core/src/disco/core/loop/engine.py",
+        "packages/core/src/disco/core/loop/driver.py",
     ],
     fc.APPROVE_PLAN_NO_EXECUTION: [
-        "current/packages/core/src/disco/core/loop/finish.py",
-        "current/packages/core/src/disco/core/loop/engine.py",
+        "packages/core/src/disco/core/loop/finish.py",
+        "packages/core/src/disco/core/loop/engine.py",
     ],
     fc.ACTION_NO_OBSERVATION: [
-        "current/packages/core/src/disco/core/loop/observe.py",
+        "packages/core/src/disco/core/loop/observe.py",
     ],
 }
 

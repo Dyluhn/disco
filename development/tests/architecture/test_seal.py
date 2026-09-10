@@ -57,8 +57,8 @@ class TestProtectedSet:
     def test_protected_includes_all_gate_files(self):
         """All executable architecture gate files must be protected."""
         required = [
-            "current/docs/governance/ENGINEERING-STANDARDS.md",
-            "current/docs/governance/ARCHITECTURE-BOUNDARIES.md",
+            "development/governance/ENGINEERING-STANDARDS.md",
+            "development/governance/ARCHITECTURE-BOUNDARIES.md",
             "development/architecture/policy.json",
             "development/architecture/contexts.json",
             "development/architecture/debt.json",
@@ -71,15 +71,15 @@ class TestProtectedSet:
             "development/scripts/check_arch_budget.py",
             "development/scripts/check_governance_seal.py",
             "development/scripts/check_tool_schemas.py",
-            "current/packages/core/tests/test_build_platform_nonweb_conformance.py",
-            "current/docs/governance/SEAL-INVOCATION.json",
+            "packages/core/tests/test_build_platform_nonweb_conformance.py",
+            "development/governance/SEAL-INVOCATION.json",
         ]
         for path in required:
             assert path in seal.PROTECTED, f"missing protected file: {path}"
 
     def test_manifest_does_not_protect_itself(self):
         """The manifest file must not protect itself."""
-        assert "current/docs/governance/PROTECTED.sha256" not in seal.PROTECTED
+        assert "development/governance/PROTECTED.sha256" not in seal.PROTECTED
 
     def test_protected_includes_implementation_bytes(self):
         """The protected set must include implementation bytes, not just wrappers."""
@@ -102,7 +102,7 @@ class TestProtectedSet:
 
     def test_drifted_implementation_file_detected(self, tmp_path: Path) -> None:
         """A drifted protected implementation file must be detected by check_seal_bytes."""
-        manifest_dir = tmp_path / "current" / "docs" / "governance"
+        manifest_dir = tmp_path / "docs" / "governance"
         manifest_dir.mkdir(parents=True)
         arch_dir = tmp_path / "development" / "architecture"
         arch_dir.mkdir(parents=True)
@@ -127,7 +127,7 @@ class TestOrderedCommands:
         assert seal.ORDERED_COMMANDS[0] == "uv run python development/scripts/check_soak_freeze.py"
         assert seal.ORDERED_COMMANDS[1] == "uv run python development/scripts/check_governance_seal.py"
         assert seal.ORDERED_COMMANDS[-1] == (
-            "uv run pytest -q current/packages/core/tests/test_build_platform_nonweb_conformance.py"
+            "uv run pytest -q packages/core/tests/test_build_platform_nonweb_conformance.py"
         )
         assert "uv run python development/scripts/check_tool_schemas.py" in seal.ORDERED_COMMANDS
 
@@ -153,7 +153,7 @@ class TestOrderedCommands:
 class TestSealByteDrift:
     def test_seal_rejects_drift(self, tmp_path: Path) -> None:
         """A digest mismatch must fail."""
-        manifest_dir = tmp_path / "current" / "docs" / "governance"
+        manifest_dir = tmp_path / "docs" / "governance"
         manifest_dir.mkdir(parents=True)
         write(tmp_path / "development" / "architecture" / "policy.json", "{}")
         manifest = f"{'0' * 64}  development/architecture/policy.json\n"
@@ -178,7 +178,7 @@ class TestSealByteDrift:
 
     def test_seal_rejects_stale_entry(self, tmp_path: Path) -> None:
         """A manifest entry for a non-protected file must fail."""
-        manifest_dir = tmp_path / "current" / "docs" / "governance"
+        manifest_dir = tmp_path / "docs" / "governance"
         manifest_dir.mkdir(parents=True)
         manifest = "abc123  extra/file.py\n"
         write(manifest_dir / "PROTECTED.sha256", manifest)
@@ -193,7 +193,7 @@ class TestSealByteDrift:
 
     def test_seal_rejects_malformed_manifest(self, tmp_path: Path) -> None:
         """A malformed manifest must fail with code 3."""
-        manifest_dir = tmp_path / "current" / "docs" / "governance"
+        manifest_dir = tmp_path / "docs" / "governance"
         manifest_dir.mkdir(parents=True)
         write(manifest_dir / "PROTECTED.sha256", "not a valid manifest\n")
         result = seal.check_seal_bytes(tmp_path)
@@ -212,7 +212,7 @@ class TestSealByteDrift:
 
     def test_seal_rejects_unsealed_protected_file(self, tmp_path: Path) -> None:
         """A protected file absent from the manifest must fail as unsealed."""
-        manifest_dir = tmp_path / "current" / "docs" / "governance"
+        manifest_dir = tmp_path / "docs" / "governance"
         manifest_dir.mkdir(parents=True)
         arch_dir = tmp_path / "development" / "architecture"
         arch_dir.mkdir(parents=True)

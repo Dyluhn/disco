@@ -582,7 +582,7 @@ async def test_get_passthrough(mock_app):
 
 
 def test_front_door_routes_versioned_preview_hosts_to_agent_server() -> None:
-    nginx = (Path(__file__).parents[4] / "current" / "frontend" / "nginx.conf").read_text()
+    nginx = (Path(__file__).parents[3] / "frontend" / "nginx.conf").read_text()
     assert (
         'server_name "~^(?:p2-[0-9a-f]{8}-\\d{2,5}|'
         f"p3s-[0-9a-f]{{8}}-[0-9a-f]{{{PATH_PREVIEW_ORIGIN_DIGEST_HEX_CHARS}}}"
@@ -614,11 +614,11 @@ def test_front_door_routes_versioned_preview_hosts_to_agent_server() -> None:
 def test_front_door_derives_dynamic_resolver_from_the_container_runtime(
     tmp_path: Path,
 ) -> None:
-    root = Path(__file__).parents[4]
-    nginx = (root / "current" / "frontend" / "nginx.conf").read_text()
-    dockerfile = (root / "current" / "frontend" / "Dockerfile").read_text()
+    root = Path(__file__).parents[3]
+    nginx = (root / "frontend" / "nginx.conf").read_text()
+    dockerfile = (root / "frontend" / "Dockerfile").read_text()
     resolver_envsh = (
-        root / "current" / "frontend" / "docker-entrypoint.d" / "10-disco-resolver.envsh"
+        root / "frontend" / "docker-entrypoint.d" / "10-disco-resolver.envsh"
     ).read_text()
 
     assert "resolver ${DISCO_NGINX_RESOLVER} valid=10s ipv6=off;" in nginx
@@ -631,7 +631,7 @@ def test_front_door_derives_dynamic_resolver_from_the_container_runtime(
     assert "try_files $uri =404;" in index_shell
 
     assert (
-        "COPY current/frontend/nginx.conf /etc/nginx/templates/default.conf.template"
+        "COPY frontend/nginx.conf /etc/nginx/templates/default.conf.template"
         in dockerfile
     )
     assert "10-disco-resolver.envsh" in dockerfile
@@ -644,7 +644,7 @@ def test_front_door_derives_dynamic_resolver_from_the_container_runtime(
     fake_awk = fake_bin / "awk"
     fake_awk.write_text("#!/bin/sh\nprintf '%s\\n' \"$DISCO_TEST_RESOLVER\"\n")
     fake_awk.chmod(0o755)
-    script = root / "current" / "frontend" / "docker-entrypoint.d" / "10-disco-resolver.envsh"
+    script = root / "frontend" / "docker-entrypoint.d" / "10-disco-resolver.envsh"
     command = f'set -e; . "{script}"; printf "%s" "$DISCO_NGINX_RESOLVER"'
 
     for supplied, rendered in (

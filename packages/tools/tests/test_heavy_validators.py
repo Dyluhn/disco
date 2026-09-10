@@ -15,8 +15,8 @@ import pytest
 from disco.tools.verify import heavy_validators
 from disco.tools.verify.heavy_validators import validate_pdf_renders, validate_pptx_renders
 
-_REPO = pathlib.Path(__file__).resolve().parents[4]
-_PDF = _REPO / "current/packages/tools/tests/fixtures/artifacts/sample_report.pdf"
+_REPO = pathlib.Path(__file__).resolve().parents[3]
+_PDF = _REPO / "packages/tools/tests/fixtures/artifacts/sample_report.pdf"
 
 
 @pytest.mark.skipif(shutil.which("pdftoppm") is None, reason="poppler not installed")

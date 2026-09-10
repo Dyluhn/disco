@@ -78,7 +78,7 @@ substitute a one-file app. Create these exact files in the workspace:
    a stylesheet link href './assets/theme.css?theme=7', a deferred script src
    './development/scripts/app.js?mode=live', an img id hero src
    './media/hero%20image.svg?asset=1#hero', and an anchor id nested-link href
-   './current/docs/?view=full#nested'. Do not inline any CSS, JavaScript, image, or font.
+   './development/notes/?view=full#nested'. Do not inline any CSS, JavaScript, image, or font.
 3. release/assets/theme.css defining @font-face named ProofFont from
    url('../fonts/proof.woff2?font=1#proof') format('woff2'), applying ProofFont
    to #font-proof, and setting body background to ${BACKGROUND}.

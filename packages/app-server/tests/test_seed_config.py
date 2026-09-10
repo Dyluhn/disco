@@ -20,7 +20,7 @@ from disco.core import SkillStore, SqliteEventStore
 from disco.core.llm import ConfigStore, SecretBox, SecretStore
 from fastapi.testclient import TestClient
 
-_SEED = Path(__file__).resolve().parents[4] / "development" / "scripts" / "seed_config.py"
+_SEED = Path(__file__).resolve().parents[3] / "development" / "scripts" / "seed_config.py"
 
 
 def _run_seed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> ConfigStore:

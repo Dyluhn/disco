@@ -4,7 +4,7 @@
 The RECOVERY half of the contract (the loop survives a wrong call and accepts the
 next valid submit_plan) holds today and passes. The REJECTION half (the disallowed
 write is visibly rejected, not executed) is the surfaced product bug and is
-xfail(strict=True). See current/docs/build-soak-surfaced-bugs.md.
+xfail(strict=True). See development/notes/build-soak-surfaced-bugs.md.
 """
 
 from __future__ import annotations

@@ -152,7 +152,7 @@ describe("deriveSrcDoc", () => {
       [
         f(
           "release/index.html",
-          '<html><head></head><body><img src="media/hero image.svg"><a href="current/docs/?mode=full#part">Docs</a></body></html>',
+          '<html><head></head><body><img src="media/hero image.svg"><a href="development/notes/?mode=full#part">Docs</a></body></html>',
         ),
       ],
       undefined,
@@ -162,8 +162,8 @@ describe("deriveSrcDoc", () => {
     expect(new URL("media/hero image.svg", base).pathname).toBe(
       "/conversations/conv_multi/preview-app/media/hero%20image.svg",
     );
-    expect(new URL("current/docs/?mode=full#part", base).href).toBe(
-      `${base}current/docs/?mode=full#part`,
+    expect(new URL("development/notes/?mode=full#part", base).href).toBe(
+      `${base}development/notes/?mode=full#part`,
     );
   });
 

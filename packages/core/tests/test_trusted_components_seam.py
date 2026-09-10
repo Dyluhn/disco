@@ -1,5 +1,5 @@
 """The trusted-components FAIL-CLOSED seam (v0.2 parking, design doc
-current/docs/trusted-components-design.md): the manifest contract parses its own
+development/notes/trusted-components-design.md): the manifest contract parses its own
 design-doc example, and NOTHING advertises the tier — a stub that runs, per
 the stubs-and-broken-things discipline (a contract nobody executes is rot)."""
 

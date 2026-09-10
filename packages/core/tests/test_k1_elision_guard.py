@@ -387,7 +387,7 @@ async def test_prose_mentioning_elided_is_not_false_rejected():
         "The middle of the file was <elided> for brevity in the original PDF.\n"
         "See <appendix> for the full content of the report.\n"
     )
-    action = _write_action("call_prose", path="current/docs/notes.md", content=body)
+    action = _write_action("call_prose", path="development/notes/notes.md", content=body)
     events = await _drive_execute(loop, action)
     assert len(loop.executor.calls) == 1, (
         "a real file whose prose merely mentions 'elided'/'full content' must NOT be "

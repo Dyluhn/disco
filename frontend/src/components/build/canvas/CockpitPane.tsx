@@ -4,7 +4,7 @@ import type { SessionInfo, SessionView } from "@/hooks/useSessions";
 import type { AgentEvent, PreviewInfo } from "@/types/agent";
 import { TerminalHistoryView } from "./TerminalPane";
 
-/** The known user-facing port set (mirror of `current/packages/.../sandbox/_container.py
+/** The known user-facing port set (mirror of `packages/.../sandbox/_container.py
  *  USER_PORTS = {8000, 3000, 5173, 8080, 5000, 4321}`). Kept client-side as a
  *  type-level label for cockpit rows; the authoritative set is the backend
  *  response (we only RENDER the rows the backend says are bound — no

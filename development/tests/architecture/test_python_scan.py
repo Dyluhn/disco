@@ -209,7 +209,7 @@ class TestParseError:
     def test_scan_all_collects_parse_errors(self, tmp_path: Path) -> None:
         tmp = make_temp_repo()
         root = Path(tmp.name)
-        write_and_track(root, "current/packages/core/src/bad.py", "def f(:\n    pass\n")
+        write_and_track(root, "packages/core/src/bad.py", "def f(:\n    pass\n")
         git_commit(root)
         result = python_scan.scan_all(root)
         assert result["errors"]
@@ -241,6 +241,6 @@ class TestPythonScanPositives:
 
     def test_is_test_path_detection(self):
         assert python_scan.is_test_path("development/tests/architecture/test_gate.py")
-        assert python_scan.is_test_path("current/packages/core/tests/test_foo.py")
+        assert python_scan.is_test_path("packages/core/tests/test_foo.py")
         assert python_scan.is_test_path("test_foo.py")
-        assert not python_scan.is_test_path("current/packages/core/src/module.py")
+        assert not python_scan.is_test_path("packages/core/src/module.py")

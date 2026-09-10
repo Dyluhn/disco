@@ -17,7 +17,7 @@ tools layer.
 SCOPE (honest, unchanged): these verify the generated worker/form by CONTROL
 FLOW, not substring presence — STRUCTURAL verification of the TypeScript *source*
 (presence + ordering + parameterization + guard-first), NOT runtime execution.
-The local runtime proof is current/packages/core/tests/test_workerd_persistence.py.
+The local runtime proof is packages/core/tests/test_workerd_persistence.py.
 """
 
 from __future__ import annotations
@@ -66,7 +66,7 @@ class WorkerAuthVerdict(WorkerAuthModel):
 #
 # SCOPE (honest): this is STRUCTURAL verification of the TypeScript *source*
 # (presence + ordering + parameterization + guard-first) — NOT CF-runtime execution
-# (the local runtime proof lives in current/packages/core/tests/test_workerd_persistence.py).
+# (the local runtime proof lives in packages/core/tests/test_workerd_persistence.py).
 # A PASS here means "the handler's STRUCTURE enforces the lead/admin contract" — it
 # does NOT prove the insert is reached or the guard runs at runtime. The flags it
 # extracts then drive `local_api_roundtrip`, which runs a MODEL of that behaviour
@@ -361,7 +361,7 @@ def _region_has_run_insert(region: str) -> tuple[bool, bool]:
     the POST handler region (see `_post_region`), NOT that runtime control actually
     REACHES it. An insert that exists only in an UNcalled function is correctly NOT
     found here; local runtime reachability is proved separately by
-    `current/packages/core/tests/test_workerd_persistence.py`."""
+    `packages/core/tests/test_workerd_persistence.py`."""
     from .worker_inspect_parts._insert_scan import _drizzle_run_insert, _raw_sql_run_insert
 
     drizzle = _drizzle_run_insert(region)
@@ -421,7 +421,7 @@ def _post_region(src: str, post_block: str) -> str:
 #
 # HONEST SCOPE: static (no runtime). The leak-sink + reachability matchers cover the
 # demonstrated exfiltration/bypass channels — they are NOT a complete information-flow
-# proof. The local runtime proof is current/packages/core/tests/test_workerd_persistence.py.
+# proof. The local runtime proof is packages/core/tests/test_workerd_persistence.py.
 
 
 # Sinks into which a token VALUE must never flow ({E} = the token expr/alias fragment).
@@ -536,7 +536,7 @@ def inspect_worker(worker_ts: str, lead: Entity) -> tuple[bool, WorkerAuthVerdic
     auth_model, reasons) where `reasons` names every contract gap found. We parse the
     ACTUAL route-handler blocks and verify STRUCTURE (presence + ordering +
     parameterization + guard-first), not substring presence. Runtime behaviour is
-    proved separately by current/packages/core/tests/test_workerd_persistence.py:
+    proved separately by packages/core/tests/test_workerd_persistence.py:
 
     * POST /api/leads is PUBLIC (no auth guard) and its in-region code (the handler
       block + any helper it calls) CONTAINS a Drizzle table insert
@@ -558,7 +558,7 @@ def inspect_worker(worker_ts: str, lead: Entity) -> tuple[bool, WorkerAuthVerdic
     The extracted `WorkerAuthVerdict` reflects the inspected STRUCTURE, so the
     deploy-free `local_api_roundtrip` models that structure (not CF-runtime
     execution; local runtime reachability/behaviour is covered by
-    current/packages/core/tests/test_workerd_persistence.py).
+    packages/core/tests/test_workerd_persistence.py).
     """
     from .worker_inspect_parts._auth_guard import _auth_guard_signals
     from .worker_inspect_parts._post_contract import _post_contract_signals

@@ -4,7 +4,7 @@ requestfailed/response listeners) against a deliberately-broken page, then rende
 through the REAL BrowserTool._render_observation — showing the agent now receives
 stacks, source:line, and NETWORK FAIL lines instead of a bare '(1 errors)'.
 
-  uv run python current/packages/tools/scripts/verify_b7_browser_errors.py
+  uv run python packages/tools/scripts/verify_b7_browser_errors.py
 """
 
 from __future__ import annotations

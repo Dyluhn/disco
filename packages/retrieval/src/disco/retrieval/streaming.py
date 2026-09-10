@@ -2,7 +2,7 @@
 
 Composes the live providers (Stage 3) + the router (Stage 1) into the
 `token → final` grounded-answer frame stream the frontend already renders
-(current/frontend/src/types/grounded.ts): rewrite is implicit, search → extract →
+(frontend/src/types/grounded.ts): rewrite is implicit, search → extract →
 rerank → constrained streamed generation (RAG_ANSWERER) → NLI-verify each claim
 → honest failure. Yields plain JSON-able dicts in the frontend's frame shape, so
 the agent/app server just forwards them over the WebSocket.

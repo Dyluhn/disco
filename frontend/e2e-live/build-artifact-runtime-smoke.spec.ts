@@ -39,10 +39,10 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const API = process.env.DISCO_RELIABILITY_AGENT_URL ?? "http://127.0.0.1:8000";
-// This file lives at `current/frontend/e2e-live/`, so the repo root is THREE
-// levels up; `../..` landed on `current/`, which made every PYTHONPATH entry
-// below point at a `current/current/...` that does not exist and the classifier
-// die with `ModuleNotFoundError`.
+// This file lives at `frontend/e2e-live/`, so the repo root is two levels up.
+//
+//
+//
 const REPO_ROOT = process.env.PMX_REPO_ROOT ?? path.resolve(__dirname, "../..");
 // The relay WRITES MINIMAX_RELAY_LOG (minimax_relay.py); accept it as primary, keep PMX_RELAY_LOG
 // as a legacy alias so the relay-ledger source can never silently drift to empty (-> a false skip).
@@ -370,7 +370,7 @@ test("live MiniMax build → product-evidence dossier classifies PASS", async ({
             ...process.env,
             // `development` carries the `harness` package being run as `-m`; it is
             // not an installed distribution, so nothing else puts it on the path.
-            PYTHONPATH: ["current/packages/core/src", "current/packages/tools/src", "current/packages/agent-server/src", "development", "."]
+            PYTHONPATH: ["packages/core/src", "packages/tools/src", "packages/agent-server/src", "development", "."]
               .map((p) => path.join(REPO_ROOT, p))
               .join(":"),
           },

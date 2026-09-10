@@ -1,7 +1,7 @@
 """Trusted Components — the verified vendored-component tier (v0.2).
 
-Implements current/docs/trusted-components-spec.md (mechanics) on top of
-current/docs/trusted-components-design.md (intent): immutable hash-pinned security
+Implements development/notes/trusted-components-spec.md (mechanics) on top of
+development/notes/trusted-components-design.md (intent): immutable hash-pinned security
 cores (auth/RBAC/payments) + free periphery; verification = integrity hash +
 requires-graph + per-component seam probe; eject = honest relabel.
 

@@ -2,7 +2,7 @@
 
 Layer 1 (AuthoredDeck / AuthoredSlide): the loose authoring schema the LLM
 emits.  Field set FROZEN by the C4 experiment verdict
-(current/docs/slides-experiment-verdict.md §6).  Do NOT change the AuthoredSlide
+(development/notes/slides-experiment-verdict.md §6).  Do NOT change the AuthoredSlide
 field set without a new experiment.
 
 Layer 2 (Deck / Slide / Element): precise positional representation consumed by

@@ -4,7 +4,7 @@ from pathlib import Path
 
 import yaml
 
-_REPO = Path(__file__).resolve().parents[4]
+_REPO = Path(__file__).resolve().parents[3]
 
 
 def _compose() -> dict:
@@ -64,7 +64,7 @@ def test_logging_inspect_and_provider_variables_reach_their_consumers() -> None:
 
 def test_example_and_self_host_doc_name_the_effective_overrides() -> None:
     example = (_REPO / ".env.example").read_text(encoding="utf-8")
-    docs = (_REPO / "current" / "docs" / "self-host.md").read_text(encoding="utf-8")
+    docs = (_REPO / "docs" / "self-host.md").read_text(encoding="utf-8")
 
     for name in (
         "DISCO_BUILD_EGRESS",
@@ -91,7 +91,7 @@ def test_server_image_ships_the_js_runtime_stdio_mcp_servers_need() -> None:
     is what shipped. Pin the runtime's presence and its lean copy-from shape —
     no apt node-* fan-out, no build toolchain."""
 
-    dockerfile = (_REPO / "current" / "deploy" / "compose" / "Dockerfile.server").read_text(
+    dockerfile = (_REPO / "deploy" / "compose" / "Dockerfile.server").read_text(
         encoding="utf-8"
     )
 
@@ -122,5 +122,5 @@ def test_server_image_ships_the_js_runtime_stdio_mcp_servers_need() -> None:
         == set()
     )
 
-    docs = (_REPO / "current" / "docs" / "self-host.md").read_text(encoding="utf-8")
+    docs = (_REPO / "docs" / "self-host.md").read_text(encoding="utf-8")
     assert "stdio MCP" in docs

@@ -483,11 +483,11 @@ def test_mcp_create_definitions_found_only_in_core() -> None:
     schema module, not in the Tools migrations module."""
     import pathlib
 
-    repo_root = pathlib.Path(__file__).resolve().parents[4]
-    core_schema = (repo_root / "current/packages/core/src/disco/core/store/schema.py").read_text(
+    repo_root = pathlib.Path(__file__).resolve().parents[3]
+    core_schema = (repo_root / "packages/core/src/disco/core/store/schema.py").read_text(
         encoding="utf-8"
     )
-    tools_migrations = (repo_root / "current/packages/tools/src/disco/tools/mcp/migrations.py").read_text(
+    tools_migrations = (repo_root / "packages/tools/src/disco/tools/mcp/migrations.py").read_text(
         encoding="utf-8"
     )
 
@@ -521,11 +521,11 @@ def test_tools_mcp_migrations_imports_core_schema() -> None:
     """The Tools migrations module imports from Core schema, not the reverse."""
     import pathlib
 
-    repo_root = pathlib.Path(__file__).resolve().parents[4]
-    tools_migrations = (repo_root / "current/packages/tools/src/disco/tools/mcp/migrations.py").read_text(
+    repo_root = pathlib.Path(__file__).resolve().parents[3]
+    tools_migrations = (repo_root / "packages/tools/src/disco/tools/mcp/migrations.py").read_text(
         encoding="utf-8"
     )
-    core_schema = (repo_root / "current/packages/core/src/disco/core/store/schema.py").read_text(
+    core_schema = (repo_root / "packages/core/src/disco/core/store/schema.py").read_text(
         encoding="utf-8"
     )
 

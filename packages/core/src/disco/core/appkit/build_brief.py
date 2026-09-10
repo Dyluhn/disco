@@ -10,7 +10,7 @@ same request always yields the same brief.
 
 Drift guard: the (request → expected brief) GOLDEN FIXTURE in
 `build_brief_golden.json` is consumed by BOTH the Python test AND the TS test
-(`current/frontend/src/lib/buildBrief.ts`), so the two implementations can never diverge
+(`frontend/src/lib/buildBrief.ts`), so the two implementations can never diverge
 silently. If you change a rule here, regenerate the fixture
 (`python -m disco.core.appkit.build_brief --regen-golden`) and the TS classifier
 must reproduce it.

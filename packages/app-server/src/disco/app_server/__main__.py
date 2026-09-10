@@ -22,7 +22,7 @@ def main() -> None:
     # disco_env() is typed str | None, but every call here passes a non-None
     # default so the runtime value is always `str`. `cast` is a typing-only
     # no-op (zero behavior change); fixing this properly would require
-    # touching disco.core.env, which lives outside current/packages/app-server.
+    # touching disco.core.env, which lives outside packages/app-server.
     ensure_process_secret_key()
     store = SqliteEventStore(cast(str, disco_env("DB", "disco.db")))
     app = create_app(store)

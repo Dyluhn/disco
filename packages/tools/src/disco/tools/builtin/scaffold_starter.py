@@ -1,7 +1,7 @@
 """scaffold_starter — the starter-component CATALOG (P7, redesigned 2026-07-09).
 
 Modeled on the Claude-design `copy_starter_component` doctrine
-(current/docs/claude-design-playbook.md §4): starters are a catalog of host-owned,
+(development/notes/claude-design-playbook.md §4): starters are a catalog of host-owned,
 composable scaffolds the MODEL selects by fit — never locked to a contract kind.
 The catalog (with when-to-use guidance) lives in the tool schema itself; the
 active contract may RECOMMEND a kit (ctx.starter_kit, used when `kind` is

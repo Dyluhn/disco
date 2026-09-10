@@ -279,7 +279,7 @@ def test_reserved_port_command_violation_blocks_binds():
         "vite -p 8000",
         "serve -l 0.0.0.0:8000",
         "python -m http.server 8800",
-        "vite --port 5173",  # the current/frontend/UI port is reserved too
+        "vite --port 5173",  # the frontend/UI port is reserved too
     ):
         assert reserved_port_command_violation(cmd, r) is not None, cmd
 

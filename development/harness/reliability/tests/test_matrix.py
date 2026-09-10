@@ -113,7 +113,7 @@ def test_preview_manifest_assets_suite_is_exact_single_wave_provider_proof() -> 
     ):
         assert exact_argument in command
 
-    spec = MATRIX.parents[3] / "current/frontend/e2e-live/preview-manifest-assets.spec.ts"
+    spec = MATRIX.parents[3] / "frontend/e2e-live/preview-manifest-assets.spec.ts"
     assert 'test.use({ trace: "off" })' in spec.read_text(encoding="utf-8")
 
 

@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "development" / "scripts"))
 
 # Import the build_platform contracts for target-adapter tests
-sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "current" / "packages" / "core" / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "packages" / "core" / "src"))
 
 from disco.core.build_platform import (  # noqa: E402
     SYNTHETIC_CAPABILITIES,

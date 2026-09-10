@@ -3,7 +3,7 @@
  * A simple off/on toggle. When on, a "Live" button appears on the Agent canvas
  * browser pane and clicking it opens an iframe to the noVNC view of the sandbox.
  *
- * Security notes (per current/docs/design-novnc-live-browser.md):
+ * Security notes (per development/notes/design-novnc-live-browser.md):
  *  - VNC is loopback-bound inside the sandbox (127.0.0.1 only, never network).
  *  - The noVNC endpoint goes through the existing server-minted per-conversation
  *    preview origin (localhost or the configured wildcard site) and auth/jail.

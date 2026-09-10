@@ -261,7 +261,7 @@ def test_nested_untracked_file_bytes_change_source_revision(tmp_path: Path) -> N
 
 def test_product_subject_identity_ignores_evaluator_bytes_only(tmp_path: Path) -> None:
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
-    product = tmp_path / "current" / "packages" / "core" / "src" / "disco" / "runtime.py"
+    product = tmp_path / "packages" / "core" / "src" / "disco" / "runtime.py"
     harness = tmp_path / "development" / "harness" / "reliability" / "oracle.py"
     product.parent.mkdir(parents=True)
     harness.parent.mkdir(parents=True)

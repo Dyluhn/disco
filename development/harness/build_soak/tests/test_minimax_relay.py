@@ -88,7 +88,7 @@ def test_create_app_fails_fast_without_key(monkeypatch) -> None:
 
 
 def test_relay_importable_without_disco_or_fastapi() -> None:
-    # the relay must import dependency-light: only the repo root on PYTHONPATH (NOT current/packages/*/src),
+    # the relay must import dependency-light: only the repo root on PYTHONPATH (NOT packages/*/src),
     # so a successful import proves it pulls neither disco nor fastapi.
     root = str(Path(__file__).resolve().parents[4])
     code = (

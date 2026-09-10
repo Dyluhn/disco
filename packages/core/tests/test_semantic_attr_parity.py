@@ -1,4 +1,4 @@
-"""P8C drift guard: the TS mirror (current/frontend/src/lib/discoSemanticAttrs.ts) must carry
+"""P8C drift guard: the TS mirror (frontend/src/lib/discoSemanticAttrs.ts) must carry
 EXACTLY the data-disco-* attribute values of the canonical Python DataDiscoAttr (P8B).
 TS can't import Python, so this test enforces parity across the language boundary."""
 
@@ -9,7 +9,7 @@ from pathlib import Path
 
 from disco.core.appkit.semantic_metadata import DataDiscoAttr
 
-_TS = Path(__file__).resolve().parents[4] / "current" / "frontend" / "src" / "lib" / "discoSemanticAttrs.ts"
+_TS = Path(__file__).resolve().parents[3] / "frontend" / "src" / "lib" / "discoSemanticAttrs.ts"
 
 
 def test_ts_mirror_matches_python_canonical_exactly() -> None:

@@ -20,7 +20,7 @@ from disco.core.llm.secrets import (
 
 _OLD_SECRET = "old-secret-material-0123456789-ABCDE"
 _NEW_SECRET = "new-secret-material-0123456789-VWXYZ"
-_REPO = Path(__file__).resolve().parents[4]
+_REPO = Path(__file__).resolve().parents[3]
 _ROTATE_SCRIPT = _REPO / "development" / "scripts" / "rotate_secret_store.py"
 
 

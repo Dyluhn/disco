@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 /**
- * BP-02 live acceptance (current/docs/workorders/BP-02, acceptance §4) — preview TRUTH.
+ * BP-02 live acceptance (development/notes/workorders/BP-02, acceptance §4) — preview TRUTH.
  *
  * Real stack end-to-end: live agent-server on :8000 with the gVisor backend
  * (VM-201 over SSH), real 27B driver, real UI. Proves:

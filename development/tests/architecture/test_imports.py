@@ -41,14 +41,14 @@ def write_import_authority(root: Path, *, seed_dm005: bool = True) -> None:
         return
     write_and_track(
         root,
-        "current/packages/tools/src/disco/tools/builtin/audio_overview.py",
+        "packages/tools/src/disco/tools/builtin/audio_overview.py",
         "def load_audio():\n"
         "    from disco.agent_server import audio_config, tts_local\n"
         "    return audio_config, tts_local\n",
     )
     write_and_track(
         root,
-        "current/packages/tools/src/disco/tools/builtin/preview.py",
+        "packages/tools/src/disco/tools/builtin/preview.py",
         "def load_preview():\n"
         "    from disco.agent_server import preview_manager\n"
         "    return preview_manager\n",
@@ -83,10 +83,10 @@ class TestImportExtraction:
         assert imports._dep_pkg(None, layers) is None
 
     def test_module_name_from_path(self):
-        assert imports._module_name("current/packages/core/src/disco/core/events.py") == "disco.core.events"
-        assert imports._module_name("current/packages/core/src/disco/core/__init__.py") == "disco.core"
+        assert imports._module_name("packages/core/src/disco/core/events.py") == "disco.core.events"
+        assert imports._module_name("packages/core/src/disco/core/__init__.py") == "disco.core"
         assert imports._module_name(
-            "current/packages/tools/src/disco/tools/builtin/preview.py"
+            "packages/tools/src/disco/tools/builtin/preview.py"
         ) == "disco.tools.builtin.preview"
 
     def test_extract_static_imports(self):
@@ -495,12 +495,12 @@ class TestCycleDetection:
         root = Path(tmp.name)
         write_and_track(
             root,
-            "current/packages/core/src/disco/core/cycle.py",
+            "packages/core/src/disco/core/cycle.py",
             "import disco.tools\n",
         )
         write_and_track(
             root,
-            "current/packages/tools/src/disco/tools/cycle.py",
+            "packages/tools/src/disco/tools/cycle.py",
             "import disco.core\n",
         )
         write_import_authority(root)
@@ -550,7 +550,7 @@ class TestCheckImportsBoundary:
         code = "from disco.agent_server import app\n"
         write_and_track(
             root,
-            "current/packages/tools/src/disco/tools/builtin/upward.py",
+            "packages/tools/src/disco/tools/builtin/upward.py",
             code,
         )
         write_import_authority(root)
@@ -564,7 +564,7 @@ class TestCheckImportsBoundary:
         root = Path(tmp.name)
         write_and_track(
             root,
-            "current/packages/core/src/disco/core/aliased_upward.py",
+            "packages/core/src/disco/core/aliased_upward.py",
             "import importlib as loader\n"
             "from importlib import import_module as load\n"
             "module_alias = loader\n"
@@ -601,7 +601,7 @@ class TestCheckImportsBoundary:
         code = "from disco.app_server import app\n"
         write_and_track(
             root,
-            "current/packages/agent-server/src/disco/agent_server/routes/cross.py",
+            "packages/agent-server/src/disco/agent_server/routes/cross.py",
             code,
         )
         write_import_authority(root)
@@ -617,7 +617,7 @@ class TestCheckImportsBoundary:
         root = Path(tmp.name)
         write_and_track(
             root,
-            "current/packages/core/src/disco/core/bad.py",
+            "packages/core/src/disco/core/bad.py",
             "def f(:\n    pass\n",
         )
         write_import_authority(root)
@@ -631,7 +631,7 @@ class TestCheckImportsBoundary:
         root = Path(tmp.name)
         write_and_track(
             root,
-            "current/packages/core/src/disco/core/nonliteral.py",
+            "packages/core/src/disco/core/nonliteral.py",
             "import importlib as loader\n"
             "from importlib import import_module as load\n"
             "assigned = loader.import_module\n"
@@ -661,17 +661,17 @@ class TestCheckImportsBoundary:
         root = Path(tmp.name)
         write_and_track(
             root,
-            "current/packages/agent-server/src/disco/agent_server/mod.py",
+            "packages/agent-server/src/disco/agent_server/mod.py",
             "from disco.tools import builtin\nfrom disco.core import events\n",
         )
         write_and_track(
             root,
-            "current/packages/tools/src/disco/tools/__init__.py",
+            "packages/tools/src/disco/tools/__init__.py",
             "from disco.core import events\n",
         )
         write_and_track(
             root,
-            "current/packages/core/src/disco/core/__init__.py",
+            "packages/core/src/disco/core/__init__.py",
             "",
         )
         write_import_authority(root)

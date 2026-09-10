@@ -25,7 +25,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 # ---------------------------------------------------------------- typed refs
-# These mirror the TS `SelectionRef` union in current/frontend/src/lib/selectionBridge.ts
+# These mirror the TS `SelectionRef` union in frontend/src/lib/selectionBridge.ts
 # (the wire contract the browser produces). Frozen + extra-forbid so a malformed
 # frame is rejected, not silently coerced.
 

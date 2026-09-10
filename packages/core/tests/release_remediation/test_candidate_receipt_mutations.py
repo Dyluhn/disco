@@ -35,7 +35,7 @@ from typing import Any
 
 import pytest
 
-_REPO_ROOT = Path(__file__).resolve().parents[5]
+_REPO_ROOT = Path(__file__).resolve().parents[4]
 _RECEIPT_PATH = _REPO_ROOT / "development" / "scripts" / "export_track1_candidate_receipt.py"
 
 

@@ -28,8 +28,8 @@ proxy, NOT a true 3-way NLI. That is itself the central fairness caveat.
 
 USAGE
 -----
-    PYTHONPATH=current/packages/core/src:current/packages/retrieval/src:current/packages/tools/src:\\
-current/packages/agent-server/src:current/packages/app-server/src \\
+    PYTHONPATH=packages/core/src:packages/retrieval/src:packages/tools/src:\\
+packages/agent-server/src:packages/app-server/src \\
       .venv/bin/python3 development/scripts/extract_grounding.py <conversation_id>
 
 The script also self-bootstraps sys.path from the repo root, so the bare form
@@ -48,7 +48,7 @@ from typing import Any
 # --- self-bootstrap the 5 package src dirs (honor an existing PYTHONPATH too) ---
 _REPO = Path(__file__).resolve().parent.parent
 for _pkg in ("core", "retrieval", "tools", "agent-server", "app-server"):
-    _src = _REPO / "current" / "packages" / _pkg / "src"
+    _src = _REPO / "packages" / _pkg / "src"
     if _src.is_dir() and str(_src) not in sys.path:
         sys.path.insert(0, str(_src))
 

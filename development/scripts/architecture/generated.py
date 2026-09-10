@@ -232,7 +232,7 @@ def _actual_versions(root: Path) -> dict[str, str]:
     )
     if node.returncode == 0:
         versions["node"] = node.stdout.strip().removeprefix("v")
-    typescript = root / "current" / "frontend" / "node_modules" / "typescript" / "package.json"
+    typescript = root / "frontend" / "node_modules" / "typescript" / "package.json"
     if not typescript.is_file():
         typescript = root / "frontend" / "node_modules" / "typescript" / "package.json"
     if typescript.is_file():

@@ -1,6 +1,6 @@
 """Disco Build Soak harness — deterministic evidence oracle for the bare Build loop.
 
-This package is the *foundation* slice of the Build Soak (current/docs/build-soak-guidelines.md):
+This package is the *foundation* slice of the Build Soak (development/notes/build-soak-guidelines.md):
 the no-live-spend, deterministic core — evidence lock, oracle result schema, the
 event normalizer, the deterministic classifier, the core oracles, and the
 fake-model/fake-tool simulator scaffolding.

@@ -76,7 +76,7 @@ _DELEGATE_ACTION_PROFILE = ActionProfile(
 # unboundedly within a single segment — the result is folded back into the
 # View, which the condenser manages; keeping the helper's prompt bounded
 # keeps the post-fold View growth bounded. Symmetric to the search/extract
-# length budget (`current/packages/tools/.../retrieval.py:_EXTRACT_CHAR_BUDGET`).
+# length budget (`packages/tools/.../retrieval.py:_EXTRACT_CHAR_BUDGET`).
 _FANOUT_INPUT_MAX_CHARS = 4_000
 
 

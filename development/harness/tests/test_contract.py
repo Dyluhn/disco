@@ -25,14 +25,14 @@ from disco.retrieval.deep_research._progress_events import (
     emit_hold,
 )
 
-_TS = (Path(__file__).resolve().parents[3] / "current" / "frontend" / "src" / "types" / "agent.ts").read_text()
+_TS = (Path(__file__).resolve().parents[3] / "frontend" / "src" / "types" / "agent.ts").read_text()
 
 # The deep-research progress ACTIONS ride ActionEvent.tool_call.tool_name, and
 # the frontend dispatches on that name in its trace parts rather than in the
 # event-type mirror. Scanning exactly that directory (plus the type mirror)
 # keeps the check meaningful: it is where a new action must be handled, not a
 # broad string search over the whole app.
-_FRONTEND_SRC = Path(__file__).resolve().parents[3] / "current" / "frontend" / "src"
+_FRONTEND_SRC = Path(__file__).resolve().parents[3] / "frontend" / "src"
 #: Payloads frozen from a real producer run and consumed byte-identically by the
 #: frontend's vitest suites. See `test_hold_payload_shape_matches_ts_fixture`.
 _TS_FIXTURES = _FRONTEND_SRC / "lib" / "__fixtures__"

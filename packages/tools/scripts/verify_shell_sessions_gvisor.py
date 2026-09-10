@@ -2,10 +2,10 @@
 
 Run from a tailnet node over Docker-over-SSH:
     PMX_DOCKER_HOST=ssh://sandbox@100.81.82.115 uv run python \
-        current/packages/tools/scripts/verify_shell_sessions_gvisor.py
+        packages/tools/scripts/verify_shell_sessions_gvisor.py
 
 Mirrors the process-backend integration scenarios in
-current/packages/tools/tests/test_shell_sessions.py::test_integration_scenarios, adapted to
+packages/tools/tests/test_shell_sessions.py::test_integration_scenarios, adapted to
 a container: (a) state persists across exec calls; (b) background server + in-container
 curl + kill; (c) interactive read fed via write; (d) SessionBusy on a busy session.
 """

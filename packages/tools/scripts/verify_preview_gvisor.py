@@ -2,7 +2,7 @@
 
 Run from a tailnet node over Docker-over-SSH:
     PMX_DOCKER_HOST=ssh://sandbox@100.81.82.115 uv run python \
-        current/packages/tools/scripts/verify_preview_gvisor.py
+        packages/tools/scripts/verify_preview_gvisor.py
 
 Proves the BP-02 contract live, in-container:
   (a) the container's main process is a plain `sleep infinity` — the supervised

@@ -1,7 +1,7 @@
 # Engineering Standards
 
 **Status: STABLE / CHANGE-CONTROLLED.** This file is sealed by
-`current/docs/governance/PROTECTED.sha256` and enforced by
+`development/governance/PROTECTED.sha256` and enforced by
 `development/scripts/check_governance_seal.py`. An agent may not edit it. Rebaselining
 requires an explicit owner instruction and the procedure in
 [`README.md`](./README.md).

@@ -1,14 +1,14 @@
 """Build-loop health metrics — Phase 0 of the Track-A build-harness fix.
 
 This is the REUSABLE acceptance instrument for the §10.1 metric table
-(`current/docs/disco-direction-and-decisions-6-17-26.md`). It parses a rendered build
+(`development/notes/disco-direction-and-decisions-6-17-26.md`). It parses a rendered build
 trace (`[seq] ACTION tool(args) / thought / → OBS`) and computes the objective
 signals that distinguish a healthy build loop from the read-thrash death the
 macOS-clone run exhibited.
 
 Used two ways:
-  1. REGRESSION (now): `current/packages/core/tests/test_build_loop_regression.py` asserts
-     the golden trace (`current/docs/evidence/macos-build-trace-6-17-26.txt`) reproduces
+  1. REGRESSION (now): `packages/core/tests/test_build_loop_regression.py` asserts
+     the golden trace (`development/notes/evidence/macos-build-trace-6-17-26.txt`) reproduces
      the known-bad BASELINE — validating the extractor AND documenting that the
      bug is real and measurable. The same test asserts the baseline VIOLATES the
      targets (so the harness genuinely captures the failure).

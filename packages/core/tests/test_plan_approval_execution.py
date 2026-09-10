@@ -6,7 +6,7 @@ The idempotency / mode-flip / no-task-duplication contracts hold and pass. The
 is now SATISFIED (Build Soak repair #2): finish.py gate_execution_nudge caps at
     3 nudges then parks at AWAITING_USER_QUESTION with legacy detail
     `approve_plan_no_execution` instead of a false FINISHED. See
-current/docs/build-soak-surfaced-bugs.md.
+development/notes/build-soak-surfaced-bugs.md.
 """
 
 from __future__ import annotations

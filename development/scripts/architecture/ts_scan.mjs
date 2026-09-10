@@ -4,7 +4,7 @@
 //
 // Enforces frontend context cycles and cross-feature edges using the checked
 // context registry, and detects raw fetch/WebSocket/EventSource transport in
-// components/hooks (typed calls through current/frontend/src/api pass).
+// components/hooks (typed calls through frontend/src/api pass).
 
 import fs from "node:fs";
 import path from "node:path";
@@ -115,7 +115,7 @@ function main() {
 
   // Build a module-to-context map from the frontend context definitions.
   // Each context lists module prefixes (e.g. "api/agent", "hooks/useBuild").
-  // A file is classified by matching its path relative to current/frontend/src/ against
+  // A file is classified by matching its path relative to frontend/src/ against
   // these prefixes. No filename-only classification.
   const moduleToContext = new Map();
   for (const [ctxName, ctxDef] of Object.entries(frontendContexts)) {
@@ -128,7 +128,7 @@ function main() {
   }
 
   function classifyContext(rel) {
-    // rel is like "current/frontend/src/components/BuildSurface.tsx" in the real
+    // rel is like "frontend/src/components/BuildSurface.tsx" in the real
     // tree and "frontend/src/..." in a fixture tree; normalise the bucket away
     // first, then strip the frontend src prefix for matching.
     const logical = stripBucket(rel);
@@ -298,8 +298,8 @@ function main() {
   // Returns the resolved path relative to repo root, or null if not found.
   function resolveImport(sourceRel, imp) {
     // imp is like "@/api/client" or "./sibling" or "../parent"
-    // sourceRel is like "current/frontend/src/components/BuildSurface.tsx"
-    const sourceDir = path.dirname(sourceRel); // current/frontend/src/components
+    // sourceRel is like "frontend/src/components/BuildSurface.tsx"
+    const sourceDir = path.dirname(sourceRel); // frontend/src/components
     let targetRel;
     if (imp.startsWith("@/")) {
       // @/ maps to the frontend src root, expressed logically.
@@ -324,7 +324,7 @@ function main() {
 
   // Detect raw transport calls (fetch, WebSocket, EventSource) in the AST.
   // Uses the compiler AST — no marker/substring search. Typed calls through
-  // current/frontend/src/api (including agentFetch) pass because they are wrappers
+  // frontend/src/api (including agentFetch) pass because they are wrappers
   // that call fetch internally but are not raw fetch calls in the component/hook.
   function rawTransportCalls(source) {
     const calls = [];
@@ -680,7 +680,7 @@ function main() {
         // Only check relative imports (starting with ./ or ../ or @/)
         // External packages (react, lucide-react, etc.) are not cross-feature
         if (!imp.startsWith(".") && !imp.startsWith("@/")) continue;
-        // Resolve the import to a file path relative to current/frontend/src/
+        // Resolve the import to a file path relative to frontend/src/
         const resolvedRel = resolveImport(rel, imp);
         if (!resolvedRel) continue;
         const targetContext = classifyContext(resolvedRel);

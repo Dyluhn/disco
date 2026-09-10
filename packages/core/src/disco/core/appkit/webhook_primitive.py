@@ -319,7 +319,7 @@ def generate_webhook(app: AppSpec, design: DesignSpec) -> dict[str, str]:
             f"    <h1>Webhook endpoints — {title}</h1>\n"
             f"    <p><strong>{WEBHOOK_PENDING_MARKER}.</strong> Every endpoint on this\n"
             "    page is DECLARED ONLY — no live receiver or emitter route is generated.\n"
-            "    The deferred security fill (see current/docs/wo-f33-webhook-security-spec.md)\n"
+            "    The deferred security fill (see development/notes/wo-f33-webhook-security-spec.md)\n"
             "    activates them.</p>\n"
             f"{listing}"
             "  </body>\n"

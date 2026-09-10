@@ -264,7 +264,7 @@ def loopback_port_bindings(
 
 # The SINGLE source of truth for which sandbox backends can actually run the noVNC
 # live-view stack (Xvfb + x11vnc + websockify). Those binaries ship ONLY in the
-# container image (current/deploy/sandbox/Dockerfile) AND the live-jail security model (P5:
+# container image (deploy/sandbox/Dockerfile) AND the live-jail security model (P5:
 # loopback-bound x11vnc, view-only, per-conversation jail, gated published port) was
 # designed/accepted for the strong-isolation gVisor backend. So gVisor is the only
 # backend that gets the live stream: the `process` dev backend has no stack at all

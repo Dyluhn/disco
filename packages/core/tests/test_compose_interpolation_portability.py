@@ -37,7 +37,7 @@ from pathlib import Path
 import yaml
 
 # tests → core → packages → current → <repo>
-_REPO_ROOT = Path(__file__).resolve().parents[4]
+_REPO_ROOT = Path(__file__).resolve().parents[3]
 _COMPOSE = _REPO_ROOT / "compose.yaml"
 
 # A '${' that appears before the closing '}' of an enclosing '${' — i.e. nesting.
@@ -65,9 +65,9 @@ def test_no_nested_variable_interpolation() -> None:
 # Dockerfiles reachable from `podman compose up --build`.
 _DOCKERFILES = (
     "compose.yaml and the images it builds",
-    "current/deploy/compose/Dockerfile.server",
-    "current/deploy/sandbox/Dockerfile",
-    "current/frontend/Dockerfile",
+    "deploy/compose/Dockerfile.server",
+    "deploy/sandbox/Dockerfile",
+    "frontend/Dockerfile",
 )
 _FROM = re.compile(r"^\s*FROM\s+(\S+)(?:\s+AS\s+(\S+))?", re.IGNORECASE | re.MULTILINE)
 

@@ -590,7 +590,7 @@ def _toolchain_probe(probe_id: str, capability: str, subject: str) -> HostCapabi
         capability=capability,
         method=ProbeMethod.TOOLCHAIN_VERSION,
         subject=subject,
-        owner="current/packages/core/tests/build_platform_registration_shapes.py",
+        owner="packages/core/tests/build_platform_registration_shapes.py",
         phases=frozenset({HostPhase.PACKAGE}),
     )
 

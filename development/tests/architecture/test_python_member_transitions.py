@@ -9,7 +9,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "development" / "scripts"))
 from architecture.public_api_parts import _members  # noqa: E402
 
-_PATH = "current/packages/core/src/disco/core/__init__.py"
+_PATH = "packages/core/src/disco/core/__init__.py"
 _IDENTITY = ("python", _PATH, "AgentErrorEvent")
 
 

@@ -2,7 +2,7 @@
 """Live verification of the Podman SandboxBackend against the VM 202 host (`podtest`),
 keyless over Tailscale SSH via Podman's native remote.
 
-  uv run python current/packages/tools/scripts/verify_podman_vm202.py
+  uv run python packages/tools/scripts/verify_podman_vm202.py
 
 Walks the 8-item checklist: connects keyless (crun rootless), session model (multi-
 exec + workspace persistence via a named volume), sealing (sealed vs granted), the

@@ -7,7 +7,7 @@ everything above it (router, policy, prompts) is provider-neutral.
 v1 ships the protocol here. The concrete HTTP adapters — `ollama`/`llamacpp`
 (local) and `openrouter` (overflow) — are [INTERIOR] implementations whose model
 ids, base URLs, and auth are all [VERIFY] at build (and whose OpenRouter key
-comes from the secrets store, never current/prompts/sandbox). They are intentionally NOT
+comes from the secrets store, never prompts/sandbox). They are intentionally NOT
 built here: they require network + the operator's real model config, and the
 whole router is provable headless against a fake provider (§10). Adding an
 adapter = implementing this protocol + classifying that provider's

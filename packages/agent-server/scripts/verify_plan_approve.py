@@ -1,7 +1,7 @@
 # ruff: noqa: E501 — a verification script; long task/log lines are inherent.
 """LIVE proof of life for the plan-and-approve stage on the Build surface.
 
-  uv run python current/packages/agent-server/scripts/verify_plan_approve.py
+  uv run python packages/agent-server/scripts/verify_plan_approve.py
 
 End-to-end:
   1. Submit a task. The loop starts in PLANNING and pauses at AWAITING_PLAN_APPROVAL.

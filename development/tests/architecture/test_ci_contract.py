@@ -48,7 +48,7 @@ class TestOrderedGates:
             "development/scripts/check_public_api.py",
             "development/scripts/check_test_inventory.py",
             "development/scripts/check_ci_contract.py",
-            "current/packages/core/tests/test_build_platform_nonweb_conformance.py",
+            "packages/core/tests/test_build_platform_nonweb_conformance.py",
         ]
         for script in expected:
             assert script in ci_contract.ORDERED_GATE_SCRIPTS, f"missing gate: {script}"
@@ -232,7 +232,7 @@ class TestNodeProvisioning:
         assert "Node" in problems[0]
         late_npm = [
             {"run": "uv run python development/scripts/check_soak_freeze.py"},
-            {"working-directory": "current/frontend", "run": "npm ci"},
+            {"working-directory": "frontend", "run": "npm ci"},
         ]
         problems = ci_contract._check_frontend_npm_ci(late_npm, "CI")
         assert any("must precede" in problem for problem in problems)
@@ -240,7 +240,7 @@ class TestNodeProvisioning:
     def test_node_before_typescript_passes(self):
         steps = [
             {"uses": "actions/setup-node@v4"},
-            {"working-directory": "current/frontend", "run": "npm ci"},
+            {"working-directory": "frontend", "run": "npm ci"},
             {"run": "uv run python development/scripts/check_arch_imports.py"},
         ]
         assert ci_contract._check_node_before_typescript(steps) == []
@@ -258,7 +258,7 @@ class TestToolSchemasPosition:
         commands = [
             "uv run python development/scripts/check_ci_contract.py",
             "uv run python development/scripts/check_tool_schemas.py",
-            "uv run pytest -q current/packages/core/tests/test_build_platform_nonweb_conformance.py",
+            "uv run pytest -q packages/core/tests/test_build_platform_nonweb_conformance.py",
         ]
         positions = ci_contract._find_gate_order(commands, ci_contract.ORDERED_GATE_SCRIPTS)
         problems = ci_contract._check_tool_schemas_position(commands, positions, "test")
@@ -277,7 +277,7 @@ class TestToolSchemasPosition:
         commands = [
             "uv run python development/scripts/check_tool_schemas.py",
             "uv run python development/scripts/check_ci_contract.py",
-            "uv run pytest -q current/packages/core/tests/test_build_platform_nonweb_conformance.py",
+            "uv run pytest -q packages/core/tests/test_build_platform_nonweb_conformance.py",
         ]
         positions = ci_contract._find_gate_order(commands, ci_contract.ORDERED_GATE_SCRIPTS)
         problems = ci_contract._check_tool_schemas_position(commands, positions, "test")
@@ -287,7 +287,7 @@ class TestToolSchemasPosition:
         """tool_schemas.py after non-web conformance must fail."""
         commands = [
             "uv run python development/scripts/check_ci_contract.py",
-            "uv run pytest -q current/packages/core/tests/test_build_platform_nonweb_conformance.py",
+            "uv run pytest -q packages/core/tests/test_build_platform_nonweb_conformance.py",
             "uv run python development/scripts/check_tool_schemas.py",
         ]
         positions = ci_contract._find_gate_order(commands, ci_contract.ORDERED_GATE_SCRIPTS)
@@ -452,7 +452,7 @@ class TestCIWorkflowMutations:
             (
                 ci_gate_anchor,
                 "      - name: Soak freeze\n"
-                "        working-directory: current/frontend\n"
+                "        working-directory: frontend\n"
                 "        run: uv run python development/scripts/check_soak_freeze.py",
                 "non-root",
             ),
@@ -527,7 +527,7 @@ class TestCIWorkflowMutations:
                 "    runs-on: ubuntu-latest\n"
                 "    defaults:\n"
                 "      run:\n"
-                "        working-directory: current/frontend\n"
+                "        working-directory: frontend\n"
                 "    steps:",
                 "defaults.run",
             ),
@@ -556,7 +556,7 @@ class TestCIWorkflowMutations:
             (
                 release_gate_anchor,
                 "      - name: Soak freeze\n"
-                "        working-directory: current/frontend\n"
+                "        working-directory: frontend\n"
                 "        run: uv run python development/scripts/check_soak_freeze.py",
                 "non-root",
             ),

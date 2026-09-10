@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /**
- * BP-03 live acceptance (current/docs/workorders/BP-03, acceptance §2 + §3) — the
+ * BP-03 live acceptance (development/notes/workorders/BP-03, acceptance §2 + §3) — the
  * environment CONTRACT, not prohibitions.
  *
  * Real stack end-to-end: live agent-server on :8000 (gVisor backend, VM-201),

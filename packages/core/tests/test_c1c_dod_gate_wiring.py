@@ -317,7 +317,7 @@ async def test_infra_failure_blocks_finish_with_visible_unverified_reason(tmp_pa
     from disco.core.dod import CommandExitPredicate, DoDSpec
     from disco.core.dod_evaluator import DoDEvaluator
 
-    sys.path.insert(0, "current/packages/core/tests")
+    sys.path.insert(0, "packages/core/tests")
     from test_dod_evaluator import _denied_command_runner, _passing_http_probe
 
     ws = tmp_path / "ws"

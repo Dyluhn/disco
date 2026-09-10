@@ -28,7 +28,7 @@ import pytest
 pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
 
 
-_HARNESS_ROOT = Path(__file__).resolve().parents[4] / "development" / "harness"
+_HARNESS_ROOT = Path(__file__).resolve().parents[3] / "development" / "harness"
 
 
 def _harness_oracles():

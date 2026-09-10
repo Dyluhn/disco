@@ -2,7 +2,7 @@
 """LIVE acceptance for the tailscale-runthru fix set (B2/B4/B5/B6).
 
   source ~/.config/disco/agent.env   # DISCO_OPENROUTER_API_KEY
-  uv run python current/packages/agent-server/scripts/verify_replan_acceptance.py
+  uv run python packages/agent-server/scripts/verify_replan_acceptance.py
 
 Drives a REAL model (disco-config.json → gpt-oss-120b) through a REAL local
 container sandbox: a small two-file build to FINISHED, then a NEW instruction

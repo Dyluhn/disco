@@ -313,7 +313,7 @@ def _collect_playwright(
 
 def _config_identities(root: Path) -> dict[str, str]:
     return {
-        config: hashlib.sha256((root / "current" / "frontend" / config).read_bytes()).hexdigest()
+        config: hashlib.sha256((root / "frontend" / config).read_bytes()).hexdigest()
         for config in PLAYWRIGHT_CONFIGS
     }
 

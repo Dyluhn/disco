@@ -11,7 +11,7 @@ a fix has shipped.
 Include what you'd want if you were fixing it:
 
 - The affected surface or component (Search / Deep Research / Build / Agent,
-  or which package under `current/packages/`).
+  or which package under `packages/`).
 - A reproduction path, ideally minimal.
 - Your deployment mode (podman/docker compose vs. local dev) and, if it's
   relevant to the bug, your sandbox backend (`process` / `local` / `gvisor` /
@@ -31,7 +31,7 @@ already-documented trust boundaries and known gaps — for example: no TLS
 termination out of the box, a loopback bind by default, and (on the default
 `local` sandbox backend) a container socket mount that makes the agent-server
 process root-equivalent on the host if it's ever compromised. Read
-[`current/sec-work-remaining/SECURITY.md`](./current/sec-work-remaining/SECURITY.md)
+[`development/notes/security/SECURITY.md`](./development/notes/security/SECURITY.md)
 before reporting — it's the full threat model: what each control actually
 does, what it explicitly does *not* protect against, and which hardening work
 is still open. If what you found matches something already listed there as a

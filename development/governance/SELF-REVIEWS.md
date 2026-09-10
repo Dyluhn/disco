@@ -325,8 +325,8 @@ still sensitive, frontend Vitest / typecheck / Vite build / G11 all green, and
 the Export Track-1 verifier launched.
 
 Evidence that it actually worked: `test_runtime_constraints.py` 17 passed,
-`test_summary_validation.py` 19 passed, `current/packages/core` + `current/packages/tools` +
-`current/packages/agent-server` exit 0 (9,020 tests, 0 failure markers, 1 skip). All
+`test_summary_validation.py` 19 passed, `packages/core` + `packages/tools` +
+`packages/agent-server` exit 0 (9,020 tests, 0 failure markers, 1 skip). All
 four architecture fitness gates exit 0, plus tool schemas, both Ruff gates and
 the governance seal. Frontend: Vitest 175 files / 1146 tests passed, typecheck
 exit 0, Vite build exit 0, G11 exit 0. Budget-gate sensitivity proven by probe:

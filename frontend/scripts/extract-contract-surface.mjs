@@ -11,7 +11,7 @@
  * `src/lib/eventDisposition.ts`'s flat string array is simple enough for the
  * regex in test_event_kind_frontend_contract.py; a discriminated union is not.
  *
- * Emits JSON on stdout for `current/packages/core/tests/test_frontend_contract_parity.py`
+ * Emits JSON on stdout for `packages/core/tests/test_frontend_contract_parity.py`
  * to compare against the Python authority. Fails closed (exit 2) if any expected
  * declaration is missing, unresolvable, or shaped unexpectedly — never emits a
  * partial surface, because a partial surface reads as agreement.
@@ -37,7 +37,7 @@ const pkgPath = path.join(compilerPath, "package.json");
 if (!fs.existsSync(pkgPath)) {
   die(
     `pinned TypeScript compiler absent at ${compilerPath} — run \`npm ci\` in ` +
-      `current/frontend/ (node_modules is gitignored and per-worktree)`,
+      `frontend/ (node_modules is gitignored and per-worktree)`,
   );
 }
 const REQUIRED_TS_VERSION = "5.9.3";

@@ -52,7 +52,7 @@ def _observation_symbol_names(
     if not clause:
         return [], None
     if " " in clause:
-        if (observation_id, path, clause) in _ALLOWED_DESCRIPTIVE_CLAUSES:
+        if (observation_id, _logical(path), clause) in _ALLOWED_DESCRIPTIVE_CLAUSES:
             return [], None
         return [], (
             f"observation {observation_id}: unapproved descriptive observation "
@@ -251,6 +251,8 @@ def _check_observation_segment(
     if clause_problem is not None:
         return [clause_problem], []
     full = root / path
+    if not full.is_file():
+        full = root / _logical(path)
     if not full.is_file():
         return [f"observation {observation_id}: file absent: {path}"], []
     text = full.read_text(encoding="utf-8")

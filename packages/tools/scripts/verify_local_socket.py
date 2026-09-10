@@ -3,7 +3,7 @@
 (no SSH) — the lowest-isolation tier. Run on a host with a local Docker socket OR a
 rootless Podman socket (its Docker-compatible API):
 
-  uv run python current/packages/tools/scripts/verify_local_socket.py
+  uv run python packages/tools/scripts/verify_local_socket.py
 
 Defaults to this host's rootless Podman socket; override via env:
   PMX_LOCAL_SOCKET   (default unix:///run/user/1000/podman/podman.sock)

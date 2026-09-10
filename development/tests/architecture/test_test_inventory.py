@@ -1651,8 +1651,8 @@ class TestInventoryRules:
         assert inventory_static._DERIVED_PATHS == {
             "development/architecture/public-api.json",
             "development/architecture/test-inventory.json",
-            "current/docs/governance/CAMPAIGN-STATUS.md",
-            "current/docs/governance/PROTECTED.sha256",
+            "development/governance/CAMPAIGN-STATUS.md",
+            "development/governance/PROTECTED.sha256",
         }
         _git(tmp_path, "init", "-q")
         write(tmp_path / "README.md", "lineage fixture\n")

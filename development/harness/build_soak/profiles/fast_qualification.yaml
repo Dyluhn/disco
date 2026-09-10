@@ -55,7 +55,7 @@ overlays:
       The provider-free progressing-hard-cap positive and the bounded
       pause-timeout reproduction committed in Epic 1. No provider calls.
     pytest:
-      - "current/packages/agent-server/tests/test_progressing_hardcap_freeze_order.py"
+      - "packages/agent-server/tests/test_progressing_hardcap_freeze_order.py"
       - "development/harness/build_soak/tests/test_freeze_before_kill.py"
 
 # F0 — provider-free deterministic checks. These are the existing suites; the
@@ -63,5 +63,5 @@ overlays:
 f0:
   pytest:
     - "development/harness/build_soak/tests"
-    - "current/packages/core/tests/test_loop_condensation.py"
-    - "current/packages/agent-server/tests/test_progressing_hardcap_freeze_order.py"
+    - "packages/core/tests/test_loop_condensation.py"
+    - "packages/agent-server/tests/test_progressing_hardcap_freeze_order.py"

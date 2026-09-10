@@ -4,7 +4,7 @@ The deck markdown is agent-generated (injection-tainted). Marp drives a full
 Chromium to render PDF/PPTX; running that on the host would let a crafted deck
 (file:// refs, local URLs) exfiltrate host files during render. So marp runs in
 the jailed sandbox via exec_shell — the binary + Chromium ship in the image
-(current/deploy/sandbox/Dockerfile, RP-10 layer). The output lands directly in the
+(deploy/sandbox/Dockerfile, RP-10 layer). The output lands directly in the
 workspace, so there is no host temp file and no read-back.
 
 Extracted from ``slides.py`` to reduce module complexity; the public facade

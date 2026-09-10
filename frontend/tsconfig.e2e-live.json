@@ -2,7 +2,7 @@
   // Live-e2e type-check scope (mirrors tsconfig.closeout-g11.json /
   // tsconfig.downloadBinding-guard.json, one directory wider).
   //
-  // Why a separate config: BEFORE this file, `current/frontend/e2e-live` was type-checked
+  // Why a separate config: BEFORE this file, `frontend/e2e-live` was type-checked
   // by NO tsconfig project at all. `tsconfig.app.json` includes only `src`;
   // `tsconfig.node.json` only `vite.config.ts`; `tsconfig.build.json` (the
   // `npm run typecheck:build` gate) extends app and additionally EXCLUDES tests;
@@ -25,7 +25,7 @@
   // strict as the shipping one.
   //
   // Invoked as `npx tsc -p tsconfig.e2e-live.json --noEmit` from ci.yml's
-  // REQUIRED job — directly, not via an npm script, because current/frontend/package.json
+  // REQUIRED job — directly, not via an npm script, because frontend/package.json
   // is a change-controlled contract file whose non-diagram bytes cannot be
   // rebaselined by any sanctioned path (public_api_parts/_contracts.py). That is
   // the same reason tsconfig.closeout-g11.json is driven by a direct `npx tsc -p`

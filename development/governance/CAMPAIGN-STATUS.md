@@ -40,8 +40,8 @@ with sole parent
 of the retained source snapshot with the same accepted parent. The source to
 candidate diff is restricted to:
 `development/architecture/public-api.json`, `development/architecture/test-inventory.json`,
-`current/docs/governance/CAMPAIGN-STATUS.md`, and
-`current/docs/governance/PROTECTED.sha256`. This file deliberately does not self-record
+`development/governance/CAMPAIGN-STATUS.md`, and
+`development/governance/PROTECTED.sha256`. This file deliberately does not self-record
 the candidate commit identity.
 
 **Derived authorities:** Public API and test inventory record the retained
@@ -78,7 +78,7 @@ untouched.
 prohibition.** The obsolete "Fable only for verification / NEVER Fable" text
 still exists in three `archive/` files. Each now opens with an explicit
 `SUPERSEDED / HISTORICAL … Not a source of current status or operating
-instructions` header, and `current/docs/governance/README.md` declares `archive/`
+instructions` header, and `development/governance/README.md` declares `archive/`
 non-authoritative. *Why:* the brief forbids restoring or rewriting archive
 history, and Epic 0's requirement is that no obsolete prohibition remains as a
 **live directive**. Scrubbing the words out of dated historical records would
@@ -88,7 +88,7 @@ as a record of past reviews, which is not a prohibition at all.
 **DECISION — `ARCHITECTURE-BOUNDARIES.md` states the vocabulary that actually
 exists, not the planning document's names.** Reconciling §5 against current code
 found `EntryDescriptor` and `ReadinessSignal` present verbatim in
-`current/packages/core/src/disco/core/build_platform/contracts.py`, but **no**
+`packages/core/src/disco/core/build_platform/contracts.py`, but **no**
 `DeliveryShape` or `PreviewModality` types: those are *open namespaced strings*
 (`DeliveryIntent.shape`, `PreviewPlan.modality`) validated by `_OPEN_NAME`.
 *Why:* sealing a name that does not exist would make the frozen boundary false
@@ -262,7 +262,7 @@ the test fails for the right reason.
 | Authority-race negatives: new user message, resume, run intent, agent view | four tests in `test_freeze_before_kill.py`; all four now route through one choke point, `_freeze_horizon_violation` |
 | Browser references after the accepted horizon cannot be certified | `test_browser_evidence_after_the_freeze_horizon_is_not_certifiable`, with a control proving the clip is what excludes the late reference |
 | Immutable identity/digest checked around collection; symlinks and mutable head fail closed | `test_tampered_immutable_version_makes_the_freeze_fail_closed`; `_verified_workspace_version` rescans size+sha256 and never follows symlinks; a landed freeze registers the verified version so the mutable-head `or` branch is unreachable |
-| Product pause/kill APIs and kill semantics unchanged | **zero changes under `current/packages/`** — every edit is harness-only; kill count asserted as exactly 1 in both the positive and the failure test |
+| Product pause/kill APIs and kill semantics unchanged | **zero changes under `packages/`** — every edit is harness-only; kill count asserted as exactly 1 in both the positive and the failure test |
 
 **Gates:** `development/harness/build_soak/tests/` exit 0 (~890 passed, 1 skipped);
 `uv run ruff check development/harness/build_soak/` **All checks passed**;
@@ -298,7 +298,7 @@ response, one horizon — enforced by the return type rather than by discipline.
 exactly `AssertionError: returned events predate the condensation the View
 already reflects`; restored, it passes.
 
-**Gates:** `current/packages/core` exit 0; `current/packages/agent-server` exit 0;
+**Gates:** `packages/core` exit 0; `packages/agent-server` exit 0;
 `test_loop_condensation.py` 5 passed; Ruff clean and formatted;
 `uv run basedpyright` **0 errors, 0 warnings, 0 notes**; `lint-imports`
 **2 contracts kept, 0 broken**; generated diagram fresh (exit 0); tool schemas
@@ -395,10 +395,10 @@ install.
 
 ```bash
 semgrep scan --metrics=off --config=p/python --json \
-  --exclude=archive --exclude=current/docs/archive --exclude=node_modules --exclude=.venv \
+  --exclude=archive --exclude=development/notes/archive --exclude=node_modules --exclude=.venv \
   --exclude=__pycache__ --exclude=cassettes --exclude=evidence \
-  --exclude='*.generated.md' --exclude=current/frontend/dist --exclude=.serena \
-  current/packages/ development/harness/ development/scripts/
+  --exclude='*.generated.md' --exclude=frontend/dist --exclude=.serena \
+  packages/ development/harness/ development/scripts/
 ```
 
 Result: **151 rules over 550 files, 15 findings** (6 ERROR, 7 WARNING, 2 INFO) —
@@ -530,7 +530,7 @@ code I reconciled the requirement against what the loop already has, and the
 answer changes the design.
 
 **Half of Epic 2 already exists, and must be extended rather than duplicated.**
-`KnowledgeEvent` (`current/packages/core/src/disco/core/events.py:1170`) is already:
+`KnowledgeEvent` (`packages/core/src/disco/core/events.py:1170`) is already:
 
 - `source: EventSource.SYSTEM` — host-authored;
 - `LLMConvertible` — renders into model context as `<knowledge …>`;
@@ -545,7 +545,7 @@ multiple real condensations, it appears once near current context, and duplicate
 observations do not grow context. `DatasourceEvent` is even condensation-immune.
 
 **What genuinely does not exist** — confirmed `NOT FOUND` for `ConstraintEvent`,
-`RuntimeConstraint`, `HostConstraint` anywhere under `current/packages/core/src/disco/core/`:
+`RuntimeConstraint`, `HostConstraint` anywhere under `packages/core/src/disco/core/`:
 
 1. a **stable key** (today the identity is an incidental content hash);
 2. an explicit **scope** beyond a free-text applicability hint;
@@ -553,7 +553,7 @@ observations do not grow context. `DatasourceEvent` is even condensation-immune.
 4. **expiry on backend/capability-generation change**;
 5. the rule that a **transient** error must stay retryable and never pin;
 6. any **typed producer** — the process-backend host-signal prohibition
-   (`current/packages/tools/src/disco/tools/sandbox/process.py:102`) is today only an
+   (`packages/tools/src/disco/tools/sandbox/process.py:102`) is today only an
    actionable refusal *string*, which is exactly why condensation could forget it
    in `k460000`.
 
@@ -622,7 +622,7 @@ proven by test.
 **Gates:** `test_runtime_constraints.py` **16 passed**, covering every Epic-2
 acceptance item except the live `k460000` run (Epic 4). Revert-check: removing
 the pinning line fails exactly the four survival tests and nothing else.
-`current/packages/core` + `current/packages/tools` exit 0. Frontend `typecheck:build` **exit 0**.
+`packages/core` + `packages/tools` exit 0. Frontend `typecheck:build` **exit 0**.
 `basedpyright` **0 errors, 0 warnings, 0 notes**. `ruff` clean on all changed
 files.
 
@@ -639,8 +639,8 @@ below.
 
 **OPEN FINDING (pre-existing, Epic 5), now quantified.** The config-driven
 `uv run ruff check` gate exits **1** on the committed tree: **3 × E501** in
-`current/packages/core/tests/test_driver_outage_meta.py` and
-`current/packages/core/tests/test_release_detect.py`. Trivial, but Epic 5 requires the
+`packages/core/tests/test_driver_outage_meta.py` and
+`packages/core/tests/test_release_detect.py`. Trivial, but Epic 5 requires the
 gate to pass, so it is listed with the architecture-budget debt rather than
 discovered late.
 
@@ -679,7 +679,7 @@ work in that span is not summarized, telling the reader to treat the range as
 *unknown rather than as "nothing happened"*. Claiming a summary we do not have
 would be worse than admitting the gap.
 
-**Gates:** `test_summary_validation.py` **19 passed**; `current/packages/core` exit 0;
+**Gates:** `test_summary_validation.py` **19 passed**; `packages/core` exit 0;
 `ruff` clean; `basedpyright` **0/0/0**. Revert-check: removing the validation
 block fails exactly the four behavioural tests and leaves the rule/fallback unit
 tests passing, which is the correct blast radius.
@@ -732,7 +732,7 @@ re-pointed, or otherwise disturbed. They are outside this authorization.
 and `uv run ruff format --check` **exit 0**. Three E501s were re-wrapped by hand
 (a user-facing string in `lifecycle.py`, a comprehension in
 `test_selfhost_e2e.py`, a constructor argument in `test_driver_outage_meta.py`)
-and 19 files were formatted. All mechanical and semantics-preserving; `current/packages/core`
+and 19 files were formatted. All mechanical and semantics-preserving; `packages/core`
 still exit 0 and `basedpyright` still **0/0/0**.
 
 **Architecture budget: attributed line by line rather than lumped together.**
@@ -777,7 +777,7 @@ flight (model/assist/Deep-Research fields, which move together through one
 state-aware check because swapping the brain mid-step is incoherent) and the
 settings that are safe to change at any time. Split into
 `_apply_gated_compose_settings()` and `_apply_ungated_settings()`. Violations
-26 → 25; full `current/packages/agent-server` suite exit 0, `basedpyright` 0/0/0, ruff
+26 → 25; full `packages/agent-server` suite exit 0, `basedpyright` 0/0/0, ruff
 clean.
 
 **`StuckDetector` attempted and REVERTED, deliberately.** The obvious lever was
@@ -838,7 +838,7 @@ and after**, and every changed assertion differs only in its receiver
 (`handler._x(page)` → `_x(page)`) with identical arguments and identical expected
 values.
 
-**Gates:** `current/packages/core`, `current/packages/tools`, `current/packages/agent-server` all exit 0;
+**Gates:** `packages/core`, `packages/tools`, `packages/agent-server` all exit 0;
 `ruff check` **0**; `ruff format --check` **0**; `basedpyright` **0/0/0**.
 
 **Still open for Epic 5:** the 23 pre-existing entries need an owner-visible
@@ -922,7 +922,7 @@ were **spot-verified by me** rather than taken on trust:
 **Test inventory: TWO REAL VIOLATIONS FOUND, and fixed.** This is the check
 earning its place: across a 334-file diff I had no other way to see these.
 
-`current/frontend/src/components/build/ExecutionCanvas.preview.test.tsx` went **27 → 12**
+`frontend/src/components/build/ExecutionCanvas.preview.test.tsx` went **27 → 12**
 tests when the preview moved to canonical capabilities. Two consequences:
 
 1. **`previewHostUrl` lost its unit coverage while remaining live production
@@ -973,7 +973,7 @@ unexpected, 0 flaky, 0 skipped).
 The lane exited 0 with **9,042 tests, 0 failures**, and was still rejected:
 
 ```
-python-nonlive: test current/packages/tools/tests/test_heavy_validators.py::
+python-nonlive: test packages/tools/tests/test_heavy_validators.py::
 test_validate_pptx_renders_real_clean_pptx was SKIPPED (must PASS)
 ```
 
@@ -994,7 +994,7 @@ because both cost a debug cycle:
 
 Result: `test_heavy_validators.py` now **21 passed, 0 skipped**.
 
-`current/packages/core/tests/test_router_overflow.py` is a *deliberate* module-level
+`packages/core/tests/test_router_overflow.py` is a *deliberate* module-level
 skip — a documented dormant "revival harness", pre-existing at `f55efb03`. Left
 alone; it is explained, which is what Epic 5 requires.
 
@@ -1047,7 +1047,7 @@ concurrency and started exercising a wrapper — which is exactly the failure mo
 the anti-bypass rule exists to prevent.
 
 **DECISION — reverted to the ratified bytes rather than ratifying the seam.**
-The alternative was amending `current/docs/export-track1-closeout-suppression-baseline.json`,
+The alternative was amending `development/notes/export-track1-closeout-suppression-baseline.json`,
 the ratified acceptance record of an **already-completed** campaign. Amending
 another campaign's acceptance record to accommodate a change made after it closed
 expands authority I was not granted, and it is exactly the stale/borrowed-authority
@@ -1200,9 +1200,9 @@ rejection: **"has 1 skipped (must be exactly 2: the frozen §3.2 baseline, nothi
 more, nothing less)"**. So the baseline demands exactly two non-passing nodes
 (`_NONLIVE_BASELINE_ALLOWLIST`, `verify_export_track1_closeout.py:416`):
 
-1. `current/packages/core/tests/test_router_overflow.py` → `skipped` — present here, the
+1. `packages/core/tests/test_router_overflow.py` → `skipped` — present here, the
    documented dormant revival harness;
-2. `current/packages/core/tests/test_appkit_directory.py::test_unknown_app_kind_lowers_as_lead_gen_byte_identical`
+2. `packages/core/tests/test_appkit_directory.py::test_unknown_app_kind_lowers_as_lead_gen_byte_identical`
    → `xfailed`.
 
 **That second node does not exist in this lineage.** Not at HEAD, and **not at
@@ -1702,7 +1702,7 @@ Counted dirs: `seed-460000-attempt7`, `seed-46000{1..8}`,
 **Two flags the check raised, both run down rather than waved through.**
 
 *Recorded revision.* Seeds 460002–460009 record `95f47088` while 460000–460001
-record `f0498c3a`. `git diff f0498c3a 95f47088 -- current/packages/ development/harness/ development/scripts/`
+record `f0498c3a`. `git diff f0498c3a 95f47088 -- packages/ development/harness/ development/scripts/`
 is EMPTY — 95f47088 is a docs-only ledger append, 39 lines of prose. All ten
 ran on byte-identical source. This is exactly the hazard written into manifest
 §8b, and it happened here to prove the point: during Epic 6 the repository is
@@ -1872,8 +1872,8 @@ per-run by `CONDENSATION_SUMMARY_UNUSABLE`).
 
 The last two open Epic-5 items are done on `a3b58feb`:
 
-1. **Recorded full-suite pass.** `pytest current/packages/core current/packages/tools
-   current/packages/agent-server development/harness/build_soak/tests -m "not integration"` —
+1. **Recorded full-suite pass.** `pytest packages/core packages/tools
+   packages/agent-server development/harness/build_soak/tests -m "not integration"` —
    **EXIT CODE 0**, zero FAILED/ERROR lines, run against a **clean tree**
    (`0 modified files`, verified in the log header, not asserted afterwards).
    Log kept outside the repo:
@@ -2172,7 +2172,7 @@ recovery, and unavailable-not-zero when no ledger is configured.
 ### Why F1 is not re-run on the new SHA
 
 The fix touches the harness's live logging only. `git diff HEAD~1 HEAD --
-current/packages/` is empty, no oracle or verdict changed, and F1 earns
+packages/` is empty, no oracle or verdict changed, and F1 earns
 `counts_toward_promotion: false` by construction. Its falsification value — "the
 candidate is not broken" — attaches to the product bytes, which are unchanged.
 The canaries, pilot and the counted 100 will all run on the single final SHA;
@@ -2353,7 +2353,7 @@ budget OK (the `navigate` extraction was the honest fix when the gate caught
 `_handle_action` exceeding its cap — no cap was raised); lint-imports 2/0;
 diagram fresh; **basedpyright 0 errors**.
 
-Note: unlike the observability commits, `git diff a3b58feb HEAD -- current/packages/` is
+Note: unlike the observability commits, `git diff a3b58feb HEAD -- packages/` is
 now **non-empty**. This candidate genuinely changes product code, so it earns no
 inheritance from the Epic-4/5 evidence and must qualify from scratch.
 
@@ -2500,7 +2500,7 @@ new bytes; if not, it certifies `b47e6f9c`-lineage bytes as the candidate.
    background run finished 100% with zero failure marks but its output file was
    lost with the scratchpad; nothing recorded = not done. Run and KEEP the log
    outside the repo:
-   `pytest current/packages/core current/packages/tools current/packages/agent-server development/harness/build_soak/tests -m "not integration"`.
+   `pytest packages/core packages/tools packages/agent-server development/harness/build_soak/tests -m "not integration"`.
 2. **Ledger checklist flip** — when (1) is green on the exact candidate, mark
    Epic 5 COMPLETE with the log path as evidence.
 
@@ -2772,7 +2772,7 @@ Proof chain, all preserved under `…/epic6/f26-fix/`:
 | packages core / agent-server / tools (`-m "not integration"`) | exit 0 each on the fixed tree |
 | basedpyright / lint-imports / arch budget / diagram / tool schemas / ruff | all green |
 | H302 unconfirmed-stop invariant + freeze suite + H190/H191 finished-path raise | green (positive controls) |
-| product delta | `git diff a632dde2..HEAD -- current/packages/` = **0 lines** — product bytes identical to the cert8-10 candidate |
+| product delta | `git diff a632dde2..HEAD -- packages/` = **0 lines** — product bytes identical to the cert8-10 candidate |
 
 Also this cycle: F-23 closed as no-defect from walker/backend bytes (FINDINGS
 closure appended); the empty `cert10/broad-pytest-during-f26.log` disclosed
@@ -2787,8 +2787,8 @@ qualification candidate; qualification restarts from scratch on it
 
 E2's two remaining items are closed on the F-26 candidate lineage:
 
-1. **Recorded four-suite pass** — `pytest current/packages/core current/packages/tools
-   current/packages/agent-server development/harness/build_soak/tests -m "not integration"` on
+1. **Recorded four-suite pass** — `pytest packages/core packages/tools
+   packages/agent-server development/harness/build_soak/tests -m "not integration"` on
    `8f249c7a`: **10190 passed, 2 skipped, 104 deselected in 17:45, EXIT=0
    in-body**, header binds SHA + source fingerprint
    `a4f62f45…`. Log kept outside the repo:
@@ -2804,7 +2804,7 @@ E2's two remaining items are closed on the F-26 candidate lineage:
 
 **Candidate freeze.** The commit carrying this entry is the frozen
 qualification candidate (it appends governance bytes only on top of
-`8f249c7a`; `current/packages/` remains byte-identical to `a632dde2`, and the source
+`8f249c7a`; `packages/` remains byte-identical to `a632dde2`, and the source
 fingerprint that governs counted credit is unchanged by governance files).
 The standing ledger continues at
 `…/epic6/f26-fix/LEDGER.md`; repository bytes stop moving until Epic 7's
@@ -2882,8 +2882,8 @@ early-deadline code move (the wait window IS the supersession affordance).
 
 **Authoritative verification on the exact committed bytes**
 (`f27-fix/f27-authoritative-verification.log`, SOURCE_FP `b55eac39…`):
-budget/lint-imports/diagram/basedpyright all EXIT=0; `pytest current/packages/core
-current/packages/agent-server -m "not integration"` EXIT=0; `pytest
+budget/lint-imports/diagram/basedpyright all EXIT=0; `pytest packages/core
+packages/agent-server -m "not integration"` EXIT=0; `pytest
 development/harness/build_soak -m "not integration"` EXIT=0. Format check: only the two
 pre-existing 0-diff-vs-base files (dispositioned cycle 4). Evidence also
 holds `f27-diff-committed.patch` (the staged bytes that became `729316e1`)

@@ -1,6 +1,6 @@
 """Tests for the server-side report audio overview endpoint (D1 un-stub).
 
-The pipeline reuses current/packages/tools/src/disco/tools/builtin/audio_overview.py
+The pipeline reuses packages/tools/src/disco/tools/builtin/audio_overview.py
 helpers.  We don't want to load the bundled Kokoro model (~0.3 GB) in tests,
 so we monkeypatch `disco.tools.builtin.audio_overview._synthesize_local` and
 `_synthesize_remote` to return tiny fake PCM.  The mixer + encoder + the

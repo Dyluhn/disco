@@ -11,7 +11,7 @@ The protected set includes:
   - the immutable disposition-ID list (development/architecture/disposition-ids.txt)
   - the stable budget checker (development/scripts/check_arch_budget.py)
   - the governance checker (development/scripts/check_governance_seal.py)
-  - the SEAL-INVOCATION contract (current/docs/governance/SEAL-INVOCATION.json)
+  - the SEAL-INVOCATION contract (development/governance/SEAL-INVOCATION.json)
 
 The digest manifest (PROTECTED.sha256) does NOT protect itself.
 

@@ -151,7 +151,7 @@ class TestCollaboratorDetection:
         root = Path(tmp.name)
         params = ", ".join(f"svc{i}: Service{i}" for i in range(11))
         code = f"class Big:\n    def __init__(self, {params}):\n        pass\n"
-        write_and_track(root, "current/packages/core/src/disco/core/big.py", code)
+        write_and_track(root, "packages/core/src/disco/core/big.py", code)
         git_commit(root)
         result = python_scan.scan_all(root)
         # The scanner must find the class and its constructor parameters
@@ -173,7 +173,7 @@ class TestCollaboratorDetection:
         root = Path(tmp.name)
         params = ", ".join(f"svc{i}: Service{i}" for i in range(11))
         code = f"class Big:\n    def __init__(self, {params}):\n        pass\n"
-        path = "current/packages/core/src/disco/core/big.py"
+        path = "packages/core/src/disco/core/big.py"
         write_and_track(root, path, code)
         write_budget_authority(root)
         git_commit(root)
@@ -209,7 +209,7 @@ class TestCollaboratorDetection:
         root = Path(tmp.name)
         params = ", ".join(f"svc{i}: Service{i}" for i in range(10))
         code = f"class AtCap:\n    def __init__(self, {params}):\n        pass\n"
-        path = "current/packages/core/src/disco/core/atcap.py"
+        path = "packages/core/src/disco/core/atcap.py"
         write_and_track(root, path, code)
         write_budget_authority(
             root,
@@ -235,7 +235,7 @@ class TestCollaboratorDetection:
                              name: str, version: int):
                     pass
             """)
-        path = "current/packages/core/src/disco/core/good.py"
+        path = "packages/core/src/disco/core/good.py"
         write_and_track(root, path, code)
         write_budget_authority(
             root,
@@ -278,7 +278,7 @@ class TestDisguisePatterns:
         tmp = make_temp_repo()
         root = Path(tmp.name)
         malformed = [*(dict(row) for row in legacy), synthetic_legacy_row(
-            "current/packages/core/src/disco/core/bad.py"
+            "packages/core/src/disco/core/bad.py"
         )]
         malformed[-1].pop("reason")
         write_budget_authority(
@@ -323,7 +323,7 @@ class TestDependencyAggregate:
         assert 11 > cap
         tmp = make_temp_repo()
         root = Path(tmp.name)
-        path = "current/packages/core/src/disco/core/dependencies.py"
+        path = "packages/core/src/disco/core/dependencies.py"
         members = ", ".join(f"Service{i}" for i in range(11))
         write_and_track(root, path, f"SERVICES = [{members}]\n")
         write_budget_authority(root)
@@ -377,14 +377,14 @@ class TestDependencyAggregate:
         values = ", ".join(f'"tool-{index}"' for index in range(11))
         write_and_track(
             root,
-            "current/packages/tools/src/disco/tools/scope.py",
+            "packages/tools/src/disco/tools/scope.py",
             f"TOOL_SCOPE = frozenset({{{values}}})\n",
         )
         write_budget_authority(root)
         git_commit(root)
         assert budget.check_dependency_aggregate_caps(root) == []
         write(
-            root / "current/packages/tools/src/disco/tools/scope.py",
+            root / "packages/tools/src/disco/tools/scope.py",
             "from builtins import frozenset as frozen\n\n"
             f"TOOL_SCOPE = frozen({{{values}}})\n",
         )
@@ -393,7 +393,7 @@ class TestDependencyAggregate:
             f'"verifier_{index}"' for index in range(11)
         )
         write(
-            root / "current/packages/tools/src/disco/tools/scope.py",
+            root / "packages/tools/src/disco/tools/scope.py",
             f"VERIFIER_CHECK_KEYS = frozenset({{{verifier_keys}}})\n",
         )
         assert budget.check_dependency_aggregate_caps(root) == []
@@ -427,7 +427,7 @@ class TestCompositionRoot:
         roots = ownership_data.get("composition_roots", [])
         assert [(row["path"], row["symbol"]) for row in roots] == [
             (
-                "current/packages/agent-server/src/disco/agent_server/app.py",
+                "packages/agent-server/src/disco/agent_server/app.py",
                 "create_app",
             )
         ]
@@ -447,7 +447,7 @@ class TestCompositionRoot:
         tree = ast.parse(
             (
                 REPO_ROOT
-                / "current/packages/agent-server/src/disco/agent_server/runtime.py"
+                / "packages/agent-server/src/disco/agent_server/runtime.py"
             ).read_text()
         )
         runtime = next(
@@ -470,7 +470,7 @@ class TestCompositionRoot:
         tmp = make_temp_repo()
         root = Path(tmp.name)
         code = "def big():\n" + "    pass\n" * 101
-        write_and_track(root, "current/packages/core/src/disco/core/big.py", code)
+        write_and_track(root, "packages/core/src/disco/core/big.py", code)
         git_commit(root)
         result = python_scan.scan_all(root)
         found_violation = False
@@ -559,7 +559,7 @@ class TestEffectOwners:
             """) + "    x = 1\n" * 80
         write_and_track(
             root,
-            "current/packages/agent-server/src/disco/agent_server/routes/handler.py",
+            "packages/agent-server/src/disco/agent_server/routes/handler.py",
             code,
         )
         git_commit(root)
@@ -583,7 +583,7 @@ class TestProtocolNonViolation:
         p = policy.load_policy()
         assert policy.is_protocol_non_violation(
             p,
-            "current/packages/core/src/disco/core/store/base.py",
+            "packages/core/src/disco/core/store/base.py",
             "EventStore",
             "python_service_public_methods_gt_12_candidate",
         )
@@ -593,7 +593,7 @@ class TestProtocolNonViolation:
         p = policy.load_policy()
         assert policy.is_protocol_non_violation(
             p,
-            "current/packages/agent-server/src/disco/agent_server/build_kernel/base.py",
+            "packages/agent-server/src/disco/agent_server/build_kernel/base.py",
             "BuildKernel",
             "python_service_public_methods_gt_12_candidate",
         )
@@ -602,7 +602,7 @@ class TestProtocolNonViolation:
         p = policy.load_policy()
         assert not policy.is_protocol_non_violation(
             p,
-            "current/packages/fake/test.py",
+            "packages/fake/test.py",
             "FakeClass",
             "python_service_public_methods_gt_12_candidate",
         )
@@ -611,13 +611,13 @@ class TestProtocolNonViolation:
         p = policy.load_policy()
         assert not policy.is_protocol_non_violation(
             p,
-            "current/packages/core/src/disco/core/store/base.py",
+            "packages/core/src/disco/core/store/base.py",
             "EventStore",
             "python_callable_logical_gt_100",
         )
         tmp = make_temp_repo()
         root = Path(tmp.name)
-        path = "current/packages/core/src/disco/core/stateful.py"
+        path = "packages/core/src/disco/core/stateful.py"
         write_and_track(
             root,
             path,
@@ -703,8 +703,8 @@ class TestPolicyTampering:
 
         tmp = make_temp_repo()
         root = Path(tmp.name)
-        first = "current/packages/core/src/disco/core/observed.py"
-        second = "current/packages/core/src/disco/core/other.py"
+        first = "packages/core/src/disco/core/observed.py"
+        second = "packages/core/src/disco/core/other.py"
         location = f"{first}:Observed:1-2 + {second}:helper:1-2"
         write_and_track(root, first, "class Observed:\n    pass\n")
         write_and_track(root, second, "def helper():\n    pass\n")
@@ -921,7 +921,7 @@ class TestDisguisedCollaboratorEnforcement:
                 def __init__(self, services: dict):
                     pass
             """)
-        path = "current/packages/core/src/disco/core/bad.py"
+        path = "packages/core/src/disco/core/bad.py"
         write_and_track(root, path, code)
         write_budget_authority(root)
         git_commit(root)
@@ -989,7 +989,7 @@ class TestDisguisedCollaboratorEnforcement:
                 def __init__(self, ctx: Any):
                     pass
             """)
-        path = "current/packages/core/src/disco/core/bad.py"
+        path = "packages/core/src/disco/core/bad.py"
         write_and_track(root, path, code)
         write_budget_authority(root)
         git_commit(root)
@@ -997,7 +997,7 @@ class TestDisguisedCollaboratorEnforcement:
         assert_problem_contains(problems, "disguised collaborator", "ctx")
 
         legacy_rel = (
-            "current/packages/agent-server/src/disco/agent_server/appkit_ejection.py"
+            "packages/agent-server/src/disco/agent_server/appkit_ejection.py"
         )
         legacy_path = root / legacy_rel
         collaborators = ", ".join(
@@ -1062,7 +1062,7 @@ class TestDisguisedCollaboratorEnforcement:
                 def __init__(self, ctx: Context):
                     pass
             """)
-        path = "current/packages/core/src/disco/core/bad.py"
+        path = "packages/core/src/disco/core/bad.py"
         write_and_track(root, path, code)
         write_budget_authority(root)
         git_commit(root)
@@ -1111,7 +1111,7 @@ class TestRouteEffectEnforcement:
                 subprocess.run(["echo", "hi"])
                 return {"ok": True}
             """)
-        path = "current/packages/agent-server/src/disco/agent_server/routes/exec.py"
+        path = "packages/agent-server/src/disco/agent_server/routes/exec.py"
         write_and_track(root, path, code)
         write_budget_authority(root)
         git_commit(root)
@@ -1197,7 +1197,7 @@ class TestRouteEffectEnforcement:
                 shutil.rmtree("/tmp/old")
                 return {"ok": True}
             """)
-        path = "current/packages/agent-server/src/disco/agent_server/routes/cleanup.py"
+        path = "packages/agent-server/src/disco/agent_server/routes/cleanup.py"
         write_and_track(root, path, code)
         write_budget_authority(root)
         git_commit(root)
@@ -1231,7 +1231,7 @@ class TestRouteEffectEnforcement:
                     return {"error": "name required"}
                 return service.process(data)
             """)
-        path = "current/packages/agent-server/src/disco/agent_server/routes/validate.py"
+        path = "packages/agent-server/src/disco/agent_server/routes/validate.py"
         write_and_track(root, path, code)
         write_budget_authority(root)
         git_commit(root)
@@ -1259,7 +1259,7 @@ class TestCompositionRootEffects:
         """A composition root over 300 logical lines must fail."""
         tmp = make_temp_repo()
         root = Path(tmp.name)
-        path = "current/packages/agent-server/src/disco/agent_server/app.py"
+        path = "packages/agent-server/src/disco/agent_server/app.py"
         code = "def create_app():\n" + "    value = 1\n" * 301
         write_and_track(root, path, code)
         write_budget_authority(

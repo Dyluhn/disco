@@ -19,7 +19,7 @@ the predicates is a SEPARATE step (C1b) that runs in a fresh context.
 # Why these predicate kinds
 
 Borrowed (and tightened) from the research recommendation in
-`current/docs/manus-gap-analysis-addendum.md` §4 ("per-step verify predicates"):
+`development/notes/manus-gap-analysis-addendum.md` §4 ("per-step verify predicates"):
 
     {"kind": "file_exists", "path": "..."}
     {"kind": "shell_exit_zero", "cmd": "..."}   # NB: gated same as a normal action

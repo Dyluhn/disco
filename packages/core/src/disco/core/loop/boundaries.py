@@ -246,7 +246,7 @@ class ToolExecutor(Protocol):
 class Sandbox(Protocol):
     """[CONTRACT BOUNDARY — the Tool/Sandbox contract owns the full surface]
     The minimal file-IO slice of a sandbox instance the loop's projection /
-    memory-mirror steps touch. The concrete `SandboxInstance` (current/packages/tools)
+    memory-mirror steps touch. The concrete `SandboxInstance` (packages/tools)
     structurally satisfies this; core stays dependency-light by binding only to
     this duck-typed view (it neither imports nor owns the sandbox)."""
 

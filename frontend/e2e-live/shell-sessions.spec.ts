@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /**
- * BP-01 live acceptance (current/docs/workorders/BP-01-shell-sessions.md, acceptance §4).
+ * BP-01 live acceptance (development/notes/workorders/BP-01-shell-sessions.md, acceptance §4).
  *
  * Drives the REAL stack — live agent-server (127.0.0.1:8000), real 27B driver,
  * process sandbox — through the real UI. Asserts the agent used the new

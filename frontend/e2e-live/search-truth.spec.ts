@@ -10,12 +10,12 @@ import {
   requireReliabilityStack,
 } from "./reliability-helpers";
 
-// This file lives at `current/frontend/e2e-live/`, so the repo root is THREE
-// levels up; `../..` landed on `current/`, whose `.venv/bin/python3` does not
-// exist, and the spawn then failed with an ENOENT carrying no status and no
-// output. `harness` is not an installed distribution either — pytest reaches it
-// through `pythonpath = [".", "development", "current"]` in pyproject.toml,
-// which is pytest-only, so a subprocess needs `development` on PYTHONPATH.
+// This file lives at `frontend/e2e-live/`, so the repo root is two levels up.
+//
+//
+//
+//
+//
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const PYTHON = process.env.PMX_VENV_PY ?? path.join(REPO, ".venv/bin/python3");
 const ORACLE_PYTHONPATH = [path.join(REPO, "development"), process.env.PYTHONPATH]

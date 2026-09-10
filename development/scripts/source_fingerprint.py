@@ -28,8 +28,8 @@ from pathlib import Path
 
 # Prefixes whose contents can change product or harness behaviour.
 SOURCE_PREFIXES: tuple[str, ...] = (
-    "current/packages/",
-    "current/frontend/",
+    "packages/",
+    "frontend/",
     "development/harness/",
     "development/scripts/",
 )

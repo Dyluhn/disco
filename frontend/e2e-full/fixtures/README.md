@@ -1,4 +1,4 @@
-# current/frontend/e2e-full/fixtures
+# frontend/e2e-full/fixtures
 
 Minimized event-log fixtures for the W9 frontend replay test suite
 (`src/lib/buildTrace.replay.test.ts`). Each file is a small, hand-written
@@ -22,7 +22,7 @@ internals are mocked.
 
 ## Negative fixtures (W18, consumed by other layers)
 
-The `current/packages/agent-server/tests/fixtures/negative/` directory mirrors
+The `packages/agent-server/tests/fixtures/negative/` directory mirrors
 `no_plan_progress_finished.json` and contains additional fixtures consumed by
 W14a (artifact validators) and W8 (scripted-agent tests):
 

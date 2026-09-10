@@ -103,7 +103,7 @@ def serialize_markdown(
     """Serialize a ReportEvent to markdown.
 
     Ported VERBATIM from `serializeReportToMarkdown` in
-    current/frontend/src/api/deepResearch.ts:88-127. Same heading levels, citation
+    frontend/src/api/deepResearch.ts:88-127. Same heading levels, citation
     rendering, section order, and bounded_by honesty footer. The byte-parity
     test asserts this against a captured sample from the client-side output.
 

@@ -91,14 +91,14 @@ _REPO = Path(__file__).resolve().parents[3]
 # BOUND, asserted to remain a subset of the derived population so that a future
 # edit to the derivation cannot silently narrow the gate back to nothing.
 CONSTRAINT4_TEST_FAMILY = (
-    "current/packages/core/tests/test_f51_constraint4_multifire.py",
-    "current/packages/core/tests/test_f53_constraint4_confirmed_repeats.py",
-    "current/packages/core/tests/test_f53_seo_primitive.py",
-    "current/packages/core/tests/test_f55_f56_weakening_repeats_and_ordinals.py",
-    "current/packages/core/tests/test_route_b_driven_composition.py",
+    "packages/core/tests/test_f51_constraint4_multifire.py",
+    "packages/core/tests/test_f53_constraint4_confirmed_repeats.py",
+    "packages/core/tests/test_f53_seo_primitive.py",
+    "packages/core/tests/test_f55_f56_weakening_repeats_and_ordinals.py",
+    "packages/core/tests/test_route_b_driven_composition.py",
 )
 
-PRODUCTION_ROOT = "current/packages/core/src/disco/core/loop"
+PRODUCTION_ROOT = "packages/core/src/disco/core/loop"
 
 # THE DERIVED-POPULATION RULE (2026-08-07s Amendment 4, standing; implemented here
 # at 2026-08-07t). An enforcement's population must be DERIVED from artifacts — a

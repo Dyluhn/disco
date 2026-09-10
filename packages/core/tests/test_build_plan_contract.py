@@ -3,7 +3,7 @@
 These assert the SPEC contract (guidelines §11.1, §15.2, §20.1). Where the product
 violates the spec the test is marked `xfail(strict=True)` with the surfaced bug code,
 so the suite stays green AND the bug flips to a hard failure the moment it is fixed.
-See current/docs/build-soak-surfaced-bugs.md for the repair backlog.
+See development/notes/build-soak-surfaced-bugs.md for the repair backlog.
 """
 
 from __future__ import annotations

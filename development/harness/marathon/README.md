@@ -1,6 +1,6 @@
 # BP-16 Marathon Gate harness
 
-End-to-end endurance gate for the BP campaign (current/docs/workorders/BP-16-marathon-gate.md).
+End-to-end endurance gate for the BP campaign (development/notes/workorders/BP-16-marathon-gate.md).
 This is a **test-only** order: if the system fails, file the failure in
 `test-record/marathon/DEFECTS.md` — never patch the system from here.
 

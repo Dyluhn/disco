@@ -57,7 +57,7 @@ class _UnknownFailingExecutor:
     """Mirrors the production DefaultToolExecutor's contract for unknown
     tools: returns a structured, model-readable FAILURE for any name that
     is not in the offered/registered set, NEVER raises. This is the
-    production shape — see current/packages/tools/src/disco/tools/executor.py
+    production shape — see packages/tools/src/disco/tools/executor.py
     `_fail(call, "unknown_tool", ...)`.
 
     The loop relies on this contract to preserve the message invariant on
@@ -298,7 +298,7 @@ async def test_requery_exhausted_with_raising_executor_still_pairs():
         assert call_id in paired, (
             f"Raising executor orphaned tool_call {call_id!r}: the engine's "
             f"`except Exception` arm failed to emit a paired AgentErrorEvent. "
-            f"Engine line: current/packages/core/src/disco/core/loop/engine.py:3310-3321. "
+            f"Engine line: packages/core/src/disco/core/loop/engine.py:3310-3321. "
             f"Paired ids so far: {paired!r}"
         )
         # The error from the executor is what surfaces.

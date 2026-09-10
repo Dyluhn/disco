@@ -48,7 +48,7 @@ from pathlib import Path
 
 import pytest
 
-_REPO_ROOT = Path(__file__).resolve().parents[5]
+_REPO_ROOT = Path(__file__).resolve().parents[4]
 _SCRIPTS_DIR = _REPO_ROOT / "development" / "scripts"
 if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
@@ -264,7 +264,7 @@ def test_diff_scan_exempts_gate_scripts_and_meta_tests() -> None:
     for exempt in (
         "development/scripts/verify_export_track1_closeout.py",
         "development/scripts/gen_closeout_acceptance_manifest.py",
-        "current/packages/agent-server/tests/release_remediation/test_r6_verifier_truthfulness.py",
+        "packages/agent-server/tests/release_remediation/test_r6_verifier_truthfulness.py",
     ):
         assert verify._scan_campaign_diff_suppressions(_diff(exempt, "x = 1  # noqa"), set()) == []
 
@@ -616,10 +616,10 @@ def test_run_frontend_lane_green_true_on_all_passed_browser_report(tmp_path: Pat
     mirror_repo = tmp_path / "repo"
     evidence_dir = tmp_path / "evidence"
     evidence_dir.mkdir()
-    _mirror_frontend(_REPO_ROOT / "current" / "frontend", mirror_repo / "current" / "frontend", vitest_rel, keep)
+    _mirror_frontend(_REPO_ROOT / "frontend", mirror_repo / "frontend", vitest_rel, keep)
 
     # An all-passed, full-spec-set browser report present in the evidence dir.
-    e2e_dir = mirror_repo / "current" / "frontend" / manifest_mod.FRONTEND_E2E_DIR.removeprefix("current/").split("/", 1)[1]
+    e2e_dir = mirror_repo / "frontend" / manifest_mod.FRONTEND_E2E_DIR.removeprefix("current/").split("/", 1)[1]
     specs = {p.name for p in e2e_dir.glob("*.spec.ts")}
     assert specs, "the mirror must expose the frozen e2e spec set"
     (evidence_dir / "frontend-e2e.json").write_text(

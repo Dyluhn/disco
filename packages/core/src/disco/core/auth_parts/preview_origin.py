@@ -286,7 +286,7 @@ def local_preview_origin_crosses_host(origin: str | None, request_host: str | No
     cookie, and reach public credential grants or owner/admin APIs.
 
     Different ports on the *same* hostname remain valid for the normal split
-    current/frontend/server development layout. A local preview origin targeting any
+    frontend/server development layout. A local preview origin targeting any
     different hostname (including a DNS name resolving to loopback) is denied.
     """
 

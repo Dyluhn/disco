@@ -6,7 +6,7 @@ design-clean lead-gen app whose lead+admin contract is STRUCTURALLY correct —
 presence + ordering + parameterization + guard-first". This is STRUCTURAL
 verification of the generated source, NOT a proof that the app works at runtime:
 runtime reachability / behavioural execution of the Worker is proved separately by
-`current/packages/core/tests/test_workerd_persistence.py`, which runs the generated Worker
+`packages/core/tests/test_workerd_persistence.py`, which runs the generated Worker
 under local workerd/wrangler with real local D1 and a cold restart. Hosted
 Cloudflare deploy remains an owner-gated action. It runs NINE checks against the
 generated app in the workspace, each returning a PASS/FAIL with concrete evidence:
@@ -22,7 +22,7 @@ generated app in the workspace, each returning a PASS/FAIL with concrete evidenc
 * ``worker_contract``     — STRUCTURALLY inspect `worker/index.ts` (presence +
                             ordering + parameterization + guard-first; NOT live
                             execution — the local runtime proof is
-                            current/packages/core/tests/test_workerd_persistence.py): the
+                            packages/core/tests/test_workerd_persistence.py): the
                             public POST /api/leads
                             region CONTAINS a Drizzle insert in a
                             non-dead position; GET /api/leads AND /admin each
@@ -43,7 +43,7 @@ generated app in the workspace, each returning a PASS/FAIL with concrete evidenc
                             consistent (modelled POST inserts; unauth GET/admin → 401;
                             an authed read returns the row; ADMIN_TOKEN unset fails
                             closed). The local runtime proof is
-                            current/packages/core/tests/test_workerd_persistence.py; hosted
+                            packages/core/tests/test_workerd_persistence.py; hosted
                             Cloudflare deploy remains owner-gated.
 * ``cloudflare_export_ready`` — Epic I deploy-export completeness: the export tree
                             carries the owner deliverables (OWNER_GUIDE.md + the
@@ -241,7 +241,7 @@ def build_verdict(checks: list[dict[str, Any]], embedded: dict[str, Any] | None)
             "schema+worker+form structure intact (presence/ordering/parameterization/"
             "guard-first); local lead/admin model round-trip consistent; routes + "
             "sections covered. STRUCTURE verified — local runtime proof lives in "
-            "current/packages/core/tests/test_workerd_persistence.py."
+            "packages/core/tests/test_workerd_persistence.py."
         )
         # Counted-promotion failure 2026-07-27 (`p4_appkit_semantic_edit` seed
         # 900065, TOOL_CALL_THRASH). An identical call returned FAIL at seq 72 —
@@ -352,7 +352,7 @@ class VerifyAppKitAppTool:
             "STRUCTURALLY verify the generated AppKit lead-gen app and return a STRUCTURED "
             "pass/fail verdict (presence + ordering + parameterization + guard-first; "
             "local runtime proof lives in "
-            "current/packages/core/tests/test_workerd_persistence.py). "
+            "packages/core/tests/test_workerd_persistence.py). "
             "Runs nine checks: "
             "design_lint clean, schema.sql valid (sqlite round-trip + NOT NULL), Drizzle "
             "schema valid (src/db/schema.ts matches schema.sql and package deps exist), worker "

@@ -36,13 +36,13 @@ _PRODUCT_ROOT_FILES = frozenset(
 )
 _PRODUCT_FRONTEND_FILES = frozenset(
     {
-        "current/frontend/.env.example",
-        "current/frontend/Dockerfile",
-        "current/frontend/index.html",
-        "current/frontend/nginx.conf",
-        "current/frontend/package-lock.json",
-        "current/frontend/package.json",
-        "current/frontend/vite.config.ts",
+        "frontend/.env.example",
+        "frontend/Dockerfile",
+        "frontend/index.html",
+        "frontend/nginx.conf",
+        "frontend/package-lock.json",
+        "frontend/package.json",
+        "frontend/vite.config.ts",
     }
 )
 _NONPRODUCT_PARTS = frozenset(
@@ -63,14 +63,14 @@ def _is_product_subject_path(path: str) -> bool:
         return False
     if path in _PRODUCT_ROOT_FILES or path in _PRODUCT_FRONTEND_FILES:
         return True
-    if path.startswith(("current/deploy/", "current/integrations/", "current/prompts/")):
+    if path.startswith(("deploy/", "integrations/", "prompts/")):
         return True
-    if path.startswith("current/packages/"):
+    if path.startswith("packages/"):
         return "src" in parts or "scripts" in parts or Path(path).name == "pyproject.toml"
-    if path.startswith("current/frontend/src/"):
+    if path.startswith("frontend/src/"):
         name = Path(path).name
         return not any(marker in name for marker in (".test.", ".spec."))
-    return path.startswith(("current/frontend/public/", "current/frontend/docker-entrypoint.d/"))
+    return path.startswith(("frontend/public/", "frontend/docker-entrypoint.d/"))
 
 
 def product_subject_identity(

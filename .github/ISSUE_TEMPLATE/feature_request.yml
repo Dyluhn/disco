@@ -7,8 +7,8 @@ body:
     attributes:
       value: |
         Before proposing something large, it's worth skimming
-        [`basis-of-design.md`](https://github.com/Dyluhn/disco/blob/main/current/docs/contracts/basis-of-design.md)
-        and [`event-state-contract.md`](https://github.com/Dyluhn/disco/blob/main/current/docs/contracts/event-state-contract.md) —
+        [`basis-of-design.md`](https://github.com/Dyluhn/disco/blob/main/docs/contracts/basis-of-design.md)
+        and [`event-state-contract.md`](https://github.com/Dyluhn/disco/blob/main/docs/contracts/event-state-contract.md) —
         the design authorities any change has to fit inside. Small, focused
         requests don't need this.
 

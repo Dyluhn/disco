@@ -4,7 +4,7 @@ This pins the build-loop health metrics so the read-thrash death is PROVABLE
 WITHOUT a live model. It has two jobs:
 
   1. BASELINE (this file, now): validate the `development/harness/build_loop_metrics`
-     extractor against the golden trace `current/docs/evidence/macos-build-trace-6-17-26.txt`
+     extractor against the golden trace `development/notes/evidence/macos-build-trace-6-17-26.txt`
      (the 374-event `build a simple macosx clone` run that looped to noop death),
      and assert the baseline VIOLATES every §10.1 target — i.e. the harness
      genuinely captures the bug. These assertions PASS today (the bug is present),
@@ -28,8 +28,8 @@ import sys
 from pathlib import Path
 
 # Single-source the extractor from development/harness/ (also used by the live-acceptance
-# script). The repo root is parents[4]: tests → core → packages → <repo>.
-_REPO_ROOT = Path(__file__).resolve().parents[4]
+# script). The repo root is parents[3]: tests → core → packages → <repo>.
+_REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(_REPO_ROOT / "development" / "harness") not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT / "development" / "harness"))
 
@@ -40,7 +40,7 @@ from build_loop_metrics import (  # noqa: E402
     target_violations,
 )
 
-_GOLDEN_TRACE = _REPO_ROOT / "current" / "docs" / "evidence" / "macos-build-trace-6-17-26.txt"
+_GOLDEN_TRACE = _REPO_ROOT / "docs" / "evidence" / "macos-build-trace-6-17-26.txt"
 
 
 def _golden_metrics():

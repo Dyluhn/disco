@@ -38,7 +38,7 @@ _Exec = namedtuple("_Exec", ["exit_code", "output"])
 
 def test_sandbox_image_browser_bundle_is_shared_with_uid_1000_and_marp() -> None:
     dockerfile = (
-        Path(__file__).resolve().parents[4] / "current" / "deploy" / "sandbox" / "Dockerfile"
+        Path(__file__).resolve().parents[3] / "deploy" / "sandbox" / "Dockerfile"
     ).read_text()
 
     shared_path = "ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright"
@@ -63,7 +63,7 @@ def test_sandbox_image_includes_asset_inspection_clis() -> None:
     specific common-CLI install layer so mentioning a package in prose cannot pass.
     """
     dockerfile = (
-        Path(__file__).resolve().parents[4] / "current" / "deploy" / "sandbox" / "Dockerfile"
+        Path(__file__).resolve().parents[3] / "deploy" / "sandbox" / "Dockerfile"
     ).read_text()
     common_cli_section = dockerfile.split("# Build toolchain + common CLIs", 1)[1].split(
         "# noVNC live-browser stack", 1

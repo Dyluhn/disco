@@ -153,7 +153,7 @@ def _resolve_remote_params(
 def _default_cache_dir() -> Path:
     """Compute the platform-appropriate default TTS cache root.
 
-    Mirrors `default_projects_root` (current/packages/tools/src/disco/tools/projects/store.py):
+    Mirrors `default_projects_root` (packages/tools/src/disco/tools/projects/store.py):
       1. ``DISCO_DATA_DIR`` (or legacy ``PMX_DATA_DIR``) env var → ``<DATA>/cache/tts``
       2. ``XDG_DATA_HOME`` env var → ``<XDG>/disco/cache/tts``
       3. POSIX fallback → ``~/.local/share/disco/cache/tts``

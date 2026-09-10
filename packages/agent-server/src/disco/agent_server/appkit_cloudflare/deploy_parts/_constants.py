@@ -107,7 +107,7 @@ _UUID_RE = re.compile(
 #: ``.git`` are regenerated / non-authored; ``.disco`` is internal disco state
 #: (deployment records + the appspec, which is digested separately so it stays
 #: covered); ``.wrangler`` is wrangler's LOCAL state dir — it is NEVER an AppKit-authored
-#: input, and it can carry a ``current/deploy/config.json`` REDIRECT that points wrangler at an
+#: input, and it can carry a ``deploy/config.json`` REDIRECT that points wrangler at an
 #: arbitrary alt config (the config-source bypass), so it is excluded from staging so a
 #: redirect can't even be present (the alt-config guard ALSO refuses if one is found —
 #: exclude + assert-absent, defence in depth); ``.dev.vars`` is the real LOCAL secret —
@@ -119,7 +119,7 @@ _TREE_SKIP_FILES = frozenset({".dev.vars"})
 # ---- SEC (config-source bypass): wrangler.toml is the SOLE config source ------
 
 #: wrangler's local state DIR — never an AppKit-authored input. It can carry a
-#: ``current/deploy/config.json`` REDIRECT (``{"configPath": "../../evil/wrangler.jsonc"}``) that
+#: ``deploy/config.json`` REDIRECT (``{"configPath": "../../evil/wrangler.jsonc"}``) that
 #: points ``wrangler deploy`` at an arbitrary config, so its mere presence is an injection.
 _WRANGLER_STATE_DIR = ".wrangler"
 #: ALTERNATE wrangler config FILE names (case-insensitive). ``wrangler deploy`` resolves
@@ -271,7 +271,7 @@ _DESTRUCTIVE_SQL_RE = re.compile(
 
 # ---- SEC-10-B: server-controlled, SIGNED ownership records -------------------
 
-#: Reserved SecretStore slot for the server-side HMAC key that SIGNS current/deploy/ownership
+#: Reserved SecretStore slot for the server-side HMAC key that SIGNS deploy/ownership
 #: records (SEC-10-B). The key lives in the ENCRYPTED SecretStore — which is stored
 #: OUTSIDE the untrusted workspace (``$XDG_CONFIG_HOME/disco`` / ``DISCO_SECRETS``) and is
 #: unreadable by the sandboxed build agent — so a record's ownership claim cannot be

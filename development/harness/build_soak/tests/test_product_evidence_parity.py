@@ -1,4 +1,4 @@
-"""P1B-LIVE-1: the TS evidence-assembly mirror (current/frontend/e2e-live/support/productEvidence.ts
+"""P1B-LIVE-1: the TS evidence-assembly mirror (frontend/e2e-live/support/productEvidence.ts
 SLICE_FIELDS) must match the Python _SLICE_FIELDS EXACTLY (cross-language drift guard), and
 _SLICE_FIELDS must cover every field the 8 HARN-2 browser oracles actually adjudicate."""
 
@@ -11,7 +11,7 @@ from harness.build_soak.product_evidence import _SLICE_FIELDS
 
 _TS = (
     Path(__file__).resolve().parents[4]
-    / "current" / "frontend"
+    / "frontend"
     / "src"
     / "lib"
     / "harness"

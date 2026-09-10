@@ -1,6 +1,6 @@
 """Fail-closed cross-language contract parity: the TS mirror matches the wire.
 
-`current/frontend/src/types/agent.ts` hand-mirrors `core/_event_types.py::EventKind` and
+`frontend/src/types/agent.ts` hand-mirrors `core/_event_types.py::EventKind` and
 `core/wire.py`'s `WSServerFrame`/`WSClientFrame` with no codegen. Until this
 gate landed there was no enforcement at all, and the mirror had drifted in
 production: `KnowledgeEvent`, `DatasourceEvent` and `RuntimeConstraintEvent`
@@ -18,7 +18,7 @@ survived. This module pins the type mirror.
 `WSServerFrame`'s union members are type literals whose properties are
 separated by `;`, so a non-greedy `= (.*?);` captures only the first member and
 reports a one-variant union — an under-report that passes. The extractor
-(`current/frontend/scripts/extract-contract-surface.mjs`) parses with the pinned
+(`frontend/scripts/extract-contract-surface.mjs`) parses with the pinned
 TypeScript 5.9.3 compiler and refuses to emit a partial surface.
 
 ## Why there are two server-frame unions
@@ -34,11 +34,11 @@ So the TS side declares `WSWireServerFrame` (mirrors Python exactly) and
 honest: without it, the synthesized union would be an escape hatch — any real
 wire frame could be parked there to dodge parity.
 
-## Why this lives in development/tests/architecture and not current/packages/core/tests
+## Why this lives in development/tests/architecture and not packages/core/tests
 
 It is cross-language governance machinery, like everything else here — it asserts
 a property OF the repo, not a behaviour of `disco.core`. It was written under
-`current/packages/core/tests/` first, and that placement also perturbed an unrelated
+`packages/core/tests/` first, and that placement also perturbed an unrelated
 agent-server test (`test_c2_bound_download.py::test_event_loop_stays_responsive_
 during_large_assessment`) purely by being imported during collection: that test
 asserts a wall-clock ratio it documents as "machine-independent", and adding this
@@ -68,7 +68,7 @@ from disco.core.events import EventKind
 from disco.core.wire import WSClientFrame, WSServerFrame
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
-_EXTRACTOR = _REPO_ROOT / "current" / "frontend" / "scripts" / "extract-contract-surface.mjs"
+_EXTRACTOR = _REPO_ROOT / "frontend" / "scripts" / "extract-contract-surface.mjs"
 
 Surface = dict[str, Any]
 
@@ -139,7 +139,7 @@ def test_agent_event_union_mirrors_every_backend_event_kind(surface: Surface) ->
         "backend EventKind(s) with NO TypeScript type in the AgentEvent union: "
         f"{sorted(backend - frontend)}. The UI cannot narrow to them, so their "
         "payload fields are unreachable from typed code. Add an interface to "
-        "current/frontend/src/types/agent.ts mirroring the backend event and put it in "
+        "frontend/src/types/agent.ts mirroring the backend event and put it in "
         "the AgentEvent union."
     )
     assert not frontend - backend, (

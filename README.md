@@ -5,8 +5,8 @@ answer engine, a deep-research report writer, and a sandboxed build agent on one
 append-only event log. It is designed to run with local or open-weight models,
 not only frontier hosted APIs.
 
-The architecture authority is [`basis-of-design.md`](./current/docs/contracts/basis-of-design.md);
-the event/state contract is [`event-state-contract.md`](./current/docs/contracts/event-state-contract.md).
+The architecture authority is [`basis-of-design.md`](./docs/contracts/basis-of-design.md);
+the event/state contract is [`event-state-contract.md`](./docs/contracts/event-state-contract.md).
 When implementation and prose disagree, those documents define the intended
 shape of the system.
 
@@ -14,7 +14,7 @@ shape of the system.
 
 Disco is single-tenant software with a built-in auth layer: cookie sessions
 with CSRF protection, a single-use pairing-token mint, and owner-scoping of
-every conversation (see [`current/sec-work-remaining/disco-security-state.md`](./current/sec-work-remaining/disco-security-state.md)
+every conversation (see [`development/notes/security/disco-security-state.md`](./development/notes/security/disco-security-state.md)
 for the full security state). It is still local-first — keep the default
 loopback binding unless you put your own TLS in front of it.
 
@@ -84,8 +84,8 @@ native, because the sandbox/tooling path uses POSIX process tools such as tmux.
 ├── basis-of-design.md          # cornerstone design document
 ├── event-state-contract.md     # the spine's binding contract
 ├── pyproject.toml              # uv workspace root (virtual; dev toolchain)
-├── current/frontend/                   # the Vite/React/TS web UI (four surfaces + settings)
-└── current/packages/                   # uv workspace (BoD §5, four-layer topology)
+├── frontend/                   # the Vite/React/TS web UI (four surfaces + settings)
+└── packages/                   # uv workspace (BoD §5, four-layer topology)
     ├── core/                   # "the brain": events, state, store, llm router, agent loop, security
     ├── tools/                  # the action space: executor, 4 sandbox backends, builtin + MCP tools
     ├── agent-server/           # per-conversation runtime: WebSocket + REST over the event log
@@ -412,10 +412,10 @@ Copy `.env.example` to `.env` only when you need to override ports, bind
 addresses, provider keys, or the sandbox socket. The default is local rootless
 Podman. Docker also works and is an explicit override, not automatic; prefer
 rootless Docker's socket (`$XDG_RUNTIME_DIR/docker.sock`) over the root-equivalent
-`/var/run/docker.sock` — see [`current/docs/self-host.md`](./current/docs/self-host.md#sandbox-image)
+`/var/run/docker.sock` — see [`docs/self-host.md`](./docs/self-host.md#sandbox-image)
 for both invocations.
 
-See [`current/docs/self-host.md`](./current/docs/self-host.md) for Podman notes, offline asset
+See [`docs/self-host.md`](./docs/self-host.md) for Podman notes, offline asset
 smoke commands, and the bundled-weight license inventory.
 
 ## Local Development

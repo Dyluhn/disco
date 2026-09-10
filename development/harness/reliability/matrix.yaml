@@ -168,7 +168,7 @@ suites:
       # Intentionally dormant revival harness for a router policy that is not
       # part of the active product. Ignoring it prevents a known collection-time
       # module skip from masquerading as missing promotion evidence.
-      - "--ignore=current/packages/core/tests/test_router_overflow.py"
+      - "--ignore=packages/core/tests/test_router_overflow.py"
       - "packages"
     claims: [backend.full_regression]
 
@@ -201,11 +201,11 @@ suites:
       - "-m"
       - "pytest"
       - "-q"
-      - "current/packages/agent-server/tests/test_resume.py"
-      - "current/packages/agent-server/tests/test_resume_reconstruction.py"
-      - "current/packages/agent-server/tests/test_workspace_versions.py"
-      - "current/packages/agent-server/tests/test_preview_wake.py"
-      - "current/packages/agent-server/tests/test_lifecycle.py"
+      - "packages/agent-server/tests/test_resume.py"
+      - "packages/agent-server/tests/test_resume_reconstruction.py"
+      - "packages/agent-server/tests/test_workspace_versions.py"
+      - "packages/agent-server/tests/test_preview_wake.py"
+      - "packages/agent-server/tests/test_lifecycle.py"
     claims: [build.resume_restore_runtime]
 
   - id: hermetic-agent-runtime
@@ -220,16 +220,16 @@ suites:
       - "-m"
       - "pytest"
       - "-q"
-      - "current/packages/agent-server/tests/test_agent_surface.py"
-      - "current/packages/agent-server/tests/test_mcp_pool.py"
-      - "current/packages/agent-server/tests/test_mcp_http.py"
-      - "current/packages/agent-server/tests/test_mcp_fence.py"
-      - "current/packages/agent-server/tests/test_mcp_tool_search_cap.py"
-      - "current/packages/agent-server/tests/test_workflow_router_wiring.py"
-      - "current/packages/agent-server/tests/test_workflow_routes.py"
-      - "current/packages/agent-server/tests/test_workflow_schedules.py"
-      - "current/packages/agent-server/tests/test_novnc_live.py"
-      - "current/packages/tools/tests/test_gvisor.py"
+      - "packages/agent-server/tests/test_agent_surface.py"
+      - "packages/agent-server/tests/test_mcp_pool.py"
+      - "packages/agent-server/tests/test_mcp_http.py"
+      - "packages/agent-server/tests/test_mcp_fence.py"
+      - "packages/agent-server/tests/test_mcp_tool_search_cap.py"
+      - "packages/agent-server/tests/test_workflow_router_wiring.py"
+      - "packages/agent-server/tests/test_workflow_routes.py"
+      - "packages/agent-server/tests/test_workflow_schedules.py"
+      - "packages/agent-server/tests/test_novnc_live.py"
+      - "packages/tools/tests/test_gvisor.py"
     claims: [agent.surface_runtime, agent.mcp_runtime, agent.workflow_runtime, agent.gvisor_novnc_runtime]
 
   - id: hermetic-search-runtime
@@ -244,13 +244,13 @@ suites:
       - "-m"
       - "pytest"
       - "-q"
-      - "current/packages/agent-server/tests/test_research.py"
-      - "current/packages/agent-server/tests/test_dr1_dr3.py"
-      - "current/packages/agent-server/tests/test_deep_research_followup_think.py"
-      - "current/packages/agent-server/tests/test_report_export.py"
-      - "current/packages/agent-server/tests/test_report_followup.py"
-      - "current/packages/agent-server/tests/test_report_audio.py"
-      - "current/packages/agent-server/tests/test_mcp_retrieval_tier.py"
+      - "packages/agent-server/tests/test_research.py"
+      - "packages/agent-server/tests/test_dr1_dr3.py"
+      - "packages/agent-server/tests/test_deep_research_followup_think.py"
+      - "packages/agent-server/tests/test_report_export.py"
+      - "packages/agent-server/tests/test_report_followup.py"
+      - "packages/agent-server/tests/test_report_audio.py"
+      - "packages/agent-server/tests/test_mcp_retrieval_tier.py"
       - "development/harness/reliability/tests/test_search_oracles.py"
     claims: [search.grounding_contract, search.deep_followup_export_audio, search.internet_mcp_sources]
 
@@ -266,12 +266,12 @@ suites:
       - "-m"
       - "pytest"
       - "-q"
-      - "current/packages/app-server/tests/test_app.py"
-      - "current/packages/app-server/tests/test_providers_routes.py"
-      - "current/packages/app-server/tests/test_probe_routes.py"
-      - "current/packages/app-server/tests/test_sandbox_persistence_health.py"
-      - "current/packages/app-server/tests/test_mcp_endpoints.py"
-      - "current/packages/app-server/tests/test_live_browser_backend_gate.py"
+      - "packages/app-server/tests/test_app.py"
+      - "packages/app-server/tests/test_providers_routes.py"
+      - "packages/app-server/tests/test_probe_routes.py"
+      - "packages/app-server/tests/test_sandbox_persistence_health.py"
+      - "packages/app-server/tests/test_mcp_endpoints.py"
+      - "packages/app-server/tests/test_live_browser_backend_gate.py"
     claims: [settings.persistence_contract]
 
   - id: hermetic-frontend

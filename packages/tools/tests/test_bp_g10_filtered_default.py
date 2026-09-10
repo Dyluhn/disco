@@ -14,14 +14,14 @@ Acceptance:
   • The npm/pip/git registry hosts are covered by the default allowlist
 
 References:
-  - current/packages/agent-server/src/disco/agent_server/runtime.py
+  - packages/agent-server/src/disco/agent_server/runtime.py
     `_build_sandbox_spec` (BP-G10 default flip)
-  - current/packages/agent-server/src/disco/agent_server/mcp_manager.py
+  - packages/agent-server/src/disco/agent_server/mcp_manager.py
     `_mcp_proxy_env` (matching default flip)
-  - current/packages/tools/src/disco/tools/sandbox/base.py:79  REGISTRY_EGRESS_ALLOW
-  - current/packages/tools/src/disco/tools/sandbox/gvisor.py   `_setup_filtered_egress` (UNCHANGED)
-  - current/packages/tools/src/disco/tools/sandbox/podman.py   `_setup_filtered_egress` (E8 wired)
-  - current/packages/tools/src/disco/tools/sandbox/local.py    (E8 wired)
+  - packages/tools/src/disco/tools/sandbox/base.py:79  REGISTRY_EGRESS_ALLOW
+  - packages/tools/src/disco/tools/sandbox/gvisor.py   `_setup_filtered_egress` (UNCHANGED)
+  - packages/tools/src/disco/tools/sandbox/podman.py   `_setup_filtered_egress` (E8 wired)
+  - packages/tools/src/disco/tools/sandbox/local.py    (E8 wired)
 """
 
 from __future__ import annotations

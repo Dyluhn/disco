@@ -39,7 +39,7 @@ async def convert_to_pdf(ctx: ToolContext, pptx_name: str) -> tuple[bool, str]:
         return False, (
             "soffice not found in the sandbox — LibreOffice is not installed. "
             "PDF conversion unavailable. Add libreoffice-impress to "
-            "current/deploy/sandbox/Dockerfile to enable it."
+            "deploy/sandbox/Dockerfile to enable it."
         )
 
     # 2. Convert (--outdir . → PDF lands in cwd = workspace)

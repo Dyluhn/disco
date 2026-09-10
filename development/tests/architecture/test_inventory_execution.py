@@ -140,7 +140,7 @@ class TestVacuousControlGuards:
             "run",
             lambda *args, **kwargs: SimpleNamespace(
                 returncode=2,
-                stdout="current/packages/a.py::test_partial\n",
+                stdout="packages/a.py::test_partial\n",
                 stderr="one module failed import",
             ),
         )
@@ -170,9 +170,9 @@ def test_execution_node_ids_match_inventory_labels_without_changing_parameters(
     from types import SimpleNamespace
 
     raw = (
-        "current/packages/a.py::test_case[development/current/value]\n"
+        "packages/a.py::test_case[development/current/value]\n"
         "development/harness/b.py::test_case\n"
-        "current/integrations/c.py::test_case\n"
+        "integrations/c.py::test_case\n"
         "development/tests/d.py::test_case\n"
     )
     monkeypatch.setattr(

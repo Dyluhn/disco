@@ -2,7 +2,7 @@
 
 Run it directly (needs a real Chromium, so it is not a unit test):
     TMPDIR=~/.local/state/disco-campaign-tmp uv run python \
-        current/packages/tools/scripts/verify_visible_text_corpus.py
+        packages/tools/scripts/verify_visible_text_corpus.py
 
 WHY THIS EXISTS. Three campaign defects in a row were one shape: an acceptance
 check testing an incidental REPRESENTATION instead of the property it claims to

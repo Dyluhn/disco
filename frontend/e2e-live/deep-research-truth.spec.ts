@@ -13,12 +13,12 @@ import {
   requireReliabilityStack,
 } from "./reliability-helpers";
 
-// This file lives at `current/frontend/e2e-live/`, so the repo root is THREE
-// levels up. `../..` landed on `current/`, which made `PYTHON` resolve to a
-// `current/.venv/bin/python3` that does not exist — `execFileSync` then failed
-// with a spawn ENOENT that carries no status, no signal and empty stdout/stderr,
-// which is why the oracle step reported nothing at all. Fallout from the
-// archive/current/development restructure moving the frontend down a level.
+// This file lives at `frontend/e2e-live/`, so the repo root is two levels up.
+//
+//
+//
+//
+//
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const PYTHON = process.env.PMX_VENV_PY ?? path.join(REPO, ".venv/bin/python3");
 const QUESTION =

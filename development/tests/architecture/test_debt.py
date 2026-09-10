@@ -26,7 +26,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 
 def _debt_row(
     id: str = "PY-TEST",
-    path: str = "current/packages/fake/test.py",
+    path: str = "packages/fake/test.py",
     symbol: str = "f",
     qname: str = "f",
     observed: int = 120,
@@ -53,7 +53,7 @@ def _debt_row(
 
 
 def _violation(
-    path: str = "current/packages/fake/test.py",
+    path: str = "packages/fake/test.py",
     qname: str = "f",
     rule: str = "python_callable_logical_gt_100",
     value: int = 120,
@@ -185,8 +185,8 @@ class TestShrinkOnly:
 
     def test_moved_violation_fails(self):
         """A violation at a different path fails (old path stale, new path new)."""
-        row = _debt_row(path="current/packages/old/test.py")
-        current = [_violation(path="current/packages/new/test.py")]
+        row = _debt_row(path="packages/old/test.py")
+        current = [_violation(path="packages/new/test.py")]
         problems = debt.check_shrink_only([row], current)
         # Old path is stale/moved/deleted, new path is a new violation
         assert any(

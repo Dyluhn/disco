@@ -1,6 +1,6 @@
 > **SUPERSEDED / HISTORICAL (as of 2026-07-07).** Messaging-bridge setup notes whose one-shot bot instructions hit `POST /conversations` etc. directly.
 > Historical only. Not a source of current status or operating instructions.
-> ⚠ post-auth (S-W1) these direct-POST instructions likely require a session/pairing token — VERIFY before use; see `current/sec-work-remaining/disco-security-state.md`.
+> ⚠ post-auth (S-W1) these direct-POST instructions likely require a session/pairing token — VERIFY before use; see `development/notes/security/disco-security-state.md`.
 
 # Disco messaging bridge
 

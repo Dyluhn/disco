@@ -14,7 +14,7 @@ a frontend public declaration: 0 of the 17 accepted additive transitions carry
 ``member_transitions`` cannot be reused, for three measured reasons.  It
 hard-rejects ``surface != "python"``; ``target_origin`` returns ``None`` for a
 frontend descriptor because ``initializer_module`` only resolves
-``current/packages/*/src/**/__init__.py``; and ``_members_of`` returns ``None`` because
+``packages/*/src/**/__init__.py``; and ``_members_of`` returns ``None`` because
 a frontend descriptor carries ``declaration = {kind, name, signature}`` rather
 than a ``public_signature`` with a member list.  Two of that authority's four
 prongs therefore have no frontend input at all.

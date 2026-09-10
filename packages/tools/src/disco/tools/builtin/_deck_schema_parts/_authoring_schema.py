@@ -1,7 +1,7 @@
 """Layer 1 — the loose authoring schema the LLM emits, plus the resolved-layout
 and archetype vocabularies shared with Layer 2/3.
 
-Field set FROZEN by the C4 experiment verdict (current/docs/slides-experiment-verdict.md
+Field set FROZEN by the C4 experiment verdict (development/notes/slides-experiment-verdict.md
 §6). Do NOT change the AuthoredSlide field set without a new experiment.
 
 Extracted from ``_deck_schema.py`` to reduce module size; the public facade
@@ -57,7 +57,7 @@ SlideArchetype = Literal[
 class ChartSpec(BaseModel):
     """Structured chart payload (wired in C8).
 
-    Field set frozen by the C4 experiment verdict (current/docs/slides-experiment-verdict.md §6).
+    Field set frozen by the C4 experiment verdict (development/notes/slides-experiment-verdict.md §6).
     labels / series have empty-list defaults so ChartSpec(kind=...) is valid with
     no data (c8 rendering handles empty data gracefully with a placeholder shape).
     """

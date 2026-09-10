@@ -8,7 +8,7 @@ These are the package-wide assertions that neither shape file owns on its own:
   than from a promise about which commands were chosen.
 * **No central target switch.**  Core's Build Platform and loop modules name no
   platform and no vendor toolchain, asserted by AST/text over the real source.
-* **The proof surface is test-owned.**  Nothing under `current/packages/*/src` mentions
+* **The proof surface is test-owned.**  Nothing under `packages/*/src` mentions
   it, so deleting these files is a complete rollback.
 * **One lifecycle.**  The registry refuses a host-protected namespace, a
   duplicate identity, and non-exact data — there is no second registration path
@@ -47,15 +47,15 @@ from disco.core.build_platform import (
     ResolutionError,
 )
 
-_REPO_ROOT = Path(__file__).resolve().parents[4]
+_REPO_ROOT = Path(__file__).resolve().parents[3]
 
 #: Every file this package adds.  Named explicitly so the rollback assertion is
 #: about a closed set rather than a glob that could silently grow.
 PKG18_FILES: tuple[str, ...] = (
-    "current/packages/core/tests/build_platform_registration_shapes.py",
-    "current/packages/core/tests/test_build_platform_mobile_registration.py",
-    "current/packages/core/tests/test_build_platform_desktop_registration.py",
-    "current/packages/core/tests/test_build_platform_registration_locality.py",
+    "packages/core/tests/build_platform_registration_shapes.py",
+    "packages/core/tests/test_build_platform_mobile_registration.py",
+    "packages/core/tests/test_build_platform_desktop_registration.py",
+    "packages/core/tests/test_build_platform_registration_locality.py",
 )
 
 #: Modules that spawn or exec a process.  An import of any of these anywhere in
@@ -119,12 +119,12 @@ _FORBIDDEN_TOOL_TOKENS: tuple[str, ...] = (
 
 #: Where a central target switch for these shapes would have to live.  This
 #: surface must name none of the tokens at all.
-_BUILD_PLATFORM_DIR = "current/packages/core/src/disco/core/build_platform"
+_BUILD_PLATFORM_DIR = "packages/core/src/disco/core/build_platform"
 
 #: The wider target-neutral Core surface the acceptance bullet protects.
 _NEUTRAL_CORE_DIRS: tuple[str, ...] = (
     _BUILD_PLATFORM_DIR,
-    "current/packages/core/src/disco/core/loop",
+    "packages/core/src/disco/core/loop",
 )
 
 #: The token sites that **already existed** at the certified parent
@@ -141,9 +141,9 @@ _NEUTRAL_CORE_DIRS: tuple[str, ...] = (
 #: loud instead of quietly excluded.
 _PREEXISTING_TOKEN_SITES: frozenset[tuple[str, str]] = frozenset(
     {
-        ("current/packages/core/src/disco/core/loop/bootstrap.py", "cargo"),
-        ("current/packages/core/src/disco/core/loop/message_rendering.py", "cargo"),
-        ("current/packages/core/src/disco/core/loop/phase_gates.py", "cargo"),
+        ("packages/core/src/disco/core/loop/bootstrap.py", "cargo"),
+        ("packages/core/src/disco/core/loop/message_rendering.py", "cargo"),
+        ("packages/core/src/disco/core/loop/phase_gates.py", "cargo"),
     }
 )
 
@@ -279,7 +279,7 @@ def test_target_neutral_core_gains_no_new_platform_or_toolchain_name() -> None:
 def test_the_proof_surface_is_test_owned_so_deleting_it_is_a_complete_rollback() -> None:
     """No shipped source references the proof namespace or its fixture module."""
     referencing: list[str] = []
-    for package_src in sorted((_REPO_ROOT / "current" / "packages").glob("*/src")):
+    for package_src in sorted((_REPO_ROOT / "packages").glob("*/src")):
         for path in sorted(package_src.rglob("*.py")):
             text = path.read_text(encoding="utf-8")
             rel = path.relative_to(_REPO_ROOT).as_posix()
@@ -291,7 +291,7 @@ def test_the_proof_surface_is_test_owned_so_deleting_it_is_a_complete_rollback()
 
     for rel in PKG18_FILES:
         assert (_REPO_ROOT / rel).is_file()
-        assert rel.startswith("current/packages/core/tests/")
+        assert rel.startswith("packages/core/tests/")
 
 
 def test_unregistering_the_proof_profiles_is_a_clean_rollback() -> None:

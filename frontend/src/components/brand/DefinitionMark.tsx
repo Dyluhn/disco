@@ -1,7 +1,7 @@
 /**
  * DefinitionMark — the disco Latin definition mark in-app component.
  *
- * Ported from current/docs/evidence/_definition.html:53-60 (the signed-off mockup).
+ * Ported from development/notes/evidence/_definition.html:53-60 (the signed-off mockup).
  * Three scales: "masthead" (largest), "colophon" (medium, default), "footer"
  * (smallest).  Neutral-branded contexts (theme.branded === false) suppress the
  * mark entirely — it IS the brand, so it must not appear when brand is off.

@@ -2,7 +2,7 @@
 application-title slot identity.
 
 Split out of the former single test_dictated_content_finish_gate.py. Quoted
-user literals in build current/prompts/follow-ups are event-derived content floors;
+user literals in build prompts/follow-ups are event-derived content floors;
 this module covers what counts as dictated content vs. metadata (serve
 arguments, diagnostic-protocol scaffolding) and how the application-title
 requirement slot tracks renames/retitles across revisions. See

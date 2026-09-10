@@ -2,7 +2,7 @@
 enter_planning path (control_ops.py:116), NOT a plain send_message.
 
 Spec contracts (guidelines §11.4, §20.2). Spec-violations are xfail(strict=True)
-with the surfaced bug code; see current/docs/build-soak-surfaced-bugs.md.
+with the surfaced bug code; see development/notes/build-soak-surfaced-bugs.md.
 """
 
 from __future__ import annotations

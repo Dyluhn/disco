@@ -1,7 +1,7 @@
 # Architecture Boundaries
 
 **Status: STABLE / CHANGE-CONTROLLED.** This file is sealed by
-`current/docs/governance/PROTECTED.sha256` and enforced by
+`development/governance/PROTECTED.sha256` and enforced by
 `development/scripts/check_governance_seal.py`. An agent may not edit it. Rebaselining
 requires an explicit owner instruction and the procedure in
 [`README.md`](./README.md).
@@ -55,7 +55,7 @@ Consequences that must remain true:
 - Therefore a target adapter registers behaviour **without creating a second
   agent loop**. There is one loop.
 
-*Today: `current/packages/core/src/disco/core/build_platform/contracts.py`.*
+*Today: `packages/core/src/disco/core/build_platform/contracts.py`.*
 
 ## 3. Neutral, open, adapter-owned vocabulary
 

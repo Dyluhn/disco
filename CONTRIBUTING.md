@@ -4,8 +4,8 @@ A self-hosted Research + Agent + Build platform built as one agent core over an
 append-only event log. Before you start, skim the two design authorities — when
 code and prose disagree, they win:
 
-- [`basis-of-design.md`](./current/docs/contracts/basis-of-design.md) — the cornerstone design document.
-- [`event-state-contract.md`](./current/docs/contracts/event-state-contract.md) — the spine's binding contract.
+- [`basis-of-design.md`](./docs/contracts/basis-of-design.md) — the cornerstone design document.
+- [`event-state-contract.md`](./docs/contracts/event-state-contract.md) — the spine's binding contract.
 
 Hosted CI runs the deterministic release gates. Before opening a PR, run the
 local equivalents for the area you touched; the `Makefile` remains the fastest
@@ -131,7 +131,7 @@ The suite splits into a **hermetic** half (fast, offline, no LLM, no network) an
 
 ```bash
 make test          # unit + harness — the fast hermetic gate (run this before pushing)
-make unit          # per-package unit suites only (current/packages/*/tests) — `uv run pytest`
+make unit          # per-package unit suites only (packages/*/tests) — `uv run pytest`
 make harness       # all development/harness/ tests
 make contract      # TS <-> Python wire/event contract drift
 make fuzz          # property-based parser fuzzing (hypothesis)
@@ -183,7 +183,7 @@ The frontend lints with `npm run lint` (eslint).
 
 ## The monorepo layering rule
 
-`current/packages/` is a five-member `uv` workspace with a strict, one-directional dependency
+`packages/` is a five-member `uv` workspace with a strict, one-directional dependency
 topology (basis-of-design §5). Dependencies only point **down**:
 
 ```

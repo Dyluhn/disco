@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 
 # Make the in-repo `harness` package importable regardless of the runner PYTHONPATH.
-_REPO_ROOT = Path(__file__).resolve().parents[4]
+_REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 

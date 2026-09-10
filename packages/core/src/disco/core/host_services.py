@@ -20,7 +20,7 @@ chokepoints. This module is that registry + dispatcher and NOTHING more:
 WO-A2.2 security-classed slice (per-app conversation-bound bearer, minted
 host-side, injected as a Worker env var). The bus endpoint MUST NOT expose
 ``call_host_service`` to the sandbox without the A2.2 auth layer in front of it.
-See ``current/docs/wo-a2-host-bus-design-notes.md``.
+See ``development/notes/wo-a2-host-bus-design-notes.md``.
 
 HANDLER DISCIPLINE (plan §10.2 A2.1): handlers are THIN ADAPTERS that only
 compose existing S-W2 calls — no new URL validation, no token minting, no

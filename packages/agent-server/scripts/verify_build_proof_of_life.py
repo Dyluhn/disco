@@ -2,7 +2,7 @@
 """LIVE proof of life for the Agent (Build) surface — a REAL model, REAL agent tools,
 REAL container sandbox, driving the composed loop end to end.
 
-  uv run python current/packages/agent-server/scripts/verify_build_proof_of_life.py
+  uv run python packages/agent-server/scripts/verify_build_proof_of_life.py
 
 Needs the AGENT_DRIVER model reachable (default_config → the local Qwen llama-server)
 and a local container sandbox (this host's rootless Podman socket + disco-sandbox:base).

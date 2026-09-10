@@ -2,7 +2,7 @@
 
 Run it directly (it needs a real host tmux + Playwright, so it is not a unit test):
     TMPDIR=~/.local/state/disco-campaign-tmp uv run python \
-        current/packages/tools/scripts/verify_generation_rotation.py
+        packages/tools/scripts/verify_generation_rotation.py
 
 WHY THIS EXISTS. A recurring defect family is "a resource bound to sandbox
 generation N is silently reused at generation N+1": the browser daemon inheriting a

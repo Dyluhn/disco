@@ -2,7 +2,7 @@
  * Event-render disposition contract (the durable fix for the "backend emits an
  * event the UI silently drops" class — see the follow-up-answer bug).
  *
- * The backend (current/packages/core/src/disco/core/events.py :: EventKind) can append
+ * The backend (packages/core/src/disco/core/events.py :: EventKind) can append
  * any of these kinds to the conversation event log. The frontend renders the log
  * by projecting events to UI. The historical failure: a renderer typed to ONE
  * shape (e.g. DeepReportView → ReportEvent) silently dropped every other kind, so
@@ -15,7 +15,7 @@
  *   "suppressed" → deliberately NOT shown to the user (internal plumbing), with a reason
  * There is no third "silently dropped" state: a kind that isn't listed fails the
  * contract test (eventDisposition.test.ts) AND the cross-language drift test
- * (current/packages/core/tests/test_event_kind_frontend_contract.py), so a new backend
+ * (packages/core/tests/test_event_kind_frontend_contract.py), so a new backend
  * kind cannot ship without a deliberate UI decision.
  *
  * IMPORTANT: KNOWN_EVENT_KINDS must stay in lockstep with the backend EventKind

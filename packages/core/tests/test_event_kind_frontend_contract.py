@@ -7,7 +7,7 @@ appends an event kind the frontend has no render path for, and it's silently
 dropped (the RP-13 follow-up answer was generated server-side but never shown).
 
 This test pins the two together: the frontend's KNOWN_EVENT_KINDS list (in
-current/frontend/src/lib/eventDisposition.ts) must equal the backend EventKind value set.
+frontend/src/lib/eventDisposition.ts) must equal the backend EventKind value set.
 Add a backend kind → this goes red until the frontend classifies it (rendered or
 suppressed). The companion vitest (eventDisposition.test.ts) enforces that every
 listed kind actually has a disposition entry.
@@ -20,8 +20,8 @@ from pathlib import Path
 
 from disco.core.events import EventKind
 
-_REPO_ROOT = Path(__file__).resolve().parents[4]
-_DISPOSITION_TS = _REPO_ROOT / "current" / "frontend" / "src" / "lib" / "eventDisposition.ts"
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+_DISPOSITION_TS = _REPO_ROOT / "frontend" / "src" / "lib" / "eventDisposition.ts"
 
 
 def _frontend_known_kinds() -> set[str]:
@@ -42,7 +42,7 @@ def test_frontend_classifies_every_backend_event_kind() -> None:
     assert not missing_in_frontend, (
         "backend EventKind(s) with NO frontend disposition — they would be "
         f"silently dropped by the UI: {sorted(missing_in_frontend)}. "
-        "Classify them in current/frontend/src/lib/eventDisposition.ts (rendered or suppressed)."
+        "Classify them in frontend/src/lib/eventDisposition.ts (rendered or suppressed)."
     )
     assert not extra_in_frontend, (
         "frontend KNOWN_EVENT_KINDS lists kind(s) the backend no longer emits: "

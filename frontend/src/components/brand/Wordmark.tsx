@@ -1,7 +1,7 @@
 /**
  * Wordmark — the "Disco." logo text component.
  *
- * Ported from current/docs/evidence/_definition.html:90-92.  The wordmark is
+ * Ported from development/notes/evidence/_definition.html:90-92.  The wordmark is
  * `Disco` in Fraunces display (font-weight 600, optical-size 60, no SOFT/WONK)
  * followed by an accent-colored `.` dot.
  *

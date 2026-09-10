@@ -11,9 +11,9 @@ prerequisite the AppKit image failed to build.
 
 These live OUTSIDE the frozen closeout dirs (no `export_track1_closeout` marker) so
 they never perturb the acceptance manifest. The frozen public-boundary proof is
-`current/packages/agent-server/tests/export_track1_closeout/test_g12_appkit_no_heredoc.py`;
+`packages/agent-server/tests/export_track1_closeout/test_g12_appkit_no_heredoc.py`;
 the live build/discrimination proof is
-`current/packages/agent-server/tests/release_remediation/test_r5_live_docker.py`.
+`packages/agent-server/tests/release_remediation/test_r5_live_docker.py`.
 """
 
 from __future__ import annotations

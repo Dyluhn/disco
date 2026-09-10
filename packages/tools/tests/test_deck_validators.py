@@ -18,8 +18,8 @@ from disco.tools.verify.artifact_validators import (
     validate_deck_file,
 )
 
-_REPO = pathlib.Path(__file__).resolve().parents[4]
-_NEG = _REPO / "current/packages/agent-server/tests/fixtures/negative"
+_REPO = pathlib.Path(__file__).resolve().parents[3]
+_NEG = _REPO / "packages/agent-server/tests/fixtures/negative"
 
 
 def test_detects_procedural_image_in_html_deck():
@@ -57,7 +57,7 @@ def test_real_image_is_not_flagged_as_procedural():
         + base64.b64encode(buf.getvalue()).decode()
         + '"></body></html>'
     )
-    p = _REPO / "current/packages/tools/tests" / "_tmp_real_deck.html"
+    p = _REPO / "packages/tools/tests" / "_tmp_real_deck.html"
     try:
         p.write_text(deck)
         assert validate_deck_file(str(p)) == []

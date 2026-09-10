@@ -2,7 +2,7 @@
 
 Two ways to run, both reach the same daemon:
   - ON VM 201 (co-located, local socket):
-      uv run python current/packages/tools/scripts/verify_gvisor_vm201.py
+      uv run python packages/tools/scripts/verify_gvisor_vm201.py
   - From a tailnet node over Docker-over-SSH (set the endpoint):
       PMX_DOCKER_HOST=ssh://sandbox@100.81.82.115 uv run python .../verify_gvisor_vm201.py
 

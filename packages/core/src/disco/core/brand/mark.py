@@ -1,6 +1,6 @@
 """Brand mark HTML partials — the disco definition mark + wordmark.
 
-Ported from current/docs/evidence/_definition.html:53-60 (definition mark structure)
+Ported from development/notes/evidence/_definition.html:53-60 (definition mark structure)
 and lines 90-92 (wordmark).  CSS for these elements lives in
 ``print_skeleton_css()`` (the ``.defmark`` block) so themes apply
 automatically.
@@ -58,7 +58,7 @@ def definition_mark_html(
 ) -> str:
     """Return the disco definition mark HTML at the requested scale.
 
-    Ported verbatim from current/docs/evidence/_definition.html:53-60 structure:
+    Ported verbatim from development/notes/evidence/_definition.html:53-60 structure:
       .l1  — headword "disco" (Fraunces) + POS "Latin · verb" + IPA
       .rule — hairline with the accent tick
       .gloss — italic gloss
@@ -84,7 +84,7 @@ def definition_mark_html(
 def wordmark_html() -> str:
     """Return the wordmark HTML: ``Disco<span class="dot">.</span>``
 
-    Ported from current/docs/evidence/_definition.html:90-92.
+    Ported from development/notes/evidence/_definition.html:90-92.
     The .wordmark CSS is in print_skeleton_css().
     """
     return '<span class="wordmark">Disco<span class="dot">.</span></span>'

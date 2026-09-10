@@ -34,7 +34,7 @@ from pathlib import Path
 
 import pytest
 
-_REPO_ROOT = Path(__file__).resolve().parents[5]
+_REPO_ROOT = Path(__file__).resolve().parents[4]
 _SCRIPTS_DIR = _REPO_ROOT / "development" / "scripts"
 if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
@@ -117,7 +117,7 @@ def test_collection_level_skip_outside_selection_is_named() -> None:
     overflow`` allow_module_level skip class."""
     rep = _report(
         ["a.py::t1"],
-        {"a.py::t1": "passed", "current/packages/core/tests/test_router_overflow.py": "skipped"},
+        {"a.py::t1": "passed", "packages/core/tests/test_router_overflow.py": "skipped"},
     )
     ok, reasons, _ = verify._evaluate_structured_pytest_report(rep, lane=_LANE)
     assert ok is False
@@ -390,9 +390,9 @@ def test_plugin_is_frozen() -> None:
 # ---- C9-01 reconciliation: the frozen §3.2 baseline allowlist is EXACT ---------
 
 
-_ROUTER = "current/packages/core/tests/test_router_overflow.py"
+_ROUTER = "packages/core/tests/test_router_overflow.py"
 _APPKIT_XFAIL = (
-    "current/packages/core/tests/test_appkit_directory.py"
+    "packages/core/tests/test_appkit_directory.py"
     "::test_unknown_app_kind_lowers_as_lead_gen_byte_identical"
 )
 

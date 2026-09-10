@@ -73,8 +73,8 @@ _APPKIT_CONTRACT = (".disco/appspec.json", "wrangler.toml", "worker/index.ts", "
 
 # Directories this WO must not touch (criterion 4).
 _FORBIDDEN_DIFF_PREFIXES = (
-    "current/packages/core/src/disco/core/appkit/",
-    "current/packages/agent-server/src/disco/agent_server/appkit_cloudflare/",
+    "packages/core/src/disco/core/appkit/",
+    "packages/agent-server/src/disco/agent_server/appkit_cloudflare/",
 )
 
 

@@ -8,7 +8,7 @@ import { configDefaults, defineConfig } from "vitest/config";
 // co-located agent-server package asset `selection_agent.js`. The frontend reads
 // the very same bytes via a `?raw` import (selectionAgent.ts) so the script the
 // browser runs and the script the preview-edit route injects can never drift.
-// The file lives outside `current/frontend/src`, so it is aliased here and allowed
+// The file lives outside `frontend/src`, so it is aliased here and allowed
 // through Vite's dev-server filesystem jail below.
 const SELECTION_AGENT_JS = resolve(
   __dirname,

@@ -1,8 +1,8 @@
 """Brand token registry — Theme dataclass + the three canonical themes.
 
 Values are ported verbatim from the signed-off evidence CSS:
-  current/docs/evidence/_brand_common.css:14-22  (Disco light)
-  current/docs/evidence/_brand_dark.css:15-23    (Disco dark)
+  development/notes/evidence/_brand_common.css:14-22  (Disco light)
+  development/notes/evidence/_brand_dark.css:15-23    (Disco dark)
 
 Verify/warn hex values are derived from theme.css:68-71 (light) and
 theme.css:87-90 (dark) via the same oklch→sRGB pipeline used to produce the
@@ -81,7 +81,7 @@ DISCO_LIGHT = Theme(
     accent="#4077a3",
     link="#39688e",
     # oklch(0.52 0.09 155), oklch(0.62 0.1 80), oklch(0.55 0.13 25)
-    # via current/docs/evidence/_brand_common.css pipeline (light, theme.css:68-71)
+    # via development/notes/evidence/_brand_common.css pipeline (light, theme.css:68-71)
     verify_supported="#397852",
     verify_weak="#a67f38",
     verify_unsupported="#b14e49",
@@ -114,7 +114,7 @@ DISCO_DARK = Theme(
     accent="#79c0f1",
     link="#74b3de",
     # oklch(0.74 0.1 155), oklch(0.8 0.11 85), oklch(0.72 0.14 25)
-    # via current/docs/evidence/_brand_dark.css pipeline (dark, theme.css:87-90)
+    # via development/notes/evidence/_brand_dark.css pipeline (dark, theme.css:87-90)
     verify_supported="#75be8f",
     verify_weak="#deb866",
     verify_unsupported="#f07f77",

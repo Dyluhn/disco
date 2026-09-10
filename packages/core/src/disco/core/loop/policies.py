@@ -72,7 +72,7 @@ _PUBLISH_KEYWORDS = frozenset({"deploy", "publish", "release"})
 
 
 def _is_publish_tool(tool_name: str) -> bool:
-    """A tool whose NAME ALONE leaves the blast radius (current/deploy/publish/release).
+    """A tool whose NAME ALONE leaves the blast radius (deploy/publish/release).
     Gates regardless of risk score, execution scope, OR registration: an
     unregistered publish-class name is a real publish intent the human must
     confirm — not a hallucination to bounce back to the model. The loop's

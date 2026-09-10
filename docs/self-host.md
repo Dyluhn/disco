@@ -269,7 +269,7 @@ schedule leases; copying or replicating the database is unsupported.
 ### Remote preview cookie boundary
 
 For an Internet-facing deployment, route wildcard DNS and TLS for a separately
-registrable preview site to the same current/frontend/agent-server ingress, then set:
+registrable preview site to the same frontend/agent-server ingress, then set:
 
 ```bash
 DISCO_PUBLIC_UI_URL=https://app.example.com
@@ -432,7 +432,7 @@ The default image bakes the full encoder tier. A smaller build can be made with:
 docker build \
   --build-arg DISCO_ENCODER_TIER=lite \
   -t disco-server:lite \
-  -f current/deploy/compose/Dockerfile.server .
+  -f deploy/compose/Dockerfile.server .
 ```
 
 ## MCP servers
@@ -515,8 +515,8 @@ no compose provider installed, use `podman-compose` or Docker Compose for the
 compose-specific checks. Plain image builds work with:
 
 ```bash
-podman build -t disco-server -f current/deploy/compose/Dockerfile.server .
-podman build -t disco-frontend -f current/frontend/Dockerfile .
+podman build -t disco-server -f deploy/compose/Dockerfile.server .
+podman build -t disco-frontend -f frontend/Dockerfile .
 ```
 
 ## Image Sizes

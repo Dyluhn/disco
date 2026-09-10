@@ -12,7 +12,7 @@ runtime proof. It shows the inspected structure (POST has a reachable parameteri
 insert; reads are guard-first; missing ADMIN_TOKEN fails closed) is internally
 coherent against a real schema — it does NOT execute the generated TypeScript, so
 actual runtime behaviour/reachability is proved separately by
-`current/packages/core/tests/test_workerd_persistence.py`, which runs the generated Worker
+`packages/core/tests/test_workerd_persistence.py`, which runs the generated Worker
 under local workerd/wrangler with real local D1 and a cold restart. The check name
 `local_api_roundtrip` denotes a MODELLED round-trip, never a live API call. Hosted
 Cloudflare deploy remains an owner-gated action outside this local model.
@@ -65,7 +65,7 @@ class WorkerAuthModel:
       an unconditional early return, not inside an `if (false)`/`if (0)` branch).
       This is structural PRESENCE + ordering, NOT a runtime proof that a submission
       persists — actual local reachability is covered by
-      `current/packages/core/tests/test_workerd_persistence.py`. A POST route whose body
+      `packages/core/tests/test_workerd_persistence.py`. A POST route whose body
       short-circuits to ``return json({ ok: true })`` while an insert merely exists
       in an unreached function does NOT have the insert in-region, so the modelled
       persist leg fails instead of structurally passing on an absent / dead insert.
@@ -338,7 +338,7 @@ def local_api_roundtrip(schema_sql: str, lead: Entity, auth: WorkerAuthModel) ->
     Worker — it exercises the behaviour implied by the inspected structural flags
     (`auth`) and checks that structure is internally CONSISTENT, WITHOUT a real CF
     deploy. The real local runtime proof lives in
-    `current/packages/core/tests/test_workerd_persistence.py` (workerd/wrangler + local D1 +
+    `packages/core/tests/test_workerd_persistence.py` (workerd/wrangler + local D1 +
     cold restart); hosted Cloudflare deploy remains owner-gated. The model confirms:
 
       1. the modelled POST /api/leads with valid JSON INSERTS (the row appears);
@@ -434,7 +434,7 @@ def local_api_roundtrip(schema_sql: str, lead: Entity, auth: WorkerAuthModel) ->
             "modelled round-trip consistent: POST inserts; unauth GET/admin → 401; "
             "authed read returns the row; ADMIN_TOKEN unset fails closed "
             "(structural model; local runtime proof is "
-            "current/packages/core/tests/test_workerd_persistence.py).",
+            "packages/core/tests/test_workerd_persistence.py).",
         )
     finally:
         conn.close()
