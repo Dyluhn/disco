@@ -13,8 +13,23 @@ name: export-track1-closeout
 # failure so a reviewer can inspect the machine-readable manifest for the exact
 # candidate SHA (plan §1.4). Exit code is truth.
 
+# The acceptance job needs a self-hosted runner labelled `self-hosted, docker,
+# export-track1-closeout` — a real Docker Engine + Compose v2 for the live lane
+# and Node for the frontend lane. The repository has ZERO self-hosted runners
+# registered, so on `push` this workflow could not start a job at all: every run
+# ended in a startup failure after 0s with no log to read, on every push, since
+# the runner went away. A gate that cannot execute is not a gate.
+#
+# So the split below. `manifest-freshness` is the part of this contract a hosted
+# runner CAN honestly prove — that the frozen acceptance manifest still matches
+# the frozen files byte for byte — and it stays on every push and PR.
+# `closeout-acceptance` is manual dispatch, and it stays exactly as strict as it
+# was: register the runner, dispatch it, and it runs every lane including the
+# live Docker proof. Re-add `push:`/`pull_request:` to that job's `if:` the day
+# the runner is back.
 on:
   push:
+    branches: ["**"]
   pull_request:
   workflow_dispatch:
 
@@ -27,7 +42,52 @@ permissions:
   contents: read
 
 jobs:
+  # Hosted, cheap (~3 s after provisioning), and the reason this workflow still
+  # has something to say on a push: the frozen acceptance manifest hashes 50
+  # frozen files, and this proves none of them moved under it.
+  manifest-freshness:
+    name: acceptance manifest is byte-fresh (hosted)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Set up Python
+        run: uv python install 3.13
+
+      - name: Sync Python deps
+        run: uv sync --all-packages --frozen
+
+      - name: Acceptance manifest is byte-fresh (frozen-file tamper check)
+        run: uv run python development/scripts/gen_closeout_acceptance_manifest.py --check
+
+      - name: What the full acceptance run still needs
+        if: always()
+        run: |
+          {
+            echo "### Export Track-1 closeout acceptance"
+            echo
+            echo "This hosted job proves only that the frozen acceptance manifest is byte-fresh."
+            echo
+            echo "The full verifier (\`--all\`: python-nonlive, python-closeout, frontend +"
+            echo "Firefox e2e, g11-typecheck, live-docker, anti-bypass-scan) runs on manual"
+            echo "dispatch and needs a self-hosted runner labelled:"
+            echo
+            echo '    self-hosted, docker, export-track1-closeout'
+            echo
+            echo "with a real Docker Engine + Compose v2 and Node 22. The repository currently"
+            echo "has no self-hosted runners registered, so that job is dispatch-only."
+          } >> "$GITHUB_STEP_SUMMARY"
+
   closeout-acceptance:
+    # Manual dispatch only while no runner carries these labels — see `on:`.
+    if: github.event_name == 'workflow_dispatch'
     name: closeout acceptance (wired verifier — required, non-advisory, live)
     # A real Docker Engine + Compose v2 (the live lane) AND Node (the frontend lane)
     # must be present; the verifier's live tests FAIL — never skip — without an engine.
