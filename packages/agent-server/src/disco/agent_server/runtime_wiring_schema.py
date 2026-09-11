@@ -42,6 +42,7 @@ if TYPE_CHECKING:
     from .preview_capture_ownership import PreviewCaptureOwnership
     from .preview_service import PreviewService
     from .project_runtime_service import ProjectRuntimeService
+    from .reference_pack_binding import BoundReferencePackStore
     from .resume_service import ResumeService
     from .run_controller import RunController
     from .run_kill_service import RunKillService
@@ -82,6 +83,7 @@ class _RuntimeWiringSchema:
     _store: SqliteEventStore
     _skill_store: SkillStore
     uploads: UploadStore
+    bound_reference_packs: BoundReferencePackStore
     _secret_store: SecretStore
     _config_store: ConfigStore
     sandbox: SandboxRuntimeService

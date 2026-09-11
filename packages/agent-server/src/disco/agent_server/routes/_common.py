@@ -186,6 +186,9 @@ class CreateConversationBody(BaseModel):
     space_ids: list[str] = []
     # Per-query research source selection. Empty means use the Settings default.
     sources: list[str] = []
+    # PKG-47: Reference Packs to bind at creation (see UpdateSettingsBody).
+    reference_pack_ids: list[str] = []
+    reference_pack_digests: dict[str, str] | None = None
 
 
 class SendMessageBody(BaseModel):
@@ -219,6 +222,11 @@ class UpdateSettingsBody(BaseModel):
     iterative: bool | None = None
     recency_window: Literal["month", "week"] | None = None
     sources: list[str] | None = None
+    # PKG-47: the Reference Packs selected for this Build (ids from GET /api/reference-packs),
+    # bound before the first model call; optional digests refuse a pack that moved since
+    # it was picked. An empty list clears the selection. None = leave unchanged.
+    reference_pack_ids: list[str] | None = None
+    reference_pack_digests: dict[str, str] | None = None
 
 
 def _reject_if_imported(store: SqliteEventStore, conversation_id: str) -> None:

@@ -698,6 +698,9 @@ class LifecycleManager:
     async def _rematerialize_uploads(self, conversation_id: str) -> None:
         return await self._rehydration._rematerialize_uploads(conversation_id)
 
+    async def _rematerialize_reference_packs(self, conversation_id: str) -> None:
+        return await self._rehydration._rematerialize_reference_packs(conversation_id)
+
     def _mark_rehydrated(self, conversation_id: str) -> None:
         self._rehydration._mark_rehydrated(conversation_id)
 

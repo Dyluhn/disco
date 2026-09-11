@@ -60,6 +60,7 @@ from .lifecycle_command_service import (
 )
 from .lifecycle_idle_sweep import LifecycleIdleSweeper
 from .lifecycle_ports import (
+    LifecycleBoundPacks,
     LifecycleConnections,
     LifecycleIdleSweepDeps,
     LifecycleKernelPins,
@@ -76,6 +77,7 @@ from .persistence_notifier import PersistenceNotifier
 from .preview_capture_ownership import PreviewCaptureOwnership
 from .preview_service import PreviewService
 from .project_runtime_service import ProjectRuntimeService
+from .reference_pack_binding import BoundReferencePackStore
 from .resume_ports import (
     PinnedRunStart,
     ResumeEnvironmentProbe,
@@ -185,6 +187,7 @@ def _wire_foundation(
     rt._store = store
     rt._skill_store = skill_store or SkillStore()
     rt.uploads = UploadStore(f"{db_path}.uploads" if db_path else "")
+    rt.bound_reference_packs = BoundReferencePackStore(f"{db_path}.refpacks" if db_path else "")
     rt._secret_store = secret_store or SecretStore()
     rt._config_store = _config_store(config, config_store)
     rt.sandbox = SandboxRuntimeService(
@@ -311,6 +314,7 @@ def _wire_lifecycle(rt: _RuntimeWiringSchema) -> None:
             lifecycle_runs,
             LifecyclePersistenceNotifier(rt._persistence_notifier),
             LifecycleUploads(rt.uploads),
+            LifecycleBoundPacks(rt.bound_reference_packs),
         ),
         lifecycle_store,
         lifecycle_runs,

@@ -120,6 +120,7 @@ if TYPE_CHECKING:
     from .mcp_manager import McpManager
     from .preview_service import PreviewService
     from .project_runtime_service import ProjectRuntimeService
+    from .reference_pack_binding import BoundReferencePackStore
     from .resume_service import ResumeService
     from .run_controller import RunController
     from .run_lifecycle_service import RunLifecycleService
@@ -227,6 +228,7 @@ class ConversationRuntime:
         suggestions: SuggestionService
         titles: TitleService
         uploads: UploadStore
+        bound_reference_packs: BoundReferencePackStore
         workspace: WorkspaceCoordinator
 
         _config_store: ConfigStore

@@ -22,6 +22,7 @@ from .connection_tracker import ConnectionState
 from .persistence_notifier import PersistenceNotifier
 from .preview_capture_ownership import PreviewCaptureOwnership
 from .project_runtime_service import ProjectRuntimeService
+from .reference_pack_binding import BoundReferencePackStore
 from .run_registry import KernelPinStore, LoopRegistry, RunRegistry, RunResourceRegistry
 from .sandbox_runtime_service import SandboxRuntimeService
 from .upload_store import UploadStore
@@ -221,6 +222,13 @@ class LifecycleUploads:
 
     def directory(self, conversation_id: str) -> Path | None:
         return self._uploads.directory(conversation_id)
+
+
+class LifecycleBoundPacks:
+    """Narrow bound Reference Pack store for rehydration."""
+
+    def __init__(self, store: BoundReferencePackStore) -> None:
+        self.store = store
 
 
 class LifecyclePersistenceNotifier:

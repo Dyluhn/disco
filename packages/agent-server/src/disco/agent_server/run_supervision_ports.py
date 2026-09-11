@@ -161,6 +161,9 @@ class RunPersistence:
     async def rematerialize_uploads(self, conversation_id: str) -> None:
         await self._lifecycle._rematerialize_uploads(conversation_id)
 
+    async def rematerialize_reference_packs(self, conversation_id: str) -> None:
+        await self._lifecycle._rematerialize_reference_packs(conversation_id)
+
     async def snapshot(self, conversation_id: str, *, trigger: str) -> None:
         await self._lifecycle._maybe_snapshot(conversation_id, trigger=trigger)
 

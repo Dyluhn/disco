@@ -622,6 +622,7 @@ class RunPersistenceSupervisor:
             async with self._persistence.workspace_lock(conversation_id):
                 await self._persistence.rehydrate(conversation_id)
                 await self._persistence.rematerialize_uploads(conversation_id)
+                await self._persistence.rematerialize_reference_packs(conversation_id)
         state = await self._run_loop(
             conversation_id,
             loop,
