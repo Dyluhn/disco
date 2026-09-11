@@ -256,6 +256,7 @@ _EXPECTED_AGENT_TOOLS = [
     "preview_start",
     "preview_status",
     "preview_stop",
+    "reference_inspect",  # PKG-47: question an image/PDF from a selected reference pack
     "release_declare",  # WO-5: record the typed, NAMES-ONLY host-owned release intent
     "run_project_script",  # CD-TOOLS-7 — buffered, prevalidated batch of file transforms
     "scaffold_starter",  # P7: materialize the contract's host-owned starter frame

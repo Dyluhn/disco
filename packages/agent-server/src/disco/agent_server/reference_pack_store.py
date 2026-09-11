@@ -19,6 +19,7 @@ into place), so a failed multi-file save commits nothing. Bounds: 50 files,
 from __future__ import annotations
 
 import hashlib
+import io
 import os
 import re
 import shutil
@@ -142,8 +143,22 @@ def extracted_text(name: str, data: bytes) -> str | None:
     if classify_file(name, data) != "ready":
         return None
     if Path(name).suffix.lower() == ".pdf":
-        return _pdf_to_text(data)
+        return _pdf_pages_text(data) or _pdf_to_text(data)
     return data.decode("utf-8")
+
+
+def _pdf_pages_text(data: bytes) -> str:
+    """Per-page extraction with ``--- page N ---`` markers (pypdf), empty when unavailable."""
+    try:
+        from pypdf import PdfReader  # type: ignore[reportMissingImports]
+
+        reader = PdfReader(io.BytesIO(data))
+        pages = [(page.extract_text() or "").strip() for page in reader.pages]
+    except Exception:  # noqa: BLE001 — fall back to the plain extractor
+        return ""
+    if not any(pages):
+        return ""
+    return "\n\n".join(f"--- page {i} ---\n{text}" for i, text in enumerate(pages, start=1))
 
 
 def _now() -> str:

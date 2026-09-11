@@ -145,6 +145,7 @@ AGENT_TOOLS = frozenset(
         "build_playbook",
         # PKG-47: the one agent-side mutation of the user's Reference Pack library
         "create_reference_pack",
+        "reference_inspect",
         # WO-5: release_declare — record the TYPED, NAMES-ONLY runtime release intent
         # as a host-owned `release-intent.json` sidecar (a CANDIDATE input to release
         # detection, never a verification claim). Free-form Build/Agent scope ONLY;

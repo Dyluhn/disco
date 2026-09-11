@@ -49,6 +49,7 @@ const TOOL_PROGRESS: Record<string, string> = {
   scaffold_starter: "Setting up the project starter",
   build_playbook: "Reading a playbook",
   create_reference_pack: "Saving a reference pack",
+  reference_inspect: "Inspecting a reference file",
   app_create: "Creating the app scaffold",
   app_add_section: "Adding an app section",
   app_update_content: "Updating app content",

@@ -43,6 +43,7 @@ from .preview import (
     PreviewStatusTool,
     PreviewStopTool,
 )
+from .reference_inspect import ReferenceInspectTool
 from .reference_packs import CreateReferencePackTool
 from .release_declare import ReleaseDeclareTool
 from .retrieval import ExtractTool, SearchTool
@@ -188,6 +189,7 @@ def build_default_registry() -> ToolRegistry:
         ScaffoldStarterTool(),  # P7: materialize the contract's host-owned starter frame
         BuildPlaybookTool(),  # build_playbook: read a bundled integration recipe (pure read)
         CreateReferencePackTool(),  # PKG-47: save workspace files as a user Reference Pack
+        ReferenceInspectTool(),  # PKG-47: question an image/PDF from a selected pack
         # WO-5: record the TYPED, NAMES-ONLY runtime release intent as a host-owned
         # `release-intent.json` sidecar (a candidate detection input, not a verdict).
         # Free-form Build/Agent scope only; the strict AppKit allowlist excludes it.

@@ -50,6 +50,7 @@ const VERB: Record<string, (a: Record<string, unknown>) => string> = {
   scaffold_starter: () => `Set up the project starter`,
   build_playbook: (a) => `Read the ${a.playbook ? String(a.playbook) : "catalog of"} playbook`,
   create_reference_pack: (a) => `Saved the reference pack${a.name ? ` "${String(a.name)}"` : ""}`,
+  reference_inspect: (a) => `Inspected ${a.path ? String(a.path) : "a reference file"}`,
   app_create: () => `Created the app scaffold`,
   app_add_section: () => `Added an app section`,
   app_update_content: () => `Updated app content`,
