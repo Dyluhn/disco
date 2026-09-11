@@ -44,7 +44,7 @@ vi.mock("@/hooks/useDriverModels", () => ({
   }),
   useLastSelectedModel: () => ({ data: null }),
 }));
-vi.mock("@/components/build/ReferencePackPicker", () => ({
+vi.mock("@/components/buildSurface/ReferencePackPicker", () => ({
   ReferencePackPicker: () => <div data-testid="stub-reference-packs" />,
 }));
 vi.mock("@/components/build/BuildModelPicker", () => ({

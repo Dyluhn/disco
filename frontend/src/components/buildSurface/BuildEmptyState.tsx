@@ -21,7 +21,7 @@ import { DriverModelNotice } from "@/components/DriverModelNotice";
 import { focusModelControl } from "@/lib/focusModelControl";
 import { QueryInput } from "@/components/QueryInput";
 import { BuildModelPicker } from "@/components/build/BuildModelPicker";
-import { ReferencePackPicker } from "@/components/build/ReferencePackPicker";
+import { ReferencePackPicker } from "@/components/buildSurface/ReferencePackPicker";
 // NOTE: this is `components/build/BuildSurface.tsx` (the OTHER file) — not the
 // file this directory decomposes. It is not ours to edit; only its
 // `UploadComposer` export is consumed here, unchanged from the original.
