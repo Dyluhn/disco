@@ -1,6 +1,6 @@
 # RAG over uploaded documents (Chroma + embeddings + @-references)
 
-> Upload/replace documents, chunk and embed them into Chroma, retrieve for each question, force-include @-referenced documents, and make the assistant cite them. Extends the ai-assistant pack.
+> Upload/replace documents, chunk and embed them into Chroma, retrieve for each question, force-include @-referenced documents, and make the assistant cite them. Extends the ai-assistant playbook.
 
 ## Services and env
 compose adds Chroma (durable volume) next to the api:
@@ -28,7 +28,7 @@ CREATE TABLE documents(id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, name TE
 `name` is the @-handle (`Contract_2024`): derived from the filename (strip extension, non-word → `_`), editable, unique per user.
 
 ## Ingest
-`POST /api/documents` (multipart, see media-uploads pack for the upload handler; accept pdf/txt/md/docx, 25 MB cap):
+`POST /api/documents` (multipart, see media-uploads playbook for the upload handler; accept pdf/txt/md/docx, 25 MB cap):
 1. Save the file under `data/documents/<user>/<uuid>`; extract text — `pdf-parse@^1.1.1` for PDF, `mammoth@^1.8.0` for DOCX, raw for txt/md.
 2. Chunk: ~800 tokens ≈ 3000 chars with 300-char overlap, split on paragraph boundaries first.
 3. Embed in batches of 32: `POST ${EMBEDDINGS_BASE_URL}/embeddings` `{ model, input: [chunks…] }` → `data[i].embedding`.
@@ -60,7 +60,7 @@ System prompt: "Answer from the provided sources. Quote or summarise briefly and
 [Contract_2024 §3] …chunk text…
 [EmployeeHandbook §1] …
 ```
-Combine with web search (ai-assistant pack) when the brief asks: retrieved chunks first, web results second, both cited.
+Combine with web search (ai-assistant playbook) when the brief asks: retrieved chunks first, web results second, both cited.
 
 ## Client
 Documents page: upload/replace, list with name, size, chunk count, updated time; inline rename of the handle. In the chat input, typing `@` opens a picker over `documents.name`; chips show pinned documents.

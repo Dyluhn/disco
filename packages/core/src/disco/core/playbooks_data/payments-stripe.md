@@ -21,7 +21,7 @@ CREATE TABLE payments(id INTEGER PRIMARY KEY, booking_id INTEGER NOT NULL, user_
 Bookings carry `payment_status` mirrored from the latest payment; a booking is `confirmed` only when a payment is `succeeded`.
 
 ## Flow
-1. `POST /api/bookings` creates the booking as `pending_payment` (availability check per booking-and-inventory pack) and returns `{ bookingId, totalCents }`.
+1. `POST /api/bookings` creates the booking as `pending_payment` (availability check per booking-and-inventory playbook) and returns `{ bookingId, totalCents }`.
 2. `POST /api/payments/intents` `{ bookingId }` → server recomputes the total, creates `stripe.paymentIntents.create({ amount, currency, automatic_payment_methods: { enabled: true }, metadata: { bookingId, userId } }, { idempotencyKey: `booking-${bookingId}-v${booking.version}` })`, stores a `pending` payment row with `intent_id`, returns `{ clientSecret }`. Re-calling for the same booking returns the same intent (idempotency key).
 3. Browser: `<Elements stripe={loadStripe(pk)} options={{ clientSecret }}>` → `<PaymentElement/>` → `stripe.confirmPayment({ elements, redirect: "if_required", confirmParams: { return_url: `${location.origin}/bookings/${id}` } })`. On `error`, show `error.message` and keep the form so the user can retry or pick another method; on `paymentIntent.status === "succeeded"` show "Processing confirmation…" and poll `GET /api/bookings/:id` until the webhook flips it (max ~20 s), then show the receipt.
 4. Webhook `POST /api/payments/webhook` (public route, RAW body):

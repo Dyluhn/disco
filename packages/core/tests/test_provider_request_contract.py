@@ -35,13 +35,13 @@ from disco.core.llm.prompts import DriverPrompts
 # timeouts can measure progress instead of total duration. The only wire change
 # is `stream: true` plus the `stream_options` the assembler already attaches to
 # every streamed request; message/tool bytes are byte-for-byte unchanged.
-# Re-accepted 2026-09-11 (PKG-46): the driver system prompt gained the
-# reference-pack guidance (a planner bullet beside the starter-kit and
+# Re-accepted 2026-09-11 (PKG-46, reworded in PKG-47): the driver system prompt
+# gained the playbook guidance (a planner bullet beside the starter-kit and
 # trusted-component bullets, and an executor rule), so the planning and resume
 # request bytes and their token budgets moved; keys, roles, tools and
 # max_tokens are unchanged.
-_PLANNING_SHA256 = "0f5a850eeefaee9baab5acdb02d1416ea4dec52828ca3feca2abc07d23649238"
-_RESUME_SHA256 = "a24fe11b66148db3bc093520a9f1b880bab543c9520f71dd68577fe3d244bf87"
+_PLANNING_SHA256 = "19c47b3df6b16a11492cb9e0d281ad27c3979c04ef0cc3e8a1236f02fc01841d"
+_RESUME_SHA256 = "90af26c6fb22e3d1cce207776b826b88aedb32697a76ae0ef4890229d82dd35b"
 _EXPECTED_KEYS = (
     "model",
     "messages",
@@ -220,7 +220,7 @@ async def test_planning_request_matches_accepted_ordered_bytes() -> None:
     response = await router.complete(request, context=context)
 
     assert estimate is not None
-    assert _budget_values(estimate) == (65_536, 321, 12_581, 11_968, 430, 2, 2)
+    assert _budget_values(estimate) == (65_536, 321, 12_571, 11_958, 430, 2, 2)
     assert response.routing is not None and response.routing.attempt == 1
     assert captured[0][1] == "golden-plan"
     _assert_request(
@@ -304,7 +304,7 @@ async def test_long_horizon_resume_retries_the_exact_compacted_request() -> None
     response = await router.complete(request, context=context)
 
     assert estimate is not None
-    assert _budget_values(estimate) == (65_536, 777, 17_684, 17_071, 430, 5, 2)
+    assert _budget_values(estimate) == (65_536, 777, 17_686, 17_073, 430, 5, 2)
     assert response.routing is not None and response.routing.attempt == 2
     assert len(captured) == 2
     assert captured[0] == captured[1]

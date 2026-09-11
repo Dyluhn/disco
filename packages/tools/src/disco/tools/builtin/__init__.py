@@ -36,13 +36,13 @@ from .find_and_edit import FindAndEditTool
 from .hardware_identity import HardwareIdentityTool
 from .image_gen import ImageGenTool, select_image_backend
 from .plan import PlanStepTool, SubmitPlanTool, UpdatePlanProgressTool
+from .playbook import BuildPlaybookTool
 from .preview import (
     PreviewLogsTool,
     PreviewStartTool,
     PreviewStatusTool,
     PreviewStopTool,
 )
-from .references import ReferencePackTool
 from .release_declare import ReleaseDeclareTool
 from .retrieval import ExtractTool, SearchTool
 from .run_script import RunProjectScriptTool
@@ -185,7 +185,7 @@ def build_default_registry() -> ToolRegistry:
             if cls().definition.name != "app_snapshot_version"
         ),
         ScaffoldStarterTool(),  # P7: materialize the contract's host-owned starter frame
-        ReferencePackTool(),  # reference_pack: read a bundled integration recipe (pure read)
+        BuildPlaybookTool(),  # build_playbook: read a bundled integration recipe (pure read)
         # WO-5: record the TYPED, NAMES-ONLY runtime release intent as a host-owned
         # `release-intent.json` sidecar (a candidate detection input, not a verdict).
         # Free-form Build/Agent scope only; the strict AppKit allowlist excludes it.

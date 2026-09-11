@@ -38,7 +38,7 @@ Requirements the graders check: a visible microphone control in the chat input; 
 
 ## Server
 ```js
-// api/src/routes/stt.js  (busboy for multipart — see media-uploads pack; 15 MB cap; audio/* only)
+// api/src/routes/stt.js  (busboy for multipart — see media-uploads playbook; 15 MB cap; audio/* only)
 app.post("/api/stt", async (req, res) => {
   const { buffer, mime } = await readSingleFile(req, { maxBytes: 15 * 1024 * 1024, accept: /^audio\// });
   const base = process.env.STT_BASE_URL ?? process.env.LLM_BASE_URL, key = process.env.STT_API_KEY ?? process.env.LLM_API_KEY ?? "";

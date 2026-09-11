@@ -1,6 +1,6 @@
 # Chat: public rooms and private threads
 
-> A public forum room and pharmacist-to-pharmacist (or any role-gated) direct messages with attribution, timestamps, persistent history and live delivery. Builds on the realtime pack.
+> A public forum room and pharmacist-to-pharmacist (or any role-gated) direct messages with attribution, timestamps, persistent history and live delivery. Builds on the realtime playbook.
 
 ## Schema (app migration)
 ```sql

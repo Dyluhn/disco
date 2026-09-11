@@ -49,7 +49,7 @@ CREATE TABLE medications(id INTEGER PRIMARY KEY, name TEXT NOT NULL, description
   stock INTEGER NOT NULL DEFAULT 0, low_stock_threshold INTEGER NOT NULL DEFAULT 10, out_of_stock INTEGER NOT NULL DEFAULT 0, category TEXT);
 ```
 - Placing an order (one transaction): verify every item `stock >= qty AND out_of_stock = 0` else 409 naming the item; decrement `stock`; insert order+items; clear the cart; broadcast `order:created` to room `pharmacists` and `order:updated` to room `user:<id>`.
-- Allowed transitions: `pending→processing→ready_for_pickup→completed`, any→`cancelled` (restock on cancel). Reject others with 409. Each transition: update, email (email pack), broadcast to both rooms.
+- Allowed transitions: `pending→processing→ready_for_pickup→completed`, any→`cancelled` (restock on cancel). Reject others with 409. Each transition: update, email (email playbook), broadcast to both rooms.
 - Low stock: after any decrement, if `stock <= low_stock_threshold` insert/refresh a `stock_alerts` row and broadcast `stock:low` to `pharmacists`; the dashboard lists them until stock is raised. `out_of_stock=1` hides "add to cart" for patients and blocks ordering server-side.
 - Patient views: browse with search (`name LIKE`), category filter, price sort; cart with quantities; order history with a live status timeline.
 

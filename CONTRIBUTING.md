@@ -306,17 +306,19 @@ standing promise back to you: **the license will never change.** disco will not
 be relicensed to a source-available or commercial license, so your contribution stays
 Apache-2.0 forever (see the README's License section).
 
-## Reference packs
+## Playbooks
 
-`packages/core/src/disco/core/references/packs/*.md` are the integration recipes
-the Build agent reads through the `reference_pack` tool (the catalog in the tool
-description is generated from the files). A pack is one capability: a `# Title`
-line, a `> summary` line, then the recipe — stack, pinned dependency majors,
-env var **names** (never values), the code shape, a "Prove it" section that says
-how to verify it inside the sandbox, and security notes. Add a pack by adding a
-file; `packages/core/tests/test_reference_packs.py` pins the set, so extend
-`EXPECTED_IDS` in the same change. Keep packs concrete and short enough to read
-in one tool call; the agent adapts them, it does not paste them.
+`packages/core/src/disco/core/playbooks_data/*.md` are the integration recipes
+the Build agent reads through the `build_playbook` tool (the catalog in the tool
+description is generated from the files). A playbook is one capability: a
+`# Title` line, a `> summary` line, then the recipe — stack, pinned dependency
+majors, env var **names** (never values), the code shape, a "Prove it" section
+that says how to verify it inside the sandbox, and security notes. Add one by
+adding a file; `packages/core/tests/test_playbooks.py` pins the set, so extend
+`EXPECTED_IDS` in the same change. Keep playbooks concrete and short enough to
+read in one tool call; the agent adapts them, it does not paste them. (They are
+not Reference Packs — those are the user's own file collections, see
+`docs/self-host.md`.)
 
 ## Benchmarks against the field: sota-scan
 

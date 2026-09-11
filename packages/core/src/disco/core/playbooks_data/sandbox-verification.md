@@ -27,7 +27,7 @@ Playwright script (`node`, `playwright` is installed): `const a = await browser.
 | RAG (Chroma) | no — Chroma is a compose service; embeddings need the endpoint | upload, ask, cite | verify chunking + `@` resolution with a deterministic fake embedder (`EMBEDDINGS_FAKE=1`: hashed bag-of-words vectors) and say so |
 | STT | yes | `curl -F audio=@sample.wav /api/stt` | browser fallback path; state it |
 | Email | no — Mailpit | `GET http://mailpit:8025/api/v1/messages` | outbox rows exist and drain later |
-| Stripe | yes for cards | `4242…` test card + `stripe listen` | signed test event to the webhook (payments pack); state that live confirmation was not exercised |
+| Stripe | yes for cards | `4242…` test card + `stripe listen` | signed test event to the webhook (payments playbook); state that live confirmation was not exercised |
 | Market data / news | yes | prices change, news arrives | 503 + "not configured"; the chart still renders from `history` fixtures under `MARKET_FIXTURES=1` — say so |
 | Uploads, realtime, chat, alerts, booking, game | no | full live check | — |
 

@@ -12,7 +12,7 @@ api/          Node 22 ESM service (node:http + Express 5), SQLite via database-k
   src/trusted/  ← installed by add_trusted_component (database-kit, auth-kit, rbac-kit)
 web/          Vite + React + TypeScript SPA, served by nginx in production
   package.json  src/  nginx.conf  Dockerfile
-compose.yaml  api + web (+ chroma / mailpit when a pack needs them)
+compose.yaml  api + web (+ chroma / mailpit when a playbook needs them)
 .env.example  NAMES only, one line per variable, comment says what it is for
 data/         SQLite file + uploads (a compose volume; never committed)
 ```
@@ -25,7 +25,7 @@ data/         SQLite file + uploads (a compose volume; never committed)
   "scripts": { "start": "node src/server.js", "dev": "node --watch src/server.js" },
   "dependencies": { "express": "^5.1.0", "socket.io": "^4.8.1" } }
 ```
-Add per-pack dependencies only when that pack is used (stripe, nodemailer, chromadb, busboy…).
+Add per-pack dependencies only when that playbook is used (stripe, nodemailer, chromadb, busboy…).
 3. `web/`: `npm create vite@latest web -- --template react-ts`, then `npm i socket.io-client@^4.8.1`.
 
 ## api/src/server.js — the one composition root
@@ -56,10 +56,10 @@ app.get("/__health/db", (req, res) => healthHandler(db)(req, res));
 const guarded = createAuthApp({ db, config: authConfig,
   handler: createRbacApp({ db, config: rbacConfig, handler: app }) });
 const server = http.createServer(guarded);
-attachRealtime(server, db);                     // socket.io on the same server (realtime pack)
+attachRealtime(server, db);                     // socket.io on the same server (realtime playbook)
 server.listen(Number(process.env.PORT ?? 3000), "0.0.0.0");
 ```
-Auth-kit protects every route unless it is in `config/auth.config.json` `publicAllowlist`; list registration, health and the SPA assets there (`"/api/auth/register"`, `"/__health/*"`). Inside a handler, identify the user with `getSession(db, token)` where `token` is the `tc_session` cookie (see auth-and-roles pack).
+Auth-kit protects every route unless it is in `config/auth.config.json` `publicAllowlist`; list registration, health and the SPA assets there (`"/api/auth/register"`, `"/__health/*"`). Inside a handler, identify the user with `getSession(db, token)` where `token` is the `tc_session` cookie (see auth-and-roles playbook).
 
 ## Migrations
 `api/src/migrations.js` exports `APP_MIGRATIONS = [{ version: 1, sql: "..." }, …]`, ascending, never edited once shipped — add a new version instead. Keep app versions below 900000 (the kits own 900001+). Use `TEXT` ISO-8601 timestamps and `INTEGER PRIMARY KEY` ids.
