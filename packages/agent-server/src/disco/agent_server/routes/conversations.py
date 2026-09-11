@@ -27,7 +27,6 @@ from fastapi import APIRouter, HTTPException, Query, Request, Response
 from pydantic import BaseModel
 
 from ..auth import current_owner_id, current_session
-from ..reference_pack_binding import ReferencePackBindError, bind_reference_packs
 from ..report_audio import remove_report_audio_cache
 from ..runtime import (
     ConversationRuntime,
@@ -48,6 +47,7 @@ from ._common import (
     _user_message,
     require_owned_conversation,
 )
+from .reference_packs import bind_reference_packs_or_409
 
 if TYPE_CHECKING:
     from ..host_token_store import HostTokenStore
@@ -167,7 +167,7 @@ async def _create_conversation_response(
             )
         _apply_create_runtime_settings(runtime, conversation_id, body, validated_space_ids)
         if body.reference_pack_ids:
-            await _bind_reference_packs_or_409(
+            await bind_reference_packs_or_409(
                 runtime,
                 store,
                 conversation_id,
@@ -355,18 +355,6 @@ async def _apply_gated_compose_settings(runtime, conversation_id: str, body) -> 
         )
 
 
-async def _bind_reference_packs_or_409(
-    runtime, store, conversation_id: str, owner_id: str, pack_ids, digests
-) -> None:
-    """Bind the selected Reference Packs; a refusal is a 409 with its reason."""
-    try:
-        await bind_reference_packs(runtime, store, conversation_id, owner_id, pack_ids, digests)
-    except ReferencePackBindError as exc:
-        raise HTTPException(
-            status_code=409, detail={"reason": exc.reason, "message": str(exc)}
-        ) from exc
-
-
 def _apply_ungated_settings(runtime, conversation_id: str, body) -> None:
     """Apply the settings that are safe to change at any point in a run."""
     if body.autonomous is not None:
@@ -503,7 +491,7 @@ async def _handle_update_settings(
     await _apply_gated_compose_settings(runtime, conversation_id, body)
     _apply_ungated_settings(runtime, conversation_id, body)
     if body.reference_pack_ids is not None:
-        await _bind_reference_packs_or_409(
+        await bind_reference_packs_or_409(
             runtime,
             store,
             conversation_id,

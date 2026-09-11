@@ -15,6 +15,7 @@ from fastapi import APIRouter, File, HTTPException, Request, Response, UploadFil
 from pydantic import BaseModel
 
 from ..auth import current_owner_id
+from ..reference_pack_binding import ReferencePackBindError, bind_reference_packs
 from ..reference_pack_store import (
     JsonReferencePackStore,
     ReferencePackError,
@@ -58,6 +59,18 @@ def _refused(exc: ReferencePackError) -> HTTPException:
     return HTTPException(
         status_code=400, detail={"reason": "invalid_reference_pack", "message": str(exc)}
     )
+
+
+async def bind_reference_packs_or_409(
+    runtime, store, conversation_id: str, owner_id: str, pack_ids, digests
+) -> None:
+    """Bind the selected Reference Packs; a refusal is a 409 with its reason."""
+    try:
+        await bind_reference_packs(runtime, store, conversation_id, owner_id, pack_ids, digests)
+    except ReferencePackBindError as exc:
+        raise HTTPException(
+            status_code=409, detail={"reason": exc.reason, "message": str(exc)}
+        ) from exc
 
 
 def make_reference_packs_router(runtime: ConversationRuntime | None) -> APIRouter:
