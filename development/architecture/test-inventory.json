@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "7aa99121fe1f01a30b8efc745d7b871cbfe3d049",
+  "source_identity": "8300dd863e07040ada117b2f3865faf55b886f25",
   "collected": {
     "counts": {
-      "packages": 12157,
+      "packages": 12169,
       "harness": 1571,
       "integrations": 9,
       "tests": 458
     },
-    "total": 14195,
+    "total": 14207,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -6834,6 +6834,13 @@
         "packages/core/tests/test_recoverable_excerpts.py::test_scan_flags_classic_destructive_phrases",
         "packages/core/tests/test_recoverable_excerpts.py::test_scan_flags_forbidden_markers_without_recover_cue",
         "packages/core/tests/test_recoverable_excerpts.py::test_scan_marker_with_cue_on_same_line_is_clean",
+        "packages/core/tests/test_reference_packs.py::test_bundled_packs_are_the_expected_set",
+        "packages/core/tests/test_reference_packs.py::test_every_pack_has_title_summary_and_a_prove_it_section",
+        "packages/core/tests/test_reference_packs.py::test_explicit_directory_overrides_the_bundle",
+        "packages/core/tests/test_reference_packs.py::test_index_lists_every_pack_once_with_its_summary",
+        "packages/core/tests/test_reference_packs.py::test_packs_never_contain_secret_values",
+        "packages/core/tests/test_reference_packs.py::test_parse_requires_title_and_summary",
+        "packages/core/tests/test_reference_packs.py::test_unknown_id_is_none",
         "packages/core/tests/test_release_appkit_local.py::test_admin_token_only_appears_as_guard_and_name",
         "packages/core/tests/test_release_appkit_local.py::test_app_service_runs_wrangler_dev_with_persist",
         "packages/core/tests/test_release_appkit_local.py::test_appkit_spec_validates_and_round_trips",
@@ -11302,6 +11309,11 @@
         "packages/tools/tests/test_projects.py::test_workspace_roundtrip",
         "packages/tools/tests/test_projects.py::test_zip_contains_real_files",
         "packages/tools/tests/test_projects.py::test_zip_excludes_runtime_secret_files_but_keeps_templates",
+        "packages/tools/tests/test_reference_pack_tool.py::test_description_carries_every_pack_id",
+        "packages/tools/tests/test_reference_pack_tool.py::test_known_id_returns_the_pack_text",
+        "packages/tools/tests/test_reference_pack_tool.py::test_no_arguments_returns_the_catalog",
+        "packages/tools/tests/test_reference_pack_tool.py::test_registered_read_only_and_in_the_build_scope",
+        "packages/tools/tests/test_reference_pack_tool.py::test_unknown_id_fails_and_lists_the_ids",
         "packages/tools/tests/test_rel_rc_d_reground.py::test_back_to_back_anchored_edits_using_returned_region_without_reread",
         "packages/tools/tests/test_rel_rc_d_reground.py::test_chunked_model_authored_file_stays_grounded_across_distant_edits",
         "packages/tools/tests/test_rel_rc_d_reground.py::test_external_mutation_still_stale_after_edit",
@@ -14216,9 +14228,9 @@
     }
   },
   "mapping_static": {
-    "identity": "7aa99121fe1f01a30b8efc745d7b871cbfe3d049",
-    "python_test_file_count": 948,
-    "python_static_test_id_count": 11658,
+    "identity": "8300dd863e07040ada117b2f3865faf55b886f25",
+    "python_test_file_count": 950,
+    "python_static_test_id_count": 11670,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -14783,6 +14795,7 @@
       "packages/core/tests/test_records_policy.py",
       "packages/core/tests/test_records_primitive.py",
       "packages/core/tests/test_recoverable_excerpts.py",
+      "packages/core/tests/test_reference_packs.py",
       "packages/core/tests/test_release_appkit_local.py",
       "packages/core/tests/test_release_detect.py",
       "packages/core/tests/test_release_finish_isolation.py",
@@ -15089,6 +15102,7 @@
       "packages/tools/tests/test_project_version_regressions.py",
       "packages/tools/tests/test_project_versions.py",
       "packages/tools/tests/test_projects.py",
+      "packages/tools/tests/test_reference_pack_tool.py",
       "packages/tools/tests/test_rel_rc_d_reground.py",
       "packages/tools/tests/test_rel_rc_g_line_recovery.py",
       "packages/tools/tests/test_release_declare.py",
@@ -21949,6 +21963,13 @@
       "packages/core/tests/test_recoverable_excerpts.py::test_scan_flags_classic_destructive_phrases",
       "packages/core/tests/test_recoverable_excerpts.py::test_scan_flags_forbidden_markers_without_recover_cue",
       "packages/core/tests/test_recoverable_excerpts.py::test_scan_marker_with_cue_on_same_line_is_clean",
+      "packages/core/tests/test_reference_packs.py::test_bundled_packs_are_the_expected_set",
+      "packages/core/tests/test_reference_packs.py::test_every_pack_has_title_summary_and_a_prove_it_section",
+      "packages/core/tests/test_reference_packs.py::test_explicit_directory_overrides_the_bundle",
+      "packages/core/tests/test_reference_packs.py::test_index_lists_every_pack_once_with_its_summary",
+      "packages/core/tests/test_reference_packs.py::test_packs_never_contain_secret_values",
+      "packages/core/tests/test_reference_packs.py::test_parse_requires_title_and_summary",
+      "packages/core/tests/test_reference_packs.py::test_unknown_id_is_none",
       "packages/core/tests/test_release_appkit_local.py::test_admin_token_only_appears_as_guard_and_name",
       "packages/core/tests/test_release_appkit_local.py::test_app_service_runs_wrangler_dev_with_persist",
       "packages/core/tests/test_release_appkit_local.py::test_appkit_spec_validates_and_round_trips",
@@ -25706,6 +25727,11 @@
       "packages/tools/tests/test_projects.py::test_workspace_roundtrip",
       "packages/tools/tests/test_projects.py::test_zip_contains_real_files",
       "packages/tools/tests/test_projects.py::test_zip_excludes_runtime_secret_files_but_keeps_templates",
+      "packages/tools/tests/test_reference_pack_tool.py::test_description_carries_every_pack_id",
+      "packages/tools/tests/test_reference_pack_tool.py::test_known_id_returns_the_pack_text",
+      "packages/tools/tests/test_reference_pack_tool.py::test_no_arguments_returns_the_catalog",
+      "packages/tools/tests/test_reference_pack_tool.py::test_registered_read_only_and_in_the_build_scope",
+      "packages/tools/tests/test_reference_pack_tool.py::test_unknown_id_fails_and_lists_the_ids",
       "packages/tools/tests/test_rel_rc_d_reground.py::test_back_to_back_anchored_edits_using_returned_region_without_reread",
       "packages/tools/tests/test_rel_rc_d_reground.py::test_chunked_model_authored_file_stays_grounded_across_distant_edits",
       "packages/tools/tests/test_rel_rc_d_reground.py::test_external_mutation_still_stale_after_edit",
@@ -42754,6 +42780,55 @@
           "packages/core/tests/test_records_policy.py::test_policy_validation_rejects_ambiguous_or_unenforceable_specs",
           "packages/core/tests/test_records_policy.py::test_records_verifier_is_artifact_derived_and_fails_tampering",
           "packages/tools/tests/test_wo_a3_verify_dispatch.py::test_records_policy_dispatches_records_contract_not_lead_gen"
+        ],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-46-REFERENCE-PACKS",
+      "root": "packages",
+      "source_identity_before": "7aa99121fe1f01a30b8efc745d7b871cbfe3d049",
+      "source_identity_after": "8300dd863e07040ada117b2f3865faf55b886f25",
+      "collected_roots": {
+        "packages": {
+          "before_count": 12157,
+          "after_count": 12169,
+          "added_ids": [
+            "packages/core/tests/test_reference_packs.py::test_bundled_packs_are_the_expected_set",
+            "packages/core/tests/test_reference_packs.py::test_every_pack_has_title_summary_and_a_prove_it_section",
+            "packages/core/tests/test_reference_packs.py::test_explicit_directory_overrides_the_bundle",
+            "packages/core/tests/test_reference_packs.py::test_index_lists_every_pack_once_with_its_summary",
+            "packages/core/tests/test_reference_packs.py::test_packs_never_contain_secret_values",
+            "packages/core/tests/test_reference_packs.py::test_parse_requires_title_and_summary",
+            "packages/core/tests/test_reference_packs.py::test_unknown_id_is_none",
+            "packages/tools/tests/test_reference_pack_tool.py::test_description_carries_every_pack_id",
+            "packages/tools/tests/test_reference_pack_tool.py::test_known_id_returns_the_pack_text",
+            "packages/tools/tests/test_reference_pack_tool.py::test_no_arguments_returns_the_catalog",
+            "packages/tools/tests/test_reference_pack_tool.py::test_registered_read_only_and_in_the_build_scope",
+            "packages/tools/tests/test_reference_pack_tool.py::test_unknown_id_fails_and_lists_the_ids"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [
+          "packages/core/tests/test_reference_packs.py",
+          "packages/tools/tests/test_reference_pack_tool.py"
+        ],
+        "python_static_test_ids": [
+          "packages/core/tests/test_reference_packs.py::test_bundled_packs_are_the_expected_set",
+          "packages/core/tests/test_reference_packs.py::test_every_pack_has_title_summary_and_a_prove_it_section",
+          "packages/core/tests/test_reference_packs.py::test_explicit_directory_overrides_the_bundle",
+          "packages/core/tests/test_reference_packs.py::test_index_lists_every_pack_once_with_its_summary",
+          "packages/core/tests/test_reference_packs.py::test_packs_never_contain_secret_values",
+          "packages/core/tests/test_reference_packs.py::test_parse_requires_title_and_summary",
+          "packages/core/tests/test_reference_packs.py::test_unknown_id_is_none",
+          "packages/tools/tests/test_reference_pack_tool.py::test_description_carries_every_pack_id",
+          "packages/tools/tests/test_reference_pack_tool.py::test_known_id_returns_the_pack_text",
+          "packages/tools/tests/test_reference_pack_tool.py::test_no_arguments_returns_the_catalog",
+          "packages/tools/tests/test_reference_pack_tool.py::test_registered_read_only_and_in_the_build_scope",
+          "packages/tools/tests/test_reference_pack_tool.py::test_unknown_id_fails_and_lists_the_ids"
         ],
         "typescript_test_files": [],
         "typescript_static_test_ids": [],

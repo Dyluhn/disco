@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-public-api-v1",
-  "source_identity": "7aa99121fe1f01a30b8efc745d7b871cbfe3d049",
+  "source_identity": "8300dd863e07040ada117b2f3865faf55b886f25",
   "python_initializers": [
     {
       "path": "packages/agent-server/src/disco/agent_server/__init__.py",
@@ -15553,7 +15553,7 @@
       "public_signatures": {
         "AGENT_TOOLS": {
           "kind": "value",
-          "signature": "AGENT_TOOLS=frozenset({'search', 'extract', 'file_read', 'file_write', 'file_append', 'file_edit', 'file_replace_lines', 'file_insert_lines', 'exact_replace', 'run_project_script', 'file_list', 'hardware_identity', 'shell', 'shell_exec', 'shell_view', 'shell_wait', 'shell_write_to_process', 'shell_kill_process', 'code_exec', 'browser', 'verify_web_app', 'design_lint', 'preview_start', 'preview_status', 'preview_logs', 'preview_stop', 'server_status', 'submit_plan', 'update_plan_progress', 'think', 'context_memory', 'app_set_tweak', 'app_snapshot_version', 'scaffold_starter', 'release_declare', 'add_trusted_component', 'eject_trusted_component', 'doc_set_section', 'doc_export', 'sheet_generate', 'slides_generate', 'audio_overview', 'image_generate', 'deck_patch', 'delegate_explore'})"
+          "signature": "AGENT_TOOLS=frozenset({'search', 'extract', 'file_read', 'file_write', 'file_append', 'file_edit', 'file_replace_lines', 'file_insert_lines', 'exact_replace', 'run_project_script', 'file_list', 'hardware_identity', 'shell', 'shell_exec', 'shell_view', 'shell_wait', 'shell_write_to_process', 'shell_kill_process', 'code_exec', 'browser', 'verify_web_app', 'design_lint', 'preview_start', 'preview_status', 'preview_logs', 'preview_stop', 'server_status', 'submit_plan', 'update_plan_progress', 'think', 'context_memory', 'app_set_tweak', 'app_snapshot_version', 'scaffold_starter', 'reference_pack', 'release_declare', 'add_trusted_component', 'eject_trusted_component', 'doc_set_section', 'doc_export', 'sheet_generate', 'slides_generate', 'audio_overview', 'image_generate', 'deck_patch', 'delegate_explore'})"
         },
         "APPKIT_MUTATORS": {
           "kind": "annotated_value",
@@ -32424,6 +32424,14 @@
       "target_sha256": "15c512be6a3d8208ffc7b2dfe76d4a46967c2582b7e5ebe9575243b531354327",
       "owner_package": "PKG-38-UI-FIXES-V51",
       "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
+    },
+    {
+      "surface": "python",
+      "path": "packages/tools/src/disco/tools/__init__.py",
+      "public_name": "AGENT_TOOLS",
+      "target_sha256": "defef65853b6b5e0050d090aeec3a11c9e3710e4047fd1c1128f1495293091c7",
+      "owner_package": "PKG-46-REFERENCE-PACKS",
+      "reason": "reference_pack joins the free-form build scope: the bundled integration recipes (auth, realtime, chat, alerts, AI assistant, RAG, dictation, email, payments, uploads, market data, booking, multiplayer, verification) are read through it before wiring a capability."
     }
   ],
   "compatibility_bridges": [],
@@ -32444,6 +32452,23 @@
       "owner_package": "PKG-19-V31-ARTIFACT-DELIVERY",
       "accepting_commit": "0866b79a29a2987d393a075e8bafc111705d7427",
       "accepting_receipt": "automation/runtime/boundary-20260813-pkg19-v31-artifact-delivery/BOUNDARY-RECEIPT.md"
+    },
+    {
+      "surface": "python",
+      "path": "packages/tools/src/disco/tools/__init__.py",
+      "public_name": "AGENT_TOOLS",
+      "origin": "disco.tools.registry.AGENT_TOOLS",
+      "removed_members": [
+        "AGENT_TOOLS=frozenset({'search', 'extract', 'file_read', 'file_write', 'file_append', 'file_edit', 'file_replace_lines', 'file_insert_lines', 'exact_replace', 'run_project_script', 'file_list', 'hardware_identity', 'shell', 'shell_exec', 'shell_view', 'shell_wait', 'shell_write_to_process', 'shell_kill_process', 'code_exec', 'browser', 'verify_web_app', 'design_lint', 'preview_start', 'preview_status', 'preview_logs', 'preview_stop', 'server_status', 'submit_plan', 'update_plan_progress', 'think', 'context_memory', 'app_set_tweak', 'app_snapshot_version', 'scaffold_starter', 'release_declare', 'add_trusted_component', 'eject_trusted_component', 'doc_set_section', 'doc_export', 'sheet_generate', 'slides_generate', 'audio_overview', 'image_generate', 'deck_patch', 'delegate_explore'})"
+      ],
+      "added_members": [
+        "AGENT_TOOLS=frozenset({'search', 'extract', 'file_read', 'file_write', 'file_append', 'file_edit', 'file_replace_lines', 'file_insert_lines', 'exact_replace', 'run_project_script', 'file_list', 'hardware_identity', 'shell', 'shell_exec', 'shell_view', 'shell_wait', 'shell_write_to_process', 'shell_kill_process', 'code_exec', 'browser', 'verify_web_app', 'design_lint', 'preview_start', 'preview_status', 'preview_logs', 'preview_stop', 'server_status', 'submit_plan', 'update_plan_progress', 'think', 'context_memory', 'app_set_tweak', 'app_snapshot_version', 'scaffold_starter', 'reference_pack', 'release_declare', 'add_trusted_component', 'eject_trusted_component', 'doc_set_section', 'doc_export', 'sheet_generate', 'slides_generate', 'audio_overview', 'image_generate', 'deck_patch', 'delegate_explore'})"
+      ],
+      "old_signature_sha256": "f3014ff74c369d9d93043b1c1a26bf8b48d2dd50513c4b07a16da243f0adfdf7",
+      "new_signature_sha256": "9f84522b49edf2ec983427d0dc336c21bd90c2238159b2dc8f18f111e62baa30",
+      "owner_package": "PKG-46-REFERENCE-PACKS",
+      "accepting_commit": "10671f9c08b546fe4174655491d833cb6984f989",
+      "accepting_receipt": "development/governance/CURRENT-STATE.md"
     },
     {
       "surface": "python",
