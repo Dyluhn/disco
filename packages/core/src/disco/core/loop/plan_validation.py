@@ -15,6 +15,7 @@ from ..events import (
     ConversationStatus,
     Event,
     EventSource,
+    LLMMessage,
     MessageEvent,
     PlanEvent,
     PlanStep,
@@ -95,9 +96,7 @@ def _plan_by_transition(events: list[Event], approval: StatusEvent) -> PlanEvent
     return plan if actual_fingerprints == transition.new_predicate_fingerprints else None
 
 
-def _plan_by_legacy_approval(
-    events: list[Event], approval: StatusEvent
-) -> PlanEvent | None:
+def _plan_by_legacy_approval(events: list[Event], approval: StatusEvent) -> PlanEvent | None:
     """Reconstruct the plan from a legacy (untyped) approval marker."""
     candidates = [
         event
@@ -125,6 +124,7 @@ def _approved_plan_at(events: list[Event], approval_seq: int) -> PlanEvent | Non
             if best is None or (event.seq or 0) >= (best.seq or 0):
                 best = event
     return best
+
 
 _MENTION_OPEN = "<mentioned-element>"
 _MENTION_CLOSE = "</mentioned-element>"
@@ -487,3 +487,87 @@ def latest_user_text(events: list[Event]) -> str | None:
     if latest is None:
         return None
     return (latest.message.content or "").strip() or None
+
+
+# --- PKG-47: Reference Packs must be read before the first plan ------------------
+
+REFERENCE_PACK_UNREAD_DIAGNOSTIC = "reference_packs_unread"
+_REFERENCE_PACK_NUDGE_CAP = 2
+
+
+def bound_reference_pack_indexes(events: list[Event]) -> list[str]:
+    """The ``references/<pack>/PACK.md`` paths of the packs bound to this conversation
+    (the latest binding marker wins; an empty binding clears the requirement)."""
+    latest: list[str] = []
+    for e in events:
+        if isinstance(e, MessageEvent) and "reference_packs" in (e.meta or {}):
+            markers = e.meta.get("reference_packs") or []
+            latest = [str(m["path"]) for m in markers if isinstance(m, dict) and m.get("path")]
+    return latest
+
+
+def _normalized_read_path(arguments: dict[str, object]) -> str | None:
+    raw = arguments.get("path")
+    if not isinstance(raw, str):
+        return None
+    path = raw.strip()
+    while path.startswith("./"):
+        path = path[2:]
+    return path.lstrip("/") or None
+
+
+def unread_reference_pack_indexes(events: list[Event]) -> list[str]:
+    """Bound PACK.md paths the agent has not read yet (any prior ``file_read`` counts)."""
+    required = bound_reference_pack_indexes(events)
+    if not required:
+        return []
+    read: set[str] = set()
+    for e in events:
+        if isinstance(e, ActionEvent) and e.tool_call is not None:
+            if e.tool_call.tool_name == "file_read":
+                path = _normalized_read_path(e.tool_call.arguments)
+                if path is not None:
+                    read.add(path)
+    return [path for path in required if path not in read]
+
+
+def reference_pack_nudges_since_current_planning(events: list[Event]) -> int:
+    """How many times this planning segment already sent the read-first reminder."""
+    start_seq = current_planning_segment_start_seq(events)
+    if start_seq is None:
+        return 0
+    return sum(
+        1
+        for e in events
+        if (e.seq or 0) > start_seq
+        and isinstance(e, MessageEvent)
+        and (e.meta or {}).get("diagnostic") == REFERENCE_PACK_UNREAD_DIAGNOSTIC
+    )
+
+
+def reference_pack_read_first_reminder(unread: list[str]) -> MessageEvent:
+    listing = "\n".join(f"- {path}" for path in unread)
+    return MessageEvent(
+        source=EventSource.ENVIRONMENT,
+        message=LLMMessage(
+            role="user",
+            content=(
+                "<system-reminder>\nThe user selected reference packs for this build and "
+                "you have not read their index yet. Before proposing a plan, file_read each "
+                f"of these, then read the listed files that matter:\n{listing}\n"
+                "Then call submit_plan.\n</system-reminder>"
+            ),
+        ),
+        meta={"diagnostic": REFERENCE_PACK_UNREAD_DIAGNOSTIC},
+    )
+
+
+def reference_packs_block_submission(events: list[Event]) -> list[str]:
+    """The unread indexes that should turn this submit_plan back into reading, or []
+    once the reminder cap is reached (the plan is then accepted, never terminated)."""
+    unread = unread_reference_pack_indexes(events)
+    if not unread:
+        return []
+    if reference_pack_nudges_since_current_planning(events) >= _REFERENCE_PACK_NUDGE_CAP:
+        return []
+    return unread

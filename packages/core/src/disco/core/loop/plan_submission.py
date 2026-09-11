@@ -23,6 +23,10 @@ from .engine_contracts import (
     signals,
     validate_plan_conditions,
 )
+from .plan_validation import (
+    reference_pack_read_first_reminder,
+    reference_packs_block_submission,
+)
 
 if TYPE_CHECKING:
     from .ports import (
@@ -34,19 +38,12 @@ if TYPE_CHECKING:
     )
 
     class _LoopFacet(
-
         ConversationModePort,
-
         GateCounterPort,
-
         LoopEventPort,
-
         PlanLifecyclePort,
-
         TurnControlPort,
-
         Protocol,
-
     ):
         """The loop capability this module uses: conversation mode, gate counters, the event log,
         the plan lifecycle, turn control.
@@ -205,9 +202,7 @@ class PlanSubmissionController:
         self._loop._plan_nudges = 0
         return await self._loop._route_plan_approval_gate(recovered)
 
-    async def _recover_empty_revision_plan(
-        self, plan: PlanEvent, events: list[Event]
-    ) -> Disp:
+    async def _recover_empty_revision_plan(self, plan: PlanEvent, events: list[Event]) -> Disp:
         if not signals.revision_force_submit(events):
             await self._loop._emit(
                 StatusEvent(
@@ -251,6 +246,13 @@ class PlanSubmissionController:
         return await self._loop._route_plan_approval_gate(plan)
 
     async def handle(self, tool_call: ToolCall, events: list[Event]) -> Disp:
+        # PKG-47: packs the user selected are required reading. An early plan is
+        # turned back into reading (at most twice per planning segment), never
+        # accepted blind and never terminated.
+        unread = reference_packs_block_submission(events)
+        if unread:
+            await self._loop._emit(reference_pack_read_first_reminder(unread))
+            return Disp.CONTINUE
         self._loop._plan_explore_reads = 0
         plan = self._loop._plan_from_args(tool_call.arguments, events)
         invalid = await self._reject_invalid_conditions(plan, tool_call, events)
