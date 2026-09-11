@@ -614,6 +614,7 @@ def test_tool_context_has_no_secret_field():
         # runtime closure captures the store/config, and the tool passes only the
         # conversation id, owner id, and the NAMES-only ReleaseIntent (no values).
         "release_intent_writer",
+        "reference_pack_writer",  # PKG-47: host-owned Reference Pack writer, no secret
     }
 
 
