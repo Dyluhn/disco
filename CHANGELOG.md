@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Reference packs for full-stack builds: fifteen bundled integration recipes
+  (`packages/core/src/disco/core/references/packs/`) the Build agent reads with
+  the new `reference_pack` tool before wiring a capability — the api/web/compose
+  stack on the trusted database/auth/RBAC kits, accounts and roles, realtime and
+  presence, chat rooms and DMs, alert banners, an OpenAI-compatible AI assistant
+  with web search and context injection, RAG over uploaded documents with Chroma
+  and @-references, voice dictation, transactional email with an outbox and
+  Mailpit, Stripe payments with webhooks, photo/video uploads, live market data
+  and news with range-selectable charts, booking/inventory rules without double
+  booking, a server-authoritative multiplayer game loop with replays, and how to
+  prove each one inside the sandbox. The build prompts point at the packs the way
+  they point at starter kits and trusted components.
+
 ## v0.2.0 - 2026-09-10
 
 First published release; everything since the 2026-07-03 tag.

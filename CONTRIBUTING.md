@@ -306,6 +306,18 @@ standing promise back to you: **the license will never change.** disco will not
 be relicensed to a source-available or commercial license, so your contribution stays
 Apache-2.0 forever (see the README's License section).
 
+## Reference packs
+
+`packages/core/src/disco/core/references/packs/*.md` are the integration recipes
+the Build agent reads through the `reference_pack` tool (the catalog in the tool
+description is generated from the files). A pack is one capability: a `# Title`
+line, a `> summary` line, then the recipe — stack, pinned dependency majors,
+env var **names** (never values), the code shape, a "Prove it" section that says
+how to verify it inside the sandbox, and security notes. Add a pack by adding a
+file; `packages/core/tests/test_reference_packs.py` pins the set, so extend
+`EXPECTED_IDS` in the same change. Keep packs concrete and short enough to read
+in one tool call; the agent adapts them, it does not paste them.
+
 ## Benchmarks against the field: sota-scan
 
 `/sota-scan` (a project skill under `.claude/skills/`, vendored from

@@ -47,6 +47,7 @@ const TOOL_PROGRESS: Record<string, string> = {
   audio_overview: "Generating an audio overview",
   image_generate: "Generating an image",
   scaffold_starter: "Setting up the project starter",
+  reference_pack: "Reading a reference pack",
   app_create: "Creating the app scaffold",
   app_add_section: "Adding an app section",
   app_update_content: "Updating app content",

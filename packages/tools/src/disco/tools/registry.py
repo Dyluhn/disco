@@ -141,6 +141,8 @@ AGENT_TOOLS = frozenset(
         "app_snapshot_version",
         # P7: materialize the contract's host-owned starter frame
         "scaffold_starter",
+        # reference packs — bundled integration recipes (realtime, payments, RAG, …)
+        "reference_pack",
         # WO-5: release_declare — record the TYPED, NAMES-ONLY runtime release intent
         # as a host-owned `release-intent.json` sidecar (a CANDIDATE input to release
         # detection, never a verification claim). Free-form Build/Agent scope ONLY;

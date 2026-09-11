@@ -48,6 +48,7 @@ const VERB: Record<string, (a: Record<string, unknown>) => string> = {
     return `Generated an image${preview ? `: "${preview}"` : ""}`;
   },
   scaffold_starter: () => `Set up the project starter`,
+  reference_pack: (a) => `Read the ${a.pack ? String(a.pack) : "catalog of"} reference pack`,
   app_create: () => `Created the app scaffold`,
   app_add_section: () => `Added an app section`,
   app_update_content: () => `Updated app content`,
