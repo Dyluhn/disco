@@ -36,12 +36,12 @@ from disco.core.llm.prompts import DriverPrompts
 # is `stream: true` plus the `stream_options` the assembler already attaches to
 # every streamed request; message/tool bytes are byte-for-byte unchanged.
 # Re-accepted 2026-09-11 (PKG-46, reworded in PKG-47): the driver system prompt
-# gained the playbook guidance (a planner bullet beside the starter-kit and
+# gained the playbook guidance and, for the executor, the Reference Pack rule (a planner bullet beside the starter-kit and
 # trusted-component bullets, and an executor rule), so the planning and resume
 # request bytes and their token budgets moved; keys, roles, tools and
 # max_tokens are unchanged.
 _PLANNING_SHA256 = "19c47b3df6b16a11492cb9e0d281ad27c3979c04ef0cc3e8a1236f02fc01841d"
-_RESUME_SHA256 = "90af26c6fb22e3d1cce207776b826b88aedb32697a76ae0ef4890229d82dd35b"
+_RESUME_SHA256 = "e8faccf7cb6628b2813fba85fa6b107511b991bbaf9cfc86e8f462bd8cd3b5f3"
 _EXPECTED_KEYS = (
     "model",
     "messages",
@@ -304,7 +304,7 @@ async def test_long_horizon_resume_retries_the_exact_compacted_request() -> None
     response = await router.complete(request, context=context)
 
     assert estimate is not None
-    assert _budget_values(estimate) == (65_536, 777, 17_686, 17_073, 430, 5, 2)
+    assert _budget_values(estimate) == (65_536, 777, 18_098, 17_485, 430, 5, 2)
     assert response.routing is not None and response.routing.attempt == 2
     assert len(captured) == 2
     assert captured[0] == captured[1]

@@ -40,6 +40,7 @@ from .executor_parts.invocation import (
     success_result,
     validated_receipts,
 )
+from .reference_packs import ReferencePackWriter
 from .registry import ToolRegistry, ToolScope
 from .release_intent import ReleaseIntentWriter
 from .sandbox.base import SandboxInstance
@@ -84,6 +85,7 @@ class DefaultToolExecutor:
         workspace_fence: Callable[[], AbstractAsyncContextManager[None]] | None = None,
         execution_admission: Callable[[str | None], Awaitable[str | None]] | None = None,
         release_intent_writer: ReleaseIntentWriter | None = None,
+        reference_pack_writer: ReferencePackWriter | None = None,
     ) -> None:
         self._registry = registry
         self._scope = scope
@@ -121,6 +123,7 @@ class DefaultToolExecutor:
         # so release_declare (in_process) persists under the ACTIVE configured store.
         # None ⇒ no host writer wired (standalone executor) ⇒ the tool fails closed.
         self._release_intent_writer = release_intent_writer
+        self._reference_pack_writer = reference_pack_writer
         # ROOT-5: the conversation's effective (override-aware) driver endpoint,
         # stamped onto every ToolContext for LLM-using tools (slides_generate).
         self._driver_llm = driver_llm
@@ -406,6 +409,7 @@ class DefaultToolExecutor:
             browser_generation=self._browser_generation,
             browser_lane="agent",
             release_intent_writer=self._release_intent_writer,
+            reference_pack_writer=self._reference_pack_writer,
         )
 
     def _advance_workspace_mutation_epoch(

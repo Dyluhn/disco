@@ -29,6 +29,7 @@ from disco.core.events import RuntimeConstraintDeclaration
 from disco.core.llm import ToolSpec
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from .reference_packs import ReferencePackWriter
 from .release_intent import ReleaseIntentWriter
 
 
@@ -114,6 +115,11 @@ class ToolContext(BaseModel):
     # fallback store. None is the safe default: without the capability the tool fails
     # closed and can persist nothing (standalone executors carry no host writer).
     release_intent_writer: ReleaseIntentWriter | None = None
+    # PKG-47: the host-owned Reference Pack writer (create_reference_pack). The runtime
+    # injects a closure that copies validated workspace bytes into the user's library
+    # under the ACTIVE projects root; the tool never sees the root. None ⇒ the tool
+    # fails closed (standalone executors carry no host writer).
+    reference_pack_writer: ReferencePackWriter | None = None
 
 
 class ToolOutcome(BaseModel):

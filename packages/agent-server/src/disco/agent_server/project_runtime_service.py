@@ -6,7 +6,10 @@ from disco.core.llm import ConfigStore
 from disco.core.release.spec import ReleaseIntent
 from disco.core.store.sqlite import SqliteEventStore
 from disco.tools.projects import ProjectStore, StorageError, StorageStatus
+from disco.tools.reference_packs import ReferencePackWriteError
 from disco.tools.release_intent import ReleaseIntentWriteError
+
+from .reference_pack_store import JsonReferencePackStore, ReferencePackError
 
 
 class ProjectRuntimeService:
@@ -52,3 +55,29 @@ class ProjectRuntimeService:
                 "failed to persist the release intent under the configured projects "
                 "root; nothing was persisted.",
             ) from exc
+
+    async def create_reference_pack(
+        self, owner_id: str, name: str, description: str, files: list[tuple[str, bytes]]
+    ) -> dict:
+        """Copy validated bytes into a new pack under the active projects root."""
+        project_store = self.current_project_store()
+        status = project_store.status()
+        root = project_store.root
+        if status is not StorageStatus.OK or root is None:
+            raise ReferencePackWriteError(
+                "invalid_projects_root",
+                "the configured projects root is not a writable directory, so the pack "
+                f"was not saved (root status: {status.value}).",
+            )
+        try:
+            record = JsonReferencePackStore(root).create(
+                owner_id=owner_id, name=name, description=description, files=files
+            )
+        except ReferencePackError as exc:
+            raise ReferencePackWriteError("invalid_reference_pack", str(exc)) from exc
+        except OSError as exc:
+            raise ReferencePackWriteError(
+                "reference_pack_persist_failed",
+                "failed to persist the pack under the configured projects root; nothing was saved.",
+            ) from exc
+        return record.summary()

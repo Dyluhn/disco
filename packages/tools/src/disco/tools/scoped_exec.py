@@ -10,6 +10,7 @@ from disco.core.contract import ContractScopeGuard
 from disco.core.llm import ModelExecutionPolicy
 
 from .executor import DefaultToolExecutor
+from .reference_packs import ReferencePackWriter
 from .registry import ToolRegistry, ToolScope
 from .release_intent import ReleaseIntentWriter
 from .sandbox.base import SandboxInstance
@@ -34,6 +35,7 @@ class ExecutorKwargs(TypedDict, total=False):
     workflow_events: Callable[[str, dict[str, Any]], Awaitable[None]] | None
     primitive_live_verifier: PrimitiveLiveVerifier | None
     release_intent_writer: ReleaseIntentWriter | None
+    reference_pack_writer: ReferencePackWriter | None
 
 
 class ScopedPhaseExecutor(DefaultToolExecutor):

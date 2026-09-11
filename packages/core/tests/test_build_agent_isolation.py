@@ -233,6 +233,7 @@ _EXPECTED_AGENT_TOOLS = [
     "build_playbook",  # PKG-46: bundled integration recipes, read before wiring a capability
     "code_exec",
     "context_memory",  # CXT-2: durable .disco/context working memory
+    "create_reference_pack",  # PKG-47: the one agent-side mutation of the Reference Pack library
     "deck_patch",  # C-EDIT-4: RFC-6902 deck edits
     "delegate_explore",
     "design_lint",  # B3 appkit port — read-only design-slop probe (nightly EPIC D3 parity)

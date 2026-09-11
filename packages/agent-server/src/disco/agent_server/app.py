@@ -54,6 +54,7 @@ from .routes import (
     make_preview_router,
     make_probes_router,
     make_projects_router,
+    make_reference_packs_router,
     make_release_router,
     make_report_router,
     make_research_pool_router,
@@ -339,6 +340,7 @@ def _include_routers(
     app.include_router(make_suggestions_router(store, runtime))
     app.include_router(make_workflows_router(store, runtime))
     app.include_router(make_spaces_router(store, runtime))
+    app.include_router(make_reference_packs_router(runtime))
     app.include_router(make_schedules_router(store, runtime))
     app.include_router(make_activity_router(store, runtime))
     app.include_router(make_ws_router(store, runtime))

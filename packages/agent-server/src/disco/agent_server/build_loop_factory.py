@@ -338,6 +338,7 @@ class BuildExecutorFactory:
             ),
             "execution_admission": execution_admission,
             "release_intent_writer": self._project.write_release_intent,
+            "reference_pack_writer": self._project.create_reference_pack,
         }
 
     def _workflow_event_sink(self, conversation_id: str) -> Any:

@@ -20,6 +20,7 @@ from .preview import make_preview_router
 from .preview_edit import make_preview_edit_router
 from .probes import make_probes_router
 from .projects import make_projects_router
+from .reference_packs import make_reference_packs_router
 from .release import make_release_router
 from .report import make_report_router
 from .research_pool import make_research_pool_router
@@ -55,6 +56,7 @@ __all__ = [
     "make_schedules_router",
     "make_sessions_router",
     "make_share_router",
+    "make_reference_packs_router",
     "make_spaces_router",
     "make_storage_router",
     "make_suggestions_router",

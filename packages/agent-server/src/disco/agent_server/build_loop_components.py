@@ -648,6 +648,10 @@ class LoopProjectStorePort(Protocol):
         self, conversation_id: str, owner_id: str, intent: ReleaseIntent
     ) -> None: ...
 
+    async def create_reference_pack(
+        self, owner_id: str, name: str, description: str, files: list[tuple[str, bytes]]
+    ) -> dict[str, Any]: ...
+
 
 @runtime_checkable
 class LoopDeepResearchPort(Protocol):
