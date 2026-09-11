@@ -61,6 +61,7 @@ PROTECTED: tuple[str, ...] = (
     "development/scripts/architecture/ts_scan.mjs",
     "development/scripts/architecture/seal.py",
     "development/scripts/architecture/ci_contract.py",
+    "development/scripts/architecture/ci_contract_release.py",
     # PKG-19-CERT-STRUCTURAL (F7): the ordered-gate comparator and the
     # ordered-list position helpers moved here when ci_contract.py hit its
     # 700-line budget. Every _parts module of a protected gate is protected
