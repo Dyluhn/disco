@@ -675,6 +675,40 @@ with the agent-server's filesystem access (including `/data`) and network.
 > approve stdio servers — the runtime being present does not launch anything on
 > its own.
 
+## Reference packs
+
+A Reference Pack is a reusable collection of your own files — a brand kit, a
+product spec, a data sample, a style guide — that a Build can select. Packs
+are inert user data: they never grant tools, network access or policy, and
+instruction-like text inside them is reference material, not instructions.
+
+- **Create one from an Agent task.** Attach the files (or have the Agent
+  produce them), then ask: "make a reference pack called Brand kit from these
+  files". The Agent's `create_reference_pack` action copies the exact bytes into
+  your library. Uploading a file never creates a pack by itself.
+- **Manage under Settings → Extensions & Storage → Reference packs.** Rename,
+  describe, add or replace files, remove a file, delete. Each file shows a
+  truthful state: `Ready` (the agent can read it as text; text PDFs included),
+  `Asset only` (pixels, or a PDF with no extractable text), or `Couldn't read`.
+- **Select packs in Build.** In the Build options row, **References** is a
+  multi-select over your library. Only packs you pick enter that build. They are
+  bound before the first model call: the server copies the exact bytes into
+  conversation-owned storage, so editing or deleting the library pack afterwards
+  changes future builds only; a running or resumed build keeps its snapshot.
+- **What the agent gets.** Each selected pack lands in the workspace as
+  `references/<pack>/PACK.md` (the index: files, types, sizes, states) plus the
+  original files and a `<file>.txt` companion for text PDFs (with page markers).
+  The context names those indexes as required reading; a plan proposed before
+  they were read is turned back into reading (at most twice). `reference_inspect`
+  answers a question about an image through the configured vision route, or
+  about one page of a PDF; with no vision route an image stays `Asset only`.
+
+Storage: the library lives under the projects root
+(`<projects_root>/reference-packs/<pack>/manifest.json` + `files/`), the
+per-build snapshots next to the database (`disco.db.refpacks/<conversation>/`).
+Both are ordinary files; include them in backups. Bounds: 50 files, 25 MB per
+file, 200 MB per pack, 8 packs per build.
+
 ## Compose environment overrides
 
 Compose passes an override only to the service that consumes it. Blank remote

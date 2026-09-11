@@ -51,6 +51,7 @@ This page is the longer inventory.
   submissions table, owner inbox), `seo` (meta/OG/JSON-LD, sitemap.xml,
   robots.txt), and `collection` (structured content collections).
 - **Design directions** — a 22-direction design library, with a numeric
+- **Reference packs** — your own reusable file collections (brand kits, specs, samples): created from an Agent task, managed in Settings, selected per Build, pinned by exact bytes and read before the agent plans.
   design-constraint lint, behind the always-on art direction of generated sites.
 
 ## Known limits

@@ -4,6 +4,17 @@
 
 ### Added
 
+- Reference Packs — the user's persistent, reusable file collections. Create
+  one from an Agent task (`create_reference_pack`), manage it under Settings →
+  Reference packs (rename, describe, add/replace/remove files with a truthful
+  `Ready` / `Asset only` / `Couldn't read` state, delete), and select packs in
+  the Build options row. Selected packs are bound before the first model call
+  — exact bytes copied into conversation-owned storage, materialised as
+  `references/<pack>/PACK.md` plus the files (page-marked text companions for
+  PDFs), named in context as required reading; an early `submit_plan` is turned
+  back into reading. `reference_inspect` questions an image through the
+  configured vision route or one page of a PDF. Later library edits never touch
+  a bound build.
 - Playbooks for full-stack builds: fifteen bundled integration recipes
   (`packages/core/src/disco/core/playbooks_data/`) the Build agent reads with
   the new `build_playbook` tool before wiring a capability — the api/web/compose
