@@ -314,7 +314,7 @@ description is generated from the files). A playbook is one capability: a
 `# Title` line, a `> summary` line, then the recipe — stack, pinned dependency
 majors, env var **names** (never values), the code shape, a "Prove it" section
 that says how to verify it inside the sandbox, and security notes. Add one by
-adding a file; `packages/core/tests/test_playbooks.py` pins the set, so extend
+adding a file; `packages/core/tests/test_reference_packs.py` (a historical file name) pins the set, so extend
 `EXPECTED_IDS` in the same change. Keep playbooks concrete and short enough to
 read in one tool call; the agent adapts them, it does not paste them. (They are
 not Reference Packs — those are the user's own file collections, see

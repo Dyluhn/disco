@@ -1,4 +1,5 @@
-"""`build_playbook`: catalog with no args, the playbook text by id, a helpful error for an
+"""`build_playbook` (file name kept from the PKG-46 landing, whose inventory record pins it):
+catalog with no args, the playbook text by id, a helpful error for an
 unknown id, and presence in the default registry and the free-form build scope."""
 
 from __future__ import annotations

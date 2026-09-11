@@ -1,4 +1,5 @@
-"""Playbooks: every bundled playbook parses, has the header the catalog needs, and
+"""Playbooks (file name kept from the PKG-46 landing, whose inventory record pins it):
+every bundled playbook parses, has the header the catalog needs, and
 is reachable by id; the registry is stable across calls."""
 
 from __future__ import annotations
