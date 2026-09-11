@@ -262,10 +262,11 @@ branch, add it to that anchor.
 ## Cutting a release (maintainers)
 
 A release is a landing head with a tag on it. In the candidate: promote the
-CHANGELOG section to `## vX.Y.Z - date`, bump the package versions
-(`packages/*/pyproject.toml`, `uv.lock`, `frontend/package.json` +
-`package-lock.json`) and the default image tag in `compose.yaml`,
-`compose.build.yaml` and `.env.example`. Land it, then tag the landing head:
+CHANGELOG section to `## vX.Y.Z - date` and move the default image tag in
+`compose.yaml`, `compose.build.yaml` and `.env.example`. The version lives in
+the tag and the CHANGELOG only: `packages/*/pyproject.toml` and
+`frontend/package.json` are pinned contract files whose bytes the public-API
+authority does not let a landing change. Land it, then tag the landing head:
 
 ```bash
 git tag -a vX.Y.Z <landing head> -m "vX.Y.Z"

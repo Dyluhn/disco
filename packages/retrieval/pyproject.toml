@@ -3,7 +3,7 @@
 # orchestrator-mediated CapabilitySet, so retrieval depends only on `core`.
 [project]
 name = "disco-retrieval"
-version = "0.2.0"
+version = "0.1.0"
 description = "Retrieval engine (discovery/extraction/rerank) + grounding/citation pipeline."
 requires-python = ">=3.12"
 dependencies = [

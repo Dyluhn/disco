@@ -3,7 +3,7 @@
 # and the §7.5 REST surface over the core EventStore. No agent loop yet.
 [project]
 name = "disco-agent-server"
-version = "0.2.0"
+version = "0.1.0"
 description = "Per-conversation runtime: WebSocket + REST over the core event log."
 requires-python = ">=3.12"
 dependencies = [

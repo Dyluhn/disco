@@ -4,7 +4,7 @@
 # LLM router, security) land here in subsequent phases.
 [project]
 name = "disco-core"
-version = "0.2.0"
+version = "0.1.0"
 description = "Event & State spine + agent core for the disco platform."
 requires-python = ">=3.12"
 dependencies = [

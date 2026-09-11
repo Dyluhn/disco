@@ -3,7 +3,7 @@
 # delete) gateway the frontend calls.
 [project]
 name = "disco-app-server"
-version = "0.2.0"
+version = "0.1.0"
 description = "User-facing orchestrator: settings + library API over the core event store."
 requires-python = ">=3.12"
 dependencies = [
