@@ -696,7 +696,7 @@ class TestMappingStatic:
             # recorded in `renamed_test_transitions`; the counts below are net
             # of them, since a rename removes one identity and adds another.
             "python_test_file_count": 948,
-            "python_static_test_id_count": 11652,
+            "python_static_test_id_count": 11658,
             "typescript_test_file_count": 302,
             "typescript_static_test_id_count": 1604,
         }
@@ -1275,11 +1275,11 @@ class TestCollectedCounts:
             # for the two defects the V51 regeneration exposed, and
             # `tests/architecture/test_frontend_relocations.py` (+14 collected
             # against +11 static: one case is parametrized four ways): +28.
-            "tests": 452,
+            "tests": 458,
         }
         assert set(collected["roots"]) == set(test_inventory.PYTHON_ROOTS)
         assert collected["counts"] == expected
-        assert collected["total"] == 14189 == sum(expected.values())
+        assert collected["total"] == 14195 == sum(expected.values())
         for root in test_inventory.PYTHON_ROOTS:
             ids = collected["roots"][root]
             assert len(ids) == expected[root]
@@ -1295,7 +1295,7 @@ class TestCollectedCounts:
         problems: list[str] = []
         result = test_inventory._check_collected_ids(baseline, REPO_ROOT, problems)
         assert problems == []
-        assert result == {"collected_total": 14189}
+        assert result == {"collected_total": 14195}
 
         drifted = copy.deepcopy(baseline)
         drifted["collected"]["roots"]["tests"] = list(
@@ -1314,9 +1314,9 @@ class TestBaselineValidation:
         assert result == {
             "ok": True,
             "problems": [],
-            "python_static_ids": 11652,
+            "python_static_ids": 11658,
             "typescript_static_ids": 1604,
-            "collected_total": 14189,
+            "collected_total": 14195,
         }
 
         latest_identity = test_inventory.subprocess.check_output(

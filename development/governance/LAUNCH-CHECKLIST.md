@@ -128,4 +128,16 @@ Current evidence: /var/home/dylan/AI-Work/disco-gap-closure-2026-09-05/CLOSEOUT-
 
 - **Only one install path is proven.** Debian, macOS and WSL2 installs are
   untested, as is the anonymous HTTPS clone path; the verified path is
-  Ubuntu 24.04 + rootless Docker (PKG-22).
+  Ubuntu 24.04 + rootless Docker (PKG-22). As of PKG-45 the default path pulls
+  published images instead of building; the build-from-checkout override was
+  verified on a VM, the pull path cannot be until the v0.2.0 images exist.
+
+- **v0.2.0 images and release are not published yet.** PKG-45 lands the
+  release workflow, the CHANGELOG section and the compose pull path; the tag
+  push that builds the images needs GitHub Actions to run, which the private
+  repository's billing state has blocked since 2026-09-10. Owner decision: flip
+  the repository public (Actions minutes are then free) or restore billing,
+  then push the tag, publish the draft release and confirm the three GHCR
+  packages are public. arm64 images are built on native runners but no arm64
+  host here can run them.
+  → `.github/workflows/release.yml`, `CONTRIBUTING.md` §Cutting a release.
