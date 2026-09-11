@@ -21,6 +21,7 @@ import { DriverModelNotice } from "@/components/DriverModelNotice";
 import { focusModelControl } from "@/lib/focusModelControl";
 import { QueryInput } from "@/components/QueryInput";
 import { BuildModelPicker } from "@/components/build/BuildModelPicker";
+import { ReferencePackPicker } from "@/components/build/ReferencePackPicker";
 // NOTE: this is `components/build/BuildSurface.tsx` (the OTHER file) — not the
 // file this directory decomposes. It is not ours to edit; only its
 // `UploadComposer` export is consumed here, unchanged from the original.
@@ -125,6 +126,10 @@ export function BuildEmptyState({
                         cid exists, lazily creating the build conversation the
                         first message will run. */}
                     <UploadComposer cid={b.preCid} ensureCid={b.ensurePreCid} />
+                    <ReferencePackPicker
+                      selected={b.referencePackIds}
+                      onChange={b.setReferencePackIds}
+                    />
                     {framing === "build" && <ImportProjectDialog />}
                     {/* Agent surface: foreground the MCP tools it can reach (its
                         reason for being). */}

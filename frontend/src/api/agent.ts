@@ -148,6 +148,8 @@ export async function createBuildConversation(
    *  Assist is never auto-enabled by hosting; the user opts in via the UI toggle. */
   assist: boolean | null = null,
   quiet = false,
+  /** PKG-47: Reference Packs to bind before the first model call (ids from the library). */
+  referencePackIds: string[] = [],
 ): Promise<string> {
   if (!agentLive()) return FIXTURE_CID;
   const res = await agentSend<{ conversation_id: string }>("POST", "/conversations", {
@@ -156,6 +158,7 @@ export async function createBuildConversation(
     autonomous,
     quiet,
     assist,
+    ...(referencePackIds.length > 0 ? { reference_pack_ids: referencePackIds } : {}),
   });
   return res.conversation_id;
 }
@@ -172,6 +175,8 @@ export async function patchConversationSettings(
     depthTier?: "quick" | "standard_deep" | "exhaustive";
     recencyWindow?: "month" | "week" | null;
     sources?: string[];
+    /** PKG-47: replace the Build's Reference Pack selection (empty list clears). */
+    referencePackIds?: string[];
   },
 ): Promise<void> {
   if (!agentLive()) return;
@@ -185,6 +190,9 @@ export async function patchConversationSettings(
       ? { recency_window: settings.recencyWindow }
       : {}),
     ...(settings.sources !== undefined ? { sources: settings.sources } : {}),
+    ...(settings.referencePackIds !== undefined
+      ? { reference_pack_ids: settings.referencePackIds }
+      : {}),
   });
 }
 

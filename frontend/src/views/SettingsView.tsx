@@ -16,6 +16,7 @@ import { ProjectStorageSection } from "@/components/settings/ProjectStorageSecti
 import { ProvidersSection } from "@/components/settings/ProvidersSection";
 import { RoleFallbackSection } from "@/components/settings/RoleFallbackSection";
 import { SandboxRuntimeSection } from "@/components/settings/SandboxRuntimeSection";
+import { ReferencePacksSection } from "@/components/settings/ReferencePacksSection";
 import { SkillsSection } from "@/components/settings/SkillsSection";
 import {
   useAssignments,
@@ -375,6 +376,9 @@ export function SettingsView() {
             >
               <SettingsItem id="project-storage">
                 <ProjectStorageSection />
+              </SettingsItem>
+              <SettingsItem id="reference-packs">
+                <ReferencePacksSection />
               </SettingsItem>
               <SettingsItem id="skills">
                 <SkillsSection />

@@ -195,6 +195,9 @@ export function useBuild(
   // auto-enabled by hosting (a capable local model like Qwen 27B is not sandbagged).
   // Off by default; the user flips it for a genuinely weak model. Locked once work begins.
   const [assistChoice, setAssistChoice] = useState(false);
+  // PKG-47: Reference Packs the user picked for this build. Bound (snapshotted)
+  // server-side before the first model call; never selected automatically.
+  const [referencePackIds, setReferencePackIds] = useState<string[]>([]);
   const { verbose: verboseChat } = useVerboseAgentChat();
   const quietChoice = !verboseChat;
 
@@ -229,6 +232,7 @@ export function useBuild(
       autonomous: boolean;
       assist: boolean;
       quiet: boolean;
+      referencePackIds: string[];
     }) =>
       createBuildConversation(
         opts.modelOverride,
@@ -236,6 +240,7 @@ export function useBuild(
         opts.autonomous,
         opts.assist,
         opts.quiet,
+        opts.referencePackIds,
       ),
   });
 
@@ -252,6 +257,7 @@ export function useBuild(
         autonomous: boolean;
         quiet: boolean;
         assist: boolean;
+        referencePackIds: string[];
       };
     }): Promise<BuildSession> => {
       const cid = await targetCid;
@@ -284,6 +290,7 @@ export function useBuild(
             autonomous: autonomousChoice,
             quiet: quietChoice,
             assist: assistChoice,
+            referencePackIds,
           },
         });
         return;
@@ -294,6 +301,7 @@ export function useBuild(
           autonomous: autonomousChoice,
           assist: assistChoice,
           quiet: quietChoice,
+          referencePackIds,
         },
         { onSuccess: (cid) => setSession({ cid, task: trimmed, kick: true }) },
       );
@@ -305,6 +313,7 @@ export function useBuild(
       autonomousChoice,
       assistChoice,
       quietChoice,
+      referencePackIds,
       precreated.preCid,
       precreated.preCidRef,
       precreated.preCreateFlightRef,
@@ -333,6 +342,8 @@ export function useBuild(
     setAutonomousChoice,
     assistChoice,
     setAssistChoice,
+    referencePackIds,
+    setReferencePackIds,
     submit,
     kill,
     reset,
