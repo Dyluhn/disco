@@ -35,8 +35,13 @@ from disco.core.llm.prompts import DriverPrompts
 # timeouts can measure progress instead of total duration. The only wire change
 # is `stream: true` plus the `stream_options` the assembler already attaches to
 # every streamed request; message/tool bytes are byte-for-byte unchanged.
-_PLANNING_SHA256 = "0fa09032cf4cbe60d414e46019864dbfcce6f93d3326a22e64ee47183899221e"
-_RESUME_SHA256 = "428da614881302da35c5cbeb383e0c1081f6058351a1751128a80beac3c94b3e"
+# Re-accepted 2026-09-11 (PKG-46): the driver system prompt gained the
+# reference-pack guidance (a planner bullet beside the starter-kit and
+# trusted-component bullets, and an executor rule), so the planning and resume
+# request bytes and their token budgets moved; keys, roles, tools and
+# max_tokens are unchanged.
+_PLANNING_SHA256 = "0f5a850eeefaee9baab5acdb02d1416ea4dec52828ca3feca2abc07d23649238"
+_RESUME_SHA256 = "a24fe11b66148db3bc093520a9f1b880bab543c9520f71dd68577fe3d244bf87"
 _EXPECTED_KEYS = (
     "model",
     "messages",
@@ -215,7 +220,7 @@ async def test_planning_request_matches_accepted_ordered_bytes() -> None:
     response = await router.complete(request, context=context)
 
     assert estimate is not None
-    assert _budget_values(estimate) == (65_536, 321, 12_196, 11_583, 430, 2, 2)
+    assert _budget_values(estimate) == (65_536, 321, 12_581, 11_968, 430, 2, 2)
     assert response.routing is not None and response.routing.attempt == 1
     assert captured[0][1] == "golden-plan"
     _assert_request(
@@ -299,7 +304,7 @@ async def test_long_horizon_resume_retries_the_exact_compacted_request() -> None
     response = await router.complete(request, context=context)
 
     assert estimate is not None
-    assert _budget_values(estimate) == (65_536, 777, 17_003, 16_390, 430, 5, 2)
+    assert _budget_values(estimate) == (65_536, 777, 17_684, 17_071, 430, 5, 2)
     assert response.routing is not None and response.routing.attempt == 2
     assert len(captured) == 2
     assert captured[0] == captured[1]
