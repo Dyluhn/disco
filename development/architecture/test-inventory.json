@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "f6bb5e3b726fe70f05eb41a48a132978ac1e5a82",
+  "source_identity": "7aa99121fe1f01a30b8efc745d7b871cbfe3d049",
   "collected": {
     "counts": {
       "packages": 12157,
       "harness": 1571,
       "integrations": 9,
-      "tests": 452
+      "tests": 458
     },
-    "total": 14189,
+    "total": 14195,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -13789,6 +13789,12 @@
         "tests/architecture/test_ci_contract.py::TestOrderedGates::test_tool_schemas_retained",
         "tests/architecture/test_ci_contract.py::TestPrecommitMutations::test_missing_precommit_config_fails",
         "tests/architecture/test_ci_contract.py::TestPrecommitMutations::test_missing_precommit_hook_fails",
+        "tests/architecture/test_ci_contract.py::TestReleaseFollowers::test_follower_needing_only_itself_fails",
+        "tests/architecture/test_ci_contract.py::TestReleaseFollowers::test_follower_needing_the_gated_job_passes",
+        "tests/architecture/test_ci_contract.py::TestReleaseFollowers::test_follower_reaching_the_gated_job_transitively_passes",
+        "tests/architecture/test_ci_contract.py::TestReleaseFollowers::test_follower_with_continue_on_error_fails",
+        "tests/architecture/test_ci_contract.py::TestReleaseFollowers::test_follower_without_needs_fails",
+        "tests/architecture/test_ci_contract.py::TestReleaseFollowers::test_shipped_release_workflow_passes",
         "tests/architecture/test_ci_contract.py::TestToolSchemasPosition::test_tool_schemas_after_ci_contract",
         "tests/architecture/test_ci_contract.py::TestToolSchemasPosition::test_tool_schemas_after_nonweb_fails",
         "tests/architecture/test_ci_contract.py::TestToolSchemasPosition::test_tool_schemas_before_ci_contract_fails",
@@ -14210,9 +14216,9 @@
     }
   },
   "mapping_static": {
-    "identity": "f6bb5e3b726fe70f05eb41a48a132978ac1e5a82",
+    "identity": "7aa99121fe1f01a30b8efc745d7b871cbfe3d049",
     "python_test_file_count": 948,
-    "python_static_test_id_count": 11652,
+    "python_static_test_id_count": 11658,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -26410,6 +26416,11 @@
       "tests/architecture/test_ci_contract.py::test_correct_order_passes",
       "tests/architecture/test_ci_contract.py::test_duplicate_gate_in_workflow_detected",
       "tests/architecture/test_ci_contract.py::test_error_suppression_detected",
+      "tests/architecture/test_ci_contract.py::test_follower_needing_only_itself_fails",
+      "tests/architecture/test_ci_contract.py::test_follower_needing_the_gated_job_passes",
+      "tests/architecture/test_ci_contract.py::test_follower_reaching_the_gated_job_transitively_passes",
+      "tests/architecture/test_ci_contract.py::test_follower_with_continue_on_error_fails",
+      "tests/architecture/test_ci_contract.py::test_follower_without_needs_fails",
       "tests/architecture/test_ci_contract.py::test_full_ci_contract_passes",
       "tests/architecture/test_ci_contract.py::test_missing_ci_workflow_fails",
       "tests/architecture/test_ci_contract.py::test_missing_gate_fails",
@@ -26426,6 +26437,7 @@
       "tests/architecture/test_ci_contract.py::test_pre_commit_hook_scripts_complete",
       "tests/architecture/test_ci_contract.py::test_precommit_passes",
       "tests/architecture/test_ci_contract.py::test_release_passes",
+      "tests/architecture/test_ci_contract.py::test_shipped_release_workflow_passes",
       "tests/architecture/test_ci_contract.py::test_tool_schemas_after_ci_contract",
       "tests/architecture/test_ci_contract.py::test_tool_schemas_after_nonweb_fails",
       "tests/architecture/test_ci_contract.py::test_tool_schemas_before_ci_contract_fails",
@@ -43808,6 +43820,40 @@
           "tests/architecture/test_typescript_scan.py::test_small_ts_module_passes",
           "tests/architecture/test_typescript_scan.py::test_ts_context_cycle_detected",
           "tests/architecture/test_typescript_scan.py::test_ts_parse_error_collected"
+        ],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-45-RELEASE",
+      "root": "tests",
+      "source_identity_before": "f6bb5e3b726fe70f05eb41a48a132978ac1e5a82",
+      "source_identity_after": "7aa99121fe1f01a30b8efc745d7b871cbfe3d049",
+      "collected_roots": {
+        "tests": {
+          "before_count": 452,
+          "after_count": 458,
+          "added_ids": [
+            "tests/architecture/test_ci_contract.py::TestReleaseFollowers::test_follower_needing_only_itself_fails",
+            "tests/architecture/test_ci_contract.py::TestReleaseFollowers::test_follower_needing_the_gated_job_passes",
+            "tests/architecture/test_ci_contract.py::TestReleaseFollowers::test_follower_reaching_the_gated_job_transitively_passes",
+            "tests/architecture/test_ci_contract.py::TestReleaseFollowers::test_follower_with_continue_on_error_fails",
+            "tests/architecture/test_ci_contract.py::TestReleaseFollowers::test_follower_without_needs_fails",
+            "tests/architecture/test_ci_contract.py::TestReleaseFollowers::test_shipped_release_workflow_passes"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [],
+        "python_static_test_ids": [
+          "tests/architecture/test_ci_contract.py::test_follower_needing_only_itself_fails",
+          "tests/architecture/test_ci_contract.py::test_follower_needing_the_gated_job_passes",
+          "tests/architecture/test_ci_contract.py::test_follower_reaching_the_gated_job_transitively_passes",
+          "tests/architecture/test_ci_contract.py::test_follower_with_continue_on_error_fails",
+          "tests/architecture/test_ci_contract.py::test_follower_without_needs_fails",
+          "tests/architecture/test_ci_contract.py::test_shipped_release_workflow_passes"
         ],
         "typescript_test_files": [],
         "typescript_static_test_ids": [],
