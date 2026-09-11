@@ -592,7 +592,7 @@ wheels = [
 
 [[package]]
 name = "disco-agent-server"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "packages/agent-server" }
 dependencies = [
     { name = "cronsim" },
@@ -631,7 +631,7 @@ requires-dist = [
 
 [[package]]
 name = "disco-app-server"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "packages/app-server" }
 dependencies = [
     { name = "disco-core" },
@@ -650,7 +650,7 @@ requires-dist = [
 
 [[package]]
 name = "disco-core"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "packages/core" }
 dependencies = [
     { name = "cronsim" },
@@ -674,7 +674,7 @@ source = { editable = "development" }
 
 [[package]]
 name = "disco-retrieval"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "packages/retrieval" }
 dependencies = [
     { name = "disco-core" },
@@ -703,7 +703,7 @@ requires-dist = [
 
 [[package]]
 name = "disco-tools"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "packages/tools" }
 dependencies = [
     { name = "disco-core" },

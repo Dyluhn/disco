@@ -17,20 +17,21 @@ Design authorities, when code and prose disagree:
 
 ## Quickstart
 
-Linux or WSL2 host, rootless Podman, a compose provider. No Python, Node or `uv`
-on the host; every build happens inside the containers.
+Linux or WSL2 host (amd64 or arm64), rootless Podman, a compose provider. No
+Python, Node or `uv` on the host; the stack pulls the published images (about
+5 GB the first time).
 
 ```bash
 sudo apt-get update && sudo apt-get install -y git podman docker-compose   # Debian 13
 # Ubuntu 24.04: ... git podman podman-compose
-git clone https://github.com/Dyluhn/disco.git   # private: clone with your GitHub access
+git clone https://github.com/Dyluhn/disco.git
 cd disco
 systemctl --user daemon-reload
 systemctl --user start dbus.socket
 loginctl enable-linger "$USER"
 systemctl --user enable --now podman.socket
 export DISCO_SANDBOX_SOCKET=$XDG_RUNTIME_DIR/podman/podman.sock
-podman compose up -d --build
+podman compose up -d
 podman ps --format '{{.Names}} {{.Status}}'      # three containers Up (healthy)
 ```
 
@@ -117,7 +118,12 @@ Dependency direction is one way, `core → tools → agent-server → app-server
 
 ## Develop
 
-Requires [uv](https://docs.astral.sh/uv/), Python 3.12+, Node 22.
+Requires [uv](https://docs.astral.sh/uv/), Python 3.12+, Node 22. To run the
+stack from your checkout instead of the published images:
+
+```bash
+podman compose -f compose.yaml -f compose.build.yaml up -d --build
+```
 
 ```bash
 uv sync --all-packages

@@ -259,6 +259,27 @@ tag `governance/authority-commit-anchors` (an empty-tree commit whose parents
 are those commits). If a landing cites a commit that will not stay on a pushed
 branch, add it to that anchor.
 
+## Cutting a release (maintainers)
+
+A release is a landing head with a tag on it. In the candidate: promote the
+CHANGELOG section to `## vX.Y.Z - date`, bump the package versions
+(`packages/*/pyproject.toml`, `uv.lock`, `frontend/package.json` +
+`package-lock.json`) and the default image tag in `compose.yaml`,
+`compose.build.yaml` and `.env.example`. Land it, then tag the landing head:
+
+```bash
+git tag -a vX.Y.Z <landing head> -m "vX.Y.Z"
+git push origin vX.Y.Z
+```
+
+`.github/workflows/release.yml` runs the twelve gates and the suites on the
+tag, drafts the GitHub release from the CHANGELOG section (a missing section
+fails the run), and only then builds the three images on native amd64 and
+arm64 runners and pushes the multi-arch tags to GHCR. Publish the draft once
+the images are up. `check_ci_contract` allows extra jobs in that workflow only
+when they depend on `draft-release`, so nothing publishes unless every gate
+passed.
+
 ## Commit & PR conventions
 
 Conventional commits with a scope: `type(scope): summary`. Observed types in the

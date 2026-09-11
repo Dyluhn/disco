@@ -1,9 +1,10 @@
 # Sandbox base image — `disco-sandbox:base`
 
 The image the gVisor / Podman / local container backends run agent code in
-(`packages/tools/.../sandbox/`). It is the **source-of-truth copy** of the
-Dockerfile that previously lived only on the sandbox host (`/opt/sandbox/Dockerfile`
-on VM 201) — keep them in sync.
+(`packages/tools/.../sandbox/`). Published with each release as
+`ghcr.io/dyluhn/disco-sandbox:<tag>` (amd64 + arm64); the compose stack's
+`sandbox-image` service pulls it and tags it `disco-sandbox:base` in the host
+daemon (`deploy/compose/ensure_sandbox_image.py`).
 
 > **Tag name:** the canonical tag is **`disco-sandbox:base`** — it is what the
 > config default (`SandboxConfig.image`) expects. `pmx-sandbox:base` is the
@@ -34,12 +35,14 @@ on VM 201) — keep them in sync.
 
 ## Build + load
 
-The backend **never pulls** (a missing image is a typed error, by design). Build
-the image where Docker runs (the daemon host — VM 201 for gVisor) and tag it
-`disco-sandbox:base`:
+The backend **never pulls** (a missing image is a typed error, by design). On a
+daemon the compose stack does not manage, pull the published image and tag it,
+or build it there:
 
 ```sh
-# on the daemon host (e.g. VM 201), from this directory:
+docker pull ghcr.io/dyluhn/disco-sandbox:v0.2.0
+docker tag ghcr.io/dyluhn/disco-sandbox:v0.2.0 disco-sandbox:base
+# or, on the daemon host, from this directory:
 docker build -t disco-sandbox:base .
 ```
 

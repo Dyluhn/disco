@@ -13,7 +13,10 @@ edits or a required `.env` file:
 ### Prerequisites
 
 `git`, rootless **Podman**, and a compose provider. Nothing else — no Python, no
-Node, no `uv` on the host; every build happens inside the containers.
+Node, no `uv` on the host; nothing is built. The stack pulls the published
+images from GHCR (amd64 and arm64; about 5 GB the first time, most of it the
+server image's bundled encoder and TTS weights). `DISCO_IMAGE_TAG` selects a
+release; the default is the tag the checkout was cut from.
 
 ```bash
 sudo apt-get update && sudo apt-get install -y git podman docker-compose   # Debian 13
@@ -40,14 +43,7 @@ Error: invalid port format - format is [[hostIP:]hostPort:]containerPort
 and, more quietly, hands the containers environment values that still read
 `${DISCO_ENCODER_TIER:-full}`. That version does not apply a `${VAR:-default}`
 when `VAR` is unset and is also one of the service's own environment keys.
-Install `docker-compose` and run `podman compose up -d --build` again.
-
-The repository is private, so `git clone` needs your own GitHub access. Either
-put an SSH key on your account and clone `git@github.com:Dyluhn/disco.git`, or
-create a personal access token with `repo` scope and give it as the password the
-`https://` clone asks for; `gh auth login` sets up either. Without access the
-clone stops at `Repository not found` — GitHub does not distinguish "private"
-from "missing" for a client it does not recognise.
+Install `docker-compose` and run `podman compose up -d` again.
 
 **Rootless Podman** (the path this project's install testing actually covers):
 
@@ -59,7 +55,7 @@ systemctl --user start dbus.socket
 loginctl enable-linger "$USER"
 systemctl --user enable --now podman.socket
 export DISCO_SANDBOX_SOCKET=$XDG_RUNTIME_DIR/podman/podman.sock
-podman compose up -d --build
+podman compose up -d
 podman compose logs app-server
 ```
 
@@ -129,7 +125,7 @@ export DOCKER_HOST="unix://$XDG_RUNTIME_DIR/docker.sock"
 git clone https://github.com/Dyluhn/disco.git
 cd disco
 DISCO_LOCAL_ENGINE=docker DISCO_SANDBOX_SOCKET=$XDG_RUNTIME_DIR/docker.sock \
-  docker compose up -d --build
+  docker compose up -d
 docker compose logs app-server
 ```
 
@@ -137,8 +133,8 @@ Keep both exports set for every later `docker compose` command in this shell, or
 add them to `~/.bashrc` as the installer suggests.
 
 Confirm the services before going further — a compose provider can report
-success while one image failed to build. Check with `podman ps`, not `compose
-ps`: the two compose providers print different things, and only one of them
+success while one image failed to pull or start. Check with `podman ps`, not
+`compose ps`: the two compose providers print different things, and only one of them
 prints health at all.
 
 ```bash
@@ -149,9 +145,9 @@ Expect three running containers — `app-server`, `agent-server` and `frontend` 
 each **Up ... (healthy)**. The names are `disco_app-server_1` under
 podman-compose and `disco-app-server-1` under Compose v2.
 
-A fourth container, `sandbox-image`, is expected to be **Exited (0)**; it exists
-only to deposit the `disco-sandbox:base` image into your daemon and then stops.
-Add `-a` to `podman ps` to see it.
+A fourth container, `sandbox-image`, is expected to be **Exited (0)**; it pulls
+the published sandbox image into your daemon, tags it `disco-sandbox:base` (the
+name the Settings default expects), and stops. Add `-a` to `podman ps` to see it.
 
 What `podman compose ps` shows instead, and why it is not the check: under
 podman-compose it lists all four containers with health, but under the
@@ -161,12 +157,11 @@ every healthcheck is passing.
 
 Then open **http://localhost:8088** in a browser.
 
-Two things Docker prints that look like failures and are not. Compose attempts a
-registry pull before it builds, so `Error: pull access denied for disco-server`
-scrolls past on every `up --build` — the build then runs normally. And if the
-build dies within about 20 seconds on a `dns error` reaching a package index,
-that is rootless Docker's network namespace failing to reach systemd-resolved's
-loopback stub, not a problem with disco; give the daemon explicit resolvers:
+One thing Docker prints that looks like a failure and is not, when building from
+a checkout (`compose.build.yaml`): if the build dies within about 20 seconds on
+a `dns error` reaching a package index, that is rootless Docker's network
+namespace failing to reach systemd-resolved's loopback stub, not a problem with
+disco; give the daemon explicit resolvers:
 
 ```bash
 mkdir -p ~/.config/docker
@@ -372,8 +367,7 @@ fails loudly; the command never prints key material, ciphertext, or secret names
 
 ## Upgrade and uninstall
 
-Upgrade is backup-first, then rebuilds with fresh base images and starts the
-stack:
+Upgrade is backup-first, then pulls the release's images and starts the stack:
 
 ```bash
 .venv/bin/python development/scripts/self_host_data.py upgrade \
@@ -385,17 +379,18 @@ podman compose exec agent-server disco-verify --quick
 Without the lifecycle script the update is:
 
 ```bash
-git pull
+git pull                        # or: git checkout v0.2.0 — the tag pins DISCO_IMAGE_TAG
 podman compose down             # or: docker compose down
-podman compose up -d --build
+podman compose pull
+podman compose up -d
 ```
 
 The `down` is required, and `upgrade` runs the same `down` internally for the
-same reason: podman-compose 1.0.6 (Ubuntu 24.04) rebuilds the images on `up`
-but cannot replace a running container — it fails with `the container name
-"disco_frontend_1" is already in use` (exit 125) and restarts the old
-container, so the operator keeps running the old code. `down` removes
-containers only; `disco-data` survives. `down --volumes` deletes it.
+same reason: podman-compose 1.0.6 (Ubuntu 24.04) cannot replace a running
+container on `up` — it fails with `the container name "disco_frontend_1" is
+already in use` (exit 125) and restarts the old container, so the operator
+keeps running the old images. `down` removes containers only; `disco-data`
+survives. `down --volumes` deletes it.
 
 Application rollback is a source/image operation. Once a newer version has
 written a schema an older version may not understand, in-place rollback is not
@@ -462,9 +457,10 @@ boundary. Localhost deployments can leave this setting blank.
 
 ## Sandbox Image
 
-The default boot builds the sandbox image, so the Build and Agent surfaces work
-out of the box. For a lean stack without build capability, comment out the
-`sandbox-image` service and the agent-server `depends_on` entry in
+The default boot pulls the published sandbox image
+(`ghcr.io/dyluhn/disco-sandbox:<tag>`) and tags it `disco-sandbox:base` in your
+daemon, so the Build and Agent surfaces work out of the box. For a lean stack
+without build capability, comment out the `sandbox-image` service in
 `compose.yaml`.
 
 The agent-server mounts the current user's rootless Podman socket by default. On
@@ -476,12 +472,12 @@ systemctl --user start dbus.socket
 loginctl enable-linger "$USER"
 systemctl --user enable --now podman.socket
 export DISCO_SANDBOX_SOCKET=$XDG_RUNTIME_DIR/podman/podman.sock
-podman compose up -d --build
+podman compose up -d
 ```
 
 The first two lines start the per-user services the Podman install added;
-without the user D-Bus, rootless `crun` fails the image build with `sd-bus call:
-Interactive authentication required`. Logging out and back in is equivalent.
+without the user D-Bus, rootless `crun` fails to start containers with `sd-bus
+call: Interactive authentication required`. Logging out and back in is equivalent.
 `enable-linger` keeps the containers running after the operator disconnects.
 
 Export the socket rather than relying on the compose default. `compose.yaml` is
@@ -500,17 +496,17 @@ under `$XDG_RUNTIME_DIR`, not `/var/run`:
 
 ```bash
 DISCO_LOCAL_ENGINE=docker DISCO_SANDBOX_SOCKET=$XDG_RUNTIME_DIR/docker.sock \
-  docker compose up -d --build
+  docker compose up -d
 ```
 
 Rootful Docker's socket at `/var/run/docker.sock` grants root-equivalent control
 of the host. It is not selected automatically. A trusted single-user operator can
-explicitly accept that weaker host boundary (and ensure the sandbox image is
-built in that daemon):
+explicitly accept that weaker host boundary (the `sandbox-image` service pulls
+the sandbox image into that daemon):
 
 ```bash
 DISCO_LOCAL_ENGINE=docker DISCO_SANDBOX_SOCKET=/var/run/docker.sock \
-  docker compose up -d --build
+  docker compose up -d
 ```
 
 gVisor is an optional stronger tier, but **not on the rootless-Podman default
@@ -533,7 +529,7 @@ For a real gVisor boundary, install `runsc` per
 
 ```bash
 DISCO_LOCAL_ENGINE=docker DISCO_SANDBOX_SOCKET=/var/run/docker.sock \
-  DISCO_LOCAL_RUNTIME=runsc docker compose up -d --build
+  DISCO_LOCAL_RUNTIME=runsc docker compose up -d
 ```
 
 Note that `/var/run/docker.sock` is root-equivalent, so this trades one boundary
@@ -593,13 +589,11 @@ that host with your machine's LAN IP** (`hostname -I | awk '{print $1}'`) and
 make sure the service binds `0.0.0.0`, not `127.0.0.1`. The same substitution
 applies to any MCP server URL pointing at the host.
 
-The default image bakes the full encoder tier. A smaller build can be made with:
+The published image bakes the full encoder tier. A smaller server image can be
+built from a checkout with the build override:
 
 ```bash
-docker build \
-  --build-arg DISCO_ENCODER_TIER=lite \
-  -t disco-server:lite \
-  -f deploy/compose/Dockerfile.server .
+DISCO_ENCODER_TIER=lite podman compose -f compose.yaml -f compose.build.yaml up -d --build
 ```
 
 ## Providers
@@ -710,23 +704,39 @@ remain accepted by Compose where one exists.
 This proves the baked encoder and TTS assets are used with networking disabled:
 
 ```bash
-podman run --rm --network none disco-server \
-  python /app/scripts/offline_asset_smoke.py
+podman run --rm --network none ghcr.io/dyluhn/disco-server:v0.2.0 \
+  python /app/development/scripts/offline_asset_smoke.py
 ```
 
 Expected output includes `offline assets ok` plus the embedding dimension,
 reranked passage id, and TTS sample count.
 
+## Building from source
+
+`compose.build.yaml` adds `build:` blocks under the published image names, so
+the rest of `compose.yaml` — including the `sandbox-image` tagging step — is
+unchanged:
+
+```bash
+podman compose -f compose.yaml -f compose.build.yaml up -d --build
+```
+
+Plain image builds, without compose:
+
+```bash
+podman build -t ghcr.io/dyluhn/disco-server:v0.2.0 -f deploy/compose/Dockerfile.server .
+podman build -t ghcr.io/dyluhn/disco-frontend:v0.2.0 -f frontend/Dockerfile .
+podman build -t ghcr.io/dyluhn/disco-sandbox:v0.2.0 -f deploy/sandbox/Dockerfile .
+```
+
+The published images are built by `.github/workflows/release.yml` on a tag
+push, one native runner per architecture, after every gate has passed.
+
 ## Podman Notes
 
 This host used Podman 5.8.2 for packaging verification. If `podman compose` has
 no compose provider installed, use `podman-compose` or Docker Compose for the
-compose-specific checks. Plain image builds work with:
-
-```bash
-podman build -t disco-server -f deploy/compose/Dockerfile.server .
-podman build -t disco-frontend -f frontend/Dockerfile .
-```
+compose-specific checks.
 
 ## Image Sizes
 

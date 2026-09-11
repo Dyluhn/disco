@@ -140,6 +140,7 @@ COPY --from=builder /opt/disco-cache /opt/disco-cache
 # `entrypoint: ["/entrypoint.sh"]` and the entrypoint runs /app/scripts/seed_config.py.
 COPY deploy/compose/entrypoint.sh /entrypoint.sh
 COPY deploy/compose/healthcheck.py /healthcheck.py
+COPY deploy/compose/ensure_sandbox_image.py /ensure_sandbox_image.py
 COPY development/scripts/ /app/development/scripts/
 RUN chmod +x /entrypoint.sh
 

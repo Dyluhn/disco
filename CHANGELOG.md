@@ -1,8 +1,28 @@
 # Changelog
 
-## Unreleased
+## v0.2.0 - 2026-09-10
+
+First published release; everything since the 2026-07-03 tag.
 
 ### Added
+
+- Prebuilt images on GHCR for amd64 and arm64: `ghcr.io/dyluhn/disco-server`,
+  `ghcr.io/dyluhn/disco-frontend` and `ghcr.io/dyluhn/disco-sandbox`, tagged
+  with the release. `compose.yaml` pulls them by default, so a self-host is
+  `podman compose up -d` with nothing built on the host; `compose.build.yaml`
+  is the override for building from a checkout. The release workflow builds
+  each arch on a native runner after every gate has passed and joins them into
+  one multi-arch tag per image.
+- Repository restructure: `packages/`, `frontend/`, `deploy/`, `docs/` and
+  `development/` at the top level, with governance, harness and tests under
+  `development/`.
+- Logo and definition mark (`docs/assets/`, from
+  `development/scripts/brand_logo.py`), screenshots of the surfaces, and a
+  showcase: a deep-research report on the Black Death and labour markets with
+  its PDF, deck and audio-overview exports, plus a compose-deployed app from
+  the Build agent.
+- `sota-scan` (peer benchmark skill + workflow under `development/sota-scan/`)
+  and a DeepGit MCP server entry in `.mcp.json`.
 
 - Design direction library grown from 9 to 22 directions, covering app/product
   verticals (fintech, healthcare, enterprise, ops dashboards, docs, scientific)

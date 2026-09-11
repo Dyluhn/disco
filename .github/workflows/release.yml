@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  packages: write
 
 jobs:
   draft-release:
@@ -136,3 +137,107 @@ jobs:
               --title "$TAG" \
               --notes-file release-notes.md
           fi
+
+  # Prebuilt images. Both jobs run only after every gate in draft-release has
+  # passed (check_ci_contract requires that dependency). Each arch builds on a
+  # native runner and pushes by digest; the manifests job joins the digests
+  # into one multi-arch tag per image. A hyphenated tag (v1.2.0-rc1) does not
+  # move `latest`.
+  images:
+    name: image ${{ matrix.image }} ${{ matrix.arch }}
+    needs: draft-release
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          - server
+          - frontend
+          - sandbox
+        arch:
+          - amd64
+          - arm64
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+          - image: server
+            dockerfile: deploy/compose/Dockerfile.server
+          - image: frontend
+            dockerfile: frontend/Dockerfile
+          - image: sandbox
+            dockerfile: deploy/sandbox/Dockerfile
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Image reference
+        id: ref
+        run: echo "ref=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/disco-${{ matrix.image }}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/${{ matrix.arch }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.version=${{ github.ref_name }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.licenses=Apache-2.0
+          outputs: type=image,name=${{ steps.ref.outputs.ref }},push-by-digest=true,name-canonical=true,push=true
+
+      - name: Record digest
+        run: |
+          mkdir -p digests
+          echo "${{ steps.build.outputs.digest }}" > "digests/${{ matrix.image }}-${{ matrix.arch }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.image }}-${{ matrix.arch }}
+          path: digests/*
+          if-no-files-found: error
+
+  manifests:
+    name: multi-arch manifests
+    needs: images
+    runs-on: ubuntu-latest
+    steps:
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: digests
+          pattern: digest-*
+          merge-multiple: true
+
+      - name: Create and push manifests
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          namespace="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}"
+          for image in server frontend sandbox; do
+            ref="$namespace/disco-$image"
+            tags=(-t "$ref:$TAG")
+            case "$TAG" in *-*) ;; *) tags+=(-t "$ref:latest") ;; esac
+            docker buildx imagetools create "${tags[@]}" \
+              "$ref@$(cat "digests/$image-amd64")" \
+              "$ref@$(cat "digests/$image-arm64")"
+            docker buildx imagetools inspect "$ref:$TAG"
+          done

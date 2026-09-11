@@ -1,7 +1,12 @@
 # disco — one-command self-host.
 #
-#   podman compose up -d --build
+#   podman compose up -d
 #   open http://localhost:8088
+#
+# Pulls the published images (ghcr.io/dyluhn/disco-{server,frontend,sandbox},
+# amd64 + arm64). DISCO_IMAGE_TAG selects the release; the default is the tag
+# this checkout was cut from. To build from this checkout instead, add the
+# override: `podman compose -f compose.yaml -f compose.build.yaml up -d --build`.
 #
 # Optional: copy .env.example to .env when you need non-default ports, provider
 # keys, or the explicitly less-safe root Docker socket. The model endpoint is
@@ -19,24 +24,22 @@
 name: disco
 
 services:
-  # Build-only: deposits the sandbox image into the host daemon so the agent-server
-  # (talking to the mounted socket) finds it. The agent never pulls — the image must
-  # pre-exist. `entrypoint: true` makes the container exit 0 immediately after build.
-  # Builds by DEFAULT: the Build/Agent surfaces need this image to exist. Comment
-  # this service out (and the agent-server depends_on below) for a lean stack.
+  # One-shot: pulls the published sandbox image and tags it `disco-sandbox:base`,
+  # the name the Settings default expects to find in the host daemon (the
+  # backends never pull at run time, so this is the only place it arrives). Exits
+  # 0 at once when the image is already there. Comment this service out for a
+  # lean stack without the Build/Agent surfaces.
   sandbox-image:
-    build:
-      context: .
-      dockerfile: deploy/sandbox/Dockerfile
-    image: disco-sandbox:base
-    entrypoint: ["true"]
+    image: ghcr.io/dyluhn/disco-server:${DISCO_IMAGE_TAG:-v0.2.0}
+    entrypoint: ["python", "/ensure_sandbox_image.py"]
+    environment:
+      DISCO_SANDBOX_IMAGE_SOURCE: ghcr.io/dyluhn/disco-sandbox:${DISCO_IMAGE_TAG:-v0.2.0}
+    volumes:
+      - "${DISCO_SANDBOX_SOCKET:-/run/user/1000/podman/podman.sock}:/var/run/docker.sock"
     restart: "no"
 
   app-server:
-    build:
-      context: .
-      dockerfile: deploy/compose/Dockerfile.server
-    image: disco-server
+    image: ghcr.io/dyluhn/disco-server:${DISCO_IMAGE_TAG:-v0.2.0}
     command: ["python", "-m", "disco.app_server"]
     entrypoint: ["/entrypoint.sh"]
     environment:
@@ -90,7 +93,7 @@ services:
     restart: unless-stopped
 
   agent-server:
-    image: disco-server # same image as app-server, different command
+    image: ghcr.io/dyluhn/disco-server:${DISCO_IMAGE_TAG:-v0.2.0} # same image as app-server, different command
     command: ["python", "-m", "disco.agent_server"]
     entrypoint: ["/entrypoint.sh"]
     environment:
@@ -256,8 +259,8 @@ services:
     depends_on:
       # NOTE: no container-state dependency on sandbox-image — it exits 0 by design
       # and podman-compose rejects an exited dependency ("container state improper").
-      # `up --build` still builds it by default; the agent only needs the IMAGE to
-      # exist in the daemon, not a running container.
+      # `up` still runs it by default; the agent only needs the IMAGE to exist in
+      # the daemon, not a running container.
       app-server:
         condition: service_healthy # the seed runs once; let app-server win the race
     healthcheck:
@@ -270,10 +273,7 @@ services:
     restart: unless-stopped
 
   frontend:
-    build:
-      context: .
-      dockerfile: frontend/Dockerfile
-    image: disco-frontend
+    image: ghcr.io/dyluhn/disco-frontend:${DISCO_IMAGE_TAG:-v0.2.0}
     environment:
       # Blank explicit URLs → env.js defaults to SAME-ORIGIN relative prefixes
       # (/svc/app, /svc/agent) that this container's nginx proxies to the

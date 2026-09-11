@@ -604,9 +604,10 @@ class TestCIWorkflowMutations:
         assert not result["ok"]
         assert_problem_contains(
             result["problems"],
-            "release jobs must be exactly",
             "publish-release",
+            "must depend on",
         )
+        assert_problem_contains(result["problems"], "publish-release", "declares if")
         tmp.cleanup()
 
     def test_bypass_pattern_in_ci_fails(self) -> None:
@@ -707,3 +708,95 @@ class TestPrecommitMutations:
         assert not result["ok"]
         assert any("missing" in p.lower() for p in result["problems"])
         tmp.cleanup()
+
+
+# ---------------------------------------------------------------------------
+# Release followers — jobs after the gated job (image publishing)
+# ---------------------------------------------------------------------------
+
+
+class TestReleaseFollowers:
+    def _release_with_followers(self, followers: str) -> tuple[object, Path]:
+        release_workflow = (REPO_ROOT / ".github/workflows/release.yml").read_text(
+            encoding="utf-8"
+        )
+        tmp = make_temp_repo()
+        root = Path(tmp.name)
+        write(root / ".github/workflows/release.yml", release_workflow + "\n" + followers)
+        return tmp, root
+
+    def test_shipped_release_workflow_passes(self) -> None:
+        """The real release.yml (draft-release + images + manifests) is accepted."""
+        result = ci_contract.check_release(REPO_ROOT)
+        assert result["ok"], result["problems"]
+
+    def test_follower_needing_the_gated_job_passes(self) -> None:
+        tmp, root = self._release_with_followers(
+            "  publish:\n"
+            "    needs: draft-release\n"
+            "    runs-on: ubuntu-latest\n"
+            "    steps:\n"
+            "      - run: echo publish\n"
+        )
+        result = ci_contract.check_release(root)
+        assert result["ok"], result["problems"]
+        tmp.cleanup()
+
+    def test_follower_reaching_the_gated_job_transitively_passes(self) -> None:
+        tmp, root = self._release_with_followers(
+            "  publish:\n"
+            "    needs: manifests\n"
+            "    runs-on: ubuntu-latest\n"
+            "    steps:\n"
+            "      - run: echo publish\n"
+        )
+        result = ci_contract.check_release(root)
+        assert result["ok"], result["problems"]
+        tmp.cleanup()
+
+    def test_follower_without_needs_fails(self) -> None:
+        tmp, root = self._release_with_followers(
+            "  publish:\n"
+            "    runs-on: ubuntu-latest\n"
+            "    steps:\n"
+            "      - run: echo publish\n"
+        )
+        result = ci_contract.check_release(root)
+        assert not result["ok"]
+        assert_problem_contains(result["problems"], "publish", "must depend on")
+        tmp.cleanup()
+
+    def test_follower_needing_only_itself_fails(self) -> None:
+        """A needs cycle that never reaches the gated job is not a dependency on it."""
+        tmp, root = self._release_with_followers(
+            "  publish:\n"
+            "    needs: mirror\n"
+            "    runs-on: ubuntu-latest\n"
+            "    steps:\n"
+            "      - run: echo publish\n"
+            "  mirror:\n"
+            "    needs: publish\n"
+            "    runs-on: ubuntu-latest\n"
+            "    steps:\n"
+            "      - run: echo mirror\n"
+        )
+        result = ci_contract.check_release(root)
+        assert not result["ok"]
+        assert_problem_contains(result["problems"], "publish", "must depend on")
+        assert_problem_contains(result["problems"], "mirror", "must depend on")
+        tmp.cleanup()
+
+    def test_follower_with_continue_on_error_fails(self) -> None:
+        tmp, root = self._release_with_followers(
+            "  publish:\n"
+            "    needs: draft-release\n"
+            "    continue-on-error: true\n"
+            "    runs-on: ubuntu-latest\n"
+            "    steps:\n"
+            "      - run: echo publish\n"
+        )
+        result = ci_contract.check_release(root)
+        assert not result["ok"]
+        assert_problem_contains(result["problems"], "publish", "continue-on-error")
+        tmp.cleanup()
+

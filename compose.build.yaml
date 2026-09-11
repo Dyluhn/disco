@@ -1,0 +1,27 @@
+# Build the images from this checkout instead of pulling the published ones:
+#
+#   podman compose -f compose.yaml -f compose.build.yaml up -d --build
+#
+# The images keep the published names, so nothing else in compose.yaml changes
+# and `sandbox-image` finds the locally built sandbox under the same reference.
+# DISCO_ENCODER_TIER=lite builds the smaller server image (see docs/self-host.md).
+services:
+  sandbox-build:
+    build:
+      context: .
+      dockerfile: deploy/sandbox/Dockerfile
+    image: ghcr.io/dyluhn/disco-sandbox:${DISCO_IMAGE_TAG:-v0.2.0}
+    entrypoint: ["true"]
+    restart: "no"
+
+  app-server:
+    build:
+      context: .
+      dockerfile: deploy/compose/Dockerfile.server
+      args:
+        DISCO_ENCODER_TIER: "${DISCO_ENCODER_TIER:-full}"
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile

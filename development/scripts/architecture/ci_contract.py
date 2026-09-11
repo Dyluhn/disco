@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from .ci_contract_release import check_release_followers
 from .ci_contract_sealed import (
     TOOL_SCHEMAS_SCRIPT,
     _check_tool_schemas_position,
@@ -566,10 +567,10 @@ def check_release(root: Path | None = None) -> dict[str, Any]:
 
     jobs = data.get("jobs")
     job = jobs.get(RELEASE_JOB) if isinstance(jobs, dict) else None
-    if not isinstance(jobs, dict) or set(jobs) != {RELEASE_JOB}:
+    if not isinstance(jobs, dict) or RELEASE_JOB not in jobs:
         found = sorted(jobs) if isinstance(jobs, dict) else type(jobs).__name__
         problems.append(
-            f"release jobs must be exactly [{RELEASE_JOB!r}]; found {found}"
+            f"release jobs must include {RELEASE_JOB!r}; found {found}"
         )
     if not isinstance(job, dict):
         return {
@@ -577,6 +578,7 @@ def check_release(root: Path | None = None) -> dict[str, Any]:
             "problems": problems + [f"release.yml has no {RELEASE_JOB!r} job"],
             "path": str(release_path.relative_to(root)),
         }
+    problems.extend(check_release_followers(jobs, RELEASE_JOB))
 
     steps = job.get("steps", [])
     commands, multiline_problems = _extract_run_commands(steps)
