@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-public-api-v1",
-  "source_identity": "8300dd863e07040ada117b2f3865faf55b886f25",
+  "source_identity": "ff6bc5fd0885c8697c6591fe935b1585f6e96e40",
   "python_initializers": [
     {
       "path": "packages/agent-server/src/disco/agent_server/__init__.py",
@@ -52,6 +52,7 @@
             "def start(self, conversation_id: str) -> None"
           ],
           "fields": [
+            "bound_reference_packs: BoundReferencePackStore",
             "connections: ConnectionTracker",
             "contract: BuildContractService",
             "conversation_control: ConversationControlService",
@@ -431,6 +432,7 @@
         "make_preview_router",
         "make_probes_router",
         "make_projects_router",
+        "make_reference_packs_router",
         "make_release_router",
         "make_report_router",
         "make_research_pool_router",
@@ -459,6 +461,7 @@
         "make_preview_router",
         "make_probes_router",
         "make_projects_router",
+        "make_reference_packs_router",
         "make_release_router",
         "make_report_router",
         "make_research_pool_router",
@@ -581,6 +584,14 @@
           "public_name": "make_projects_router",
           "name": "make_projects_router",
           "module": "projects",
+          "level": 1,
+          "alias": null,
+          "kind": "from"
+        },
+        {
+          "public_name": "make_reference_packs_router",
+          "name": "make_reference_packs_router",
+          "module": "reference_packs",
           "level": 1,
           "alias": null,
           "kind": "from"
@@ -738,6 +749,10 @@
         "make_projects_router": {
           "kind": "function",
           "signature": "def make_projects_router(store: SqliteEventStore, runtime: ConversationRuntime | None) -> APIRouter"
+        },
+        "make_reference_packs_router": {
+          "kind": "function",
+          "signature": "def make_reference_packs_router(runtime: ConversationRuntime | None) -> APIRouter"
         },
         "make_release_router": {
           "kind": "function",
@@ -15553,7 +15568,7 @@
       "public_signatures": {
         "AGENT_TOOLS": {
           "kind": "value",
-          "signature": "AGENT_TOOLS=frozenset({'search', 'extract', 'file_read', 'file_write', 'file_append', 'file_edit', 'file_replace_lines', 'file_insert_lines', 'exact_replace', 'run_project_script', 'file_list', 'hardware_identity', 'shell', 'shell_exec', 'shell_view', 'shell_wait', 'shell_write_to_process', 'shell_kill_process', 'code_exec', 'browser', 'verify_web_app', 'design_lint', 'preview_start', 'preview_status', 'preview_logs', 'preview_stop', 'server_status', 'submit_plan', 'update_plan_progress', 'think', 'context_memory', 'app_set_tweak', 'app_snapshot_version', 'scaffold_starter', 'reference_pack', 'release_declare', 'add_trusted_component', 'eject_trusted_component', 'doc_set_section', 'doc_export', 'sheet_generate', 'slides_generate', 'audio_overview', 'image_generate', 'deck_patch', 'delegate_explore'})"
+          "signature": "AGENT_TOOLS=frozenset({'search', 'extract', 'file_read', 'file_write', 'file_append', 'file_edit', 'file_replace_lines', 'file_insert_lines', 'exact_replace', 'run_project_script', 'file_list', 'hardware_identity', 'shell', 'shell_exec', 'shell_view', 'shell_wait', 'shell_write_to_process', 'shell_kill_process', 'code_exec', 'browser', 'verify_web_app', 'design_lint', 'preview_start', 'preview_status', 'preview_logs', 'preview_stop', 'server_status', 'submit_plan', 'update_plan_progress', 'think', 'context_memory', 'app_set_tweak', 'app_snapshot_version', 'scaffold_starter', 'build_playbook', 'create_reference_pack', 'reference_inspect', 'release_declare', 'add_trusted_component', 'eject_trusted_component', 'doc_set_section', 'doc_export', 'sheet_generate', 'slides_generate', 'audio_overview', 'image_generate', 'deck_patch', 'delegate_explore'})"
         },
         "APPKIT_MUTATORS": {
           "kind": "annotated_value",
@@ -15639,7 +15654,7 @@
             "async def execute(self, call: ToolCall) -> ToolResult",
             "async def execute_attributed(self, call: ToolCall, agent_view_id: str | None, on_result: Callable[[ToolResult], Awaitable[None]] | None=None, prepare: Callable[[], Awaitable[None]] | None=None) -> ToolResult",
             "async def kill(self) -> None",
-            "def __init__(self, registry: ToolRegistry, scope: ToolScope, *, sandbox: SandboxInstance | None=None, broker: CapabilityBroker | None=None, owner_id: str='local', conversation_id: str | None=None, default_timeout_s: int=300, model_policy: ModelExecutionPolicy=_STANDARD_POLICY, driver_llm: tuple[str, str, str | None] | None=None, read_char_budget: int | None=None, scope_guard: ContractScopeGuard | None=None, on_tool_success: Callable[[str], None] | None=None, starter_kit: str | None=None, workflow_events: Callable[[str, dict[str, Any]], Awaitable[None]] | None=None, primitive_live_verifier: PrimitiveLiveVerifier | None=None, workspace_lock: asyncio.Lock | None=None, workspace_fence: Callable[[], AbstractAsyncContextManager[None]] | None=None, execution_admission: Callable[[str | None], Awaitable[str | None]] | None=None, release_intent_writer: ReleaseIntentWriter | None=None) -> None",
+            "def __init__(self, registry: ToolRegistry, scope: ToolScope, *, sandbox: SandboxInstance | None=None, broker: CapabilityBroker | None=None, owner_id: str='local', conversation_id: str | None=None, default_timeout_s: int=300, model_policy: ModelExecutionPolicy=_STANDARD_POLICY, driver_llm: tuple[str, str, str | None] | None=None, read_char_budget: int | None=None, scope_guard: ContractScopeGuard | None=None, on_tool_success: Callable[[str], None] | None=None, starter_kit: str | None=None, workflow_events: Callable[[str, dict[str, Any]], Awaitable[None]] | None=None, primitive_live_verifier: PrimitiveLiveVerifier | None=None, workspace_lock: asyncio.Lock | None=None, workspace_fence: Callable[[], AbstractAsyncContextManager[None]] | None=None, execution_admission: Callable[[str | None], Awaitable[str | None]] | None=None, release_intent_writer: ReleaseIntentWriter | None=None, reference_pack_writer: ReferencePackWriter | None=None) -> None",
             "def action_profile_for_call(self, tool_name: str, arguments: dict[str, Any]) -> ActionProfile | None",
             "def available_tools(self) -> list[ToolSpec]",
             "def callable_tool_names(self) -> frozenset[str]",
@@ -15871,6 +15886,7 @@
             "owner_id: str",
             "primitive_live_verifier: PrimitiveLiveVerifier | None",
             "read_char_budget: int | None",
+            "reference_pack_writer: ReferencePackWriter | None",
             "release_intent_writer: ReleaseIntentWriter | None",
             "sandbox: Any | None",
             "scope_allowed_tools: frozenset[str] | None",
@@ -18329,7 +18345,7 @@
         {
           "kind": "function",
           "name": "createBuildConversation",
-          "signature": "export async function createBuildConversation( modelOverride?: string | null, surface: \"build\" | \"agent\" = \"build\", autonomous = false, /** Weak-model assist tier \u2014 EXPLICIT user toggle only (null/false = standard). * Assist is never auto-enabled by hosting; the user opts in via the UI toggle. */ assist: boolean | null = null, quiet = false, ): Promise<string>"
+          "signature": "export async function createBuildConversation( modelOverride?: string | null, surface: \"build\" | \"agent\" = \"build\", autonomous = false, /** Weak-model assist tier \u2014 EXPLICIT user toggle only (null/false = standard). * Assist is never auto-enabled by hosting; the user opts in via the UI toggle. */ assist: boolean | null = null, quiet = false, /** PKG-47: Reference Packs to bind before the first model call (ids from the library). */ referencePackIds: string[] = [], ): Promise<string>"
         },
         {
           "kind": "function",
@@ -18404,7 +18420,7 @@
         {
           "kind": "function",
           "name": "patchConversationSettings",
-          "signature": "export async function patchConversationSettings( conversationId: string, settings: { modelOverride?: string | null; autonomous?: boolean; quiet?: boolean; assist?: boolean | null; depthTier?: \"quick\" | \"standard_deep\" | \"exhaustive\"; recencyWindow?: \"month\" | \"week\" | null; sources?: string[]; }, ): Promise<void>"
+          "signature": "export async function patchConversationSettings( conversationId: string, settings: { modelOverride?: string | null; autonomous?: boolean; quiet?: boolean; assist?: boolean | null; depthTier?: \"quick\" | \"standard_deep\" | \"exhaustive\"; recencyWindow?: \"month\" | \"week\" | null; sources?: string[]; /** PKG-47: replace the Build's Reference Pack selection (empty list clears). */ referencePackIds?: string[]; }, ): Promise<void>"
         },
         {
           "kind": "function",
@@ -19590,6 +19606,46 @@
           "kind": "InterfaceDeclaration",
           "name": "DownloadBinding",
           "signature": "export interface DownloadBinding { version_seq: number; spec_digest: string; }"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/api/referencePacks.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "addReferencePackFiles",
+          "signature": "export async function addReferencePackFiles( packId: string, files: File[], ): Promise<ReferencePackDetail>"
+        },
+        {
+          "kind": "function",
+          "name": "deleteReferencePack",
+          "signature": "export async function deleteReferencePack(packId: string): Promise<void>"
+        },
+        {
+          "kind": "function",
+          "name": "getReferencePack",
+          "signature": "export async function getReferencePack(packId: string): Promise<ReferencePackDetail>"
+        },
+        {
+          "kind": "function",
+          "name": "listReferencePacks",
+          "signature": "export async function listReferencePacks(): Promise<ReferencePackSummary[]>"
+        },
+        {
+          "kind": "function",
+          "name": "referencePackFilePath",
+          "signature": "export function referencePackFilePath(packId: string, name: string): string"
+        },
+        {
+          "kind": "function",
+          "name": "removeReferencePackFile",
+          "signature": "export async function removeReferencePackFile( packId: string, name: string, ): Promise<ReferencePackDetail>"
+        },
+        {
+          "kind": "function",
+          "name": "updateReferencePack",
+          "signature": "export async function updateReferencePack( packId: string, patch: { name?: string; description?: string }, ): Promise<ReferencePackDetail>"
         }
       ]
     },
@@ -21309,6 +21365,16 @@
       ]
     },
     {
+      "path": "frontend/src/components/buildSurface/ReferencePackPicker.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "ReferencePackPicker",
+          "signature": "export function ReferencePackPicker({ selected, onChange, disabled = false, defaultOpen = false, }: { selected: string[]; onChange: (next: string[]) => void; disabled?: boolean; /** Start expanded (tests and screenshots). */ defaultOpen?: boolean; })"
+        }
+      ]
+    },
+    {
       "path": "frontend/src/components/buildSurface/types.ts",
       "public_declarations": [
         {
@@ -22170,6 +22236,16 @@
           "kind": "function",
           "name": "ProvidersSection",
           "signature": "export function ProvidersSection()"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/settings/ReferencePacksSection.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "ReferencePacksSection",
+          "signature": "export function ReferencePacksSection()"
         }
       ]
     },
@@ -24040,6 +24116,46 @@
           "kind": "function",
           "name": "useUpdateProjectsConfig",
           "signature": "export function useUpdateProjectsConfig()"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/hooks/useReferencePacks.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "useAddReferencePackFiles",
+          "signature": "export function useAddReferencePackFiles()"
+        },
+        {
+          "kind": "function",
+          "name": "useDeleteReferencePack",
+          "signature": "export function useDeleteReferencePack()"
+        },
+        {
+          "kind": "function",
+          "name": "useReferencePack",
+          "signature": "export function useReferencePack(packId: string | null)"
+        },
+        {
+          "kind": "function",
+          "name": "useReferencePacks",
+          "signature": "export function useReferencePacks()"
+        },
+        {
+          "kind": "function",
+          "name": "useRemoveReferencePackFile",
+          "signature": "export function useRemoveReferencePackFile()"
+        },
+        {
+          "kind": "function",
+          "name": "useUpdateReferencePack",
+          "signature": "export function useUpdateReferencePack()"
+        },
+        {
+          "kind": "variable",
+          "name": "REFERENCE_PACKS_KEY",
+          "signature": "export const REFERENCE_PACKS_KEY = [\"reference-packs\"] as const;"
         }
       ]
     },
@@ -26793,6 +26909,31 @@
       ]
     },
     {
+      "path": "frontend/src/types/referencePacks.ts",
+      "public_declarations": [
+        {
+          "kind": "InterfaceDeclaration",
+          "name": "ReferencePackDetail",
+          "signature": "export interface ReferencePackDetail extends ReferencePackSummary { files: ReferencePackFile[]; }"
+        },
+        {
+          "kind": "InterfaceDeclaration",
+          "name": "ReferencePackFile",
+          "signature": "export interface ReferencePackFile { name: string; media_type: string; bytes: number; sha256: string; state: ReferencePackFileState; }"
+        },
+        {
+          "kind": "InterfaceDeclaration",
+          "name": "ReferencePackSummary",
+          "signature": "export interface ReferencePackSummary { pack_id: string; name: string; description: string; file_count: number; total_bytes: number; created_at: string; updated_at: string; digest: string; }"
+        },
+        {
+          "kind": "TypeAliasDeclaration",
+          "name": "ReferencePackFileState",
+          "signature": "export type ReferencePackFileState = \"ready\" | \"asset_only\" | \"unreadable\";"
+        }
+      ]
+    },
+    {
       "path": "frontend/src/types/release.ts",
       "public_declarations": [
         {
@@ -27374,14 +27515,6 @@
       "path": "packages/agent-server/src/disco/agent_server/verify/operator_parts/__init__.py",
       "public_name": "scan_gate_events",
       "target_sha256": "94f7f0b705f36b83a1ab532b300b38f2270e63ac34a986264f5eebb6fd3da353",
-      "owner_package": "PKG-08-VERIFY",
-      "reason": "Epic 7-10 decomposition: typed interior parts package published by its owning module's accepted extraction"
-    },
-    {
-      "surface": "python",
-      "path": "packages/tools/src/disco/tools/__init__.py",
-      "public_name": "DefaultToolExecutor",
-      "target_sha256": "9e257797372141e7988df5a6ae1fd94d91b12c80f7b16a653debd9873aa12d87",
       "owner_package": "PKG-08-VERIFY",
       "reason": "Epic 7-10 decomposition: typed interior parts package published by its owning module's accepted extraction"
     },
@@ -30347,14 +30480,6 @@
     },
     {
       "surface": "python",
-      "path": "packages/agent-server/src/disco/agent_server/__init__.py",
-      "public_name": "ConversationRuntime",
-      "target_sha256": "8662d024a3711c72150a46ccf394a08efc3d9d2a0103472880894be6c851ff6a",
-      "owner_package": "PKG-13-FACADES",
-      "reason": "Epic 13-B6: removed the deprecated Pi-named tool binding and retained the one-tool orchestration under the Disclaude-owned execute_disco_tool name."
-    },
-    {
-      "surface": "python",
       "path": "packages/core/src/disco/core/loop/finish/__init__.py",
       "public_name": "FinishGate",
       "target_sha256": "7ef3f3792508767454c906907ae91f37490061e74208e65069b9f4d6e24d7756",
@@ -30888,14 +31013,6 @@
       "target_sha256": "da123800a4587268399ab8dff1ab3e8435cea5d4d5adecbf4705e7749fd94533",
       "owner_package": "PKG-32-PRODUCTION-READINESS",
       "reason": "Wire type for one parsed server row of the MCP import preview/apply response, including its warnings, per-server error and secret refs."
-    },
-    {
-      "surface": "frontend",
-      "path": "frontend/src/api/agent.ts",
-      "public_name": "patchConversationSettings",
-      "owner_package": "PKG-34-RESEARCH-FUNNEL",
-      "reason": "The research funnel deletes the dormant iterative flag: the settings patch no longer carries `iterative`.",
-      "target_sha256": "f215970273431385cd1763c70d4bfd92ced90d1e3051fb95122fa84f5260fc56"
     },
     {
       "surface": "frontend",
@@ -32426,12 +32543,220 @@
       "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
     },
     {
+      "surface": "frontend",
+      "path": "frontend/src/api/agent.ts",
+      "public_name": "createBuildConversation",
+      "target_sha256": "e54ae52cf1e410a16e6490690b4a8bd774dc30c3ea026e64aaee19ec51cb450d",
+      "owner_package": "PKG-47-REFERENCE-PACKS",
+      "reason": "PKG-47-REFERENCE-PACKS: Reference Packs: the writer port on ToolContext/DefaultToolExecutor, the bound-pack store on ConversationRuntime, three tools in the free-form scope, the packs router, and the frontend picker/section/API/hooks/types"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/agent.ts",
+      "public_name": "patchConversationSettings",
+      "target_sha256": "2c58e4499874694a262d9131a36815a63f7175a66d0a271c3d40d3dc91a93764",
+      "owner_package": "PKG-47-REFERENCE-PACKS",
+      "reason": "PKG-47-REFERENCE-PACKS: Reference Packs: the writer port on ToolContext/DefaultToolExecutor, the bound-pack store on ConversationRuntime, three tools in the free-form scope, the packs router, and the frontend picker/section/API/hooks/types"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/referencePacks.ts",
+      "public_name": "addReferencePackFiles",
+      "target_sha256": "938eeb90c24892139c12ba5a3cbb18932889fcd5c5fe7bace5bd6883f7a41c6e",
+      "owner_package": "PKG-47-REFERENCE-PACKS",
+      "reason": "PKG-47-REFERENCE-PACKS: Reference Packs: the writer port on ToolContext/DefaultToolExecutor, the bound-pack store on ConversationRuntime, three tools in the free-form scope, the packs router, and the frontend picker/section/API/hooks/types"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/referencePacks.ts",
+      "public_name": "deleteReferencePack",
+      "target_sha256": "5ca3f45f47ea959d7c089a3f1d7c15444a8fcd561cca3ff92fcc4b1fd3b3f04b",
+      "owner_package": "PKG-47-REFERENCE-PACKS",
+      "reason": "PKG-47-REFERENCE-PACKS: Reference Packs: the writer port on ToolContext/DefaultToolExecutor, the bound-pack store on ConversationRuntime, three tools in the free-form scope, the packs router, and the frontend picker/section/API/hooks/types"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/referencePacks.ts",
+      "public_name": "getReferencePack",
+      "target_sha256": "a2b3a192f54735cb71b6019c574af50a8936b61be2e57551fdd099fe2a350de4",
+      "owner_package": "PKG-47-REFERENCE-PACKS",
+      "reason": "PKG-47-REFERENCE-PACKS: Reference Packs: the writer port on ToolContext/DefaultToolExecutor, the bound-pack store on ConversationRuntime, three tools in the free-form scope, the packs router, and the frontend picker/section/API/hooks/types"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/referencePacks.ts",
+      "public_name": "listReferencePacks",
+      "target_sha256": "848c9ca58e8a406363465f3f13e42e72ae079bda9fb56b2734e558c83beb404e",
+      "owner_package": "PKG-47-REFERENCE-PACKS",
+      "reason": "PKG-47-REFERENCE-PACKS: Reference Packs: the writer port on ToolContext/DefaultToolExecutor, the bound-pack store on ConversationRuntime, three tools in the free-form scope, the packs router, and the frontend picker/section/API/hooks/types"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/referencePacks.ts",
+      "public_name": "referencePackFilePath",
+      "target_sha256": "a4768e2fe0fb7d2c9d3a2093a6426fb028a9ca2dd79329cb3334ec988400302d",
+      "owner_package": "PKG-47-REFERENCE-PACKS",
+      "reason": "PKG-47-REFERENCE-PACKS: Reference Packs: the writer port on ToolContext/DefaultToolExecutor, the bound-pack store on ConversationRuntime, three tools in the free-form scope, the packs router, and the frontend picker/section/API/hooks/types"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/referencePacks.ts",
+      "public_name": "removeReferencePackFile",
+      "target_sha256": "aabec9664c2be4fee1220c4fa2b02b23b1413bcc915c22d5a6cfe486252242bf",
+      "owner_package": "PKG-47-REFERENCE-PACKS",
+      "reason": "PKG-47-REFERENCE-PACKS: Reference Packs: the writer port on ToolContext/DefaultToolExecutor, the bound-pack store on ConversationRuntime, three tools in the free-form scope, the packs router, and the frontend picker/section/API/hooks/types"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/referencePacks.ts",
+      "public_name": "updateReferencePack",
+      "target_sha256": "4be212191ac970fc1eda9c06d39f9e7a5b3bd57e73fbe8c493d2df257a7641e4",
+      "owner_package": "PKG-47-REFERENCE-PACKS",
+      "reason": "PKG-47-REFERENCE-PACKS: Reference Packs: the writer port on ToolContext/DefaultToolExecutor, the bound-pack store on ConversationRuntime, three tools in the free-form scope, the packs router, and the frontend picker/section/API/hooks/types"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/buildSurface/ReferencePackPicker.tsx",
+      "public_name": "ReferencePackPicker",
+      "target_sha256": "0371754010f226a6d3e9ff721323fa08b4db99a81d0a44aa4a3bff4474548fa8",
+      "owner_package": "PKG-47-REFERENCE-PACKS",
+      "reason": "PKG-47-REFERENCE-PACKS: Reference Packs: the writer port on ToolContext/DefaultToolExecutor, the bound-pack store on ConversationRuntime, three tools in the free-form scope, the packs router, and the frontend picker/section/API/hooks/types"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/ReferencePacksSection.tsx",
+      "public_name": "ReferencePacksSection",
+      "target_sha256": "b549d8994efb822649a15b62a7cb62a53d24bad26a03f83fcc5a14ce19dec6d1",
+      "owner_package": "PKG-47-REFERENCE-PACKS",
+      "reason": "PKG-47-REFERENCE-PACKS: Reference Packs: the writer port on ToolContext/DefaultToolExecutor, the bound-pack store on ConversationRuntime, three tools in the free-form scope, the packs router, and the frontend picker/section/API/hooks/types"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/hooks/useReferencePacks.ts",
+      "public_name": "REFERENCE_PACKS_KEY",
+      "target_sha256": "00fb75c8228fca849218f084446b6bab420020c3de32ba6da8a1f1666de35139",
+      "owner_package": "PKG-47-REFERENCE-PACKS",
+      "reason": "PKG-47-REFERENCE-PACKS: Reference Packs: the writer port on ToolContext/DefaultToolExecutor, the bound-pack store on ConversationRuntime, three tools in the free-form scope, the packs router, and the frontend picker/section/API/hooks/types"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/hooks/useReferencePacks.ts",
+      "public_name": "useAddReferencePackFiles",
+      "target_sha256": "4ab9627410201fb9dcfcf4e6a2de9746382684156fd6d9e757766e864f904873",
+      "owner_package": "PKG-47-REFERENCE-PACKS",
+      "reason": "PKG-47-REFERENCE-PACKS: Reference Packs: the writer port on ToolContext/DefaultToolExecutor, the bound-pack store on ConversationRuntime, three tools in the free-form scope, the packs router, and the frontend picker/section/API/hooks/types"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/hooks/useReferencePacks.ts",
+      "public_name": "useDeleteReferencePack",
+      "target_sha256": "c62d0028e6a87489a7af78d0ca5e522c591a2adb732c520af1938a1ee40b644a",
+      "owner_package": "PKG-47-REFERENCE-PACKS",
+      "reason": "PKG-47-REFERENCE-PACKS: Reference Packs: the writer port on ToolContext/DefaultToolExecutor, the bound-pack store on ConversationRuntime, three tools in the free-form scope, the packs router, and the frontend picker/section/API/hooks/types"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/hooks/useReferencePacks.ts",
+      "public_name": "useReferencePack",
+      "target_sha256": "7745417a999c24bf2aea10251696260728f623305496a35fd6a0233be721b17a",
+      "owner_package": "PKG-47-REFERENCE-PACKS",
+      "reason": "PKG-47-REFERENCE-PACKS: Reference Packs: the writer port on ToolContext/DefaultToolExecutor, the bound-pack store on ConversationRuntime, three tools in the free-form scope, the packs router, and the frontend picker/section/API/hooks/types"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/hooks/useReferencePacks.ts",
+      "public_name": "useReferencePacks",
+      "target_sha256": "ca54de6431311b82f44a79d19faff49d6da2a2098c54a61174685f37079dbb60",
+      "owner_package": "PKG-47-REFERENCE-PACKS",
+      "reason": "PKG-47-REFERENCE-PACKS: Reference Packs: the writer port on ToolContext/DefaultToolExecutor, the bound-pack store on ConversationRuntime, three tools in the free-form scope, the packs router, and the frontend picker/section/API/hooks/types"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/hooks/useReferencePacks.ts",
+      "public_name": "useRemoveReferencePackFile",
+      "target_sha256": "3287be9d36ae8aa748acc7103f0bc304849e1c711455dbb1a2a5d29c6a4662d6",
+      "owner_package": "PKG-47-REFERENCE-PACKS",
+      "reason": "PKG-47-REFERENCE-PACKS: Reference Packs: the writer port on ToolContext/DefaultToolExecutor, the bound-pack store on ConversationRuntime, three tools in the free-form scope, the packs router, and the frontend picker/section/API/hooks/types"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/hooks/useReferencePacks.ts",
+      "public_name": "useUpdateReferencePack",
+      "target_sha256": "3b4aef5e15e2cd67bb00fb9e060ebe35e00edf7b7757c63c28e0d7453a9c9226",
+      "owner_package": "PKG-47-REFERENCE-PACKS",
+      "reason": "PKG-47-REFERENCE-PACKS: Reference Packs: the writer port on ToolContext/DefaultToolExecutor, the bound-pack store on ConversationRuntime, three tools in the free-form scope, the packs router, and the frontend picker/section/API/hooks/types"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/referencePacks.ts",
+      "public_name": "ReferencePackDetail",
+      "target_sha256": "97b1c6ca9274f576adb68dd6d8205f136ca96fd6e0b6844bf0db270d338bf889",
+      "owner_package": "PKG-47-REFERENCE-PACKS",
+      "reason": "PKG-47-REFERENCE-PACKS: Reference Packs: the writer port on ToolContext/DefaultToolExecutor, the bound-pack store on ConversationRuntime, three tools in the free-form scope, the packs router, and the frontend picker/section/API/hooks/types"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/referencePacks.ts",
+      "public_name": "ReferencePackFile",
+      "target_sha256": "34e71f1e0d5d0596abeffb69984e52a8e285ab417444323bca6b3dcb456e9187",
+      "owner_package": "PKG-47-REFERENCE-PACKS",
+      "reason": "PKG-47-REFERENCE-PACKS: Reference Packs: the writer port on ToolContext/DefaultToolExecutor, the bound-pack store on ConversationRuntime, three tools in the free-form scope, the packs router, and the frontend picker/section/API/hooks/types"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/referencePacks.ts",
+      "public_name": "ReferencePackFileState",
+      "target_sha256": "f82efccb2b54d880855b11b68c1dc0dadac082364f5dd1e2d821b650dddf3417",
+      "owner_package": "PKG-47-REFERENCE-PACKS",
+      "reason": "PKG-47-REFERENCE-PACKS: Reference Packs: the writer port on ToolContext/DefaultToolExecutor, the bound-pack store on ConversationRuntime, three tools in the free-form scope, the packs router, and the frontend picker/section/API/hooks/types"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/referencePacks.ts",
+      "public_name": "ReferencePackSummary",
+      "target_sha256": "2c614227bcdbf56a0d19c72392a48d7f3ceb6496f077c2f687f5bfdf290045c5",
+      "owner_package": "PKG-47-REFERENCE-PACKS",
+      "reason": "PKG-47-REFERENCE-PACKS: Reference Packs: the writer port on ToolContext/DefaultToolExecutor, the bound-pack store on ConversationRuntime, three tools in the free-form scope, the packs router, and the frontend picker/section/API/hooks/types"
+    },
+    {
+      "surface": "python",
+      "path": "packages/agent-server/src/disco/agent_server/__init__.py",
+      "public_name": "ConversationRuntime",
+      "target_sha256": "4d17181bb06a31899fc87f6d9cb2f8d940abb04cebbbde4b6a7e570bb8e96697",
+      "owner_package": "PKG-47-REFERENCE-PACKS",
+      "reason": "PKG-47-REFERENCE-PACKS: Reference Packs: the writer port on ToolContext/DefaultToolExecutor, the bound-pack store on ConversationRuntime, three tools in the free-form scope, the packs router, and the frontend picker/section/API/hooks/types"
+    },
+    {
+      "surface": "python",
+      "path": "packages/agent-server/src/disco/agent_server/routes/__init__.py",
+      "public_name": "make_reference_packs_router",
+      "target_sha256": "2ff4bdb9906e44f0c6b4ab12463b97b972b598c0a8f797894cd7828551a9e496",
+      "owner_package": "PKG-47-REFERENCE-PACKS",
+      "reason": "PKG-47-REFERENCE-PACKS: Reference Packs: the writer port on ToolContext/DefaultToolExecutor, the bound-pack store on ConversationRuntime, three tools in the free-form scope, the packs router, and the frontend picker/section/API/hooks/types"
+    },
+    {
       "surface": "python",
       "path": "packages/tools/src/disco/tools/__init__.py",
       "public_name": "AGENT_TOOLS",
-      "target_sha256": "defef65853b6b5e0050d090aeec3a11c9e3710e4047fd1c1128f1495293091c7",
-      "owner_package": "PKG-46-REFERENCE-PACKS",
-      "reason": "reference_pack joins the free-form build scope: the bundled integration recipes (auth, realtime, chat, alerts, AI assistant, RAG, dictation, email, payments, uploads, market data, booking, multiplayer, verification) are read through it before wiring a capability."
+      "target_sha256": "6593c22b34e70622bc01de288dc752223bc74ef364ebc7898d6e2827d830e26a",
+      "owner_package": "PKG-47-REFERENCE-PACKS",
+      "reason": "PKG-47-REFERENCE-PACKS: Reference Packs: the writer port on ToolContext/DefaultToolExecutor, the bound-pack store on ConversationRuntime, three tools in the free-form scope, the packs router, and the frontend picker/section/API/hooks/types"
+    },
+    {
+      "surface": "python",
+      "path": "packages/tools/src/disco/tools/__init__.py",
+      "public_name": "DefaultToolExecutor",
+      "target_sha256": "914df2f68fa31ecb8228a43531abb0c86495427cd5b32ebaebf5853ba76170dd",
+      "owner_package": "PKG-47-REFERENCE-PACKS",
+      "reason": "PKG-47-REFERENCE-PACKS: Reference Packs: the writer port on ToolContext/DefaultToolExecutor, the bound-pack store on ConversationRuntime, three tools in the free-form scope, the packs router, and the frontend picker/section/API/hooks/types"
+    },
+    {
+      "surface": "python",
+      "path": "packages/tools/src/disco/tools/__init__.py",
+      "public_name": "ToolContext",
+      "target_sha256": "c7e7d0d848c3d53eeee72102a6a7dbb8bd6f3fe695ecc1be8d2ce12b4dbe7253",
+      "owner_package": "PKG-47-REFERENCE-PACKS",
+      "reason": "PKG-47-REFERENCE-PACKS: Reference Packs: the writer port on ToolContext/DefaultToolExecutor, the bound-pack store on ConversationRuntime, three tools in the free-form scope, the packs router, and the frontend picker/section/API/hooks/types"
     }
   ],
   "compatibility_bridges": [],
@@ -32452,40 +32777,6 @@
       "owner_package": "PKG-19-V31-ARTIFACT-DELIVERY",
       "accepting_commit": "0866b79a29a2987d393a075e8bafc111705d7427",
       "accepting_receipt": "automation/runtime/boundary-20260813-pkg19-v31-artifact-delivery/BOUNDARY-RECEIPT.md"
-    },
-    {
-      "surface": "python",
-      "path": "packages/tools/src/disco/tools/__init__.py",
-      "public_name": "AGENT_TOOLS",
-      "origin": "disco.tools.registry.AGENT_TOOLS",
-      "removed_members": [
-        "AGENT_TOOLS=frozenset({'search', 'extract', 'file_read', 'file_write', 'file_append', 'file_edit', 'file_replace_lines', 'file_insert_lines', 'exact_replace', 'run_project_script', 'file_list', 'hardware_identity', 'shell', 'shell_exec', 'shell_view', 'shell_wait', 'shell_write_to_process', 'shell_kill_process', 'code_exec', 'browser', 'verify_web_app', 'design_lint', 'preview_start', 'preview_status', 'preview_logs', 'preview_stop', 'server_status', 'submit_plan', 'update_plan_progress', 'think', 'context_memory', 'app_set_tweak', 'app_snapshot_version', 'scaffold_starter', 'release_declare', 'add_trusted_component', 'eject_trusted_component', 'doc_set_section', 'doc_export', 'sheet_generate', 'slides_generate', 'audio_overview', 'image_generate', 'deck_patch', 'delegate_explore'})"
-      ],
-      "added_members": [
-        "AGENT_TOOLS=frozenset({'search', 'extract', 'file_read', 'file_write', 'file_append', 'file_edit', 'file_replace_lines', 'file_insert_lines', 'exact_replace', 'run_project_script', 'file_list', 'hardware_identity', 'shell', 'shell_exec', 'shell_view', 'shell_wait', 'shell_write_to_process', 'shell_kill_process', 'code_exec', 'browser', 'verify_web_app', 'design_lint', 'preview_start', 'preview_status', 'preview_logs', 'preview_stop', 'server_status', 'submit_plan', 'update_plan_progress', 'think', 'context_memory', 'app_set_tweak', 'app_snapshot_version', 'scaffold_starter', 'reference_pack', 'release_declare', 'add_trusted_component', 'eject_trusted_component', 'doc_set_section', 'doc_export', 'sheet_generate', 'slides_generate', 'audio_overview', 'image_generate', 'deck_patch', 'delegate_explore'})"
-      ],
-      "old_signature_sha256": "f3014ff74c369d9d93043b1c1a26bf8b48d2dd50513c4b07a16da243f0adfdf7",
-      "new_signature_sha256": "9f84522b49edf2ec983427d0dc336c21bd90c2238159b2dc8f18f111e62baa30",
-      "owner_package": "PKG-46-REFERENCE-PACKS",
-      "accepting_commit": "10671f9c08b546fe4174655491d833cb6984f989",
-      "accepting_receipt": "development/governance/CURRENT-STATE.md"
-    },
-    {
-      "surface": "python",
-      "path": "packages/tools/src/disco/tools/__init__.py",
-      "public_name": "DefaultToolExecutor",
-      "origin": "disco.tools.executor.DefaultToolExecutor",
-      "removed_members": [
-        "def assert_behavior_complete(self) -> None",
-        "def tool_names_with_capability(self, capability: EffectCapability) -> frozenset[str]",
-        "def unclassified_tool_names(self) -> frozenset[str]"
-      ],
-      "added_members": [],
-      "old_signature_sha256": "e29f8444aca53dc0ef2337b75c6cea210bb3099cd43b6a86f8fb0916d2b91199",
-      "new_signature_sha256": "79ed2a6371edc7abe73d48770875302abc860155d904953f84f664b6e3b3221e",
-      "owner_package": "PKG-10-EXECUTOR",
-      "accepting_commit": "3501df9bcee672c0d6cb8d7a8cc186cec03719e9",
-      "accepting_receipt": "2026-07-31/PKG-10-EPIC/EPIC-10A-ACCEPTANCE-RECEIPT.md"
     },
     {
       "surface": "python",
@@ -32698,6 +32989,70 @@
     },
     {
       "surface": "python",
+      "path": "packages/tools/src/disco/tools/__init__.py",
+      "public_name": "AGENT_TOOLS",
+      "origin": "disco.tools.registry.AGENT_TOOLS",
+      "removed_members": [
+        "AGENT_TOOLS=frozenset({'search', 'extract', 'file_read', 'file_write', 'file_append', 'file_edit', 'file_replace_lines', 'file_insert_lines', 'exact_replace', 'run_project_script', 'file_list', 'hardware_identity', 'shell', 'shell_exec', 'shell_view', 'shell_wait', 'shell_write_to_process', 'shell_kill_process', 'code_exec', 'browser', 'verify_web_app', 'design_lint', 'preview_start', 'preview_status', 'preview_logs', 'preview_stop', 'server_status', 'submit_plan', 'update_plan_progress', 'think', 'context_memory', 'app_set_tweak', 'app_snapshot_version', 'scaffold_starter', 'reference_pack', 'release_declare', 'add_trusted_component', 'eject_trusted_component', 'doc_set_section', 'doc_export', 'sheet_generate', 'slides_generate', 'audio_overview', 'image_generate', 'deck_patch', 'delegate_explore'})"
+      ],
+      "added_members": [
+        "AGENT_TOOLS=frozenset({'search', 'extract', 'file_read', 'file_write', 'file_append', 'file_edit', 'file_replace_lines', 'file_insert_lines', 'exact_replace', 'run_project_script', 'file_list', 'hardware_identity', 'shell', 'shell_exec', 'shell_view', 'shell_wait', 'shell_write_to_process', 'shell_kill_process', 'code_exec', 'browser', 'verify_web_app', 'design_lint', 'preview_start', 'preview_status', 'preview_logs', 'preview_stop', 'server_status', 'submit_plan', 'update_plan_progress', 'think', 'context_memory', 'app_set_tweak', 'app_snapshot_version', 'scaffold_starter', 'build_playbook', 'create_reference_pack', 'reference_inspect', 'release_declare', 'add_trusted_component', 'eject_trusted_component', 'doc_set_section', 'doc_export', 'sheet_generate', 'slides_generate', 'audio_overview', 'image_generate', 'deck_patch', 'delegate_explore'})"
+      ],
+      "old_signature_sha256": "9f84522b49edf2ec983427d0dc336c21bd90c2238159b2dc8f18f111e62baa30",
+      "new_signature_sha256": "55d88976135500259b6f41ac503e16d6447b28e025ba3dec3bf2bd7eb08b01a3",
+      "owner_package": "PKG-47-REFERENCE-PACKS",
+      "accepting_commit": "77ce35eaa560b1b42aee470a2e4f920eebfa08f6",
+      "accepting_receipt": "Reference Packs: the writer port on ToolContext/DefaultToolExecutor, the bound-pack store on ConversationRuntime, three tools in the free-form scope, the packs router, and the frontend picker/section/API/hooks/types"
+    },
+    {
+      "surface": "python",
+      "path": "packages/agent-server/src/disco/agent_server/__init__.py",
+      "public_name": "ConversationRuntime",
+      "origin": "disco.agent_server.runtime.ConversationRuntime",
+      "removed_members": [],
+      "added_members": [
+        "bound_reference_packs: BoundReferencePackStore"
+      ],
+      "old_signature_sha256": "f9ff8063da5935f4a1fec4a4a772b9745ff894981335e24401eb4f90223348a7",
+      "new_signature_sha256": "73324214a4905364129c02e0079f69cfa82efb3d2f3e72596326c6fa519a0f71",
+      "owner_package": "PKG-47-REFERENCE-PACKS",
+      "accepting_commit": "77ce35eaa560b1b42aee470a2e4f920eebfa08f6",
+      "accepting_receipt": "Reference Packs: the writer port on ToolContext/DefaultToolExecutor, the bound-pack store on ConversationRuntime, three tools in the free-form scope, the packs router, and the frontend picker/section/API/hooks/types"
+    },
+    {
+      "surface": "python",
+      "path": "packages/tools/src/disco/tools/__init__.py",
+      "public_name": "DefaultToolExecutor",
+      "origin": "disco.tools.executor.DefaultToolExecutor",
+      "removed_members": [
+        "def __init__(self, registry: ToolRegistry, scope: ToolScope, *, sandbox: SandboxInstance | None=None, broker: CapabilityBroker | None=None, owner_id: str='local', conversation_id: str | None=None, default_timeout_s: int=300, model_policy: ModelExecutionPolicy=_STANDARD_POLICY, driver_llm: tuple[str, str, str | None] | None=None, read_char_budget: int | None=None, scope_guard: ContractScopeGuard | None=None, on_tool_success: Callable[[str], None] | None=None, starter_kit: str | None=None, workflow_events: Callable[[str, dict[str, Any]], Awaitable[None]] | None=None, primitive_live_verifier: PrimitiveLiveVerifier | None=None, workspace_lock: asyncio.Lock | None=None, workspace_fence: Callable[[], AbstractAsyncContextManager[None]] | None=None, execution_admission: Callable[[str | None], Awaitable[str | None]] | None=None, release_intent_writer: ReleaseIntentWriter | None=None) -> None"
+      ],
+      "added_members": [
+        "def __init__(self, registry: ToolRegistry, scope: ToolScope, *, sandbox: SandboxInstance | None=None, broker: CapabilityBroker | None=None, owner_id: str='local', conversation_id: str | None=None, default_timeout_s: int=300, model_policy: ModelExecutionPolicy=_STANDARD_POLICY, driver_llm: tuple[str, str, str | None] | None=None, read_char_budget: int | None=None, scope_guard: ContractScopeGuard | None=None, on_tool_success: Callable[[str], None] | None=None, starter_kit: str | None=None, workflow_events: Callable[[str, dict[str, Any]], Awaitable[None]] | None=None, primitive_live_verifier: PrimitiveLiveVerifier | None=None, workspace_lock: asyncio.Lock | None=None, workspace_fence: Callable[[], AbstractAsyncContextManager[None]] | None=None, execution_admission: Callable[[str | None], Awaitable[str | None]] | None=None, release_intent_writer: ReleaseIntentWriter | None=None, reference_pack_writer: ReferencePackWriter | None=None) -> None"
+      ],
+      "old_signature_sha256": "79ed2a6371edc7abe73d48770875302abc860155d904953f84f664b6e3b3221e",
+      "new_signature_sha256": "5ccc806c45a2796085297eb6bbd2ac5f23c951daf00cd0957c1a01c5bcbc0f79",
+      "owner_package": "PKG-47-REFERENCE-PACKS",
+      "accepting_commit": "77ce35eaa560b1b42aee470a2e4f920eebfa08f6",
+      "accepting_receipt": "Reference Packs: the writer port on ToolContext/DefaultToolExecutor, the bound-pack store on ConversationRuntime, three tools in the free-form scope, the packs router, and the frontend picker/section/API/hooks/types"
+    },
+    {
+      "surface": "python",
+      "path": "packages/tools/src/disco/tools/__init__.py",
+      "public_name": "ToolContext",
+      "origin": "disco.tools.anatomy.ToolContext",
+      "removed_members": [],
+      "added_members": [
+        "reference_pack_writer: ReferencePackWriter | None"
+      ],
+      "old_signature_sha256": "d56664e9ab841b9c3e17822053cb7a56f5f7bfea7a2697e960757d694cfbe8b1",
+      "new_signature_sha256": "af75a5218cd50739085f87c2e777e8f9ced5e451be27ffb0b16c555012101389",
+      "owner_package": "PKG-47-REFERENCE-PACKS",
+      "accepting_commit": "77ce35eaa560b1b42aee470a2e4f920eebfa08f6",
+      "accepting_receipt": "Reference Packs: the writer port on ToolContext/DefaultToolExecutor, the bound-pack store on ConversationRuntime, three tools in the free-form scope, the packs router, and the frontend picker/section/API/hooks/types"
+    },
+    {
+      "surface": "python",
       "path": "packages/core/src/disco/core/llm/__init__.py",
       "public_name": "DefaultLLMRouter",
       "origin": "disco.core.llm.routing.DefaultLLMRouter",
@@ -32821,23 +33176,6 @@
       "owner_package": "PKG-11-SETTINGS",
       "accepting_commit": "a0e4b9b356e650b8b8beb531f3579df4f490f8a0",
       "accepting_receipt": "2026-08-01/PKG-11-EPIC/EPIC-11B-ACCEPTANCE-RECEIPT.md"
-    },
-    {
-      "surface": "python",
-      "path": "packages/agent-server/src/disco/agent_server/__init__.py",
-      "public_name": "ConversationRuntime",
-      "origin": "disco.agent_server.runtime.ConversationRuntime",
-      "removed_members": [
-        "async def execute_pi_tool(self, conversation_id: str, tool_call: ToolCall) -> ToolResult"
-      ],
-      "added_members": [
-        "async def execute_disco_tool(self, conversation_id: str, tool_call: ToolCall) -> ToolResult"
-      ],
-      "old_signature_sha256": "2da24bc56683792052044f962de95e4d0864b8fc7e9eeed8566bfb7ec39ef227",
-      "new_signature_sha256": "f9ff8063da5935f4a1fec4a4a772b9745ff894981335e24401eb4f90223348a7",
-      "owner_package": "PKG-13-FACADES",
-      "accepting_commit": "bea3945c73bcfefcee45d5860639d3b543cb404b",
-      "accepting_receipt": "2026-08-03/PKG-13-FACADES/EPIC-13B6-ACCEPTANCE-RECEIPT.md"
     },
     {
       "surface": "python",
@@ -33684,6 +34022,32 @@
     },
     {
       "surface": "frontend",
+      "path": "frontend/src/api/agent.ts",
+      "public_name": "createBuildConversation",
+      "declaration_kind": "function",
+      "old_signature": "export async function createBuildConversation( modelOverride?: string | null, surface: \"build\" | \"agent\" = \"build\", autonomous = false, /** Weak-model assist tier \u2014 EXPLICIT user toggle only (null/false = standard). * Assist is never auto-enabled by hosting; the user opts in via the UI toggle. */ assist: boolean | null = null, quiet = false, ): Promise<string>",
+      "new_signature": "export async function createBuildConversation( modelOverride?: string | null, surface: \"build\" | \"agent\" = \"build\", autonomous = false, /** Weak-model assist tier \u2014 EXPLICIT user toggle only (null/false = standard). * Assist is never auto-enabled by hosting; the user opts in via the UI toggle. */ assist: boolean | null = null, quiet = false, /** PKG-47: Reference Packs to bind before the first model call (ids from the library). */ referencePackIds: string[] = [], ): Promise<string>",
+      "old_target_sha256": "d50603b756ef58279a5478787ed23836aa220c12df70d5a5291fc579fd0df8fa",
+      "new_target_sha256": "e54ae52cf1e410a16e6490690b4a8bd774dc30c3ea026e64aaee19ec51cb450d",
+      "owner_package": "PKG-47-REFERENCE-PACKS",
+      "accepting_commit": "77ce35eaa560b1b42aee470a2e4f920eebfa08f6",
+      "accepting_receipt": "Reference Packs: the writer port on ToolContext/DefaultToolExecutor, the bound-pack store on ConversationRuntime, three tools in the free-form scope, the packs router, and the frontend picker/section/API/hooks/types"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/agent.ts",
+      "public_name": "patchConversationSettings",
+      "declaration_kind": "function",
+      "old_signature": "export async function patchConversationSettings( conversationId: string, settings: { modelOverride?: string | null; autonomous?: boolean; quiet?: boolean; assist?: boolean | null; depthTier?: \"quick\" | \"standard_deep\" | \"exhaustive\"; recencyWindow?: \"month\" | \"week\" | null; sources?: string[]; }, ): Promise<void>",
+      "new_signature": "export async function patchConversationSettings( conversationId: string, settings: { modelOverride?: string | null; autonomous?: boolean; quiet?: boolean; assist?: boolean | null; depthTier?: \"quick\" | \"standard_deep\" | \"exhaustive\"; recencyWindow?: \"month\" | \"week\" | null; sources?: string[]; /** PKG-47: replace the Build's Reference Pack selection (empty list clears). */ referencePackIds?: string[]; }, ): Promise<void>",
+      "old_target_sha256": "f215970273431385cd1763c70d4bfd92ced90d1e3051fb95122fa84f5260fc56",
+      "new_target_sha256": "2c58e4499874694a262d9131a36815a63f7175a66d0a271c3d40d3dc91a93764",
+      "owner_package": "PKG-47-REFERENCE-PACKS",
+      "accepting_commit": "77ce35eaa560b1b42aee470a2e4f920eebfa08f6",
+      "accepting_receipt": "Reference Packs: the writer port on ToolContext/DefaultToolExecutor, the bound-pack store on ConversationRuntime, three tools in the free-form scope, the packs router, and the frontend picker/section/API/hooks/types"
+    },
+    {
+      "surface": "frontend",
       "path": "frontend/src/components/research/needMoreCardParts/audioProgress.ts",
       "public_name": "audioReasonMessage",
       "owner_package": "PKG-37-UI-FIXES-V50",
@@ -33925,19 +34289,6 @@
       "new_signature": "export interface DeepResearchSubmit { query: string; /** Per-conversation lead-model override (leader pill). null = use default. */ leaderId?: string | null; /** Depth tier (quick / standard_deep / exhaustive). Defaults to standard_deep. */ depthTier?: \"quick\" | \"standard_deep\" | \"exhaustive\"; /** DR-3 recency filter: \"month\" = past 30 days, \"week\" = past 7 days, null = off. */ recencyWindow?: \"month\" | \"week\" | null; /** Per-query research source ids. Empty means use the Settings default. */ sources?: string[]; }",
       "old_target_sha256": "9091ef53682b21b77386c13c7fded7cd36424ff20f5b4afa5a22786629d109b3",
       "new_target_sha256": "a5d86fa9ebb9f7a1d5112f691ffee7d7badfece1646d21749b61da29b4cdb5bf",
-      "owner_package": "PKG-34-RESEARCH-FUNNEL",
-      "accepting_commit": "dd91e94b04cd249d759919bf0f0d7d64b50f9afb",
-      "accepting_receipt": "automation/runtime/boundary-20260823-research-funnel/BOUNDARY-RECEIPT.md"
-    },
-    {
-      "surface": "frontend",
-      "path": "frontend/src/api/agent.ts",
-      "public_name": "patchConversationSettings",
-      "declaration_kind": "function",
-      "old_signature": "export async function patchConversationSettings( conversationId: string, settings: { modelOverride?: string | null; autonomous?: boolean; quiet?: boolean; assist?: boolean | null; depthTier?: \"quick\" | \"standard_deep\" | \"exhaustive\"; iterative?: boolean; recencyWindow?: \"month\" | \"week\" | null; sources?: string[]; }, ): Promise<void>",
-      "new_signature": "export async function patchConversationSettings( conversationId: string, settings: { modelOverride?: string | null; autonomous?: boolean; quiet?: boolean; assist?: boolean | null; depthTier?: \"quick\" | \"standard_deep\" | \"exhaustive\"; recencyWindow?: \"month\" | \"week\" | null; sources?: string[]; }, ): Promise<void>",
-      "old_target_sha256": "069e38775bb3909f391213ff6cd89a0855c9094e79dee6f383225402b60aa020",
-      "new_target_sha256": "f215970273431385cd1763c70d4bfd92ced90d1e3051fb95122fa84f5260fc56",
       "owner_package": "PKG-34-RESEARCH-FUNNEL",
       "accepting_commit": "dd91e94b04cd249d759919bf0f0d7d64b50f9afb",
       "accepting_receipt": "automation/runtime/boundary-20260823-research-funnel/BOUNDARY-RECEIPT.md"
