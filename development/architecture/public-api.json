@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-public-api-v1",
-  "source_identity": "8a856a22978248d88441c9f27a8f0d34ca58edc8",
+  "source_identity": "d8f38be11acd26f8c9e252c57ae6251c6092960e",
   "python_initializers": [
     {
       "path": "packages/agent-server/src/disco/agent_server/__init__.py",
@@ -3534,7 +3534,8 @@
           "signature": "class LLMSummarizingCondenser()",
           "members": [
             "async def condense(self, events: list[Event], view: View, *, summarizer: Summarizer, reason: str='tokens', artifact_paths: list[str] | None=None) -> CondensationEvent | None",
-            "def __init__(self, *, context_window: int | None=None, soft_frac: float=0.65, hard_frac: float=0.8, max_tokens: int | None=None, hard_max_tokens: int | None=None, keep_head: int=1, keep_recent: int=6, min_forget: int=2, budget_tokens: int=24000, hard_budget_tokens: int=32000, summary_input_chars: int=384000) -> None",
+            "def __init__(self, *, context_window: int | None=None, soft_frac: float=0.65, hard_frac: float=0.8, max_tokens: int | None=None, hard_max_tokens: int | None=None, keep_head: int=1, keep_recent: int=6, min_forget: int=2, budget_tokens: int=24000, hard_budget_tokens: int=32000, summary_input_chars: int=384000, min_batch_tokens: int | None=None) -> None",
+            "def forgettable_tokens(self, events: list[Event]) -> int",
             "def should_condense(self, view: View, *, token_count: int | None) -> CondensationRequest | None"
           ],
           "fields": []
@@ -30744,14 +30745,6 @@
     },
     {
       "surface": "python",
-      "path": "packages/core/src/disco/core/__init__.py",
-      "public_name": "LLMSummarizingCondenser",
-      "owner_package": "PKG-19-V30-INTEGRATION",
-      "reason": "V30 integrates the accepted reliability, preview, and grounded-research contract.",
-      "target_sha256": "e528373fac972109d5b280399f6cd6364150ece23e05cc3caa635a40eea2faa8"
-    },
-    {
-      "surface": "python",
       "path": "packages/core/src/disco/core/llm/__init__.py",
       "public_name": "SecretBox",
       "owner_package": "PKG-19-V30-INTEGRATION",
@@ -32965,6 +32958,14 @@
       "target_sha256": "08ebce6179a8913d8941c669ba152cb150cb112698bb9542f39a4015883e9a64",
       "owner_package": "PKG-53-DIAGNOSTICS-UI",
       "reason": "PKG-53-DIAGNOSTICS-UI: Diagnostics UI: make_diagnostics_router added to the agent-server routes initializer (additive), four new frontend modules (additive rows); no member transition"
+    },
+    {
+      "surface": "python",
+      "path": "packages/core/src/disco/core/__init__.py",
+      "public_name": "LLMSummarizingCondenser",
+      "target_sha256": "3e4090ac76c795f5d5f23a37e573d9851d26694a190ddb83cc933ae2c35da0bd",
+      "owner_package": "PKG-57-CONDENSE-BATCH",
+      "reason": "PKG-57-CONDENSE-BATCH: Condensation batching: LLMSummarizingCondenser gains forgettable_tokens and min_batch_tokens (member transition); no initializer or frontend change"
     }
   ],
   "compatibility_bridges": [],
@@ -33000,23 +33001,6 @@
       "owner_package": "PKG-19-APPKIT-RECORD-POLICY",
       "accepting_commit": "3fb227b1c8ba98faca9b41100a9c7bf81e05e8ed",
       "accepting_receipt": "automation/runtime/post-campaign-ux-acceptance-20260816/evidence/appkit-record-policy/ACCEPTANCE-RECEIPT.md"
-    },
-    {
-      "surface": "python",
-      "path": "packages/core/src/disco/core/__init__.py",
-      "public_name": "LLMSummarizingCondenser",
-      "origin": "disco.core.view.LLMSummarizingCondenser",
-      "removed_members": [
-        "def __init__(self, *, context_window: int | None=None, soft_frac: float=0.65, hard_frac: float=0.8, max_tokens: int | None=None, hard_max_tokens: int | None=None, keep_head: int=1, keep_recent: int=6, min_forget: int=2, budget_tokens: int=24000, hard_budget_tokens: int=32000) -> None"
-      ],
-      "added_members": [
-        "def __init__(self, *, context_window: int | None=None, soft_frac: float=0.65, hard_frac: float=0.8, max_tokens: int | None=None, hard_max_tokens: int | None=None, keep_head: int=1, keep_recent: int=6, min_forget: int=2, budget_tokens: int=24000, hard_budget_tokens: int=32000, summary_input_chars: int=384000) -> None"
-      ],
-      "old_signature_sha256": "efb0a0471135603f48dfe6d59daa20cb6b59d954ba1b9d2693627845035f1f23",
-      "new_signature_sha256": "9679fa155dc8d1f2900a2e25960ea31ba4f5c9d68d5eb0aea0d97a173687290b",
-      "owner_package": "PKG-19-V30-INTEGRATION",
-      "accepting_commit": "41cecbab85195f473ac8c4f773f5106efadeab83",
-      "accepting_receipt": "2026-07-28/STATUS.md"
     },
     {
       "surface": "python",
@@ -33417,6 +33401,24 @@
       "owner_package": "PKG-11-SETTINGS",
       "accepting_commit": "a0e4b9b356e650b8b8beb531f3579df4f490f8a0",
       "accepting_receipt": "2026-08-01/PKG-11-EPIC/EPIC-11B-ACCEPTANCE-RECEIPT.md"
+    },
+    {
+      "surface": "python",
+      "path": "packages/core/src/disco/core/__init__.py",
+      "public_name": "LLMSummarizingCondenser",
+      "origin": "disco.core.view.LLMSummarizingCondenser",
+      "removed_members": [
+        "def __init__(self, *, context_window: int | None=None, soft_frac: float=0.65, hard_frac: float=0.8, max_tokens: int | None=None, hard_max_tokens: int | None=None, keep_head: int=1, keep_recent: int=6, min_forget: int=2, budget_tokens: int=24000, hard_budget_tokens: int=32000, summary_input_chars: int=384000) -> None"
+      ],
+      "added_members": [
+        "def __init__(self, *, context_window: int | None=None, soft_frac: float=0.65, hard_frac: float=0.8, max_tokens: int | None=None, hard_max_tokens: int | None=None, keep_head: int=1, keep_recent: int=6, min_forget: int=2, budget_tokens: int=24000, hard_budget_tokens: int=32000, summary_input_chars: int=384000, min_batch_tokens: int | None=None) -> None",
+        "def forgettable_tokens(self, events: list[Event]) -> int"
+      ],
+      "old_signature_sha256": "9679fa155dc8d1f2900a2e25960ea31ba4f5c9d68d5eb0aea0d97a173687290b",
+      "new_signature_sha256": "3ebe93d95926a0dc8d0b2e11aabc5c76d1de11f9eb0b0986a6aff6ecf0eabb67",
+      "owner_package": "PKG-57-CONDENSE-BATCH",
+      "accepting_commit": "c701407f03b054ace4d64d69c1aec0ff3d2a5e25",
+      "accepting_receipt": "Condensation batching: LLMSummarizingCondenser gains forgettable_tokens and min_batch_tokens (member transition); no initializer or frontend change"
     },
     {
       "surface": "python",

@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "8a856a22978248d88441c9f27a8f0d34ca58edc8",
+  "source_identity": "d8f38be11acd26f8c9e252c57ae6251c6092960e",
   "collected": {
     "counts": {
-      "packages": 12285,
+      "packages": 12288,
       "harness": 1571,
       "integrations": 9,
       "tests": 458
     },
-    "total": 14323,
+    "total": 14326,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -4804,8 +4804,11 @@
         "packages/core/tests/test_condenser.py::test_condense_forgets_the_middle_keeps_head_and_recent",
         "packages/core/tests/test_condenser.py::test_condense_makes_progress_guard_no_churn_on_tiny_history",
         "packages/core/tests/test_condenser.py::test_empty_summary_is_not_emitted",
+        "packages/core/tests/test_condenser.py::test_forgettable_tokens_counts_only_what_the_next_condensation_would_remove",
         "packages/core/tests/test_condenser.py::test_long_task_condenses_and_keeps_going",
+        "packages/core/tests/test_condenser.py::test_min_batch_tokens_derives_from_the_soft_to_hard_band",
         "packages/core/tests/test_condenser.py::test_should_condense_fires_only_past_the_bound",
+        "packages/core/tests/test_condenser.py::test_soft_pressure_waits_for_a_batch_then_condenses_once",
         "packages/core/tests/test_condenser.py::test_summary_input_bound_is_independent_and_keeps_tool_pair",
         "packages/core/tests/test_condenser.py::test_summary_input_preserves_event_provenance_and_host_verdict",
         "packages/core/tests/test_condenser.py::test_update_in_place_fires_on_real_re_condensation",
@@ -14344,9 +14347,9 @@
     }
   },
   "mapping_static": {
-    "identity": "8a856a22978248d88441c9f27a8f0d34ca58edc8",
+    "identity": "d8f38be11acd26f8c9e252c57ae6251c6092960e",
     "python_test_file_count": 963,
-    "python_static_test_id_count": 11771,
+    "python_static_test_id_count": 11774,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -20484,8 +20487,11 @@
       "packages/core/tests/test_condenser.py::test_condense_forgets_the_middle_keeps_head_and_recent",
       "packages/core/tests/test_condenser.py::test_condense_makes_progress_guard_no_churn_on_tiny_history",
       "packages/core/tests/test_condenser.py::test_empty_summary_is_not_emitted",
+      "packages/core/tests/test_condenser.py::test_forgettable_tokens_counts_only_what_the_next_condensation_would_remove",
       "packages/core/tests/test_condenser.py::test_long_task_condenses_and_keeps_going",
+      "packages/core/tests/test_condenser.py::test_min_batch_tokens_derives_from_the_soft_to_hard_band",
       "packages/core/tests/test_condenser.py::test_should_condense_fires_only_past_the_bound",
+      "packages/core/tests/test_condenser.py::test_soft_pressure_waits_for_a_batch_then_condenses_once",
       "packages/core/tests/test_condenser.py::test_summary_input_bound_is_independent_and_keeps_tool_pair",
       "packages/core/tests/test_condenser.py::test_summary_input_preserves_event_provenance_and_host_verdict",
       "packages/core/tests/test_condenser.py::test_update_in_place_fires_on_real_re_condensation",
@@ -42894,6 +42900,34 @@
           "packages/core/tests/test_compose_interpolation_portability.py::test_compose_file_exists",
           "packages/core/tests/test_compose_interpolation_portability.py::test_healthcheck_arguments_have_no_shell_metacharacters",
           "packages/core/tests/test_compose_interpolation_portability.py::test_no_nested_variable_interpolation"
+        ],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-57-CONDENSE-BATCH",
+      "root": "packages",
+      "source_identity_before": "8a856a22978248d88441c9f27a8f0d34ca58edc8",
+      "source_identity_after": "d8f38be11acd26f8c9e252c57ae6251c6092960e",
+      "collected_roots": {
+        "packages": {
+          "before_count": 12285,
+          "after_count": 12288,
+          "added_ids": [
+            "packages/core/tests/test_condenser.py::test_forgettable_tokens_counts_only_what_the_next_condensation_would_remove",
+            "packages/core/tests/test_condenser.py::test_min_batch_tokens_derives_from_the_soft_to_hard_band",
+            "packages/core/tests/test_condenser.py::test_soft_pressure_waits_for_a_batch_then_condenses_once"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [],
+        "python_static_test_ids": [
+          "packages/core/tests/test_condenser.py::test_forgettable_tokens_counts_only_what_the_next_condensation_would_remove",
+          "packages/core/tests/test_condenser.py::test_min_batch_tokens_derives_from_the_soft_to_hard_band",
+          "packages/core/tests/test_condenser.py::test_soft_pressure_waits_for_a_batch_then_condenses_once"
         ],
         "typescript_test_files": [],
         "typescript_static_test_ids": [],
