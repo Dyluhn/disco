@@ -16,6 +16,7 @@ the former _LoopFacet methods.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Protocol, cast
 
 from ..context import (
