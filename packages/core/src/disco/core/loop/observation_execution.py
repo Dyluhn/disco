@@ -504,6 +504,11 @@ async def _check_meta(
     before: check_ledger.CheckSnapshot | None,
 ) -> dict[str, Any]:
     """The check-ledger record for a shell run; empty for every other tool."""
+    if action.tool_call is not None and action.tool_call.tool_name == check_ledger.BROWSER_TOOL:
+        if result.success:
+            events = await loop.store.get_events(loop.conversation_id)
+            return {"step": check_ledger.browser_step_meta(action, result.content or "", events)}
+        return {}
     if not check_ledger.ledger_tool(action):
         return {}
     with log_span("loop.ledger.snapshot", phase="after"):

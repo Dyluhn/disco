@@ -104,7 +104,7 @@ def _stale_agent_checks(
     latest_agent = {r.fingerprint: r for r in records if not r.probe}
     out = [
         (status, latest_agent[status.fingerprint])
-        for status in check_ledger.check_statuses(_without_probes(events))
+        for status in check_ledger.check_statuses(_without_probes(events), limit=None)
         if status.state == "stale"
         and status.exit_code == 0
         and status.tool == "shell"

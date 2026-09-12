@@ -658,3 +658,83 @@ async def test_gate_is_a_no_op_without_stale_checks(monkeypatch) -> None:
     assert await loop._finish.stale_checks_gate_passed(events) is True
     assert len(_shell_calls(ex)) == 1
     assert await loop._finish.stale_checks_gate_passed([]) is True
+
+
+# --- browser step records, the browser line, the finish fact -----------------------------------
+
+
+class _BrowserExecutor(_ProfileExecutor):
+    """browser returns a page observation; shell as before."""
+
+    async def execute(self, call):
+        if call.tool_name == "browser":
+            self.calls.append(call)
+            url = (call.arguments or {}).get("url") or "http://localhost:3000/"
+            return ToolResult(
+                call_id=call.call_id, tool_name="browser", success=True,
+                content=f"[UNTRUSTED WEB CONTENT]\nURL: {url}\nTITLE: Shop\nELEMENTS:\n  1[:] <button>Sign in</button>\n[END]\nscreenshot: .pmx/screenshots/0001.png",
+                action_profile=ActionProfile(capabilities=frozenset({EffectCapability.WEB_OBSERVE})),
+            )
+        return await super().execute(call)
+
+
+async def test_browser_observation_carries_a_step_record(monkeypatch) -> None:
+    monkeypatch.setenv("DISCO_CHECK_MEMO", "off")
+    loop = _make_loop(_BrowserExecutor(_Sandbox([DIGEST_A] * 4)))
+    await _drive(loop, _action("file_edit", "e1", path="src/a.js", old="a", new="b"))
+    events = await _drive(loop, _action("browser", "b1", action="navigate", url="http://localhost:3000/"))
+    obs = _last_obs(events)
+    step = obs.meta["step"]
+    assert step["url"] == "http://localhost:3000/" and len(step["dom_hash"]) == 64
+    assert step["fingerprint"].startswith("browser:")
+    assert step["mutation_seq"] == 2  # the edit's observation
+
+
+async def test_browser_line_counts_steps_and_identical_repeats_since_the_last_edit(monkeypatch) -> None:
+    monkeypatch.setenv("DISCO_CHECK_MEMO", "off")
+    loop = _make_loop(_BrowserExecutor(_Sandbox([DIGEST_A] * 6)))
+    await _drive(loop, _action("file_edit", "e1", path="src/a.js", old="a", new="b"))
+    await _drive(loop, _action("browser", "b1", action="navigate", url="http://localhost:3000/"))
+    await _drive(loop, _action("browser", "b2", action="click", click_text="Sign in"))
+    events = await _drive(loop, _action("browser", "b3", action="navigate", url="http://localhost:3000/"))
+    summary = check_ledger.browser_summary(events)
+    assert summary is not None and (summary.since_seq, summary.steps, summary.repeated) == (2, 3, 1)
+    assert "Browser: 3 steps since the last source change (step 2); 1 repeated an identical earlier step." == summary.render()
+    block = check_ledger.render_checks_block(events)
+    assert block is not None and block.splitlines()[0] == check_ledger.CHECKS_HEADER and "Browser: 3 steps" in block
+
+
+def _quiet_events(n_verification: int, *, failed: bool = False) -> list[Event]:
+    evs: list[Event] = _edit("e0", "src/a.js") + _pure("c0", "bash smoke.sh", exit_code=1 if failed else 0)
+    for i in range(n_verification):
+        evs += _pure(f"v{i}", f"curl localhost:3000/api/{i}")
+    return with_seqs(evs)
+
+
+def test_finish_fact_needs_all_current_checks_and_a_quiet_stretch() -> None:
+    quiet = _quiet_events(check_ledger.QUIET_ACTIONS)
+    fact = check_ledger.finish_fact(quiet, check_ledger.check_statuses(quiet, limit=None))
+    assert fact is not None
+    assert fact.startswith("No source change since step 2 (13 verification actions since); all 13 recorded checks are current.")
+    assert "Nothing is stale for the finish gate to re-run." in fact
+    assert fact in (check_ledger.render_checks_block(quiet) or "")
+
+    short = _quiet_events(check_ledger.QUIET_ACTIONS - 2)
+    assert check_ledger.finish_fact(short, check_ledger.check_statuses(short, limit=None)) is None
+
+    failing = _quiet_events(check_ledger.QUIET_ACTIONS, failed=True)
+    assert check_ledger.finish_fact(failing, check_ledger.check_statuses(failing, limit=None)) is None
+
+
+def test_finish_fact_resets_after_an_edit() -> None:
+    evs = _quiet_events(check_ledger.QUIET_ACTIONS) + with_seqs(_edit("e9", "src/b.js"), start=200)
+    statuses = check_ledger.check_statuses(evs, limit=None)
+    assert all(s.state == "stale" for s in statuses)
+    assert check_ledger.finish_fact(evs, statuses) is None
+    since, count = check_ledger.quiet_verification_count(evs)
+    assert since == 201 and count == 0
+
+
+def test_no_checks_and_no_browser_steps_renders_nothing() -> None:
+    assert check_ledger.render_checks_block([]) is None
+    assert check_ledger.browser_summary([]) is None

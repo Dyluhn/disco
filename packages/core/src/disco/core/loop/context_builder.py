@@ -120,6 +120,6 @@ def build_context_pack(
         policy=policy,
         todo_text=todo_text,
         design_direction=design_direction,
-        checks_text=check_ledger.render_checks(check_ledger.check_statuses(list(events))),
+        checks_text=check_ledger.render_checks_block(list(events)),
         allowed_next_actions=allowed_next_actions,
     )

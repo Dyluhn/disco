@@ -314,7 +314,7 @@ def _command_text(action: ActionEvent | None) -> str:
     return command if len(command) <= COMMAND_CHARS else command[: COMMAND_CHARS - 1] + "…"
 
 
-def check_statuses(events: list[Event], *, limit: int = CHECKS_SHOWN) -> list[CheckStatus]:
+def check_statuses(events: list[Event], *, limit: int | None = CHECKS_SHOWN) -> list[CheckStatus]:
     """The latest run of each distinct pure check, oldest first, capped to the most recent.
 
     Runs that changed the tree are not checks and are left out. A check is current when
@@ -330,7 +330,8 @@ def check_statuses(events: list[Event], *, limit: int = CHECKS_SHOWN) -> list[Ch
             continue
         latest[record.fingerprint] = record
     statuses: list[CheckStatus] = []
-    for record in sorted(latest.values(), key=lambda r: r.seq)[-limit:]:
+    ordered = sorted(latest.values(), key=lambda r: r.seq)
+    for record in ordered if limit is None else ordered[-limit:]:
         staled_by = next((m for m in changes if m.seq > record.seq), None)
         if record.fingerprint in flaky:
             state = "flaky"
@@ -363,7 +364,7 @@ def render_checks(statuses: list[CheckStatus]) -> str | None:
 
 def staled_checks_line(events_before: list[Event]) -> str | None:
     """The line an edit result carries: which current passing checks this edit staled."""
-    current = [s for s in check_statuses(events_before, limit=CHECKS_SHOWN) if s.state == "current"]
+    current = [s for s in check_statuses(events_before, limit=None) if s.state == "current"]
     if not current:
         return None
     names = "; ".join(s.command for s in current)
@@ -508,3 +509,107 @@ def memo_meta(action: ActionEvent, before: CheckSnapshot, source: CheckRecord) -
     record = check_meta(action, before, before, source.exit_code)
     record["memo_of"] = source.seq
     return record
+
+
+# --- browser steps (recorded, shown, never memoised) and the finish fact ----------------------
+
+BROWSER_TOOL = "browser"
+QUIET_ACTIONS = 12  # verification actions on unchanged source before the finish fact is stated
+VERIFICATION_TOOLS = frozenset({"shell", "shell_exec", "browser", "server_status", "preview_status"})
+
+
+def browser_step_meta(action: ActionEvent, content: str, events: list[Event]) -> dict[str, Any]:
+    """`meta["step"]` for a browser observation: exact call, page URL, DOM hash, and the
+    source-change seq it ran after. Stateful, so it is shown but never answered from."""
+    import hashlib
+
+    url = ""
+    lines = []
+    for line in (content or "").splitlines():
+        if line.startswith("URL: ") and not url:
+            url = line[5:].strip()
+        if not line.startswith("screenshot:"):
+            lines.append(line)
+    changes = mutations(events)
+    return {
+        "fingerprint": check_fingerprint(action.tool_call),
+        "url": url,
+        "dom_hash": hashlib.sha256("\n".join(lines).encode("utf-8", "replace")).hexdigest(),
+        "mutation_seq": changes[-1].seq if changes else 0,
+    }
+
+
+@dataclass(frozen=True)
+class BrowserSummary:
+    since_seq: int  # the last source change (0 = none)
+    steps: int  # browser steps since then
+    repeated: int  # steps identical (call + url) to an earlier step since then
+
+    def render(self) -> str:
+        since = f"since the last source change (step {self.since_seq})" if self.since_seq else "so far"
+        return f"Browser: {self.steps} steps {since}; {self.repeated} repeated an identical earlier step."
+
+
+def browser_summary(events: list[Event]) -> BrowserSummary | None:
+    changes = mutations(events)
+    since = changes[-1].seq if changes else 0
+    seen: set[tuple[str, str]] = set()
+    steps = repeated = 0
+    for event in events:
+        if not isinstance(event, ObservationEvent) or event.seq is None or event.seq <= since:
+            continue
+        step = event.meta.get("step")
+        if not isinstance(step, dict) or event.tool_result.tool_name != BROWSER_TOOL:
+            continue
+        steps += 1
+        key = (str(step.get("fingerprint")), str(step.get("url")))
+        if key in seen:
+            repeated += 1
+        seen.add(key)
+    return BrowserSummary(since_seq=since, steps=steps, repeated=repeated) if steps else None
+
+
+def quiet_verification_count(events: list[Event]) -> tuple[int, int]:
+    """(last source-change seq, verification actions since it)."""
+    changes = mutations(events)
+    since = changes[-1].seq if changes else 0
+    count = sum(
+        1
+        for e in events
+        if isinstance(e, ActionEvent)
+        and e.seq is not None
+        and e.seq > since
+        and e.tool_call is not None
+        and e.tool_call.tool_name in VERIFICATION_TOOLS
+        and not e.meta.get("verify_probe")
+    )
+    return since, count
+
+
+def finish_fact(events: list[Event], statuses: list[CheckStatus]) -> str | None:
+    """Stated only when every recorded check is current and passing and the agent has
+    run QUIET_ACTIONS verification actions without changing source. Facts, no steer."""
+    if not statuses or any(s.state != "current" for s in statuses):
+        return None
+    since, count = quiet_verification_count(events)
+    if since == 0 or count < QUIET_ACTIONS:
+        return None
+    return (
+        f"No source change since step {since} ({count} verification actions since); all "
+        f"{len(statuses)} recorded checks are current. Nothing is stale for the finish gate to re-run."
+    )
+
+
+def render_checks_block(events: list[Event]) -> str | None:
+    """The whole Checks section: check rows, the browser line, the finish fact."""
+    statuses = check_statuses(events, limit=None)
+    browser = browser_summary(events)
+    if not statuses and browser is None:
+        return None
+    lines = [CHECKS_HEADER, *(s.render() for s in statuses[-CHECKS_SHOWN:])]
+    if browser is not None:
+        lines.append(browser.render())
+    fact = finish_fact(events, statuses)
+    if fact:
+        lines.append(fact)
+    return "\n".join(lines)
