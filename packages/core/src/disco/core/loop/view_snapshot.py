@@ -102,13 +102,13 @@ async def working_set_hashes(sbx: Any, paths: list[str]) -> dict[str, str] | Non
     Missing files are simply absent from the map (their read path reports them).
     Returns None when the sandbox has no shell or the exec fails, so the caller falls
     back to reading every file — never a wrong "unchanged"."""
-    exec_shell = getattr(sbx, "exec_shell", None)
-    if not callable(exec_shell) or not paths:
+    if not hasattr(sbx, "exec_shell") or not paths:
         return None
     command = "sha256sum -- " + " ".join(shlex.quote(p) for p in paths) + " 2>/dev/null"
     try:
         result = await asyncio.wait_for(
-            exec_shell(command, timeout_s=int(_WS_HASH_TIMEOUT_S)), timeout=_WS_HASH_TIMEOUT_S + 2
+            sbx.exec_shell(command, timeout_s=int(_WS_HASH_TIMEOUT_S)),
+            timeout=_WS_HASH_TIMEOUT_S + 2,
         )
     except Exception:  # noqa: BLE001 — a failed hash means "read everything", never "unchanged"
         return None
