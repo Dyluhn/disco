@@ -13,6 +13,8 @@ Contract:
 
 from __future__ import annotations
 
+import pytest
+
 from dataclasses import dataclass
 
 from disco.core import (
@@ -709,6 +711,96 @@ async def test_probe_results_do_not_touch_the_circuit_breaker_streak(monkeypatch
     probe_ok = ObservationEvent(action_id=probe.id, tool_result=ToolResult(
         call_id="p", tool_name="shell", success=True, content="", structured={"exit_code": 0}))
     assert signals.count_recent_failures([real, real_error, probe, probe_ok]) == 1
+
+
+@pytest.mark.parametrize(
+    ("command", "written", "expected"),
+    [
+        ("bash check.sh", {"check.sh", "index.html"}, True),
+        ("ls -la public/", {"public/app.js"}, True),                       # a directory of a written file
+        ("node server/index.js --check", {"server/index.js"}, True),
+        ("./scripts/smoke.sh", {"scripts/smoke.sh"}, True),
+        ("bash smoke.sh", set(), True),                                     # a script file, however it got there
+        ("node rt-test.mjs && echo ok", set(), True),
+        ("python3 -c \"print(1)\"", set(), False),                          # an interpreter without a script
+        ("curl -s http://127.0.0.1:8000/api/health", set(), True),         # loopback server
+        ("python3 -c \"import urllib.request as U;U.urlopen('http://localhost:5173/')\"", set(), True),
+        ("npm test", set(), True),
+        ("cd server && make check", set(), True),
+        ("which mailpit || echo 'no mailpit in PATH'", {"index.html"}, False),
+        ("find / -name 'mailpit*' -type f 2>/dev/null | head", {"server/index.js"}, False),
+        ('cd /tmp && curl -sL -o mailpit.tar.gz "https://github.com/axllent/mailpit/releases/latest/x.tar.gz"',
+         {"server/index.js"}, False),
+        ("which go docker 2>/dev/null; go version", set(), False),
+        ("", {"index.html"}, False),
+    ],
+)
+def test_verifies_source_names_a_written_file_a_script_a_loopback_server_or_a_runner(command, written, expected) -> None:
+    assert check_ledger.verifies_source(command, frozenset(written)) is expected
+
+
+def test_written_paths_come_from_the_agents_mutations() -> None:
+    events = with_seqs(_edit("e1", "src/email.js") + _pure("c1", "bash check.sh") + _edit("e2", "/public/app.js"))
+    assert check_ledger.written_paths(events) == frozenset({"src/email.js", "public/app.js"})
+
+
+async def test_gate_does_not_rerun_setup_commands_that_cannot_depend_on_source(monkeypatch) -> None:
+    """Run 3 re-ran `which mailpit`, `find / -name mailpit*` and a GitHub download at finish (V-37)."""
+    monkeypatch.setenv("DISCO_CHECK_MEMO", "off")
+    ex = _GateExecutor(_Sandbox([DIGEST_A] * 6 + [DIGEST_B] * 8), codes=[0, 0, 0])  # three agent runs on A
+    loop = _make_loop(ex)
+    await _drive(loop, _action("shell", "c0", command="which mailpit || echo 'no mailpit in PATH'"))
+    await _drive(loop, _action("shell", "c1", command='cd /tmp && curl -sL -o mp.tgz "https://github.com/x/y/z.tgz"'))
+    await _drive(loop, _action("shell", "c2", command="bash check.sh"))
+    events = await _drive(loop, _action("file_edit", "e1", path="check.sh", old="a", new="b"))
+    assert [s.state for s in check_ledger.check_statuses(events)] == ["stale", "stale", "stale"]
+
+    assert await loop._finish.stale_checks_gate_passed(events) is True
+    events = await loop.store.get_events(CID)
+    probes = [e for e in events if isinstance(e, ActionEvent) and e.meta.get("verify_probe")]
+    assert [p.tool_call.arguments["command"] for p in probes] == ["bash check.sh"]
+    assert len(_shell_calls(ex)) == 4  # three agent runs + one re-run
+    # the setup commands stay visible as stale; nothing pretends they were verified
+    assert [s.state for s in check_ledger.check_statuses(events)] == ["stale", "stale", "current"]
+
+
+async def test_gate_reruns_with_the_agents_own_arguments(monkeypatch) -> None:
+    """Whatever the shell tool took besides the command (a future cwd or timeout) rides along."""
+    monkeypatch.setenv("DISCO_CHECK_MEMO", "off")
+    ex = _GateExecutor(_Sandbox([DIGEST_A, DIGEST_A] + [DIGEST_B] * 8), codes=[0, 0])
+    loop = _make_loop(ex)
+    await _drive(loop, _action("shell", "c1", command="bash check.sh", timeout_s=30))
+    events = await _drive(loop, _action("file_edit", "e1", path="check.sh", old="a", new="b"))
+    assert await loop._finish.stale_checks_gate_passed(events) is True
+    [probe] = [e for e in await loop.store.get_events(CID) if isinstance(e, ActionEvent) and e.meta.get("verify_probe")]
+    assert probe.tool_call.arguments == {"command": "bash check.sh", "timeout_s": 30, "force": True}
+
+
+def test_probe_pairs_are_not_identical_action_error_cycles_for_the_stuck_detector() -> None:
+    from disco.core.loop import StuckDetector
+
+    def pairs(meta: dict) -> list[Event]:
+        out: list[Event] = []
+        for _ in range(3):
+            a = ActionEvent(thought="gate", tool_call=ToolCall(tool_name="shell", arguments={"command": "bash x.sh"}), meta=meta)
+            out += [a, AgentErrorEvent(error="command exited 2", action_id=a.id)]
+        return out
+
+    assert StuckDetector().evaluate(with_seqs(pairs({}))).is_stuck is True           # the model's own loop
+    assert StuckDetector().evaluate(with_seqs(pairs({"verify_probe": True}))).is_stuck is False
+
+
+def test_recent_failures_lists_only_the_models_errors_most_recent_first() -> None:
+    from disco.core.loop import signals
+
+    a = _action("shell", "a", command="false"); ea = AgentErrorEvent(error="exit 1 (a)", action_id=a.id)
+    probe = ActionEvent(thought="gate", tool_call=ToolCall(tool_name="shell", arguments={"command": "bash x.sh"}),
+                        meta={"verify_probe": True})
+    ep = AgentErrorEvent(error="exit 2 (probe)", action_id=probe.id)
+    b = _action("shell", "b", command="false"); eb = AgentErrorEvent(error="exit 1 (b)", action_id=b.id)
+    streak = signals.recent_failures([a, ea, probe, ep, b, eb])
+    assert [e.error for e in streak] == ["exit 1 (b)", "exit 1 (a)"]
+    assert signals.count_recent_failures([a, ea, probe, ep, b, eb]) == 2
 
 
 async def test_gate_is_a_no_op_without_stale_checks(monkeypatch) -> None:

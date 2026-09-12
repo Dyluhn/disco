@@ -201,8 +201,8 @@ _NON_PRODUCT_FAILURE_CLASSES = frozenset(
 )
 
 
-def count_recent_failures(events: list[Event]) -> int:
-    """Consecutive AgentErrorEvents walking back from the tail. Reset by a
+def recent_failures(events: list[Event]) -> list[AgentErrorEvent]:
+    """The consecutive AgentErrorEvents at the tail, most recent first. Reset by a
     successful ObservationEvent or a USER message (a fresh instruction).
     Interleaved ActionEvents and agent/env messages do NOT reset. Drives the
     Cluster 2 circuit breaker. Failures from non-critical informational tools
@@ -217,7 +217,7 @@ def count_recent_failures(events: list[Event]) -> int:
     # Host probes (the finish gate re-running a recorded check) are not the model's
     # attempts: their results neither increment nor reset the streak.
     probe_ids = {e.id for e in events if isinstance(e, ActionEvent) and e.meta.get("verify_probe")}
-    streak = 0
+    streak: list[AgentErrorEvent] = []
     for e in reversed(events):
         if isinstance(e, ObservationEvent | AgentErrorEvent) and e.action_id in probe_ids:
             continue
@@ -230,12 +230,17 @@ def count_recent_failures(events: list[Event]) -> int:
                 and tool_by_action.get(action_id) in _NONCRITICAL_FAILURE_TOOLS
             ):
                 continue  # cosmetic bookkeeping error — transparent to the breaker
-            streak += 1
+            streak.append(e)
         elif isinstance(e, ObservationEvent):
             break
         elif isinstance(e, MessageEvent) and e.source == EventSource.USER:
             break
     return streak
+
+
+def count_recent_failures(events: list[Event]) -> int:
+    """Length of the consecutive-failure streak that drives the Cluster 2 circuit breaker."""
+    return len(recent_failures(events))
 
 
 def recovery_requested_since_reset(events: list[Event]) -> bool:

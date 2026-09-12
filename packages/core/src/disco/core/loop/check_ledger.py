@@ -16,6 +16,8 @@ never counts as a memo hit (fail closed).
 
 from __future__ import annotations
 
+import re
+
 import shlex
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
@@ -283,6 +285,47 @@ def mutations(events: list[Event]) -> list[Mutation]:
         path = args.get("path") if isinstance(args.get("path"), str) else None
         out.append(Mutation(seq=event.seq, tool=tool, path=path))
     return out
+
+
+def written_paths(events: list[Event]) -> frozenset[str]:
+    """Paths the agent's mutating actions named — the source the checks can depend on."""
+    return frozenset(m.path.strip("/") for m in mutations(events) if m.path)
+
+
+_LOOPBACK = re.compile(r"\b(localhost|127\.0\.0\.1|0\.0\.0\.0|host\.docker\.internal)\b|\[::1\]|https?://[^/\s]+:\d{2,5}")
+_RUNNERS = re.compile(
+    r"(^|[\s;&|(])(npm (test|run|start)|pnpm (test|run)|yarn (test|run)|npx |pytest|python3? -m pytest|"
+    r"go test|cargo test|make( |$)|vitest|jest|mocha|playwright)"
+)
+_SCRIPT_RUN = re.compile(
+    r"(^|[\s;&|(])(bash|sh|zsh|node|deno|bun|tsx|ts-node|python3?|ruby|perl|php|go run)\s+(\./)?[\w./-]+\.\w+"
+)
+_TOKEN_SPLIT = re.compile(r"[\s;&|()<>\"'`=,]+")
+
+
+def verifies_source(command: str, paths: frozenset[str] | set[str]) -> bool:
+    """Whether a recorded check can be staled by a source change at all.
+
+    A check verifies the source when it names a file the agent wrote (or one of its
+    directories), runs a script file (`bash check.sh`, `node rt-test.mjs`), talks to a
+    loopback server, or invokes a test runner. Environment discovery and setup (`which
+    mailpit`, `find / -name …`, a download to /tmp) cannot fail because a source file
+    changed, so the finish gate does not re-run them. When the rule cannot tell, the
+    answer is False: the check stays visibly stale and finish behaves as it did before
+    the gate existed — never a wrong "verified".
+    """
+    if _LOOPBACK.search(command) or _RUNNERS.search(command) or _SCRIPT_RUN.search(command):
+        return True
+    names: set[str] = set()
+    for path in paths:
+        parts = [part for part in path.split("/") if part]
+        names.update(parts)
+        names.update("/".join(parts[: i + 1]) for i in range(len(parts)))
+    for token in _TOKEN_SPLIT.split(command):
+        token = token.strip("./")
+        if token and token in names:
+            return True
+    return False
 
 
 @dataclass(frozen=True)

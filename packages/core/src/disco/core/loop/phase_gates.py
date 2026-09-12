@@ -335,10 +335,9 @@ class ProgressGateMixin(_ValveHost):
         # already), the HARNESS hands off to the user instead of grinding:
         # it halts at AWAITING_USER_DECISION with a summary of what failed.
         # The user's next message resets the streak (see _count_recent_failures).
-        fails = signals.count_recent_failures(events)
-        recent_errors = [e.error for e in reversed(events) if isinstance(e, AgentErrorEvent)][
-            :fails
-        ]
+        failures = signals.recent_failures(events)
+        fails = len(failures)
+        recent_errors = [e.error for e in failures]
         recovery_requested = signals.recovery_requested_since_reset(events)
         if fails >= self._loop._circuit_breaker_threshold and not recovery_requested:
             # D2 — FIRST time we hit the wall: don't dump a dead-end message.

@@ -481,6 +481,7 @@ class StuckDetector:
             if isinstance(a, ActionEvent)
             and isinstance(e, AgentErrorEvent)
             and (a.tool_call is None or a.tool_call.tool_name not in _NONCRITICAL_FAILURE_TOOLS)
+            and not a.meta.get("verify_probe")  # the finish gate's re-runs are not the model's loop
         ]
         if len(pairs) < n:
             return False

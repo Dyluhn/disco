@@ -32,6 +32,7 @@ class _StaleChecksGateService(_FinishGateComponent):
         if not stale:
             self._loop._stale_check_refusals = 0
             return True
+        actions = check_ledger._actions_by_id(events)
         now = await check_ledger.snapshot(sandbox)
         digest = now.tree_digest if now is not None else None
         failures: list[tuple[check_ledger.CheckStatus, int | None, str]] = []
@@ -44,9 +45,12 @@ class _StaleChecksGateService(_FinishGateComponent):
             if probe is not None:
                 failures.append((status, probe.exit_code, _probe_output(events, probe)))
                 continue
-            exit_code, output = await self._rerun(status.command)
+            original = actions.get(record.action_id)
+            arguments = dict(original.tool_call.arguments) if original and original.tool_call else {}
+            arguments["command"] = status.command
+            exit_code, output = await self._rerun(arguments)
             if exit_code != 0:
-                exit_code, output = await self._rerun(status.command)
+                exit_code, output = await self._rerun(arguments)
             if exit_code != 0:
                 failures.append((status, exit_code, output))
         if not failures:
@@ -60,12 +64,13 @@ class _StaleChecksGateService(_FinishGateComponent):
             return True
         return False
 
-    async def _rerun(self, command: str) -> tuple[int | None, str]:
-        """Run one recorded check as a host probe; returns (exit code, output tail)."""
+    async def _rerun(self, arguments: dict[str, object]) -> tuple[int | None, str]:
+        """Run one recorded check as a host probe with the agent's own arguments (the command
+        exactly as written plus whatever else the tool took), forced past the memo."""
         action = ActionEvent(
             thought="Finish gate: re-running a recorded check that source changes staled",
             tool_call=ToolCall(
-                tool_name="shell", arguments={"command": command, check_ledger.FORCE_ARG: True}
+                tool_name="shell", arguments={**arguments, check_ledger.FORCE_ARG: True}
             ),
             meta={"verify_probe": True},
         )
@@ -100,8 +105,11 @@ def _without_probes(events: list[Event]) -> list[Event]:
 def _stale_agent_checks(
     events: list[Event], records: list[check_ledger.CheckRecord]
 ) -> list[tuple[check_ledger.CheckStatus, check_ledger.CheckRecord]]:
-    """Stale, previously passing one-shot checks, judged by the agent's own latest run."""
+    """Stale, previously passing one-shot checks that can depend on the source, judged by
+    the agent's own latest run. Setup and discovery commands stay stale in the table but
+    are not re-run (check_ledger.verifies_source)."""
     latest_agent = {r.fingerprint: r for r in records if not r.probe}
+    written = check_ledger.written_paths(events)
     out = [
         (status, latest_agent[status.fingerprint])
         for status in check_ledger.check_statuses(_without_probes(events), limit=None)
@@ -109,6 +117,7 @@ def _stale_agent_checks(
         and status.exit_code == 0
         and status.tool == "shell"
         and status.fingerprint in latest_agent
+        and check_ledger.verifies_source(status.command, written)
     ]
     return out[-STALE_RERUN_CAP:]
 
