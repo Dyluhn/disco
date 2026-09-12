@@ -288,6 +288,7 @@ describe("Settings — information architecture", () => {
       "Research & Media",
       "Runtime",
       "Extensions & Storage",
+      "Diagnostics",
     ]) {
       expect(within(nav).getByRole("link", { name: label })).toBeInTheDocument();
     }

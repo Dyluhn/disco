@@ -7,6 +7,7 @@ import { useScrollFade } from "@/hooks/useScrollFade";
 import { AudioSection } from "@/components/settings/AudioSection";
 import { ChatVerbositySection } from "@/components/settings/ChatVerbositySection";
 import { DataSourcesSection } from "@/components/settings/DataSourcesSection";
+import { DiagnosticsSection } from "@/components/settings/DiagnosticsSection";
 import { EncoderSection } from "@/components/settings/EncoderSection";
 import { ImageGenSection } from "@/components/settings/ImageGenSection";
 import { McpSection } from "@/components/settings/McpSection";
@@ -39,6 +40,7 @@ const NAV = [
   { id: "research-media", label: "Research & Media" },
   { id: "runtime", label: "Runtime" },
   { id: "extensions-storage", label: "Extensions & Storage" },
+  { id: "diagnostics", label: "Diagnostics" },
 ] as const;
 
 function imageGenIssue(
@@ -385,6 +387,16 @@ export function SettingsView() {
               </SettingsItem>
               <SettingsItem id="connections">
                 <McpSection />
+              </SettingsItem>
+            </SettingsGroup>
+
+            <SettingsGroup
+              id="diagnostics"
+              title="Diagnostics"
+              summary="Which build this is, whether both servers and the sandbox answer, and the facts a bug report needs."
+            >
+              <SettingsItem id="diagnostics-checks">
+                <DiagnosticsSection />
               </SettingsItem>
             </SettingsGroup>
           </div>

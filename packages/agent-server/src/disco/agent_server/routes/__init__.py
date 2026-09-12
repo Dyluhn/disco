@@ -13,6 +13,7 @@ from .debug import make_debug_router
 from .deck_editor import make_deck_editor_router
 from .export import make_export_router
 from .files import make_files_router
+from .diagnostics import make_diagnostics_router
 from .health import make_health_router
 from .mcp import make_mcp_router
 from .models import make_models_router
@@ -42,6 +43,7 @@ __all__ = [
     "make_deck_editor_router",
     "make_export_router",
     "make_files_router",
+    "make_diagnostics_router",
     "make_health_router",
     "make_mcp_router",
     "make_models_router",

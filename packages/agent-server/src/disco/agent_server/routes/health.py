@@ -11,39 +11,48 @@ from fastapi.responses import JSONResponse
 from ..runtime import ConversationRuntime
 
 
+async def health_snapshot(
+    store: SqliteEventStore, runtime: ConversationRuntime | None
+) -> tuple[dict[str, object], bool]:
+    """Store reachable + runtime/router wired, plus the build identity. Never calls a
+    model (that's the canary's job). Returns (body, ok); shared by `/health` and
+    `/api/diagnostics` so the two can never disagree."""
+    checks: dict[str, object] = {}
+    ok = True
+    try:
+        await store.list_conversations(owner_id=DEFAULT_OWNER_ID, limit=1)
+        checks["store"] = "ok"
+    except Exception as e:  # noqa: BLE001 — any store failure is a health signal
+        checks["store"] = f"error: {e}"
+        ok = False
+    if runtime is None:
+        checks["runtime"] = "absent (wire-only mode)"
+    else:
+        try:
+            models = runtime.drivers.catalog().get("models", [])
+            checks["models"] = len(models) if isinstance(models, list) else 0
+            checks["runtime"] = "ok"
+        except Exception as e:  # noqa: BLE001
+            checks["runtime"] = f"error: {e}"
+            ok = False
+    info = build_info()
+    body: dict[str, object] = {
+        "status": "ok" if ok else "degraded",
+        "version": info.label(),
+        "build": info.as_dict(),
+        "checks": checks,
+    }
+    return body, ok
+
+
 def make_health_router(store: SqliteEventStore, runtime: ConversationRuntime | None) -> APIRouter:
     router = APIRouter()
 
     @router.get("/health")
     async def health() -> JSONResponse:
-        """Cheap readiness probe: store reachable + runtime/router wired. Does NOT
-        call a model (that's the canary's job — `development/harness/canary.py` adds a real
-        grounded research query on top). Returns 200 ok / 503 degraded so a
-        systemd-timer or uptime check can alert on a dead dependency."""
-        checks: dict[str, object] = {}
-        ok = True
-        try:
-            await store.list_conversations(owner_id=DEFAULT_OWNER_ID, limit=1)
-            checks["store"] = "ok"
-        except Exception as e:  # noqa: BLE001 — any store failure is a health signal
-            checks["store"] = f"error: {e}"
-            ok = False
-        if runtime is None:
-            checks["runtime"] = "absent (wire-only mode)"
-        else:
-            try:
-                models = runtime.drivers.catalog().get("models", [])
-                checks["models"] = len(models) if isinstance(models, list) else 0
-                checks["runtime"] = "ok"
-            except Exception as e:  # noqa: BLE001
-                checks["runtime"] = f"error: {e}"
-                ok = False
-        body = {
-            "status": "ok" if ok else "degraded",
-            "version": build_info().label(),
-            "build": build_info().as_dict(),
-            "checks": checks,
-        }
+        """Cheap readiness probe; 200 ok / 503 degraded so a systemd timer or uptime
+        check can alert on a dead dependency."""
+        body, ok = await health_snapshot(store, runtime)
         return JSONResponse(body, status_code=200 if ok else 503)
 
     return router
