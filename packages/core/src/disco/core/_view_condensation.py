@@ -370,6 +370,7 @@ class LLMSummarizingCondenser:
         budget_tokens: int = 24_000,
         hard_budget_tokens: int = 32_000,
         summary_input_chars: int = 384_000,
+        min_batch_tokens: int | None = None,
     ) -> None:
         if context_window is not None:
             derived_soft = int(context_window * soft_frac)
@@ -378,6 +379,15 @@ class LLMSummarizingCondenser:
             derived_soft, derived_hard = budget_tokens, hard_budget_tokens
         self._max = max_tokens if max_tokens is not None else derived_soft
         self._hard = hard_max_tokens if hard_max_tokens is not None else derived_hard
+        # A soft trigger waits until this much forgettable history has aged out of the
+        # recent window; otherwise a view whose fixed part (system prompt, context pack,
+        # workspace snapshot, the kept turns) sits above the soft line would pay one
+        # summarizer call per turn to forget two events. Derived from the soft→hard band
+        # so it is model-neutral; the hard trigger never waits.
+        band = max(0, self._hard - self._max)
+        self.min_batch_tokens = (
+            min_batch_tokens if min_batch_tokens is not None else max(1_000, int(band * 0.3))
+        )
         self._keep_head = keep_head
         self._keep_recent = keep_recent
         self._min_forget = min_forget
@@ -392,15 +402,8 @@ class LLMSummarizingCondenser:
             return CondensationRequest(soft=True, reason="tokens")
         return None
 
-    async def condense(
-        self,
-        events: list[Event],
-        view: View,
-        *,
-        summarizer: Summarizer,
-        reason: str = "tokens",
-        artifact_paths: list[str] | None = None,
-    ) -> CondensationEvent | None:
+    def _forgettable_span(self, events: list[Event]) -> list[Event] | None:
+        """The oldest forgettable span under the keep-head / keep-recent policy."""
         forgotten = [
             (e.forgotten_start_seq, e.forgotten_end_seq)
             for e in events
@@ -415,15 +418,37 @@ class LLMSummarizingCondenser:
             for e in events
             if isinstance(e, LLMConvertible) and e.seq is not None and not is_forgotten(e.seq)
         ]
-
         span = _compute_condense_span(live, self._keep_head, self._keep_recent, self._min_forget)
         if span is None:
             return None
-        span = _bounded_summary_span(
+        return _bounded_summary_span(
             span,
             max_chars=self._summary_input_chars,
             min_events=self._min_forget,
         )
+
+    def forgettable_tokens(self, events: list[Event]) -> int:
+        """Estimated tokens the next condensation would remove from the view (~4 chars/token)."""
+        span = self._forgettable_span(events) or []
+        chars = 0
+        for event in span:
+            message = event.to_llm_message() if isinstance(event, LLMConvertible) else None
+            if message is not None:
+                chars += len(message.content or "") + len(str(message.tool_calls or ()))
+        return chars // 4
+
+    async def condense(
+        self,
+        events: list[Event],
+        view: View,
+        *,
+        summarizer: Summarizer,
+        reason: str = "tokens",
+        artifact_paths: list[str] | None = None,
+    ) -> CondensationEvent | None:
+        span = self._forgettable_span(events)
+        if span is None:
+            return None
 
         start_seq, end_seq = span[0].seq, span[-1].seq
         if start_seq is None or end_seq is None:

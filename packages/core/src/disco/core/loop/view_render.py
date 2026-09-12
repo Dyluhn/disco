@@ -356,6 +356,16 @@ def _drop_context_pack_owned_history(messages: list[LLMMessage]) -> list[LLMMess
     ]
 
 
+def _worth_a_summarizer_call(condenser: object, events: list[Event]) -> bool:
+    """Soft condensation batches: only when the condenser can say how much history has aged
+    out AND that amount reaches its batch size. Condensers without the seam behave as before."""
+    forgettable = getattr(condenser, "forgettable_tokens", None)
+    batch = getattr(condenser, "min_batch_tokens", None)
+    if not callable(forgettable) or not isinstance(batch, int):
+        return True
+    return int(forgettable(events)) >= batch
+
+
 class ViewBuilder:
     """Materialize the model-facing View each turn: microcompact, condense if
     triggered (§8), gate the C6 tail-recap, apply the F8 shrink (assist), and
@@ -670,6 +680,8 @@ class ViewBuilder:
                 view = await self._project_view(events, include_context_pack=context_pack_active)
                 est = signals.estimate_tokens(view) + snap_tokens
                 req = self._loop.condenser.should_condense(view, token_count=est)
+        if req is not None and req.soft and not _worth_a_summarizer_call(self._loop.condenser, events):
+            req = None  # aged history too small to summarize yet; the hard trigger never waits
         if req is not None:
             tombstone = await self._loop.condenser.condense(
                 events, view, summarizer=self._loop.summarizer

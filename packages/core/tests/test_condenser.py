@@ -619,3 +619,37 @@ async def test_user_task_survives_when_an_environment_notice_precedes_it():
     assert "Catalog Audit 460000" in rendered and "Catalog Audited 460000" in rendered, (
         "the literal requirements the verifier matches must still be in context"
     )
+
+
+# ---- soft condensation batches (Pharmacy run 4: one summarizer call per turn) ----
+
+
+def test_min_batch_tokens_derives_from_the_soft_to_hard_band():
+    c = LLMSummarizingCondenser(context_window=131_072)
+    assert c.min_batch_tokens == int((int(131_072 * 0.80) - int(131_072 * 0.65)) * 0.3)
+    assert LLMSummarizingCondenser(context_window=8_000).min_batch_tokens == 1_000  # floor
+    assert LLMSummarizingCondenser(min_batch_tokens=50).min_batch_tokens == 50
+
+
+async def test_forgettable_tokens_counts_only_what_the_next_condensation_would_remove():
+    condenser = LLMSummarizingCondenser(keep_head=1, keep_recent=2, min_forget=2)
+    assert condenser.forgettable_tokens(await _seed_pairs(2)) == 0  # nothing older than the kept turns
+    events = await _seed_pairs(6)  # 4 aged turns
+    aged = condenser.forgettable_tokens(events)
+    assert aged > 0
+    assert condenser.forgettable_tokens(await _seed_pairs(10)) > aged  # grows as turns age out
+
+
+async def test_soft_pressure_waits_for_a_batch_then_condenses_once():
+    """A view whose fixed part sits above the soft line must not pay one summarizer call per
+    turn to forget two events. The loop condenses when a batch of history has aged out."""
+    from disco.core.loop.view_render import _worth_a_summarizer_call
+
+    condenser = LLMSummarizingCondenser(keep_head=1, keep_recent=2, min_forget=2, min_batch_tokens=40)
+    assert _worth_a_summarizer_call(condenser, await _seed_pairs(3)) is False   # one aged turn (~25 tokens)
+    assert _worth_a_summarizer_call(condenser, await _seed_pairs(6)) is True    # four aged turns
+
+    class Bare:  # a condenser without the seam keeps today's behaviour
+        pass
+
+    assert _worth_a_summarizer_call(Bare(), await _seed_pairs(3)) is True
