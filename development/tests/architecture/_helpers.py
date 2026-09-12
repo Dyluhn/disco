@@ -538,6 +538,7 @@ def write_budget_authority(
 # Exact accepted public member/value population for the research closeout.
 PUBLIC_API_MEMBER_NAMES = frozenset(
     {
+        "ContextPack",
         "ToolContext",
         "AGENT_TOOLS",
         "AgentErrorEvent",
