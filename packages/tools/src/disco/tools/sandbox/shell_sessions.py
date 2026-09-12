@@ -35,6 +35,7 @@ _LOG = logging.getLogger(__name__)
 _PREFIX = "disco"  # WRITE side: new tmux sessions are disco-*
 _LEGACY_PREFIX = "pmx"  # READ side: still swept on teardown (no orphans across rename)
 _VIEW_TAIL_CHARS = 10_000
+_SHELL_COMMANDS = frozenset({"bash", "sh", "dash", "zsh", "fish", "ash"})  # an idle pane's foreground
 _EXEC_RETURN_CHARS = 6_000
 _POLL_S = 0.5
 _EXEC_WAIT_S = 15.0
@@ -89,6 +90,21 @@ class SessionInfo:
     name: str
     busy: bool
     last_lines: str
+
+
+def _short_session_name(namespace: str, full: str) -> str | None:
+    """A namespace's short session name for a tmux session name, or None.
+
+    Dual-read: sessions under the current `disco-` AND legacy `pmx-` prefix so a rename
+    never strands a session. W3 C-5: internal `__`-prefixed sessions (e.g. `__kernel`)
+    are never enumerated — the single choke point every listing consumer inherits."""
+    suffix = f"-{namespace}" if namespace else "-"
+    for prefix in (_PREFIX, _LEGACY_PREFIX):
+        candidate = f"{prefix}{suffix}"
+        if full.startswith(candidate):
+            name = full[len(candidate) :]
+            return None if name.startswith("__") else name
+    return None
 
 
 class ShellSessionManager:
@@ -493,32 +509,36 @@ class ShellSessionManager:
         await self.ensure(name)
         return f"Process ignored Ctrl-C; session '{name}' was killed and recreated."
 
-    async def list(self) -> list[SessionInfo]:
+    async def _list_from_panes(self) -> list[SessionInfo]:
+        code, out = await self._run_tmux_safe(
+            "list-panes -a -F '#{session_name}\t#{pane_current_command}'"
+        )
+        if code != 0:
+            return []
+        busy: dict[str, bool] = {}
+        for line in out.splitlines():
+            session, _, command = line.strip().partition("\t")
+            name = _short_session_name(self.namespace, session)
+            if name is not None:
+                busy[name] = busy.get(name, False) or (bool(command) and command not in _SHELL_COMMANDS)
+        return [SessionInfo(name=n, busy=b, last_lines="") for n, b in sorted(busy.items())]
+
+    async def list(self, *, output: bool = True) -> list[SessionInfo]:
+        """This namespace's sessions. With ``output=False`` one ``list-panes`` call answers
+        busy-or-idle from each pane's foreground command and ``last_lines`` is empty — the
+        check ledger's purity check needs only that, and the per-pane capture the default
+        path does cost ~2 s per ledger snapshot on a five-session build (Pharmacy run 4)."""
+        if not output:
+            return await self._list_from_panes()
         code, out = await self._run_tmux_safe("list-sessions -F '#{session_name}'")
         if code != 0:
             return []
-
         sessions = []
         for line in out.splitlines():
-            line = line.strip()
-            # Dual-read: list sessions under the current `disco-` AND legacy `pmx-`
-            # prefix so a rename never strands a session. Strip whichever matched.
-            suffix = f"-{self.namespace}" if self.namespace else "-"
-            prefix_match = None
-            for p in (_PREFIX, _LEGACY_PREFIX):
-                cand = f"{p}{suffix}"
-                if line.startswith(cand):
-                    prefix_match = cand
-                    break
-            if prefix_match is not None:
-                name = line[len(prefix_match) :]
-                # W3 C-5: never enumerate internal, `__`-prefixed sessions (e.g.
-                # `__kernel`, whose pane holds the gateway launch line). This is
-                # the single choke point every listing consumer inherits — the
-                # model-facing `server_status` tool and any other caller.
-                if name.startswith("__"):
-                    continue
+            name = _short_session_name(self.namespace, line.strip())
+            if name is not None:
                 view = await self.view(name, tail_chars=1000)
                 last_lines = "\n".join(view.output.split("\n")[-3:])
                 sessions.append(SessionInfo(name=name, busy=view.running, last_lines=last_lines))
         return sessions
+

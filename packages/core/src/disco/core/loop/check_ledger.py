@@ -16,6 +16,7 @@ never counts as a memo hit (fail closed).
 
 from __future__ import annotations
 
+import inspect
 import re
 
 import shlex
@@ -91,12 +92,15 @@ async def snapshot(sandbox: object | None) -> CheckSnapshot | None:
 
 
 async def _busy_sessions(sandbox: object) -> tuple[str, ...]:
+    """Busy session names. A manager whose ``list`` takes ``output`` is asked for the
+    cheap listing (one tmux call, no pane capture); older managers are listed as before."""
     manager = getattr(sandbox, "sessions", None)
     list_sessions = getattr(manager, "list", None)
     if not callable(list_sessions):
         return ()
     try:
-        infos = await cast(Callable[[], Awaitable[Any]], list_sessions)()
+        cheap = "output" in inspect.signature(list_sessions).parameters
+        infos = await cast(Callable[..., Awaitable[Any]], list_sessions)(**({"output": False} if cheap else {}))
     except Exception:  # noqa: BLE001 — same fail-closed rule as the digest
         return ()
     return tuple(sorted(info.name for info in infos if getattr(info, "busy", False)))

@@ -1051,3 +1051,30 @@ async def test_exec_never_rewrites_serve_shaped_text_on_shared_host():
         sent = _sent_literals(inst)
         assert "http.server 8000" in sent, command  # verbatim
         assert "http.server 3000" not in sent, command
+
+
+async def test_list_without_output_is_one_tmux_call_and_reads_busy_from_the_foreground_command():
+    """The check ledger's purity check needs only which sessions are busy; the default
+    listing captures every pane (~2 s per ledger snapshot on a five-session build, run 4)."""
+    inst = FakeInstance()
+    inst.canned_outputs["list-panes"] = (
+        0,
+        "disco-install\tbash\ndisco-mailpit\tmailpit\ndisco-preview-node\tnode\n"
+        "disco-__kernel\tpython3\npmx-legacy-server\tnode\nother-namespace\tnode\n",
+    )
+
+    async def get_inst():
+        return inst
+
+    manager = ShellSessionManager(get_inst)
+    infos = await manager.list(output=False)
+    assert [(i.name, i.busy, i.last_lines) for i in infos] == [
+        ("install", False, ""), ("legacy-server", True, ""), ("mailpit", True, ""), ("preview-node", True, ""),
+    ]
+    assert [c for c in inst.cmd_log if "tmux" in c] == [
+        "tmux list-panes -a -F '#{session_name}\t#{pane_current_command}'"
+    ]
+    assert inst.capture_pane_calls == 0
+
+    inst.canned_outputs["list-panes"] = (1, "no server running")
+    assert await manager.list(output=False) == []

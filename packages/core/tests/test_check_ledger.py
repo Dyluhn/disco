@@ -204,6 +204,31 @@ async def test_failing_digest_pipeline_records_none() -> None:
     assert record["tree_before"] is None and record["tree_after"] is None
 
 
+async def test_busy_sessions_ask_for_the_cheap_listing_when_the_manager_offers_it() -> None:
+    class _Manager:
+        def __init__(self) -> None:
+            self.calls: list[bool] = []
+
+        async def list(self, *, output: bool = True):
+            self.calls.append(output)
+            return [type("I", (), {"name": "preview", "busy": True})(), type("I", (), {"name": "install", "busy": False})()]
+
+    class _Box:
+        sessions = _Manager()
+
+    assert await check_ledger._busy_sessions(_Box()) == ("preview",)
+    assert _Box.sessions.calls == [False]  # no pane capture requested
+
+    class _Older:  # a manager without the parameter is listed as before
+        async def list(self):
+            return [type("I", (), {"name": "srv", "busy": True})()]
+
+    class _OldBox:
+        sessions = _Older()
+
+    assert await check_ledger._busy_sessions(_OldBox()) == ("srv",)
+
+
 def test_digest_command_prunes_dependency_dirs_and_runtime_state() -> None:
     cmd = check_ledger.tree_digest_command()
     assert "-name node_modules" in cmd and "-name .git" in cmd
