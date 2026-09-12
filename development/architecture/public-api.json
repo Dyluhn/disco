@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-public-api-v1",
-  "source_identity": "8f4a63c144e605d5d520b4e6365876fbae3f066c",
+  "source_identity": "f545896c5f2dcd802d608f0b14b8b6f99c428414",
   "python_initializers": [
     {
       "path": "packages/agent-server/src/disco/agent_server/__init__.py",
@@ -12245,6 +12245,7 @@
             "async def gate_execution_nudge(self, step, events)",
             "async def handle_finish_path(self, step, state, events)",
             "async def normalize_finish_step(self, step, events)",
+            "async def stale_checks_gate_passed(self, events)",
             "async def synthetic_finish_after_actionless_pauses(self, state, events)",
             "def __init__(self, loop: AgentLoop) -> None"
           ],
@@ -30482,14 +30483,6 @@
     {
       "surface": "python",
       "path": "packages/core/src/disco/core/loop/finish/__init__.py",
-      "public_name": "FinishGate",
-      "target_sha256": "7ef3f3792508767454c906907ae91f37490061e74208e65069b9f4d6e24d7756",
-      "owner_package": "PKG-13-FACADES",
-      "reason": "Epic 13-C: explicit typed finish collaborators replace inherited mixin surface; package-owned helper exports are made explicit."
-    },
-    {
-      "surface": "python",
-      "path": "packages/core/src/disco/core/loop/finish/__init__.py",
       "public_name": "FinishVerificationSurface",
       "target_sha256": "e74dd9111c0a5e4abf773b794b9ecd0b6715e9f1411a5781bb1c1244c88765db",
       "owner_package": "PKG-13-FACADES",
@@ -32766,6 +32759,14 @@
       "target_sha256": "dbf1f03f98a0677eb18fb03a11e5599163a1c78b7b19f17e0133fde88a2265ce",
       "owner_package": "PKG-49-CHECK-LEDGER-SHOW",
       "reason": "PKG-49-CHECK-LEDGER-SHOW: Check ledger phase 2: SourceKind gains CHECKS and ContextPack gains current_checks / checks_text (member transitions); no other public-API change"
+    },
+    {
+      "surface": "python",
+      "path": "packages/core/src/disco/core/loop/finish/__init__.py",
+      "public_name": "FinishGate",
+      "target_sha256": "ad5b8b374b2135b594686c06e436b53d3799b60ae18276e7597e30502d0ae234",
+      "owner_package": "PKG-51-CHECK-LEDGER-GATE",
+      "reason": "PKG-51-CHECK-LEDGER-GATE: Check ledger phase 4: FinishGate gains stale_checks_gate_passed (member transition if the initializer is tracked); no other public-API change"
     }
   ],
   "compatibility_bridges": [],
@@ -32952,6 +32953,21 @@
       "owner_package": "PKG-08-VERIFY",
       "accepting_commit": "5c3785e75554e62ec12f2460c10559ca0d0a584c",
       "accepting_receipt": "2026-07-30/PKG-08-VERIFY/PKG-08-VERIFY-ACCEPTANCE-RECEIPT.md"
+    },
+    {
+      "surface": "python",
+      "path": "packages/core/src/disco/core/loop/finish/__init__.py",
+      "public_name": "FinishGate",
+      "origin": null,
+      "removed_members": [],
+      "added_members": [
+        "async def stale_checks_gate_passed(self, events)"
+      ],
+      "old_signature_sha256": "7c8fb7096b4292a2a9ab64c857fcc9ce31cb509d5851e1447c631fb74a54a7a3",
+      "new_signature_sha256": "b9ebe81f4dc24ae69389754ad7aa8657be2cd13210f046a96daa0bc5b3a7cc38",
+      "owner_package": "PKG-51-CHECK-LEDGER-GATE",
+      "accepting_commit": "631cc39e510003bb9d50faaaf003176901c49f35",
+      "accepting_receipt": "Check ledger phase 4: FinishGate gains stale_checks_gate_passed (member transition if the initializer is tracked); no other public-API change"
     },
     {
       "surface": "python",
@@ -33221,30 +33237,6 @@
       "owner_package": "PKG-11-PLATFORM-STRUCTURE",
       "accepting_commit": "d9653a370224bf37c575c49e8a386d41bb5cea12",
       "accepting_receipt": "automation/runtime/boundary-review-20260804-15p1-corrective-luna/REVIEW-RECEIPT.md"
-    },
-    {
-      "surface": "python",
-      "path": "packages/core/src/disco/core/loop/finish/__init__.py",
-      "public_name": "FinishGate",
-      "origin": null,
-      "removed_members": [
-        "async def build_dod_evaluator(self)",
-        "async def finish_dod_gate_passed(self)",
-        "async def finish_verify_passed(self, command)",
-        "async def gate_browser_verify(self, step, events, **kwargs)",
-        "async def gate_export_render(self, step, events)",
-        "async def gate_host_verify(self, step, events, **kwargs)",
-        "async def gate_workflow_output_contract(self, step, events)",
-        "async def maybe_honest_unverifiable_static_actionless_finish(self, events)",
-        "async def run_finish_verify_gates(self, step, events)",
-        "async def seal_gate_allows_finish(self)"
-      ],
-      "added_members": [],
-      "old_signature_sha256": "d92c210c32e4d89005b60cf453af43a8c8e9b5bd6fcafe833a89089c2c927af1",
-      "new_signature_sha256": "7c8fb7096b4292a2a9ab64c857fcc9ce31cb509d5851e1447c631fb74a54a7a3",
-      "owner_package": "PKG-13-FACADES",
-      "accepting_commit": "dc0532173e8ad820d651a26e7f2feac8df5d0f49",
-      "accepting_receipt": "2026-08-03/PKG-13-FACADES/EPIC-13C-ACCEPTANCE-RECEIPT.md"
     },
     {
       "surface": "python",

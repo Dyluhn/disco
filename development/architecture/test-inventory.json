@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "8f4a63c144e605d5d520b4e6365876fbae3f066c",
+  "source_identity": "f545896c5f2dcd802d608f0b14b8b6f99c428414",
   "collected": {
     "counts": {
-      "packages": 12226,
+      "packages": 12230,
       "harness": 1571,
       "integrations": 9,
       "tests": 458
     },
-    "total": 14264,
+    "total": 14268,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -4651,6 +4651,10 @@
         "packages/core/tests/test_check_ledger.py::test_failed_shell_run_records_on_the_error_event",
         "packages/core/tests/test_check_ledger.py::test_failing_digest_pipeline_records_none",
         "packages/core/tests/test_check_ledger.py::test_force_executes_and_stays_the_same_check",
+        "packages/core/tests/test_check_ledger.py::test_gate_is_a_no_op_without_stale_checks",
+        "packages/core/tests/test_check_ledger.py::test_gate_lets_finish_through_on_the_third_refusal",
+        "packages/core/tests/test_check_ledger.py::test_gate_refuses_when_the_rerun_fails_twice_and_names_the_check",
+        "packages/core/tests/test_check_ledger.py::test_gate_reruns_the_stale_check_as_a_host_probe_and_passes",
         "packages/core/tests/test_check_ledger.py::test_latest_run_wins_and_the_table_is_capped",
         "packages/core/tests/test_check_ledger.py::test_mutations_are_edits_and_tree_changing_shell_runs_only",
         "packages/core/tests/test_check_ledger.py::test_no_checks_renders_nothing",
@@ -14285,9 +14289,9 @@
     }
   },
   "mapping_static": {
-    "identity": "8f4a63c144e605d5d520b4e6365876fbae3f066c",
+    "identity": "f545896c5f2dcd802d608f0b14b8b6f99c428414",
     "python_test_file_count": 957,
-    "python_static_test_id_count": 11727,
+    "python_static_test_id_count": 11731,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -20281,6 +20285,10 @@
       "packages/core/tests/test_check_ledger.py::test_failed_shell_run_records_on_the_error_event",
       "packages/core/tests/test_check_ledger.py::test_failing_digest_pipeline_records_none",
       "packages/core/tests/test_check_ledger.py::test_force_executes_and_stays_the_same_check",
+      "packages/core/tests/test_check_ledger.py::test_gate_is_a_no_op_without_stale_checks",
+      "packages/core/tests/test_check_ledger.py::test_gate_lets_finish_through_on_the_third_refusal",
+      "packages/core/tests/test_check_ledger.py::test_gate_refuses_when_the_rerun_fails_twice_and_names_the_check",
+      "packages/core/tests/test_check_ledger.py::test_gate_reruns_the_stale_check_as_a_host_probe_and_passes",
       "packages/core/tests/test_check_ledger.py::test_latest_run_wins_and_the_table_is_capped",
       "packages/core/tests/test_check_ledger.py::test_mutations_are_edits_and_tree_changing_shell_runs_only",
       "packages/core/tests/test_check_ledger.py::test_no_checks_renders_nothing",
@@ -42530,6 +42538,36 @@
           "packages/core/tests/test_check_ledger.py::test_staled_line_names_only_current_passing_checks",
           "packages/core/tests/test_context_pack_prompt.py::test_checks_section_renders_after_todo_from_recorded_shell_runs",
           "packages/core/tests/test_context_pack_prompt.py::test_no_shell_runs_means_no_checks_section"
+        ],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-51-CHECK-LEDGER-GATE",
+      "root": "packages",
+      "source_identity_before": "8f4a63c144e605d5d520b4e6365876fbae3f066c",
+      "source_identity_after": "f545896c5f2dcd802d608f0b14b8b6f99c428414",
+      "collected_roots": {
+        "packages": {
+          "before_count": 12226,
+          "after_count": 12230,
+          "added_ids": [
+            "packages/core/tests/test_check_ledger.py::test_gate_is_a_no_op_without_stale_checks",
+            "packages/core/tests/test_check_ledger.py::test_gate_lets_finish_through_on_the_third_refusal",
+            "packages/core/tests/test_check_ledger.py::test_gate_refuses_when_the_rerun_fails_twice_and_names_the_check",
+            "packages/core/tests/test_check_ledger.py::test_gate_reruns_the_stale_check_as_a_host_probe_and_passes"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [],
+        "python_static_test_ids": [
+          "packages/core/tests/test_check_ledger.py::test_gate_is_a_no_op_without_stale_checks",
+          "packages/core/tests/test_check_ledger.py::test_gate_lets_finish_through_on_the_third_refusal",
+          "packages/core/tests/test_check_ledger.py::test_gate_refuses_when_the_rerun_fails_twice_and_names_the_check",
+          "packages/core/tests/test_check_ledger.py::test_gate_reruns_the_stale_check_as_a_host_probe_and_passes"
         ],
         "typescript_test_files": [],
         "typescript_static_test_ids": [],
