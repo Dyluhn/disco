@@ -22,6 +22,7 @@ from ..events import (
     value_is_only_elision_marker,
 )
 from ..llm import LLMContextWindowExceeded
+from . import check_ledger
 from .dedup import (
     _W39_NOTICE_TOOLS,
     _W39_PLAN_TOOLS,
@@ -456,6 +457,8 @@ async def _persist_primary_result(
     loop: _LoopFacet,
     action: ActionEvent,
     result: ToolResult,
+    *,
+    check_before: check_ledger.CheckSnapshot | None = None,
 ) -> None:
     events = await loop.store.get_events(loop.conversation_id)
     already_persisted = any(
@@ -465,8 +468,9 @@ async def _persist_primary_result(
     if already_persisted:
         return
     await _persist_runtime_constraints(loop, result)
+    meta = await _check_meta(loop, action, result, check_before)
     if result.success:
-        await loop._emit(ObservationEvent(tool_result=result, action_id=action.id))
+        await loop._emit(ObservationEvent(tool_result=result, action_id=action.id, meta=meta))
         return
     error = result.error or "tool failed"
     structured = result.structured or {}
@@ -474,6 +478,7 @@ async def _persist_primary_result(
     failure_reason = structured.get("error_reason")
     await loop._emit(
         AgentErrorEvent(
+            meta=meta,
             error=error,
             detail=_error_detail(
                 error,
@@ -488,6 +493,20 @@ async def _persist_primary_result(
             effect_receipts=result.effect_receipts,
         )
     )
+
+
+async def _check_meta(
+    loop: _LoopFacet,
+    action: ActionEvent,
+    result: ToolResult,
+    before: check_ledger.CheckSnapshot | None,
+) -> dict[str, Any]:
+    """The check-ledger record for a shell run; empty for every other tool."""
+    if not check_ledger.ledger_tool(action):
+        return {}
+    after = await check_ledger.snapshot(getattr(loop.executor, "sandbox", None))
+    exit_code = check_ledger.exit_code_of(result.structured)
+    return {"check": check_ledger.check_meta(action, before, after, exit_code)}
 
 
 async def _emit_execution_error(
@@ -563,7 +582,8 @@ async def execute_and_observe(
         return
     sandbox = getattr(loop.executor, "sandbox", None)
     generation_before = getattr(sandbox, "generation", 0) if sandbox is not None else 0
-    persist = partial(_persist_primary_result, loop, action)
+    check_before = await check_ledger.snapshot(sandbox) if check_ledger.ledger_tool(action) else None
+    persist = partial(_persist_primary_result, loop, action, check_before=check_before)
     primary_persisted = False
     try:
         attributed_execute = getattr(loop.executor, "execute_attributed", None)

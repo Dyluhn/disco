@@ -119,7 +119,9 @@ def _context_evidence_line(event: Event) -> str | None:
         return f"- seq {event.seq} OBSERVED action: {_context_tool_summary(event)}"
     if isinstance(event, ObservationEvent):
         state = "success" if event.tool_result.success else "failure"
-        return f"- seq {event.seq} OBSERVED result: {event.tool_result.tool_name} {state}"
+        exit_code = (event.tool_result.structured or {}).get("exit_code")
+        exit_note = f" exit {exit_code}" if isinstance(exit_code, int) else ""
+        return f"- seq {event.seq} OBSERVED result: {event.tool_result.tool_name} {state}{exit_note}"
     if isinstance(event, VerifierVerdictEvent):
         state = "PASS" if event.verified else "FAIL"
         return (
@@ -147,7 +149,7 @@ def _context_chronology(ranged: list[Event]) -> list[str]:
 def _context_verification(ranged: list[Event]) -> str:
     verdicts = [event for event in ranged if isinstance(event, VerifierVerdictEvent)]
     if not verdicts:
-        return "HOST VERIFICATION: none; these step states remain agent claims, not verified facts."
+        return "HOST VERIFICATION: none. Tool results above are observed facts; the step marks are the agent's."
     return "HOST VERIFICATION: " + ", ".join(
         "PASS" if event.verified else "FAIL" for event in verdicts
     )

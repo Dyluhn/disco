@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from disco.core import SecurityRisk
 from disco.core.effects import EffectCapability
 from pydantic import BaseModel, Field
@@ -86,10 +88,11 @@ class ShellExecTool:
             if outcome.note:
                 content += f"\nNote: {outcome.note}"
             content, cap_meta = cap_shell_observation(content.strip())
-            structured = dict(cap_meta) if cap_meta is not None else None
+            structured: dict[str, Any] = dict(cap_meta) if cap_meta is not None else {}
+            structured["running"] = bool(outcome.running)
+            if not outcome.running:
+                structured["exit_code"] = outcome.exit_code
             if output_sanitized is not None:
-                if structured is None:
-                    structured = {}
                 structured.update(
                     {
                         "binary_output_sanitized": True,
