@@ -22,6 +22,7 @@ from ..events import (
     value_is_only_elision_marker,
 )
 from ..llm import LLMContextWindowExceeded
+from ..obs import log_span
 from . import check_ledger
 from .dedup import (
     _W39_NOTICE_TOOLS,
@@ -505,7 +506,8 @@ async def _check_meta(
     """The check-ledger record for a shell run; empty for every other tool."""
     if not check_ledger.ledger_tool(action):
         return {}
-    after = await check_ledger.snapshot(getattr(loop.executor, "sandbox", None))
+    with log_span("loop.ledger.snapshot", phase="after"):
+        after = await check_ledger.snapshot(getattr(loop.executor, "sandbox", None))
     exit_code = check_ledger.exit_code_of(result.structured)
     return {"check": check_ledger.check_meta(action, before, after, exit_code)}
 
@@ -657,24 +659,29 @@ async def execute_and_observe(
         return
     sandbox = getattr(loop.executor, "sandbox", None)
     generation_before = getattr(sandbox, "generation", 0) if sandbox is not None else 0
-    check_before = await check_ledger.snapshot(sandbox) if check_ledger.ledger_tool(action) else None
+    tool_name = action.tool_call.tool_name if action.tool_call else ""
+    check_before = None
+    if check_ledger.ledger_tool(action):
+        with log_span("loop.ledger.snapshot", phase="before"):
+            check_before = await check_ledger.snapshot(sandbox)
     if check_before is not None and await _answer_from_record(loop, action, check_before):
         return
     persist = partial(_persist_primary_result, loop, action, check_before=check_before)
     primary_persisted = False
     try:
         attributed_execute = getattr(loop.executor, "execute_attributed", None)
-        if callable(attributed_execute):
-            result = await cast(Any, attributed_execute)(
-                action.tool_call,
-                action.agent_view_id,
-                persist,
-                loop._prepare_executor,
-            )
-            primary_persisted = True
-        else:
-            await loop._prepare_executor()
-            result = await loop.executor.execute(action.tool_call)
+        with log_span("loop.tool", tool=tool_name):
+            if callable(attributed_execute):
+                result = await cast(Any, attributed_execute)(
+                    action.tool_call,
+                    action.agent_view_id,
+                    persist,
+                    loop._prepare_executor,
+                )
+                primary_persisted = True
+            else:
+                await loop._prepare_executor()
+                result = await loop.executor.execute(action.tool_call)
     except LLMContextWindowExceeded:
         raise
     except Exception as error:  # noqa: BLE001
@@ -682,7 +689,8 @@ async def execute_and_observe(
         await emit_restart(sandbox, generation_before)
         return
     if not primary_persisted:
-        await persist(result)
+        with log_span("loop.persist", tool=tool_name):
+            await persist(result)
     if result.success:
         await _emit_success_followups(loop, action, reminder)
     await emit_restart(sandbox, generation_before)

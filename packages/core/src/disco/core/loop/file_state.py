@@ -143,6 +143,7 @@ class FileStateTracker:
         self,
         sbx: object,
         working_set: list[str],
+        hashes: dict[str, str] | None = None,
     ) -> list[str]:
         """Return the subset of ``working_set`` paths whose current disk SHA
         diverges from the last-seen SHA recorded in this tracker.
@@ -155,12 +156,20 @@ class FileStateTracker:
         treated as "not stale" (the snapshot will handle the missing case).
 
         This is a pure DETECTION scan; it does NOT update the tracker.
+
+        With ``hashes`` (the per-turn ``working_set_hashes`` map) no file is read:
+        a path absent from the map could not be hashed and is treated as not stale.
         """
         stale: list[str] = []
         for path in working_set:
             snap = self._snaps.get(path)
             if snap is None:
                 continue  # never shown → "never-shown", not "stale"
+            if hashes is not None:
+                disk = hashes.get(path)
+                if disk is not None and disk != snap.sha:
+                    stale.append(path)
+                continue
             try:
                 raw = await asyncio.wait_for(
                     sbx.read_file(path),  # type: ignore[attr-defined]

@@ -17,7 +17,8 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import os
-from typing import TYPE_CHECKING
+import shlex
+from typing import TYPE_CHECKING, Any
 
 from ..effects import ObservationReceipt
 from ..events import WORKSPACE_SNAPSHOT_SENTINEL, Event, LLMMessage
@@ -50,6 +51,67 @@ _BASELINE_CAPS = ContextCaps(
 )
 _WS_READ_TIMEOUT_S = 2.0  # per-file read cap — the snapshot runs under the conversation
 #                           lock, so a hung sandbox read must never freeze control ops
+_WS_HASH_TIMEOUT_S = 5.0  # the single per-turn hash exec over the working set
+
+
+class SnapshotCache:
+    """Bytes of working-set files keyed by content hash, held across turns.
+
+    The per-turn snapshot used to re-read every working-set file from the sandbox —
+    one container exec per file, ~25 s a turn on a ten-file set (Pharmacy run 2).
+    Now one `sha256sum` exec names what changed; a file is read again only when its
+    hash differs from the cached one, and its bytes come from here otherwise. The
+    rendered block is byte-identical either way; only the I/O differs."""
+
+    def __init__(self) -> None:
+        self._entries: dict[str, tuple[str, bytes]] = {}
+
+    def get(self, path: str, sha: str) -> bytes | None:
+        entry = self._entries.get(path)
+        return entry[1] if entry is not None and entry[0] == sha else None
+
+    def put(self, path: str, raw: bytes) -> None:
+        self._entries[path] = (hashlib.sha256(raw).hexdigest(), raw)
+
+    def retain(self, paths: list[str]) -> None:
+        keep = set(paths)
+        for path in [p for p in self._entries if p not in keep]:
+            del self._entries[path]
+
+    def __len__(self) -> int:
+        return len(self._entries)
+
+
+def _parse_sha256sum(stdout: str) -> dict[str, str]:
+    hashes: dict[str, str] = {}
+    for line in (stdout or "").splitlines():
+        parts = line.split("  ", 1)
+        if len(parts) != 2 or len(parts[0]) != 64:
+            continue
+        digest, path = parts
+        if digest.startswith("\\"):  # GNU escapes odd path bytes with a leading backslash
+            digest = digest[1:]
+        hashes[path.strip()] = digest
+    return hashes
+
+
+async def working_set_hashes(sbx: Any, paths: list[str]) -> dict[str, str] | None:
+    """One sandbox exec: the sha256 of every working-set file that exists.
+
+    Missing files are simply absent from the map (their read path reports them).
+    Returns None when the sandbox has no shell or the exec fails, so the caller falls
+    back to reading every file — never a wrong "unchanged"."""
+    exec_shell = getattr(sbx, "exec_shell", None)
+    if not callable(exec_shell) or not paths:
+        return None
+    command = "sha256sum -- " + " ".join(shlex.quote(p) for p in paths) + " 2>/dev/null"
+    try:
+        result = await asyncio.wait_for(
+            exec_shell(command, timeout_s=int(_WS_HASH_TIMEOUT_S)), timeout=_WS_HASH_TIMEOUT_S + 2
+        )
+    except Exception:  # noqa: BLE001 — a failed hash means "read everything", never "unchanged"
+        return None
+    return _parse_sha256sum(getattr(result, "stdout", "") or "")
 
 
 class _SnapshotHalt:
@@ -288,6 +350,27 @@ def _compose_snapshot_coverage(prompt_receipts: list[ObservationReceipt]) -> str
     )
 
 
+async def _fetch_working_file(
+    sbx: Sandbox,
+    path: str,
+    omitted_notes: list[str],
+    *,
+    hashes: dict[str, str] | None,
+    cache: SnapshotCache | None,
+) -> bytes | _SnapshotHalt | None:
+    """Cached bytes when the per-turn hash matches; otherwise a sandbox read."""
+    if hashes is not None and cache is not None:
+        sha = hashes.get(path)
+        if sha is not None:
+            cached = cache.get(path, sha)
+            if cached is not None:
+                return cached
+    raw = await _read_working_file(sbx, path, omitted_notes)
+    if isinstance(raw, bytes) and cache is not None:
+        cache.put(path, raw)
+    return raw
+
+
 async def _collect_snapshot_files(
     sbx: Sandbox,
     candidates: list[str],
@@ -296,6 +379,8 @@ async def _collect_snapshot_files(
     budget: int,
     tracker: FileStateTracker | None,
     out_pinned_full: set[str] | None,
+    hashes: dict[str, str] | None = None,
+    cache: SnapshotCache | None = None,
 ) -> tuple[list[str], list[ObservationReceipt], list[str], list[str], int, bool]:
     """Read and render each working-set file within the snapshot budget.
 
@@ -312,7 +397,7 @@ async def _collect_snapshot_files(
         if shown_count >= caps.max_files or budget <= 0:
             budget_omitted.extend(candidates[index:])
             break
-        raw = await _read_working_file(sbx, path, omitted_notes)
+        raw = await _fetch_working_file(sbx, path, omitted_notes, hashes=hashes, cache=cache)
         if isinstance(raw, _SnapshotHalt):
             budget_omitted.extend(candidates[index:])
             return blocks, prompt_receipts, omitted_notes, budget_omitted, shown_count, True
@@ -356,6 +441,8 @@ async def workspace_snapshot_message(
     pin_full: bool = False,
     out_pinned_full: set[str] | None = None,
     out_prompt_receipts: list[ObservationReceipt] | None = None,
+    hashes: dict[str, str] | None = None,
+    cache: SnapshotCache | None = None,
 ) -> LLMMessage | None:
     """Re-derive the CURRENT on-disk content of the working-set files from the
     sandbox each turn and render it as an authoritative, always-fresh message.
@@ -408,6 +495,8 @@ async def workspace_snapshot_message(
     preamble = _workspace_snapshot_preamble(pin_full)
     budget = _caps.total_chars - len(preamble)
     candidates = _filter_snapshot_candidates(ordered)
+    if cache is not None:
+        cache.retain(candidates)
     blocks, prompt_receipts, omitted_notes, budget_omitted, _shown, _halted = (
         await _collect_snapshot_files(
             sbx,
@@ -416,6 +505,8 @@ async def workspace_snapshot_message(
             budget=budget,
             tracker=tracker,
             out_pinned_full=out_pinned_full,
+            hashes=hashes,
+            cache=cache,
         )
     )
     # E4 (T8) — return None only when there is NOTHING to tell the model.

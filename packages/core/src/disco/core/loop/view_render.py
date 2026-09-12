@@ -40,7 +40,7 @@ from ..events import (
 )
 from ..inspect import inspect_enabled
 from ..llm import Difficulty, OperatingMode, OverflowSignal
-from ..obs import log_event
+from ..obs import log_event, log_span
 from ..view import View, effective_plan_progress, microcompact
 from . import signals
 from .context_budget import ContextCaps, derive_context_caps
@@ -69,6 +69,8 @@ from .view_snapshot import (  # noqa: F401 — re-exported for back-compat
     _WS_PER_FILE_CHARS,
     _WS_READ_TIMEOUT_S,
     _WS_TOTAL_CHARS,
+    SnapshotCache,
+    working_set_hashes,
     workspace_snapshot_message,
 )
 from .view_snapshot import (
@@ -443,6 +445,9 @@ class ViewBuilder:
         # files are shown in full. No lock needed: build() runs under the
         # loop's conversation lock.
         self._file_tracker: FileStateTracker = FileStateTracker()
+        # Bytes of the working set keyed by hash — one hash exec per turn decides
+        # which files are read again (see SnapshotCache).
+        self._snapshot_cache: SnapshotCache = SnapshotCache()
 
     def _resolve_caps(self) -> ContextCaps:
         """CW-2/CW-6 — resolve this turn's context caps from the capability gate
@@ -628,10 +633,11 @@ class ViewBuilder:
             events = await self._loop._events()
         context_pack_active = context_pack_enabled()
         view = await self._project_view(events, include_context_pack=context_pack_active)
-        sbx, stale = await self._compute_stale_paths(events)
-        snapshot, pinned_full, snapshot_receipts = await self._build_snapshot(
-            sbx, events, stale, caps
-        )
+        sbx, hashes, stale = await self._compute_stale_paths(events)
+        with log_span("loop.view.snapshot", cached=len(self._snapshot_cache)):
+            snapshot, pinned_full, snapshot_receipts = await self._build_snapshot(
+                sbx, events, stale, caps, hashes=hashes
+            )
         for _p in pinned_full:
             _ground_read(self._loop, _p)
         snap_tokens = len(snapshot.content) // 4 if snapshot is not None else 0
@@ -639,9 +645,10 @@ class ViewBuilder:
         # H3: log the prompt size per step so cost regressions are visible (the 60k
         # bloat was invisible because nothing measured it). DEBUG-level; cheap.
         _LOG.debug("driver view: ~%d input tokens, %d messages", est, len(view.messages))
-        view, events = await self._maybe_condense(
-            events, view, context_pack_active, snap_tokens, est
-        )
+        with log_span("loop.view.condense"):
+            view, events = await self._maybe_condense(
+                events, view, context_pack_active, snap_tokens, est
+            )
         view = self._apply_history_transforms(view, events, pinned_full, snapshot_receipts, stale)
         view = self._position_snapshot(view, snapshot, stale)
         # `events` has been re-read after every durable append above, so it is the
@@ -651,21 +658,25 @@ class ViewBuilder:
 
     async def _compute_stale_paths(
         self, events: list[Event]
-    ) -> tuple[Sandbox | None, list[str]]:
+    ) -> tuple[Sandbox | None, dict[str, str] | None, list[str]]:
         """W2 — identify files whose disk SHA diverged from the snapshot's last view.
 
-        Runs before the snapshot so the snapshot can mark those files as full-body
-        and the stale notice names exactly those paths. Guarded by sandbox
-        availability and a non-empty working set.
+        One hash exec over the working set serves both this scan and the snapshot's
+        read decisions; when it is unavailable both fall back to per-file reads.
+        Returns (sandbox, hash map or None, stale paths).
         """
         sbx = getattr(getattr(self._loop, "executor", None), "sandbox", None)
         reconcile_mutation_receipts(self._file_tracker, events)
         mutated, read_only = _workspace_paths_from_events(events)
         working_set = mutated + read_only
+        hashes: dict[str, str] | None = None
         stale: list[str] = []
         if sbx is not None and working_set:
-            stale = await self._file_tracker.stale_paths(sbx, working_set)
-        return sbx, stale
+            with log_span("loop.view.hashes", files=len(working_set)) as span:
+                hashes = await working_set_hashes(sbx, working_set)
+                span["hashed"] = len(hashes) if hashes is not None else -1
+            stale = await self._file_tracker.stale_paths(sbx, working_set, hashes=hashes)
+        return sbx, hashes, stale
 
     async def _build_snapshot(
         self,
@@ -673,6 +684,8 @@ class ViewBuilder:
         events: list[Event],
         stale: list[str],
         caps: ContextCaps,
+        *,
+        hashes: dict[str, str] | None = None,
     ) -> tuple[LLMMessage | None, set[str], list[ObservationReceipt]]:
         """A8 — build the live workspace snapshot up-front so its size is counted.
 
@@ -692,6 +705,8 @@ class ViewBuilder:
             pin_full=not self._loop._assist,
             out_pinned_full=pinned_full,
             out_prompt_receipts=snapshot_receipts,
+            hashes=hashes,
+            cache=self._snapshot_cache,
         )
         return snapshot, pinned_full, snapshot_receipts
 
