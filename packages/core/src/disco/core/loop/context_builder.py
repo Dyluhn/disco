@@ -28,6 +28,7 @@ from ..context import (
     SourcePriority as SourcePriority,
 )
 from ..context.compaction import resolved_ranges_from_events
+from . import check_ledger
 from ..events import Event, EventSource, MessageEvent, PlanEvent
 from .context_rendering import (
     _BLOCK_CLOSE as _BLOCK_CLOSE,
@@ -119,5 +120,6 @@ def build_context_pack(
         policy=policy,
         todo_text=todo_text,
         design_direction=design_direction,
+        checks_text=check_ledger.render_checks(check_ledger.check_statuses(list(events))),
         allowed_next_actions=allowed_next_actions,
     )

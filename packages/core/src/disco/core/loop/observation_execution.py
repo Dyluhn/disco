@@ -470,6 +470,7 @@ async def _persist_primary_result(
     await _persist_runtime_constraints(loop, result)
     meta = await _check_meta(loop, action, result, check_before)
     if result.success:
+        result = await _annotate_result(loop, action, result, events, meta)
         await loop._emit(ObservationEvent(tool_result=result, action_id=action.id, meta=meta))
         return
     error = result.error or "tool failed"
@@ -507,6 +508,38 @@ async def _check_meta(
     after = await check_ledger.snapshot(getattr(loop.executor, "sandbox", None))
     exit_code = check_ledger.exit_code_of(result.structured)
     return {"check": check_ledger.check_meta(action, before, after, exit_code)}
+
+
+async def _annotate_result(
+    loop: _LoopFacet,
+    action: ActionEvent,
+    result: ToolResult,
+    events: list[Event],
+    meta: dict[str, Any],
+) -> ToolResult:
+    """Carry the ledger's consequences in the result the model reads (funnel rule 4).
+
+    An edit says which current passing checks it staled. A shell run or status report
+    says which busy sessions started before the latest source change.
+    """
+    lines: list[str] = []
+    tool = action.tool_call.tool_name if action.tool_call else ""
+    caps = check_ledger._profile_capabilities(result)
+    if check_ledger.MUTATE_CAPABILITY in caps and not check_ledger.ledger_tool(action):
+        line = check_ledger.staled_checks_line(events)
+        if line:
+            lines.append(line)
+    if check_ledger.ledger_tool(action) or tool == "server_status":
+        check = meta.get("check") or {}
+        busy: list[str] = list(check.get("sessions_after") or [])
+        if tool == "server_status":
+            busy = list(
+                await check_ledger._busy_sessions(getattr(loop.executor, "sandbox", None))
+            )
+        lines.extend(s.render() for s in check_ledger.stale_sessions(events, busy))
+    if not lines:
+        return result
+    return result.model_copy(update={"content": (result.content or "").rstrip() + "\n" + "\n".join(lines)})
 
 
 async def _emit_execution_error(

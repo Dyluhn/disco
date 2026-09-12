@@ -104,6 +104,12 @@ def _todo_section(pack: ContextPack) -> list[str] | None:
     return None
 
 
+def _checks_section(pack: ContextPack) -> list[str] | None:
+    if pack.current_checks:
+        return pack.current_checks.splitlines()
+    return None
+
+
 def _verifier_failure_section(pack: ContextPack) -> list[str] | None:
     if pack.latest_failures:
         return ["Unresolved verifier failures:", *[_failure_line(f) for f in pack.latest_failures]]
@@ -155,6 +161,7 @@ def _build_context_pack_sections(pack: ContextPack) -> dict[SourceKind, list[str
         (SourceKind.CONTRACT, _contract_section),
         (SourceKind.DESIGN_DIRECTION, _design_direction_section),
         (SourceKind.TODO, _todo_section),
+        (SourceKind.CHECKS, _checks_section),
         (SourceKind.VERIFIER_FAILURE, _verifier_failure_section),
         (SourceKind.DIRECT_EDIT, _direct_edit_section),
         (SourceKind.COMMENT, _comment_section),

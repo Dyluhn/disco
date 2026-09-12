@@ -19,6 +19,7 @@ class SourceKind(str, Enum):
     CONTRACT = "contract"
     DESIGN_DIRECTION = "design_direction"
     TODO = "todo"
+    CHECKS = "checks"
     VERIFIER_FAILURE = "verifier_failure"
     DIRECT_EDIT = "direct_edit"
     RESOURCE = "resource"
@@ -37,6 +38,7 @@ _DEFAULT_ORDER: tuple[SourceKind, ...] = (
     SourceKind.DESIGN_DIRECTION,
     SourceKind.VERIFIER_FAILURE,
     SourceKind.TODO,
+    SourceKind.CHECKS,
     SourceKind.DIRECT_EDIT,
     SourceKind.COMMENT,
     SourceKind.RESOURCE,

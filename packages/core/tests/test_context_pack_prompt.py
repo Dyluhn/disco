@@ -151,3 +151,36 @@ def test_render_caps_via_policy() -> None:
     pol = CompactionPolicy(max_resource_refs=2)
     out = render_context_pack(build_context_pack([_plan("g")], base_ledger=led, policy=pol))
     assert out.count("- a") == 2  # capped to policy limit
+
+
+# --- Checks section (verification ledger, phase 2) ---------------------------------------
+
+
+def test_checks_section_renders_after_todo_from_recorded_shell_runs() -> None:
+    from disco.core.events import ActionEvent, ObservationEvent, ToolCall, ToolResult
+    from disco.core.loop import check_ledger
+
+    action = ActionEvent(
+        thought="t",
+        tool_call=ToolCall(tool_name="shell", call_id="c1", arguments={"command": "bash smoke.sh"}),
+    )
+    meta = check_ledger.check_meta(
+        action,
+        check_ledger.CheckSnapshot("a" * 64, ()),
+        check_ledger.CheckSnapshot("a" * 64, ()),
+        0,
+    )
+    obs = ObservationEvent(
+        tool_result=ToolResult(call_id="c1", tool_name="shell", success=True, content="ok"),
+        action_id=action.id,
+        meta={"check": meta},
+    )
+    events = [e.model_copy(update={"seq": i + 1}) for i, e in enumerate([_plan("g"), action, obs])]
+    out = render_context_pack(build_context_pack(events, todo_text="- [ ] s1"))
+    assert out.index("Todo:") < out.index(check_ledger.CHECKS_HEADER)
+    assert "- [current] exit 0 at step 3  bash smoke.sh" in out
+
+
+def test_no_shell_runs_means_no_checks_section() -> None:
+    out = render_context_pack(build_context_pack([_plan("g")], todo_text="- [ ] s1"))
+    assert "Checks (" not in out

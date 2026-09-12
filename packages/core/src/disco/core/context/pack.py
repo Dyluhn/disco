@@ -40,6 +40,7 @@ class ContextPack(BaseModel):
     active_contract: str | None = None
     current_version: int = 0
     current_todo: str | None = None
+    current_checks: str | None = None
     design_direction: str | None = None
     todo_ref: ArtifactMemoryRef | None = None
     latest_failures: tuple[VerifierFailureRef, ...] = ()
@@ -58,6 +59,7 @@ class ContextPack(BaseModel):
         allowed_next_actions: tuple[str, ...] = (),
         todo_text: str | None = None,
         design_direction: str | None = None,
+        checks_text: str | None = None,
     ) -> ContextPack:
         policy = policy or CompactionPolicy.default()
         direction_text = (
@@ -73,6 +75,7 @@ class ContextPack(BaseModel):
             active_contract=ledger.active_contract,
             current_version=ledger.current_version,
             current_todo=todo_text,
+            current_checks=checks_text,
             design_direction=direction_text,
             todo_ref=ledger.todo_ref,
             latest_failures=_cap(unresolved_failures, SourceKind.VERIFIER_FAILURE, policy),

@@ -17,7 +17,7 @@ never counts as a memo hit (fail closed).
 from __future__ import annotations
 
 import shlex
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import Any, cast
 
@@ -219,3 +219,188 @@ def memo_disagreements(events: list[Event]) -> list[tuple[CheckRecord, CheckReco
     observe-only phase this is the measure of how often memoisation would have lied.
     """
     return [(run, source) for run, source in memo_hits(events) if run.exit_code != source.exit_code]
+
+
+# --- phase 2: show the ledger -----------------------------------------------------
+
+MUTATE_CAPABILITY = "workspace.mutate"
+CHECKS_SHOWN = 12
+COMMAND_CHARS = 90
+CHECKS_HEADER = "Checks (recorded shell runs; current = nothing changed since it ran):"
+
+
+@dataclass(frozen=True)
+class Mutation:
+    """An action that may have changed source files."""
+
+    seq: int
+    tool: str
+    path: str | None
+
+    def describe(self) -> str:
+        target = f" {self.path}" if self.path else ""
+        return f"{self.tool}{target} at step {self.seq}"
+
+
+def _profile_capabilities(result: Any) -> set[str]:
+    profile = getattr(result, "action_profile", None)
+    caps = getattr(profile, "capabilities", None)
+    if caps is None and isinstance(profile, dict):
+        caps = profile.get("capabilities")
+    return {str(getattr(c, "value", c)) for c in (caps or ())}
+
+
+def _actions_by_id(events: list[Event]) -> dict[str, ActionEvent]:
+    return {e.id: e for e in events if isinstance(e, ActionEvent)}
+
+
+def mutations(events: list[Event]) -> list[Mutation]:
+    """Observed actions that may have changed source, in seq order.
+
+    A tool that declares workspace mutation counts, except a recorded shell run whose
+    digest proves the tree did not change. An unknown digest counts (fail closed).
+    """
+    actions = _actions_by_id(events)
+    out: list[Mutation] = []
+    for event in events:
+        if not isinstance(event, ObservationEvent) or event.seq is None:
+            continue
+        action = actions.get(event.action_id)
+        tool = event.tool_result.tool_name
+        if action is not None and ledger_tool(action):
+            # The record is the authority for a shell run: an unchanged digest proves
+            # purity; a changed or unknown one counts as a mutation.
+            raw = event.meta.get("check") or {}
+            before, after = raw.get("tree_before"), raw.get("tree_after")
+            if before is not None and before == after:
+                continue
+        elif MUTATE_CAPABILITY not in _profile_capabilities(event.tool_result):
+            continue
+        args = action.tool_call.arguments if action is not None and action.tool_call else {}
+        path = args.get("path") if isinstance(args.get("path"), str) else None
+        out.append(Mutation(seq=event.seq, tool=tool, path=path))
+    return out
+
+
+@dataclass(frozen=True)
+class CheckStatus:
+    fingerprint: str
+    command: str
+    seq: int
+    exit_code: int | None
+    state: str  # "current" | "stale" | "failed"
+    staled_by: Mutation | None
+
+    def render(self) -> str:
+        exit_note = f"exit {self.exit_code}" if self.exit_code is not None else "no exit code"
+        if self.state == "stale" and self.staled_by is not None:
+            state = f"stale: {self.staled_by.describe()}"
+        else:
+            state = self.state
+        return f"- [{state}] {exit_note} at step {self.seq}  {self.command}"
+
+
+def _command_text(action: ActionEvent | None) -> str:
+    if action is None or action.tool_call is None:
+        return "?"
+    command = str(action.tool_call.arguments.get("command") or "")
+    command = " ".join(command.split())
+    return command if len(command) <= COMMAND_CHARS else command[: COMMAND_CHARS - 1] + "…"
+
+
+def check_statuses(events: list[Event], *, limit: int = CHECKS_SHOWN) -> list[CheckStatus]:
+    """The latest run of each distinct pure check, oldest first, capped to the most recent.
+
+    Runs that changed the tree are not checks and are left out. A check is current when
+    no mutation follows it, stale when one does, failed when its exit code is not 0.
+    """
+    actions = _actions_by_id(events)
+    changes = mutations(events)
+    latest: dict[str, CheckRecord] = {}
+    for record in check_records(events):
+        if record.tree_before is None or record.tree_before != record.tree_after:
+            continue
+        latest[record.fingerprint] = record
+    statuses: list[CheckStatus] = []
+    for record in sorted(latest.values(), key=lambda r: r.seq)[-limit:]:
+        staled_by = next((m for m in changes if m.seq > record.seq), None)
+        if not record.passed:
+            state = "failed"
+        elif staled_by is not None:
+            state = "stale"
+        else:
+            state = "current"
+        statuses.append(
+            CheckStatus(
+                fingerprint=record.fingerprint,
+                command=_command_text(actions.get(record.action_id)),
+                seq=record.seq,
+                exit_code=record.exit_code,
+                state=state,
+                staled_by=staled_by if state == "stale" else None,
+            )
+        )
+    return statuses
+
+
+def render_checks(statuses: list[CheckStatus]) -> str | None:
+    if not statuses:
+        return None
+    return "\n".join([CHECKS_HEADER, *(s.render() for s in statuses)])
+
+
+def staled_checks_line(events_before: list[Event]) -> str | None:
+    """The line an edit result carries: which current passing checks this edit staled."""
+    current = [s for s in check_statuses(events_before, limit=CHECKS_SHOWN) if s.state == "current"]
+    if not current:
+        return None
+    names = "; ".join(s.command for s in current)
+    plural = "" if len(current) == 1 else "s"
+    return f"[staled {len(current)} recorded check{plural}: {names} — re-run after your changes]"
+
+
+@dataclass(frozen=True)
+class StaleSession:
+    name: str
+    started_seq: int
+    changed_by: Mutation
+
+    def render(self) -> str:
+        return (
+            f"[session '{self.name}' has been running since step {self.started_seq}; source "
+            f"changed since ({self.changed_by.describe()}) — it is serving old code until restarted]"
+        )
+
+
+def _session_starts(events: list[Event]) -> dict[str, int]:
+    """Session name → seq of the latest `shell_exec` that left a process running in it."""
+    actions = _actions_by_id(events)
+    started: dict[str, int] = {}
+    for event in events:
+        if not isinstance(event, ObservationEvent) or event.seq is None:
+            continue
+        if event.tool_result.tool_name != "shell_exec":
+            continue
+        if not (event.tool_result.structured or {}).get("running"):
+            continue
+        action = actions.get(event.action_id)
+        arguments = action.tool_call.arguments if action is not None and action.tool_call else {}
+        name = str(arguments.get("session") or "")
+        if name:
+            started[name] = event.seq
+    return started
+
+
+def stale_sessions(events: list[Event], busy: Sequence[str]) -> list[StaleSession]:
+    """Busy sessions whose process started before the latest source change."""
+    started = _session_starts(events)
+    changes = mutations(events)
+    out: list[StaleSession] = []
+    for name in busy:
+        seq = started.get(name)
+        if seq is None:
+            continue
+        change = next((m for m in changes if m.seq > seq), None)
+        if change is not None:
+            out.append(StaleSession(name=name, started_seq=seq, changed_by=change))
+    return out
