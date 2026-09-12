@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "eefb4f5b8b8eacf9473aecb760520a706c7bda20",
+  "source_identity": "fc437ffd7ed60dc633522dfc85192d1de1a5609b",
   "collected": {
     "counts": {
-      "packages": 12256,
+      "packages": 12261,
       "harness": 1571,
       "integrations": 9,
       "tests": 458
     },
-    "total": 14294,
+    "total": 14299,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -4658,6 +4658,8 @@
         "packages/core/tests/test_cd_tools8_prompt_pack.py::test_weak_execution_prompt_has_universal_discipline_minus_anchored",
         "packages/core/tests/test_check_ledger.py::test_a_disagreeing_repeat_makes_the_command_flaky_and_never_memoised",
         "packages/core/tests/test_check_ledger.py::test_agreeing_hits_are_not_disagreements",
+        "packages/core/tests/test_check_ledger.py::test_browser_line_counts_steps_and_identical_repeats_since_the_last_edit",
+        "packages/core/tests/test_check_ledger.py::test_browser_observation_carries_a_step_record",
         "packages/core/tests/test_check_ledger.py::test_changed_source_or_kill_switch_executes",
         "packages/core/tests/test_check_ledger.py::test_check_fingerprint_ignores_force",
         "packages/core/tests/test_check_ledger.py::test_check_statuses_current_stale_failed_and_excludes_mutating_runs",
@@ -4666,6 +4668,8 @@
         "packages/core/tests/test_check_ledger.py::test_edit_without_current_checks_is_untouched",
         "packages/core/tests/test_check_ledger.py::test_failed_shell_run_records_on_the_error_event",
         "packages/core/tests/test_check_ledger.py::test_failing_digest_pipeline_records_none",
+        "packages/core/tests/test_check_ledger.py::test_finish_fact_needs_all_current_checks_and_a_quiet_stretch",
+        "packages/core/tests/test_check_ledger.py::test_finish_fact_resets_after_an_edit",
         "packages/core/tests/test_check_ledger.py::test_force_executes_and_stays_the_same_check",
         "packages/core/tests/test_check_ledger.py::test_gate_is_a_no_op_without_stale_checks",
         "packages/core/tests/test_check_ledger.py::test_gate_lets_finish_through_on_the_third_refusal",
@@ -4673,6 +4677,7 @@
         "packages/core/tests/test_check_ledger.py::test_gate_reruns_the_stale_check_as_a_host_probe_and_passes",
         "packages/core/tests/test_check_ledger.py::test_latest_run_wins_and_the_table_is_capped",
         "packages/core/tests/test_check_ledger.py::test_mutations_are_edits_and_tree_changing_shell_runs_only",
+        "packages/core/tests/test_check_ledger.py::test_no_checks_and_no_browser_steps_renders_nothing",
         "packages/core/tests/test_check_ledger.py::test_no_checks_renders_nothing",
         "packages/core/tests/test_check_ledger.py::test_no_hit_when_the_prior_run_failed_or_mutated",
         "packages/core/tests/test_check_ledger.py::test_no_hit_when_tree_changed_between_runs",
@@ -14315,9 +14320,9 @@
     }
   },
   "mapping_static": {
-    "identity": "eefb4f5b8b8eacf9473aecb760520a706c7bda20",
+    "identity": "fc437ffd7ed60dc633522dfc85192d1de1a5609b",
     "python_test_file_count": 963,
-    "python_static_test_id_count": 11757,
+    "python_static_test_id_count": 11762,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -20324,6 +20329,8 @@
       "packages/core/tests/test_cd_tools8_prompt_pack.py::test_weak_execution_prompt_has_universal_discipline_minus_anchored",
       "packages/core/tests/test_check_ledger.py::test_a_disagreeing_repeat_makes_the_command_flaky_and_never_memoised",
       "packages/core/tests/test_check_ledger.py::test_agreeing_hits_are_not_disagreements",
+      "packages/core/tests/test_check_ledger.py::test_browser_line_counts_steps_and_identical_repeats_since_the_last_edit",
+      "packages/core/tests/test_check_ledger.py::test_browser_observation_carries_a_step_record",
       "packages/core/tests/test_check_ledger.py::test_changed_source_or_kill_switch_executes",
       "packages/core/tests/test_check_ledger.py::test_check_fingerprint_ignores_force",
       "packages/core/tests/test_check_ledger.py::test_check_statuses_current_stale_failed_and_excludes_mutating_runs",
@@ -20332,6 +20339,8 @@
       "packages/core/tests/test_check_ledger.py::test_edit_without_current_checks_is_untouched",
       "packages/core/tests/test_check_ledger.py::test_failed_shell_run_records_on_the_error_event",
       "packages/core/tests/test_check_ledger.py::test_failing_digest_pipeline_records_none",
+      "packages/core/tests/test_check_ledger.py::test_finish_fact_needs_all_current_checks_and_a_quiet_stretch",
+      "packages/core/tests/test_check_ledger.py::test_finish_fact_resets_after_an_edit",
       "packages/core/tests/test_check_ledger.py::test_force_executes_and_stays_the_same_check",
       "packages/core/tests/test_check_ledger.py::test_gate_is_a_no_op_without_stale_checks",
       "packages/core/tests/test_check_ledger.py::test_gate_lets_finish_through_on_the_third_refusal",
@@ -20339,6 +20348,7 @@
       "packages/core/tests/test_check_ledger.py::test_gate_reruns_the_stale_check_as_a_host_probe_and_passes",
       "packages/core/tests/test_check_ledger.py::test_latest_run_wins_and_the_table_is_capped",
       "packages/core/tests/test_check_ledger.py::test_mutations_are_edits_and_tree_changing_shell_runs_only",
+      "packages/core/tests/test_check_ledger.py::test_no_checks_and_no_browser_steps_renders_nothing",
       "packages/core/tests/test_check_ledger.py::test_no_checks_renders_nothing",
       "packages/core/tests/test_check_ledger.py::test_no_hit_when_the_prior_run_failed_or_mutated",
       "packages/core/tests/test_check_ledger.py::test_no_hit_when_tree_changed_between_runs",
@@ -42658,6 +42668,38 @@
           "packages/core/tests/test_check_ledger.py::test_shell_run_records_digests_exit_code_and_sessions",
           "packages/tools/tests/test_shell_exec_exit_code.py::test_finished_command_exposes_exit_code",
           "packages/tools/tests/test_shell_exec_exit_code.py::test_still_running_command_has_no_exit_code"
+        ],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-55-FINISH-FACT",
+      "root": "packages",
+      "source_identity_before": "eefb4f5b8b8eacf9473aecb760520a706c7bda20",
+      "source_identity_after": "fc437ffd7ed60dc633522dfc85192d1de1a5609b",
+      "collected_roots": {
+        "packages": {
+          "before_count": 12256,
+          "after_count": 12261,
+          "added_ids": [
+            "packages/core/tests/test_check_ledger.py::test_browser_line_counts_steps_and_identical_repeats_since_the_last_edit",
+            "packages/core/tests/test_check_ledger.py::test_browser_observation_carries_a_step_record",
+            "packages/core/tests/test_check_ledger.py::test_finish_fact_needs_all_current_checks_and_a_quiet_stretch",
+            "packages/core/tests/test_check_ledger.py::test_finish_fact_resets_after_an_edit",
+            "packages/core/tests/test_check_ledger.py::test_no_checks_and_no_browser_steps_renders_nothing"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [],
+        "python_static_test_ids": [
+          "packages/core/tests/test_check_ledger.py::test_browser_line_counts_steps_and_identical_repeats_since_the_last_edit",
+          "packages/core/tests/test_check_ledger.py::test_browser_observation_carries_a_step_record",
+          "packages/core/tests/test_check_ledger.py::test_finish_fact_needs_all_current_checks_and_a_quiet_stretch",
+          "packages/core/tests/test_check_ledger.py::test_finish_fact_resets_after_an_edit",
+          "packages/core/tests/test_check_ledger.py::test_no_checks_and_no_browser_steps_renders_nothing"
         ],
         "typescript_test_files": [],
         "typescript_static_test_ids": [],
