@@ -726,12 +726,20 @@ encoder URLs keep the bundled local encoder tier; setting them has an effect whe
 | `DISCO_NLI_URL` | `agent-server` | blank; bundled NLI verifier |
 | `DISCO_INSPECT` | `agent-server` | `0`; debug trace routes inert |
 | `DISCO_LOG_LEVEL` / `DISCO_LOG_JSON` | both Python servers | `INFO` / `0` |
+| `DISCO_BUILD_TAG` / `DISCO_BUILD_COMMIT` | build argument for the server image | `unknown`; the release workflow sets the tag and commit, shown by `/health` and the doctor |
 | provider/search/image/TTS key variables from `.env.example` | both Python servers | blank; imported only after the matching origin is approved |
 
 `DISCO_BUILD_EGRESS` accepts `filtered`, `public`, `sealed`, `open`, or `raw`;
 unknown values fail closed. `open` and `raw` are explicit weaker postures. The
 `DISCO_*` names take precedence, while the documented legacy `PMX_*` aliases
 remain accepted by Compose where one exists.
+
+## When something is wrong
+
+Start with [`docs/troubleshooting.md`](./troubleshooting.md): one command inside the
+agent-server container prints a PASS/FAIL table for the build, both servers, the
+sandbox, the data disk, the database, the secret key and the driver model, and can
+write the redacted support bundle a bug report asks for.
 
 ## Offline Asset Smoke
 

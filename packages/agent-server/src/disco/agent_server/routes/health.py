@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from disco.core import DEFAULT_OWNER_ID
+from disco.core.build_info import build_info
 from disco.core.store.sqlite import SqliteEventStore
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
@@ -37,7 +38,12 @@ def make_health_router(store: SqliteEventStore, runtime: ConversationRuntime | N
             except Exception as e:  # noqa: BLE001
                 checks["runtime"] = f"error: {e}"
                 ok = False
-        body = {"status": "ok" if ok else "degraded", "version": "0.1.0", "checks": checks}
+        body = {
+            "status": "ok" if ok else "degraded",
+            "version": build_info().label(),
+            "build": build_info().as_dict(),
+            "checks": checks,
+        }
         return JSONResponse(body, status_code=200 if ok else 503)
 
     return router

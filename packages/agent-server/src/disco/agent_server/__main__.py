@@ -71,19 +71,9 @@ def main() -> None:
     # Surface app-logger output (providers, the loop) alongside uvicorn's access log —
     # uvicorn configures only its own loggers, so without this the disco.*
     # INFO traces (e.g. "exa search …", "local extract …") are silently dropped.
-    import logging
+    from disco.core.obs import configure_logging
 
-    log_level = disco_env("LOG_LEVEL", "INFO")
-    assert log_level is not None  # default above is non-None
-    level = log_level.upper()
-    if disco_env("LOG_JSON") == "1":
-        # Structured JSON logs (core.obs span records become one JSON object/line —
-        # greppable + trace-assertable). Plain text otherwise.
-        from disco.core.obs import install_json_logging
-
-        install_json_logging(level)
-    else:
-        logging.basicConfig(level=level, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    configure_logging(disco_env("LOG_LEVEL", "INFO"), disco_env("LOG_JSON") == "1")
     ensure_process_secret_key()
     db_path = disco_env("DB", "disco.db")
     assert db_path is not None  # default above is non-None

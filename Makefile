@@ -9,7 +9,7 @@
 BASE ?= http://localhost:8001          # agent-server base URL for live probes
 CASSETTE ?= development/harness/cassettes/research_demo.jsonl
 
-.PHONY: help test unit harness contract fuzz fault eval eval-real replay \
+.PHONY: help test unit harness contract fuzz fault eval eval-real replay doctor \
         canary canary-health capture capture-loop lint fmt e2e verify
 
 help:
@@ -82,6 +82,12 @@ eval-real:
 # the live grounding step. Reads the persisted config/secrets like the servers do.
 verify:
 	uv run python -m disco.agent_server.verify $(ARGS)
+
+# One command that says what is wrong: build, both servers, sandbox, disk, database,
+# secret key, driver model. `make doctor ARGS="--bundle /tmp/disco-doctor.json"` also
+# writes the redacted support bundle a bug report asks for.
+doctor:
+	uv run python -m disco.agent_server.doctor $(ARGS)
 
 # Heavy: cold fastembed + a real LLM + the grounding self-correction loop. Detached
 # (setsid) so an interactive-session timeout can't SIGKILL it before fastembed loads.

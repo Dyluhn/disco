@@ -147,8 +147,15 @@ RUN chmod +x /entrypoint.sh
 # Put the venv first on PATH so `python` is the venv interpreter (the base
 # python:3.12-slim interpreter the venv was built against lives at the same
 # /usr/local path, so the venv symlinks resolve here).
+# Build identity for /health and `python -m disco.agent_server.doctor`. The release
+# workflow passes the tag and commit; a local build leaves them "unknown" unless
+# DISCO_BUILD_TAG / DISCO_BUILD_COMMIT are exported before `compose ... --build`.
+ARG DISCO_BUILD_TAG=unknown
+ARG DISCO_BUILD_COMMIT=unknown
 ENV PATH=/app/.venv/bin:$PATH \
     PYTHONUNBUFFERED=1 \
+    DISCO_BUILD_TAG=${DISCO_BUILD_TAG} \
+    DISCO_BUILD_COMMIT=${DISCO_BUILD_COMMIT} \
     DISCO_ENCODER_TIER=${DISCO_ENCODER_TIER} \
     FASTEMBED_CACHE_PATH=/opt/disco-cache/fastembed \
     DISCO_NLI_MODEL_DIR=/opt/disco-cache/nli \

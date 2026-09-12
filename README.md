@@ -46,7 +46,9 @@ podman compose exec agent-server disco-verify --quick
 
 [`docs/self-host.md`](./docs/self-host.md) has the rest: the rootless Docker
 path, what each compose provider prints, the headless (no browser) provider
-setup, updating, starting at boot, backups, models and hardware.
+setup, updating, starting at boot, backups, models and hardware. Something not
+working? [`docs/troubleshooting.md`](./docs/troubleshooting.md) starts with one
+command that says what is wrong.
 
 ## What it looks like
 

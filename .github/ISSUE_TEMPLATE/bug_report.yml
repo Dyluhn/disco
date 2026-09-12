@@ -103,6 +103,19 @@ body:
       required: true
 
   - type: textarea
+    id: doctor
+    attributes:
+      label: Doctor output
+      description: >
+        Run `podman compose exec agent-server python -m disco.agent_server.doctor --bundle /tmp/disco-doctor.json`
+        (swap in `docker compose` if that's your deployment), paste the table it prints
+        here, and attach `/tmp/disco-doctor.json` (copy it out with
+        `podman compose cp agent-server:/tmp/disco-doctor.json .`). The bundle has
+        secrets redacted and contains no conversation content — only versions, the
+        checks, your DISCO_* settings, and the shape of recent runs.
+      render: shell
+
+  - type: textarea
     id: logs
     attributes:
       label: Relevant logs

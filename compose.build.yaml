@@ -20,6 +20,8 @@ services:
       dockerfile: deploy/compose/Dockerfile.server
       args:
         DISCO_ENCODER_TIER: "${DISCO_ENCODER_TIER:-full}"
+        DISCO_BUILD_TAG: "${DISCO_BUILD_TAG:-unknown}"
+        DISCO_BUILD_COMMIT: "${DISCO_BUILD_COMMIT:-unknown}"
 
   frontend:
     build:

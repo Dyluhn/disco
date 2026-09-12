@@ -13,6 +13,7 @@ from typing import cast
 import uvicorn
 from disco.core.env import disco_env
 from disco.core.llm.secrets import ensure_process_secret_key
+from disco.core.obs import configure_logging
 from disco.core.store.sqlite import SqliteEventStore
 
 from .app import create_app
@@ -23,6 +24,9 @@ def main() -> None:
     # default so the runtime value is always `str`. `cast` is a typing-only
     # no-op (zero behavior change); fixing this properly would require
     # touching disco.core.env, which lives outside packages/app-server.
+    # Same log contract as the agent-server: compose passes DISCO_LOG_LEVEL /
+    # DISCO_LOG_JSON to both, and until this call the app-server ignored them.
+    configure_logging(disco_env("LOG_LEVEL", "INFO"), disco_env("LOG_JSON") == "1")
     ensure_process_secret_key()
     store = SqliteEventStore(cast(str, disco_env("DB", "disco.db")))
     app = create_app(store)

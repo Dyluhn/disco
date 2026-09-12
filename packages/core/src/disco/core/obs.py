@@ -38,6 +38,21 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(out, default=str, ensure_ascii=False)
 
 
+def configure_logging(level: str | None, json_logs: bool) -> None:
+    """Configure root logging for a server process from `DISCO_LOG_LEVEL` / `DISCO_LOG_JSON`.
+
+    uvicorn configures only its own loggers; without this the `disco.*` records are
+    dropped, which is why both servers call it first thing. Idempotent."""
+    resolved = (level or "INFO").upper()
+    if json_logs:
+        install_json_logging(resolved)
+        return
+    root = logging.getLogger()
+    for handler in list(root.handlers):
+        root.removeHandler(handler)
+    logging.basicConfig(level=resolved, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+
+
 def install_json_logging(level: str = "INFO") -> None:
     """Replace the root handler with one that emits JSON. Idempotent."""
     root = logging.getLogger()

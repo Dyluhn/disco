@@ -91,6 +91,10 @@ services:
       retries: 6
       start_period: 20s
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
 
   agent-server:
     image: ghcr.io/dyluhn/disco-server:${DISCO_IMAGE_TAG:-v0.2.0} # same image as app-server, different command
@@ -271,6 +275,10 @@ services:
       retries: 6
       start_period: 20s
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
 
   frontend:
     image: ghcr.io/dyluhn/disco-frontend:${DISCO_IMAGE_TAG:-v0.2.0}
@@ -295,6 +303,10 @@ services:
       agent-server:
         condition: service_healthy
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
 
   # NO bundled driver model. Configure an OpenAI-compatible local/LAN or paid
   # endpoint in Settings after boot, then run `disco-verify` in the agent-server.
