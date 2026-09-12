@@ -16,7 +16,7 @@ the former _LoopFacet methods.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Protocol, cast
 
 from ..context import (
     ArtifactMemoryStore,
@@ -363,7 +363,7 @@ def _worth_a_summarizer_call(condenser: object, events: list[Event]) -> bool:
     batch = getattr(condenser, "min_batch_tokens", None)
     if not callable(forgettable) or not isinstance(batch, int):
         return True
-    return int(forgettable(events)) >= batch
+    return int(cast(Callable[[list[Event]], int], forgettable)(events)) >= batch
 
 
 class ViewBuilder:
