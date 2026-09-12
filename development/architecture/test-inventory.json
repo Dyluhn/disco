@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "ccfd3b390b247d2a4b980445f37d080f0daedfd2",
+  "source_identity": "0f18b0b259ba5b5092f13f0edc073504d839d5fc",
   "collected": {
     "counts": {
-      "packages": 12248,
+      "packages": 12249,
       "harness": 1571,
       "integrations": 9,
       "tests": 458
     },
-    "total": 14286,
+    "total": 14287,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -1236,6 +1236,7 @@
         "packages/agent-server/tests/test_deep_research_followup_think.py::test_follow_up_wall_counts_what_failed_and_offers_a_wired_next_step",
         "packages/agent-server/tests/test_deep_research_followup_think.py::test_no_corpus_wall_does_not_send_the_reader_back_to_a_move_that_cannot_work",
         "packages/agent-server/tests/test_deep_research_followup_think.py::test_ungrounded_wall_does_not_count_to_zero_when_there_was_nothing_to_check",
+        "packages/agent-server/tests/test_diagnostics_route.py::test_diagnostics_reports_build_health_sandbox_checks_and_redacted_env",
         "packages/agent-server/tests/test_disco_verify_runner.py::test_app_fails_on_3xx",
         "packages/agent-server/tests/test_disco_verify_runner.py::test_app_scenario_fails_when_no_app_delivered",
         "packages/agent-server/tests/test_disco_verify_runner.py::test_app_scenario_passes_when_app_served_and_reachable",
@@ -14307,9 +14308,9 @@
     }
   },
   "mapping_static": {
-    "identity": "ccfd3b390b247d2a4b980445f37d080f0daedfd2",
-    "python_test_file_count": 961,
-    "python_static_test_id_count": 11749,
+    "identity": "0f18b0b259ba5b5092f13f0edc073504d839d5fc",
+    "python_test_file_count": 962,
+    "python_static_test_id_count": 11750,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -14477,6 +14478,7 @@
       "packages/agent-server/tests/test_deck_editor_route.py",
       "packages/agent-server/tests/test_deep_research_failure_class.py",
       "packages/agent-server/tests/test_deep_research_followup_think.py",
+      "packages/agent-server/tests/test_diagnostics_route.py",
       "packages/agent-server/tests/test_disco_verify_runner.py",
       "packages/agent-server/tests/test_doctor.py",
       "packages/agent-server/tests/test_dr1_dr3.py",
@@ -17380,6 +17382,7 @@
       "packages/agent-server/tests/test_deep_research_followup_think.py::test_follow_up_wall_counts_what_failed_and_offers_a_wired_next_step",
       "packages/agent-server/tests/test_deep_research_followup_think.py::test_no_corpus_wall_does_not_send_the_reader_back_to_a_move_that_cannot_work",
       "packages/agent-server/tests/test_deep_research_followup_think.py::test_ungrounded_wall_does_not_count_to_zero_when_there_was_nothing_to_check",
+      "packages/agent-server/tests/test_diagnostics_route.py::test_diagnostics_reports_build_health_sandbox_checks_and_redacted_env",
       "packages/agent-server/tests/test_disco_verify_runner.py::test_app_fails_on_3xx",
       "packages/agent-server/tests/test_disco_verify_runner.py::test_app_scenario_fails_when_no_app_delivered",
       "packages/agent-server/tests/test_disco_verify_runner.py::test_app_scenario_passes_when_app_served_and_reachable",
@@ -27024,8 +27027,8 @@
       "tests/unbiased_gate/test_authorB_models_imagegen.py::test_w50_slides_degrade_to_image_less_when_image_backend_unconfigured",
       "tests/unbiased_gate/test_authorB_models_imagegen.py::test_w50_unconfigured_image_backend_fails_loudly_instead_of_procedural_fallback"
     ],
-    "typescript_test_file_count": 304,
-    "typescript_static_test_id_count": 1606,
+    "typescript_test_file_count": 305,
+    "typescript_static_test_id_count": 1610,
     "typescript_test_files": [
       "frontend/e2e-full/scenarios/click-provenance.smoke.spec.ts",
       "frontend/e2e-full/scenarios/per-surface.full.spec.ts",
@@ -27229,6 +27232,7 @@
       "frontend/src/components/research/needMoreCardParts/AudioSection.test.tsx",
       "frontend/src/components/research/needMoreCardParts/audioProgress.test.ts",
       "frontend/src/components/settings/DataSourcesSection.test.tsx",
+      "frontend/src/components/settings/DiagnosticsSection.test.tsx",
       "frontend/src/components/settings/ImageGenSection.test.tsx",
       "frontend/src/components/settings/LiveBrowserSection.test.tsx",
       "frontend/src/components/settings/McpImportBox.test.tsx",
@@ -28227,6 +28231,10 @@
       "frontend/src/components/settings/DataSourcesSection.test.tsx::persists Brave with a selected stored credential name",
       "frontend/src/components/settings/DataSourcesSection.test.tsx::shows the bundled keyless composite and never a trademark name",
       "frontend/src/components/settings/DataSourcesSection.test.tsx::states the keyless tier's real capacity where the tier is chosen",
+      "frontend/src/components/settings/DiagnosticsSection.test.tsx::copies the payload as JSON",
+      "frontend/src/components/settings/DiagnosticsSection.test.tsx::names the doctor command for the bundle",
+      "frontend/src/components/settings/DiagnosticsSection.test.tsx::shows a fetch failure instead of inventing a green",
+      "frontend/src/components/settings/DiagnosticsSection.test.tsx::shows the build and one row per fact with the fetched detail",
       "frontend/src/components/settings/ImageGenSection.test.tsx::PUTs the chosen provider and shows the ComfyUI base-URL field (required, no false default)",
       "frontend/src/components/settings/ImageGenSection.test.tsx::renders the three real tiers from the live config with the configured tier active",
       "frontend/src/components/settings/ImageGenSection.test.tsx::says an unconfigured tier is optional and not set up, in a neutral tone (W-50, UI-2)",
@@ -30856,8 +30864,8 @@
         ]
       }
     },
-    "vitest_ids": 1537,
-    "vitest_files": 228,
+    "vitest_ids": 1541,
+    "vitest_files": 229,
     "vitest_ids_list": [
       "frontend/src/App.moderesume.test.tsx::A2 \u2014 fresh sessions and resume targets > New preserves the active mode, then a mode chip lands on that mode's splash",
       "frontend/src/App.moderesume.test.tsx::A2 \u2014 fresh sessions and resume targets > does not resume a just-killed conversation id from the mode chip",
@@ -31664,6 +31672,10 @@
       "frontend/src/components/settings/DataSourcesSection.test.tsx::DataSourcesSection \u2014 search provider surface > persists Brave with a selected stored credential name",
       "frontend/src/components/settings/DataSourcesSection.test.tsx::DataSourcesSection \u2014 search provider surface > shows the bundled keyless composite and never a trademark name",
       "frontend/src/components/settings/DataSourcesSection.test.tsx::DataSourcesSection \u2014 search provider surface > states the keyless tier's real capacity where the tier is chosen",
+      "frontend/src/components/settings/DiagnosticsSection.test.tsx::DiagnosticsSection > copies the payload as JSON",
+      "frontend/src/components/settings/DiagnosticsSection.test.tsx::DiagnosticsSection > names the doctor command for the bundle",
+      "frontend/src/components/settings/DiagnosticsSection.test.tsx::DiagnosticsSection > shows a fetch failure instead of inventing a green",
+      "frontend/src/components/settings/DiagnosticsSection.test.tsx::DiagnosticsSection > shows the build and one row per fact with the fetched detail",
       "frontend/src/components/settings/ImageGenSection.test.tsx::ImageGenSection \u2014 A3 image-gen provider settings > PUTs the chosen provider and shows the ComfyUI base-URL field (required, no false default)",
       "frontend/src/components/settings/ImageGenSection.test.tsx::ImageGenSection \u2014 A3 image-gen provider settings > renders the three real tiers from the live config with the configured tier active",
       "frontend/src/components/settings/ImageGenSection.test.tsx::ImageGenSection \u2014 A3 image-gen provider settings > says an unconfigured tier is optional and not set up, in a neutral tone (W-50, UI-2)",
@@ -32526,6 +32538,7 @@
       "frontend/src/components/research/needMoreCardParts/AudioSection.test.tsx",
       "frontend/src/components/research/needMoreCardParts/audioProgress.test.ts",
       "frontend/src/components/settings/DataSourcesSection.test.tsx",
+      "frontend/src/components/settings/DiagnosticsSection.test.tsx",
       "frontend/src/components/settings/ImageGenSection.test.tsx",
       "frontend/src/components/settings/LiveBrowserSection.test.tsx",
       "frontend/src/components/settings/McpImportBox.test.tsx",
@@ -40607,6 +40620,39 @@
             "scope": "pytest.fixture(autouse=True)"
           }
         ]
+      }
+    },
+    {
+      "package": "PKG-53-DIAGNOSTICS-UI",
+      "root": "packages",
+      "source_identity_before": "ccfd3b390b247d2a4b980445f37d080f0daedfd2",
+      "source_identity_after": "0f18b0b259ba5b5092f13f0edc073504d839d5fc",
+      "collected_roots": {
+        "packages": {
+          "before_count": 12248,
+          "after_count": 12249,
+          "added_ids": [
+            "packages/agent-server/tests/test_diagnostics_route.py::test_diagnostics_reports_build_health_sandbox_checks_and_redacted_env"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [
+          "packages/agent-server/tests/test_diagnostics_route.py"
+        ],
+        "python_static_test_ids": [
+          "packages/agent-server/tests/test_diagnostics_route.py::test_diagnostics_reports_build_health_sandbox_checks_and_redacted_env"
+        ],
+        "typescript_test_files": [
+          "frontend/src/components/settings/DiagnosticsSection.test.tsx"
+        ],
+        "typescript_static_test_ids": [
+          "frontend/src/components/settings/DiagnosticsSection.test.tsx::copies the payload as JSON",
+          "frontend/src/components/settings/DiagnosticsSection.test.tsx::names the doctor command for the bundle",
+          "frontend/src/components/settings/DiagnosticsSection.test.tsx::shows a fetch failure instead of inventing a green",
+          "frontend/src/components/settings/DiagnosticsSection.test.tsx::shows the build and one row per fact with the fetched detail"
+        ],
+        "fixtures": []
       }
     },
     {

@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-public-api-v1",
-  "source_identity": "ccfd3b390b247d2a4b980445f37d080f0daedfd2",
+  "source_identity": "0f18b0b259ba5b5092f13f0edc073504d839d5fc",
   "python_initializers": [
     {
       "path": "packages/agent-server/src/disco/agent_server/__init__.py",
@@ -423,6 +423,7 @@
         "make_conversations_router",
         "make_debug_router",
         "make_deck_editor_router",
+        "make_diagnostics_router",
         "make_export_router",
         "make_files_router",
         "make_health_router",
@@ -452,6 +453,7 @@
         "make_conversations_router",
         "make_debug_router",
         "make_deck_editor_router",
+        "make_diagnostics_router",
         "make_export_router",
         "make_files_router",
         "make_health_router",
@@ -512,6 +514,14 @@
           "public_name": "make_deck_editor_router",
           "name": "make_deck_editor_router",
           "module": "deck_editor",
+          "level": 1,
+          "alias": null,
+          "kind": "from"
+        },
+        {
+          "public_name": "make_diagnostics_router",
+          "name": "make_diagnostics_router",
+          "module": "diagnostics",
           "level": 1,
           "alias": null,
           "kind": "from"
@@ -713,6 +723,10 @@
         "make_deck_editor_router": {
           "kind": "function",
           "signature": "def make_deck_editor_router(store: SqliteEventStore, runtime: ConversationRuntime | None) -> APIRouter"
+        },
+        "make_diagnostics_router": {
+          "kind": "function",
+          "signature": "def make_diagnostics_router(store: SqliteEventStore, runtime: ConversationRuntime | None) -> APIRouter"
         },
         "make_export_router": {
           "kind": "function",
@@ -19017,6 +19031,21 @@
       ]
     },
     {
+      "path": "frontend/src/api/diagnostics.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "getAppServerHealth",
+          "signature": "export async function getAppServerHealth(): Promise<AppServerHealth>"
+        },
+        {
+          "kind": "function",
+          "name": "getDiagnostics",
+          "signature": "export async function getDiagnostics(): Promise<Diagnostics>"
+        }
+      ]
+    },
+    {
       "path": "frontend/src/api/downloadBinding.typeguard.contract.ts",
       "public_declarations": [
         {
@@ -22102,6 +22131,16 @@
       ]
     },
     {
+      "path": "frontend/src/components/settings/DiagnosticsSection.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "DiagnosticsSection",
+          "signature": "export function DiagnosticsSection()"
+        }
+      ]
+    },
+    {
       "path": "frontend/src/components/settings/EncoderSection.tsx",
       "public_declarations": [
         {
@@ -23803,6 +23842,31 @@
           "kind": "variable",
           "name": "initial",
           "signature": "export const initial: RawState = { status: \"IDLE\", statusDetail: null, followUpStatus: null, events: [], error: null, failure: null, connectionState: \"connected\", };"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/hooks/useDiagnostics.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "useAppServerHealth",
+          "signature": "export function useAppServerHealth()"
+        },
+        {
+          "kind": "function",
+          "name": "useDiagnostics",
+          "signature": "export function useDiagnostics()"
+        },
+        {
+          "kind": "variable",
+          "name": "APP_HEALTH_KEY",
+          "signature": "export const APP_HEALTH_KEY = [\"app-server-health\"] as const;"
+        },
+        {
+          "kind": "variable",
+          "name": "DIAGNOSTICS_KEY",
+          "signature": "export const DIAGNOSTICS_KEY = [\"diagnostics\"] as const;"
         }
       ]
     },
@@ -26557,6 +26621,36 @@
           "kind": "InterfaceDeclaration",
           "name": "ConversationSummary",
           "signature": "export interface ConversationSummary { id: string; owner_id: string; /** Space folder membership; null/undefined means Unfiled. */ space_id?: string | null; /** the conversation's title / first question */ title: string; /** the conversation's current status (cached library projection) */ status?: string; /** ISO-8601 creation timestamp */ created_at: string; /** which surface produced it \u2014 History routes by this (read-only open). * \"agent\" is the general-task framing of \"build\" (same machinery). */ surface?: \"research\" | \"build\" | \"agent\" | \"deep_research\"; /** \"imported\" for a read-only share-bundle import (routes to /imported/:cid and * refuses every mutating action at the server edge); undefined for first-party. */ origin?: \"imported\" | null; }"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/types/diagnostics.ts",
+      "public_declarations": [
+        {
+          "kind": "InterfaceDeclaration",
+          "name": "AgentServerHealth",
+          "signature": "export interface AgentServerHealth { status: \"ok\" | \"degraded\" | string; version: string; build: BuildInfo; checks: Record<string, string | number>; }"
+        },
+        {
+          "kind": "InterfaceDeclaration",
+          "name": "AppServerHealth",
+          "signature": "export interface AppServerHealth { status: string; service: string; version: string; build: BuildInfo; }"
+        },
+        {
+          "kind": "InterfaceDeclaration",
+          "name": "BuildInfo",
+          "signature": "export interface BuildInfo { tag: string; commit: string; source: \"image\" | \"checkout\" | \"unknown\" | string; }"
+        },
+        {
+          "kind": "InterfaceDeclaration",
+          "name": "DiagnosticCheck",
+          "signature": "export interface DiagnosticCheck { name: string; status: \"PASS\" | \"WARN\" | \"FAIL\" | \"SKIP\" | string; detail: string; }"
+        },
+        {
+          "kind": "InterfaceDeclaration",
+          "name": "Diagnostics",
+          "signature": "export interface Diagnostics { generated_at: string; version: string; build: BuildInfo; agent_server: AgentServerHealth; sandbox: { reachable: boolean; backend: string; detail: string }; checks: DiagnosticCheck[]; env: Record<string, string>; }"
         }
       ]
     },
@@ -32767,6 +32861,110 @@
       "target_sha256": "ad5b8b374b2135b594686c06e436b53d3799b60ae18276e7597e30502d0ae234",
       "owner_package": "PKG-51-CHECK-LEDGER-GATE",
       "reason": "PKG-51-CHECK-LEDGER-GATE: Check ledger phase 4: FinishGate gains stale_checks_gate_passed (member transition if the initializer is tracked); no other public-API change"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/diagnostics.ts",
+      "public_name": "getAppServerHealth",
+      "target_sha256": "c807114c79626d30d8dc1c31e721ba7541a4fa497b368b9d51d31170a1ea0efa",
+      "owner_package": "PKG-53-DIAGNOSTICS-UI",
+      "reason": "PKG-53-DIAGNOSTICS-UI: Diagnostics UI: make_diagnostics_router added to the agent-server routes initializer (additive), four new frontend modules (additive rows); no member transition"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/diagnostics.ts",
+      "public_name": "getDiagnostics",
+      "target_sha256": "0258dbafac2f7b3d432e2727707e206249c230be0c7d027f056cd6cfb6ae9f83",
+      "owner_package": "PKG-53-DIAGNOSTICS-UI",
+      "reason": "PKG-53-DIAGNOSTICS-UI: Diagnostics UI: make_diagnostics_router added to the agent-server routes initializer (additive), four new frontend modules (additive rows); no member transition"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/DiagnosticsSection.tsx",
+      "public_name": "DiagnosticsSection",
+      "target_sha256": "6af98ce963433cde558e90dd55b1ad79b6f66450f62db1b08b888064987c308b",
+      "owner_package": "PKG-53-DIAGNOSTICS-UI",
+      "reason": "PKG-53-DIAGNOSTICS-UI: Diagnostics UI: make_diagnostics_router added to the agent-server routes initializer (additive), four new frontend modules (additive rows); no member transition"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/hooks/useDiagnostics.ts",
+      "public_name": "APP_HEALTH_KEY",
+      "target_sha256": "1019f01cb1e045d3ab123489f89cc90ce8515302276353f0020980ec5e3ad4d8",
+      "owner_package": "PKG-53-DIAGNOSTICS-UI",
+      "reason": "PKG-53-DIAGNOSTICS-UI: Diagnostics UI: make_diagnostics_router added to the agent-server routes initializer (additive), four new frontend modules (additive rows); no member transition"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/hooks/useDiagnostics.ts",
+      "public_name": "DIAGNOSTICS_KEY",
+      "target_sha256": "8dc51d421c92385a7122b5e9015cbfb4a2e4a088c50a94e28ce26bee236eb264",
+      "owner_package": "PKG-53-DIAGNOSTICS-UI",
+      "reason": "PKG-53-DIAGNOSTICS-UI: Diagnostics UI: make_diagnostics_router added to the agent-server routes initializer (additive), four new frontend modules (additive rows); no member transition"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/hooks/useDiagnostics.ts",
+      "public_name": "useAppServerHealth",
+      "target_sha256": "682d09abd6c101864119b0b2ed2c36005bad85167048d44696910aad6e5b5239",
+      "owner_package": "PKG-53-DIAGNOSTICS-UI",
+      "reason": "PKG-53-DIAGNOSTICS-UI: Diagnostics UI: make_diagnostics_router added to the agent-server routes initializer (additive), four new frontend modules (additive rows); no member transition"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/hooks/useDiagnostics.ts",
+      "public_name": "useDiagnostics",
+      "target_sha256": "f6fc6d9954687b84227dc8ecb11d2124511b7a84ebbf3f0039418b528a93f367",
+      "owner_package": "PKG-53-DIAGNOSTICS-UI",
+      "reason": "PKG-53-DIAGNOSTICS-UI: Diagnostics UI: make_diagnostics_router added to the agent-server routes initializer (additive), four new frontend modules (additive rows); no member transition"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/diagnostics.ts",
+      "public_name": "AgentServerHealth",
+      "target_sha256": "ae6e69c007b65912f5b7d9c2dae3f5400feffb71cfac5cefd9cc9931e99b3fa7",
+      "owner_package": "PKG-53-DIAGNOSTICS-UI",
+      "reason": "PKG-53-DIAGNOSTICS-UI: Diagnostics UI: make_diagnostics_router added to the agent-server routes initializer (additive), four new frontend modules (additive rows); no member transition"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/diagnostics.ts",
+      "public_name": "AppServerHealth",
+      "target_sha256": "bfee6ff70d4ad909a915d12a1a3e66c7ac2cb5943b847a1d038d6eb02117677a",
+      "owner_package": "PKG-53-DIAGNOSTICS-UI",
+      "reason": "PKG-53-DIAGNOSTICS-UI: Diagnostics UI: make_diagnostics_router added to the agent-server routes initializer (additive), four new frontend modules (additive rows); no member transition"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/diagnostics.ts",
+      "public_name": "BuildInfo",
+      "target_sha256": "d3f3ffc978d75d86c1fdf64c31a65df7b6112f1164786030bf896b9c70100f96",
+      "owner_package": "PKG-53-DIAGNOSTICS-UI",
+      "reason": "PKG-53-DIAGNOSTICS-UI: Diagnostics UI: make_diagnostics_router added to the agent-server routes initializer (additive), four new frontend modules (additive rows); no member transition"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/diagnostics.ts",
+      "public_name": "DiagnosticCheck",
+      "target_sha256": "2243849d6b58377e7f92873655f49d241edb4f88edd2f4d21e9213a3eff811d8",
+      "owner_package": "PKG-53-DIAGNOSTICS-UI",
+      "reason": "PKG-53-DIAGNOSTICS-UI: Diagnostics UI: make_diagnostics_router added to the agent-server routes initializer (additive), four new frontend modules (additive rows); no member transition"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/diagnostics.ts",
+      "public_name": "Diagnostics",
+      "target_sha256": "7e0c889b3dbe4130a048ed65311bb5818671882c4e4b46430b920541f4a683af",
+      "owner_package": "PKG-53-DIAGNOSTICS-UI",
+      "reason": "PKG-53-DIAGNOSTICS-UI: Diagnostics UI: make_diagnostics_router added to the agent-server routes initializer (additive), four new frontend modules (additive rows); no member transition"
+    },
+    {
+      "surface": "python",
+      "path": "packages/agent-server/src/disco/agent_server/routes/__init__.py",
+      "public_name": "make_diagnostics_router",
+      "target_sha256": "08ebce6179a8913d8941c669ba152cb150cb112698bb9542f39a4015883e9a64",
+      "owner_package": "PKG-53-DIAGNOSTICS-UI",
+      "reason": "PKG-53-DIAGNOSTICS-UI: Diagnostics UI: make_diagnostics_router added to the agent-server routes initializer (additive), four new frontend modules (additive rows); no member transition"
     }
   ],
   "compatibility_bridges": [],
