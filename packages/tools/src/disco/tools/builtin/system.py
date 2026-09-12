@@ -128,6 +128,13 @@ async def _exec_outcome(res: ExecResult, *, what: str, timeout_s: int, ctx=None)
 
 class ShellArgs(BaseModel):
     command: str = Field(description="Shell command to run in the sandbox.")
+    force: bool = Field(
+        default=False,
+        description=(
+            "Run even if this exact command already ran on unchanged source with the same "
+            "live sessions; by default such a repeat returns the recorded result."
+        ),
+    )
 
 
 class ShellTool:

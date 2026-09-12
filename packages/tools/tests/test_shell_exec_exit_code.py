@@ -57,3 +57,11 @@ async def test_still_running_command_has_no_exit_code() -> None:
     assert res.structured is not None
     assert res.structured["running"] is True
     assert "exit_code" not in res.structured
+
+
+def test_shell_tools_accept_force_default_false() -> None:
+    from disco.tools.builtin.system import ShellTool
+
+    assert ShellTool.definition.args_model(command="ls").force is False
+    assert ShellTool.definition.args_model(command="ls", force=True).force is True
+    assert ShellExecTool.definition.args_model(session="s", command="ls").force is False

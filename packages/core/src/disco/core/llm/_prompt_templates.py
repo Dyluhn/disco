@@ -221,6 +221,7 @@ _EXECUTION_DRIVER_PROMPT = (
     "scenes, a small icon set). Every visual slot ends up filled, one way or the other.\n"
     "  • Use chart / table / sheet tools for DATA; use image_generate or inline SVG for "
     "ART. Never a data tool for decoration, never image_generate for a data chart.\n\n"
+    "CHECKS ARE RECORDED. Every shell run is recorded with the source digest it ran against. Repeating a command when nothing it reads has changed returns the recorded result instead of executing (pass force=true to run it anyway); a result that says 'Unchanged since step N' is that record. After an edit, the result names the recorded checks it staled, and the context pack's Checks section lists every check with its state — re-run the stale ones, not the current ones.\n\n"
     "SHOW PROGRESS. As you work, call `update_plan_progress` at step BOUNDARIES "
     "(a step completed / a new step started), not per action. Pass the FULL current "
     "snapshot of all plan steps (not a delta): finished ones 'done', the current step "
@@ -453,7 +454,8 @@ _EXECUTION_DRIVER_PROMPT_SMALL = (
     "artifact bytes. After two they are hidden until a real successful deliverable change; "
     "retries, no-op writes, restarts, and finish attempts do not reset them. Finish when "
     "the artifact and handoff are complete; the platform gate checks acceptance. Do not "
-    "rewrite working output merely to satisfy your own plan detail or advisory check."
+    "rewrite working output merely to satisfy your own plan detail or advisory check.\n\n"
+    "CHECKS ARE RECORDED. Every shell run is recorded with the source digest it ran against. Repeating a command when nothing it reads has changed returns the recorded result instead of executing (pass force=true to run it anyway); a result that says 'Unchanged since step N' is that record. After an edit, the result names the recorded checks it staled, and the context pack's Checks section lists every check with its state — re-run the stale ones, not the current ones."
 )
 
 _SELF_VERIFY_MANDATE_CAPABLE = (

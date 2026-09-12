@@ -114,7 +114,7 @@ def check_meta(
     tool_call = action.tool_call
     assert tool_call is not None
     return {
-        "fingerprint": tool_call_fingerprint(tool_call.tool_name, tool_call.arguments),
+        "fingerprint": check_fingerprint(tool_call),
         "tree_before": before.tree_digest if before else None,
         "tree_after": after.tree_digest if after else None,
         "exit_code": exit_code,
@@ -288,13 +288,15 @@ class CheckStatus:
     command: str
     seq: int
     exit_code: int | None
-    state: str  # "current" | "stale" | "failed"
+    state: str  # "current" | "stale" | "failed" | "flaky"
     staled_by: Mutation | None
 
     def render(self) -> str:
         exit_note = f"exit {self.exit_code}" if self.exit_code is not None else "no exit code"
         if self.state == "stale" and self.staled_by is not None:
             state = f"stale: {self.staled_by.describe()}"
+        elif self.state == "flaky":
+            state = "flaky: exited differently on unchanged inputs; always executed"
         else:
             state = self.state
         return f"- [{state}] {exit_note} at step {self.seq}  {self.command}"
@@ -316,15 +318,19 @@ def check_statuses(events: list[Event], *, limit: int = CHECKS_SHOWN) -> list[Ch
     """
     actions = _actions_by_id(events)
     changes = mutations(events)
+    records = check_records(events)
+    flaky = flaky_fingerprints(records)
     latest: dict[str, CheckRecord] = {}
-    for record in check_records(events):
+    for record in records:
         if record.tree_before is None or record.tree_before != record.tree_after:
             continue
         latest[record.fingerprint] = record
     statuses: list[CheckStatus] = []
     for record in sorted(latest.values(), key=lambda r: r.seq)[-limit:]:
         staled_by = next((m for m in changes if m.seq > record.seq), None)
-        if not record.passed:
+        if record.fingerprint in flaky:
+            state = "flaky"
+        elif not record.passed:
             state = "failed"
         elif staled_by is not None:
             state = "stale"
@@ -404,3 +410,95 @@ def stale_sessions(events: list[Event], busy: Sequence[str]) -> list[StaleSessio
         if change is not None:
             out.append(StaleSession(name=name, started_seq=seq, changed_by=change))
     return out
+
+
+# --- phase 3: answer a repeat from the record ------------------------------------------
+
+MEMO_HEADER = (
+    "Unchanged since step {seq}: same command, same source digest, same live sessions. "
+    "The recorded result (exit {exit}) follows; the command was not re-executed. "
+    "Pass force=true to run it anyway."
+)
+FORCE_ARG = "force"
+
+
+def memo_enabled() -> bool:
+    """`DISCO_CHECK_MEMO` (default on) — the one switch that turns memoised answers off."""
+    from ..env import disco_env
+
+    return (disco_env("CHECK_MEMO", "on") or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def check_fingerprint(tool_call: Any) -> str:
+    """The call's identity for the ledger: `force` asks for execution, it is not a different check."""
+    arguments = {k: v for k, v in (tool_call.arguments or {}).items() if k != FORCE_ARG}
+    return tool_call_fingerprint(tool_call.tool_name, arguments)
+
+
+def forced(action: ActionEvent) -> bool:
+    return bool(action.tool_call and action.tool_call.arguments.get(FORCE_ARG))
+
+
+def _hits(records: list[CheckRecord]) -> list[tuple[CheckRecord, CheckRecord]]:
+    hits: list[tuple[CheckRecord, CheckRecord]] = []
+    seen: list[CheckRecord] = []
+    for record in records:
+        source = memo_source(record, seen)
+        if source is not None:
+            hits.append((record, source))
+        seen.append(record)
+    return hits
+
+
+def flaky_fingerprints(records: list[CheckRecord]) -> frozenset[str]:
+    """Commands that ever exited differently on unchanged inputs. Never memoised."""
+    return frozenset(
+        run.fingerprint for run, source in _hits(records) if run.exit_code != source.exit_code
+    )
+
+
+def repeatable(fingerprint: str, records: list[CheckRecord]) -> bool:
+    """A command has proven repeatable when one real repeat agreed with its source and none
+    ever disagreed. Its first repeat therefore always executes."""
+    if fingerprint in flaky_fingerprints(records):
+        return False
+    return any(
+        run.fingerprint == fingerprint and run.exit_code == source.exit_code
+        for run, source in _hits(records)
+    )
+
+
+def memo_source_for(
+    action: ActionEvent, before: CheckSnapshot | None, events: list[Event]
+) -> CheckRecord | None:
+    """The recorded run that answers this call without executing it, or None."""
+    if before is None or before.tree_digest is None or not memo_enabled() or forced(action):
+        return None
+    assert action.tool_call is not None
+    fingerprint = check_fingerprint(action.tool_call)
+    records = check_records(events)
+    if not repeatable(fingerprint, records):
+        return None
+    candidate = CheckRecord(
+        seq=0,
+        action_id=action.id,
+        fingerprint=fingerprint,
+        tree_before=before.tree_digest,
+        tree_after=before.tree_digest,
+        exit_code=None,
+        sessions_before=before.sessions,
+        sessions_after=before.sessions,
+    )
+    return memo_source(candidate, records)
+
+
+def memo_content(source: CheckRecord, source_content: str) -> str:
+    header = MEMO_HEADER.format(seq=source.seq, exit=source.exit_code)
+    body = (source_content or "").rstrip()
+    return f"{header}\n---\n{body}" if body else header
+
+
+def memo_meta(action: ActionEvent, before: CheckSnapshot, source: CheckRecord) -> dict[str, Any]:
+    record = check_meta(action, before, before, source.exit_code)
+    record["memo_of"] = source.seq
+    return record

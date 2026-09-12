@@ -34,6 +34,13 @@ class ShellExecArgs(BaseModel):
     session: str = Field(default="main", description="Name of the shell session.")
     exec_dir: str = Field(default="", description="Directory to run the command in.")
     command: str = Field(..., description="The shell command to execute.")
+    force: bool = Field(
+        default=False,
+        description=(
+            "Run even if this exact command already ran on unchanged source with the same "
+            "live sessions; by default such a repeat returns the recorded result."
+        ),
+    )
 
 
 class ShellExecTool:

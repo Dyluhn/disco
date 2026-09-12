@@ -450,3 +450,115 @@ async def test_shell_result_warns_about_a_session_serving_old_code() -> None:
     assert obs.tool_result.tool_name == "shell"
     assert "[session 'server' has been running since step" in obs.tool_result.content
     assert "file_edit src/routes.js" in obs.tool_result.content
+
+
+# --- phase 3: answer a repeat from the record ---------------------------------------
+
+
+class _SeqExecutor(_ShellExecutor):
+    """Shell runs exit with the next code from `codes`; records every execution."""
+
+    def __init__(self, sandbox: _Sandbox | None, codes: list[int]) -> None:
+        super().__init__(sandbox)
+        self._codes = list(codes)
+
+    async def execute(self, call):
+        self.calls.append(call)
+        code = self._codes.pop(0) if self._codes else 0
+        return ToolResult(
+            call_id=call.call_id, tool_name=call.tool_name, success=code == 0,
+            content=f"run #{len(self.calls)} output" if code == 0 else "",
+            error=None if code == 0 else f"command exited {code}",
+            structured={"exit_code": code},
+        )
+
+
+def _last_obs(events: list[Event]) -> ObservationEvent:
+    return [e for e in events if isinstance(e, ObservationEvent)][-1]
+
+
+def test_repeatable_needs_one_agreeing_repeat_and_no_disagreement() -> None:
+    one = check_ledger.check_records(with_seqs(_pure("c1", "bash t.sh")))
+    fp = one[0].fingerprint
+    assert check_ledger.repeatable(fp, one) is False
+    two = check_ledger.check_records(with_seqs(_pure("c1", "bash t.sh") + _pure("c2", "bash t.sh")))
+    assert check_ledger.repeatable(fp, two) is True
+    flaky = check_ledger.check_records(
+        with_seqs(_pure("c1", "bash t.sh") + _pure("c2", "bash t.sh", exit_code=1) + _pure("c3", "bash t.sh"))
+    )
+    assert check_ledger.repeatable(fp, flaky) is False
+    assert check_ledger.flaky_fingerprints(flaky) == frozenset({fp})
+
+
+def test_check_fingerprint_ignores_force() -> None:
+    plain = _action("shell", "a", command="ls")
+    forced = _action("shell", "b", command="ls", force=True)
+    assert check_ledger.check_fingerprint(plain.tool_call) == check_ledger.check_fingerprint(forced.tool_call)
+    assert check_ledger.forced(forced) and not check_ledger.forced(plain)
+
+
+async def test_third_identical_run_is_answered_from_the_record(monkeypatch) -> None:
+    monkeypatch.delenv("DISCO_CHECK_MEMO", raising=False)
+    sandbox = _Sandbox([DIGEST_A] * 8)
+    ex = _SeqExecutor(sandbox, [0, 0, 0, 0])
+    loop = _make_loop(ex)
+    await _drive(loop, _action("shell", "c1", command="bash smoke.sh"))
+    await _drive(loop, _action("shell", "c2", command="bash smoke.sh"))   # first repeat executes
+    assert len(ex.calls) == 2
+    events = await _drive(loop, _action("shell", "c3", command="bash smoke.sh"))
+    assert len(ex.calls) == 2, "the proven-repeatable third run must not execute"
+
+    obs = _last_obs(events)
+    assert obs.tool_result.content.startswith("Unchanged since step 4: same command")
+    assert "run #2 output" in obs.tool_result.content
+    assert obs.tool_result.structured == {"exit_code": 0, "memo_of_seq": 4}
+    assert obs.meta["check"]["memo_of"] == 4 and obs.meta["check"]["exit_code"] == 0
+    # the memo is the notice: no W-39 reminder follows it
+    assert not any(
+        e.seq > obs.seq and getattr(e, "message", None) is not None for e in events
+    )
+    # and the record keeps counting hits without executing
+    assert [(r.seq, s.seq) for r, s in check_ledger.memo_hits(events)] == [(4, 2), (obs.seq, 4)]
+
+
+async def test_force_executes_and_stays_the_same_check(monkeypatch) -> None:
+    monkeypatch.delenv("DISCO_CHECK_MEMO", raising=False)
+    ex = _SeqExecutor(_Sandbox([DIGEST_A] * 8), [0, 0, 0])
+    loop = _make_loop(ex)
+    await _drive(loop, _action("shell", "c1", command="bash smoke.sh"))
+    await _drive(loop, _action("shell", "c2", command="bash smoke.sh"))
+    events = await _drive(loop, _action("shell", "c3", command="bash smoke.sh", force=True))
+    assert len(ex.calls) == 3
+    records = check_ledger.check_records(events)
+    assert len({r.fingerprint for r in records}) == 1
+
+
+async def test_a_disagreeing_repeat_makes_the_command_flaky_and_never_memoised(monkeypatch) -> None:
+    monkeypatch.delenv("DISCO_CHECK_MEMO", raising=False)
+    ex = _SeqExecutor(_Sandbox([DIGEST_A] * 8), [0, 1, 0, 0])
+    loop = _make_loop(ex)
+    await _drive(loop, _action("shell", "c1", command="bash flaky.sh"))
+    await _drive(loop, _action("shell", "c2", command="bash flaky.sh"))   # exits 1 on the same source
+    await _drive(loop, _action("shell", "c3", command="bash flaky.sh"))
+    events = await _drive(loop, _action("shell", "c4", command="bash flaky.sh"))
+    assert len(ex.calls) == 4
+    statuses = check_ledger.check_statuses(events)
+    assert [s.state for s in statuses] == ["flaky"]
+    assert "exited differently on unchanged inputs" in statuses[0].render()
+
+
+async def test_changed_source_or_kill_switch_executes(monkeypatch) -> None:
+    monkeypatch.delenv("DISCO_CHECK_MEMO", raising=False)
+    ex = _SeqExecutor(_Sandbox([DIGEST_A, DIGEST_A, DIGEST_A, DIGEST_A, DIGEST_B, DIGEST_B]), [0, 0, 0])
+    loop = _make_loop(ex)
+    await _drive(loop, _action("shell", "c1", command="bash smoke.sh"))
+    await _drive(loop, _action("shell", "c2", command="bash smoke.sh"))
+    await _drive(loop, _action("shell", "c3", command="bash smoke.sh"))   # digest B now → executes
+    assert len(ex.calls) == 3
+
+    monkeypatch.setenv("DISCO_CHECK_MEMO", "off")
+    ex2 = _SeqExecutor(_Sandbox([DIGEST_A] * 6), [0, 0, 0])
+    loop2 = _make_loop(ex2)
+    for cid in ("k1", "k2", "k3"):
+        await _drive(loop2, _action("shell", cid, command="bash smoke.sh"))
+    assert len(ex2.calls) == 3

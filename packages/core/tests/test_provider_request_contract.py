@@ -41,7 +41,7 @@ from disco.core.llm.prompts import DriverPrompts
 # request bytes and their token budgets moved; keys, roles, tools and
 # max_tokens are unchanged.
 _PLANNING_SHA256 = "19c47b3df6b16a11492cb9e0d281ad27c3979c04ef0cc3e8a1236f02fc01841d"
-_RESUME_SHA256 = "e8faccf7cb6628b2813fba85fa6b107511b991bbaf9cfc86e8f462bd8cd3b5f3"
+_RESUME_SHA256 = "d65d10c4f9f2efa25ef5145d964cf89d3e87319eb7e00e02b87169e9ab6a355a"
 _EXPECTED_KEYS = (
     "model",
     "messages",
@@ -304,7 +304,7 @@ async def test_long_horizon_resume_retries_the_exact_compacted_request() -> None
     response = await router.complete(request, context=context)
 
     assert estimate is not None
-    assert _budget_values(estimate) == (65_536, 777, 18_098, 17_485, 430, 5, 2)
+    assert _budget_values(estimate) == (65_536, 777, 18_571, 17_958, 430, 5, 2)
     assert response.routing is not None and response.routing.attempt == 2
     assert len(captured) == 2
     assert captured[0] == captured[1]

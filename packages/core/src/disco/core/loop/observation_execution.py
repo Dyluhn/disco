@@ -542,6 +542,48 @@ async def _annotate_result(
     return result.model_copy(update={"content": (result.content or "").rstrip() + "\n" + "\n".join(lines)})
 
 
+async def _answer_from_record(
+    loop: _LoopFacet,
+    action: ActionEvent,
+    before: check_ledger.CheckSnapshot,
+) -> bool:
+    """Answer a repeated check from its recorded run instead of executing it.
+
+    Only a command that has proven repeatable (one real repeat agreed, none ever
+    disagreed) on the same source digest and live sessions is answered this way; the
+    result says so and how to force execution. The W-39 reminder is not emitted — the
+    memo result is the notice.
+    """
+    events = await loop.store.get_events(loop.conversation_id)
+    source = check_ledger.memo_source_for(action, before, events)
+    if source is None:
+        return False
+    source_event = next(
+        (e for e in events if isinstance(e, ObservationEvent) and e.seq == source.seq), None
+    )
+    source_content = source_event.tool_result.content if source_event is not None else ""
+    assert action.tool_call is not None
+    call = action.tool_call
+    _LOG.info(
+        "check ledger: answered %s (call_id=%s) from step %s without executing",
+        call.tool_name,
+        call.call_id,
+        source.seq,
+    )
+    meta = {"check": check_ledger.memo_meta(action, before, source)}
+    result = ToolResult(
+        call_id=call.call_id,
+        tool_name=call.tool_name,
+        success=True,
+        content=check_ledger.memo_content(source, source_content),
+        structured={"exit_code": source.exit_code, "memo_of_seq": source.seq},
+        action_profile=_action_profile_for_call(loop, action),
+    )
+    result = await _annotate_result(loop, action, result, events, meta)
+    await loop._emit(ObservationEvent(tool_result=result, action_id=action.id, meta=meta))
+    return True
+
+
 async def _emit_execution_error(
     loop: _LoopFacet,
     action: ActionEvent,
@@ -616,6 +658,8 @@ async def execute_and_observe(
     sandbox = getattr(loop.executor, "sandbox", None)
     generation_before = getattr(sandbox, "generation", 0) if sandbox is not None else 0
     check_before = await check_ledger.snapshot(sandbox) if check_ledger.ledger_tool(action) else None
+    if check_before is not None and await _answer_from_record(loop, action, check_before):
+        return
     persist = partial(_persist_primary_result, loop, action, check_before=check_before)
     primary_persisted = False
     try:
