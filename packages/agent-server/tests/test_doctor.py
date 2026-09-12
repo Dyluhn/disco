@@ -29,7 +29,8 @@ HEALTHY = {
     "GET /api/health": httpx.Response(200, json={"status": "ok", "service": "app-server", "version": "v0.2.0 (abc1234)"}),
     "POST /api/auth/mint": httpx.Response(200, json={"ok": True, "csrf_token": "csrf"}, headers={"set-cookie": "disco_session=abc; Path=/"}),
     "GET /api/sandbox/health": httpx.Response(200, json={"reachable": True, "backend": "podman", "detail": "ok"}),
-    "GET /conversations": httpx.Response(200, json={"conversations": [{"conversation_id": "conv_1", "status": "FINISHED"}]}),
+    "GET /conversations": httpx.Response(200, json={"conversation_ids": ["conv_1"]}),
+    "GET /conversations/conv_1/state": httpx.Response(200, json={"execution_status": "FINISHED", "iteration": 6}),
     "GET /conversations/conv_1/events": httpx.Response(200, json={"events": [
         {"seq": 1, "kind": "message", "message": {"content": "SECRET PROMPT"}},
         {"seq": 2, "kind": "action", "tool_call": {"tool_name": "shell", "arguments": {"command": "cat .env"}}},
@@ -128,7 +129,7 @@ def test_bundle_is_redacted_and_carries_shapes_not_content(tmp_path, monkeypatch
     assert bundle["env"]["DISCO_OPENROUTER_API_KEY"] == "***REDACTED***"
     assert bundle["build"]["commit"] == "abc1234"
     [conversation] = bundle["conversations"]
-    assert conversation["conversation_id"] == "conv_1"
+    assert conversation["conversation_id"] == "conv_1" and conversation["status"] == "FINISHED"
     assert conversation["events"][1] == {"seq": 2, "kind": "action", "tool": "shell"}
     assert conversation["events"][2] == {"seq": 3, "kind": "observation", "success": True}
     assert conversation["events"][3] == {"seq": 4, "kind": "agent_error", "error": "command exited 1"}

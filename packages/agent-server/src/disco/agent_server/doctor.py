@@ -212,19 +212,18 @@ class Doctor:
         listing, _ = self._get_json(
             f"{self.agent_url}/conversations?limit={BUNDLE_CONVERSATIONS}", headers=headers, cookies=cookies
         )
-        rows = listing.get("conversations", listing) if isinstance(listing, dict) else listing
+        ids = listing.get("conversation_ids", []) if isinstance(listing, dict) else []
         shapes: list[dict[str, Any]] = []
-        for row in (rows or [])[:BUNDLE_CONVERSATIONS]:
-            cid = row.get("conversation_id") or row.get("id")
-            if not cid:
-                continue
+        for cid in [str(c) for c in ids if c][:BUNDLE_CONVERSATIONS]:
+            state, _ = self._get_json(f"{self.agent_url}/conversations/{cid}/state", headers=headers, cookies=cookies)
             events, _ = self._get_json(
                 f"{self.agent_url}/conversations/{cid}/events?limit={BUNDLE_EVENTS_PER_CONVERSATION}",
                 headers=headers,
                 cookies=cookies,
             )
+            status = (state or {}).get("execution_status") or (state or {}).get("status") if isinstance(state, dict) else None
             items = events.get("events", []) if isinstance(events, dict) else []
-            shapes.append({"conversation_id": cid, "status": row.get("status"), "events": [_event_shape(e) for e in items]})
+            shapes.append({"conversation_id": cid, "status": status, "events": [_event_shape(e) for e in items]})
         return shapes
 
     # --- transport helpers ---------------------------------------------------------
