@@ -214,8 +214,13 @@ def count_recent_failures(events: list[Event]) -> int:
         for e in events
         if isinstance(e, ActionEvent) and e.tool_call is not None
     }
+    # Host probes (the finish gate re-running a recorded check) are not the model's
+    # attempts: their results neither increment nor reset the streak.
+    probe_ids = {e.id for e in events if isinstance(e, ActionEvent) and e.meta.get("verify_probe")}
     streak = 0
     for e in reversed(events):
+        if isinstance(e, ObservationEvent | AgentErrorEvent) and e.action_id in probe_ids:
+            continue
         if isinstance(e, AgentErrorEvent):
             if e.failure_class in _NON_PRODUCT_FAILURE_CLASSES:
                 continue

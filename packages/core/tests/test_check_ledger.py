@@ -650,6 +650,67 @@ async def test_gate_lets_finish_through_on_the_third_refusal(monkeypatch) -> Non
     assert len(messages) == 3 and "refusal 3 of 3" in messages[-1]
 
 
+LONG_COMMAND = (
+    "cd /workspace && export PATH=\"/workspace/bin:$PATH\" && \\\n"
+    "TS=$(date +%s) && echo \"=== 1. register ===\" && curl -s -X POST http://127.0.0.1:8000/api/auth/register "
+    "-H 'Content-Type: application/json' -d \"{\\\"email\\\":\\\"p$TS@example.com\\\"}\" | head -c 300"
+)
+
+
+async def test_gate_reruns_the_command_as_written_not_its_display_label(monkeypatch) -> None:
+    """Pharmacy run 3 (2026-09-12): the gate re-ran the 90-char label of four long setup commands
+    (`… | hea…`, an unterminated quote), every probe failed on syntax and the run went STUCK."""
+    monkeypatch.setenv("DISCO_CHECK_MEMO", "off")
+    ex = _GateExecutor(_Sandbox([DIGEST_A, DIGEST_A] + [DIGEST_B] * 8), codes=[0, 0])
+    loop = _make_loop(ex)
+    await _drive(loop, _action("shell", "c1", command=LONG_COMMAND))
+    events = await _drive(loop, _action("file_edit", "e1", path="src/a.js", old="a", new="b"))
+    [status] = check_ledger.check_statuses(events)
+    assert status.command == LONG_COMMAND
+    assert status.label.endswith("…") and len(status.label) == check_ledger.COMMAND_CHARS
+    assert "\n" not in status.label and status.label in status.render()
+
+    assert await loop._finish.stale_checks_gate_passed(events) is True
+    events = await loop.store.get_events(CID)
+    [probe] = [e for e in events if isinstance(e, ActionEvent) and e.meta.get("verify_probe")]
+    assert probe.tool_call.arguments["command"] == LONG_COMMAND
+
+
+async def test_gate_message_shows_the_label_not_the_multiline_command(monkeypatch) -> None:
+    monkeypatch.setenv("DISCO_CHECK_MEMO", "off")
+    ex = _GateExecutor(_Sandbox([DIGEST_A, DIGEST_A] + [DIGEST_B] * 10), codes=[0, 1, 1])
+    loop = _make_loop(ex)
+    await _drive(loop, _action("shell", "c1", command=LONG_COMMAND))
+    events = await _drive(loop, _action("file_edit", "e1", path="src/a.js", old="a", new="b"))
+    assert await loop._finish.stale_checks_gate_passed(events) is False
+    [message] = _gate_messages(await loop.store.get_events(CID))
+    assert f"`{check_ledger.command_label(LONG_COMMAND)}` passed at step 2; now exit 1." in message
+    assert LONG_COMMAND not in message
+
+
+async def test_probe_results_do_not_touch_the_circuit_breaker_streak(monkeypatch) -> None:
+    """The gate's probes are the host's runs, not the model's attempts: two failing probes (run +
+    retry) must not count as failures, and a passing probe must not reset a real streak."""
+    from disco.core.loop import signals
+
+    monkeypatch.setenv("DISCO_CHECK_MEMO", "off")
+    ex = _GateExecutor(_Sandbox([DIGEST_A, DIGEST_A] + [DIGEST_B] * 10), codes=[0, 1, 1])
+    loop = _make_loop(ex)
+    events = await _seed_stale_check(loop)
+    assert await loop._finish.stale_checks_gate_passed(events) is False
+    events = await loop.store.get_events(CID)
+    assert sum(1 for e in events if isinstance(e, AgentErrorEvent)) == 2  # the two probe failures exist
+    assert signals.count_recent_failures(events) == 0
+
+    real = _action("shell", "r1", command="false")
+    real_error = AgentErrorEvent(error="command exited 1", action_id=real.id)
+    probe = ActionEvent(thought="gate", tool_call=ToolCall(tool_name="shell", arguments={"command": "true"}),
+                        meta={"verify_probe": True})
+    probe_ok = ObservationEvent(action_id=probe.id, tool_result=ToolResult(
+        call_id="p", tool_name="shell", success=True, content="", structured={"exit_code": 0}))
+    assert signals.count_recent_failures([real, real_error, probe, probe_ok]) == 1
+
+
 async def test_gate_is_a_no_op_without_stale_checks(monkeypatch) -> None:
     monkeypatch.setenv("DISCO_CHECK_MEMO", "off")
     ex = _GateExecutor(_Sandbox([DIGEST_A] * 6))

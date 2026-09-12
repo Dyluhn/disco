@@ -288,12 +288,17 @@ def mutations(events: list[Event]) -> list[Mutation]:
 @dataclass(frozen=True)
 class CheckStatus:
     fingerprint: str
-    command: str
+    command: str  # the command exactly as the agent ran it — what the finish gate re-runs
     tool: str
     seq: int
     exit_code: int | None
     state: str  # "current" | "stale" | "failed" | "flaky"
     staled_by: Mutation | None
+
+    @property
+    def label(self) -> str:
+        """One-line, capped form for the Checks section and the gate's message — never executed."""
+        return command_label(self.command)
 
     def render(self) -> str:
         exit_note = f"exit {self.exit_code}" if self.exit_code is not None else "no exit code"
@@ -303,15 +308,20 @@ class CheckStatus:
             state = "flaky: exited differently on unchanged inputs; always executed"
         else:
             state = self.state
-        return f"- [{state}] {exit_note} at step {self.seq}  {self.command}"
+        return f"- [{state}] {exit_note} at step {self.seq}  {self.label}"
 
 
-def _command_text(action: ActionEvent | None) -> str:
+def _command_of(action: ActionEvent | None) -> str:
+    """The raw command string; newlines and spacing kept, because a shell re-run needs them."""
     if action is None or action.tool_call is None:
         return "?"
-    command = str(action.tool_call.arguments.get("command") or "")
-    command = " ".join(command.split())
-    return command if len(command) <= COMMAND_CHARS else command[: COMMAND_CHARS - 1] + "…"
+    return str(action.tool_call.arguments.get("command") or "")
+
+
+def command_label(command: str) -> str:
+    """Whitespace collapsed and capped to COMMAND_CHARS with an ellipsis. Display only."""
+    text = " ".join(command.split())
+    return text if len(text) <= COMMAND_CHARS else text[: COMMAND_CHARS - 1] + "…"
 
 
 def check_statuses(events: list[Event], *, limit: int | None = CHECKS_SHOWN) -> list[CheckStatus]:
@@ -345,7 +355,7 @@ def check_statuses(events: list[Event], *, limit: int | None = CHECKS_SHOWN) -> 
         statuses.append(
             CheckStatus(
                 fingerprint=record.fingerprint,
-                command=_command_text(action),
+                command=_command_of(action),
                 tool=action.tool_call.tool_name if action is not None and action.tool_call else "",
                 seq=record.seq,
                 exit_code=record.exit_code,

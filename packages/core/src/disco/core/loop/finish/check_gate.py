@@ -145,7 +145,7 @@ def _refusal_message(
     ]
     for status, exit_code, output in failures:
         tail = (output or "").strip()[-OUTPUT_TAIL:]
-        lines.append(f"- `{status.command}` passed at step {status.seq}; now exit {exit_code}.")
+        lines.append(f"- `{status.label}` passed at step {status.seq}; now exit {exit_code}.")
         if tail:
             lines.append("  " + tail.replace("\n", "\n  "))
     if refusals >= REFUSAL_CAP:
