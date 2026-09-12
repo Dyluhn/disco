@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "ff6bc5fd0885c8697c6591fe935b1585f6e96e40",
+  "source_identity": "968eae971cbab06bcaec54b00269346591edd072",
   "collected": {
     "counts": {
-      "packages": 12193,
+      "packages": 12208,
       "harness": 1571,
       "integrations": 9,
       "tests": 458
     },
-    "total": 14231,
+    "total": 14246,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -4640,6 +4640,19 @@
         "packages/core/tests/test_cd_tools8_prompt_pack.py::test_non_anchored_prompt_never_names_withheld_anchored_edit_tools[True-long_horizon]",
         "packages/core/tests/test_cd_tools8_prompt_pack.py::test_non_anchored_prompt_never_names_withheld_anchored_edit_tools[True-planning]",
         "packages/core/tests/test_cd_tools8_prompt_pack.py::test_weak_execution_prompt_has_universal_discipline_minus_anchored",
+        "packages/core/tests/test_check_ledger.py::test_agreeing_hits_are_not_disagreements",
+        "packages/core/tests/test_check_ledger.py::test_digest_command_prunes_dependency_dirs_and_runtime_state",
+        "packages/core/tests/test_check_ledger.py::test_failed_shell_run_records_on_the_error_event",
+        "packages/core/tests/test_check_ledger.py::test_failing_digest_pipeline_records_none",
+        "packages/core/tests/test_check_ledger.py::test_no_hit_when_the_prior_run_failed_or_mutated",
+        "packages/core/tests/test_check_ledger.py::test_no_hit_when_tree_changed_between_runs",
+        "packages/core/tests/test_check_ledger.py::test_no_hit_without_a_digest_or_with_different_sessions",
+        "packages/core/tests/test_check_ledger.py::test_no_sandbox_records_none_digest",
+        "packages/core/tests/test_check_ledger.py::test_non_shell_tools_get_no_record_and_no_digest_exec",
+        "packages/core/tests/test_check_ledger.py::test_only_the_latest_run_of_a_command_answers_it",
+        "packages/core/tests/test_check_ledger.py::test_repeat_of_a_pure_pass_on_unchanged_tree_is_a_hit",
+        "packages/core/tests/test_check_ledger.py::test_shell_exec_is_recorded_too",
+        "packages/core/tests/test_check_ledger.py::test_shell_run_records_digests_exit_code_and_sessions",
         "packages/core/tests/test_clarify_gate.py::test_answer_resumes_planning",
         "packages/core/tests/test_clarify_gate.py::test_clarify_empty_options_downgrade_to_text_no_blank_radios",
         "packages/core/tests/test_clarify_gate.py::test_clarify_falls_back_to_free_form_on_empty_questions",
@@ -11697,6 +11710,8 @@
         "packages/tools/tests/test_sheets.py::test_tool_registered_and_scoped",
         "packages/tools/tests/test_sheets.py::test_unknown_formula_is_escaped",
         "packages/tools/tests/test_sheets.py::test_whitespace_function_call_still_validated",
+        "packages/tools/tests/test_shell_exec_exit_code.py::test_finished_command_exposes_exit_code",
+        "packages/tools/tests/test_shell_exec_exit_code.py::test_still_running_command_has_no_exit_code",
         "packages/tools/tests/test_shell_sessions.py::test_background_parser_distinguishes_control_from_redirection",
         "packages/tools/tests/test_shell_sessions.py::test_busy_detection",
         "packages/tools/tests/test_shell_sessions.py::test_container_backend_session_is_adopted_without_a_workspace_probe",
@@ -14252,9 +14267,9 @@
     }
   },
   "mapping_static": {
-    "identity": "ff6bc5fd0885c8697c6591fe935b1585f6e96e40",
-    "python_test_file_count": 955,
-    "python_static_test_id_count": 11694,
+    "identity": "968eae971cbab06bcaec54b00269346591edd072",
+    "python_test_file_count": 957,
+    "python_static_test_id_count": 11709,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -14678,6 +14693,7 @@
       "packages/core/tests/test_c6_recitation_cadence.py",
       "packages/core/tests/test_cd_tools6_verify_scope.py",
       "packages/core/tests/test_cd_tools8_prompt_pack.py",
+      "packages/core/tests/test_check_ledger.py",
       "packages/core/tests/test_clarify_gate.py",
       "packages/core/tests/test_clean_thought.py",
       "packages/core/tests/test_cluster1_context.py",
@@ -15154,6 +15170,7 @@
       "packages/tools/tests/test_server_status.py",
       "packages/tools/tests/test_session_diagnostics.py",
       "packages/tools/tests/test_sheets.py",
+      "packages/tools/tests/test_shell_exec_exit_code.py",
       "packages/tools/tests/test_shell_sessions.py",
       "packages/tools/tests/test_shell_spill.py",
       "packages/tools/tests/test_shipped_standalone_artifacts.py",
@@ -20235,6 +20252,19 @@
       "packages/core/tests/test_cd_tools8_prompt_pack.py::test_capable_without_anchored_capability_does_not_name_exact_replace",
       "packages/core/tests/test_cd_tools8_prompt_pack.py::test_non_anchored_prompt_never_names_withheld_anchored_edit_tools",
       "packages/core/tests/test_cd_tools8_prompt_pack.py::test_weak_execution_prompt_has_universal_discipline_minus_anchored",
+      "packages/core/tests/test_check_ledger.py::test_agreeing_hits_are_not_disagreements",
+      "packages/core/tests/test_check_ledger.py::test_digest_command_prunes_dependency_dirs_and_runtime_state",
+      "packages/core/tests/test_check_ledger.py::test_failed_shell_run_records_on_the_error_event",
+      "packages/core/tests/test_check_ledger.py::test_failing_digest_pipeline_records_none",
+      "packages/core/tests/test_check_ledger.py::test_no_hit_when_the_prior_run_failed_or_mutated",
+      "packages/core/tests/test_check_ledger.py::test_no_hit_when_tree_changed_between_runs",
+      "packages/core/tests/test_check_ledger.py::test_no_hit_without_a_digest_or_with_different_sessions",
+      "packages/core/tests/test_check_ledger.py::test_no_sandbox_records_none_digest",
+      "packages/core/tests/test_check_ledger.py::test_non_shell_tools_get_no_record_and_no_digest_exec",
+      "packages/core/tests/test_check_ledger.py::test_only_the_latest_run_of_a_command_answers_it",
+      "packages/core/tests/test_check_ledger.py::test_repeat_of_a_pure_pass_on_unchanged_tree_is_a_hit",
+      "packages/core/tests/test_check_ledger.py::test_shell_exec_is_recorded_too",
+      "packages/core/tests/test_check_ledger.py::test_shell_run_records_digests_exit_code_and_sessions",
       "packages/core/tests/test_clarify_gate.py::test_answer_resumes_planning",
       "packages/core/tests/test_clarify_gate.py::test_clarify_empty_options_downgrade_to_text_no_blank_radios",
       "packages/core/tests/test_clarify_gate.py::test_clarify_falls_back_to_free_form_on_empty_questions",
@@ -26035,6 +26065,8 @@
       "packages/tools/tests/test_sheets.py::test_tool_registered_and_scoped",
       "packages/tools/tests/test_sheets.py::test_unknown_formula_is_escaped",
       "packages/tools/tests/test_sheets.py::test_whitespace_function_call_still_validated",
+      "packages/tools/tests/test_shell_exec_exit_code.py::test_finished_command_exposes_exit_code",
+      "packages/tools/tests/test_shell_exec_exit_code.py::test_still_running_command_has_no_exit_code",
       "packages/tools/tests/test_shell_sessions.py::test_background_parser_distinguishes_control_from_redirection",
       "packages/tools/tests/test_shell_sessions.py::test_busy_detection",
       "packages/tools/tests/test_shell_sessions.py::test_container_backend_session_is_adopted_without_a_workspace_probe",
@@ -42327,6 +42359,61 @@
         "python_static_test_ids": [
           "packages/core/tests/test_build_platform_vercel_contract.py::test_deployment_request_has_no_source_or_secret_channel",
           "packages/core/tests/test_build_platform_vercel_contract.py::test_documented_prebuilt_contract_preserves_artifact_and_scopes"
+        ],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-48-CHECK-LEDGER",
+      "root": "packages",
+      "source_identity_before": "ff6bc5fd0885c8697c6591fe935b1585f6e96e40",
+      "source_identity_after": "968eae971cbab06bcaec54b00269346591edd072",
+      "collected_roots": {
+        "packages": {
+          "before_count": 12193,
+          "after_count": 12208,
+          "added_ids": [
+            "packages/core/tests/test_check_ledger.py::test_agreeing_hits_are_not_disagreements",
+            "packages/core/tests/test_check_ledger.py::test_digest_command_prunes_dependency_dirs_and_runtime_state",
+            "packages/core/tests/test_check_ledger.py::test_failed_shell_run_records_on_the_error_event",
+            "packages/core/tests/test_check_ledger.py::test_failing_digest_pipeline_records_none",
+            "packages/core/tests/test_check_ledger.py::test_no_hit_when_the_prior_run_failed_or_mutated",
+            "packages/core/tests/test_check_ledger.py::test_no_hit_when_tree_changed_between_runs",
+            "packages/core/tests/test_check_ledger.py::test_no_hit_without_a_digest_or_with_different_sessions",
+            "packages/core/tests/test_check_ledger.py::test_no_sandbox_records_none_digest",
+            "packages/core/tests/test_check_ledger.py::test_non_shell_tools_get_no_record_and_no_digest_exec",
+            "packages/core/tests/test_check_ledger.py::test_only_the_latest_run_of_a_command_answers_it",
+            "packages/core/tests/test_check_ledger.py::test_repeat_of_a_pure_pass_on_unchanged_tree_is_a_hit",
+            "packages/core/tests/test_check_ledger.py::test_shell_exec_is_recorded_too",
+            "packages/core/tests/test_check_ledger.py::test_shell_run_records_digests_exit_code_and_sessions",
+            "packages/tools/tests/test_shell_exec_exit_code.py::test_finished_command_exposes_exit_code",
+            "packages/tools/tests/test_shell_exec_exit_code.py::test_still_running_command_has_no_exit_code"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [
+          "packages/core/tests/test_check_ledger.py",
+          "packages/tools/tests/test_shell_exec_exit_code.py"
+        ],
+        "python_static_test_ids": [
+          "packages/core/tests/test_check_ledger.py::test_agreeing_hits_are_not_disagreements",
+          "packages/core/tests/test_check_ledger.py::test_digest_command_prunes_dependency_dirs_and_runtime_state",
+          "packages/core/tests/test_check_ledger.py::test_failed_shell_run_records_on_the_error_event",
+          "packages/core/tests/test_check_ledger.py::test_failing_digest_pipeline_records_none",
+          "packages/core/tests/test_check_ledger.py::test_no_hit_when_the_prior_run_failed_or_mutated",
+          "packages/core/tests/test_check_ledger.py::test_no_hit_when_tree_changed_between_runs",
+          "packages/core/tests/test_check_ledger.py::test_no_hit_without_a_digest_or_with_different_sessions",
+          "packages/core/tests/test_check_ledger.py::test_no_sandbox_records_none_digest",
+          "packages/core/tests/test_check_ledger.py::test_non_shell_tools_get_no_record_and_no_digest_exec",
+          "packages/core/tests/test_check_ledger.py::test_only_the_latest_run_of_a_command_answers_it",
+          "packages/core/tests/test_check_ledger.py::test_repeat_of_a_pure_pass_on_unchanged_tree_is_a_hit",
+          "packages/core/tests/test_check_ledger.py::test_shell_exec_is_recorded_too",
+          "packages/core/tests/test_check_ledger.py::test_shell_run_records_digests_exit_code_and_sessions",
+          "packages/tools/tests/test_shell_exec_exit_code.py::test_finished_command_exposes_exit_code",
+          "packages/tools/tests/test_shell_exec_exit_code.py::test_still_running_command_has_no_exit_code"
         ],
         "typescript_test_files": [],
         "typescript_static_test_ids": [],
