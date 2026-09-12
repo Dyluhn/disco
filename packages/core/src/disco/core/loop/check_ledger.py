@@ -295,7 +295,7 @@ def written_paths(events: list[Event]) -> frozenset[str]:
 _LOOPBACK = re.compile(r"\b(localhost|127\.0\.0\.1|0\.0\.0\.0|host\.docker\.internal)\b|\[::1\]|https?://[^/\s]+:\d{2,5}")
 _RUNNERS = re.compile(
     r"(^|[\s;&|(])(npm (test|run|start)|pnpm (test|run)|yarn (test|run)|npx |pytest|python3? -m pytest|"
-    r"go test|cargo test|make( |$)|vitest|jest|mocha|playwright)"
+    r"go test|make( |$)|vitest|jest|mocha|playwright)"
 )
 _SCRIPT_RUN = re.compile(
     r"(^|[\s;&|(])(bash|sh|zsh|node|deno|bun|tsx|ts-node|python3?|ruby|perl|php|go run)\s+(\./)?[\w./-]+\.\w+"

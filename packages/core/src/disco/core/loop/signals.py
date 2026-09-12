@@ -201,35 +201,40 @@ _NON_PRODUCT_FAILURE_CLASSES = frozenset(
 )
 
 
+def _transparent_to_the_breaker(
+    event: Event, tool_by_action: dict[str, str], probe_ids: set[str]
+) -> bool:
+    """Results that are neither the model's failure nor its recovery: a host probe's
+    observation or error, a non-product failure class, a noncritical bookkeeping tool."""
+    if isinstance(event, ObservationEvent | AgentErrorEvent) and event.action_id in probe_ids:
+        return True
+    if not isinstance(event, AgentErrorEvent):
+        return False
+    if event.failure_class in _NON_PRODUCT_FAILURE_CLASSES:
+        return True
+    action_id = event.action_id
+    return action_id is not None and tool_by_action.get(action_id) in _NONCRITICAL_FAILURE_TOOLS
+
+
 def recent_failures(events: list[Event]) -> list[AgentErrorEvent]:
     """The consecutive AgentErrorEvents at the tail, most recent first. Reset by a
     successful ObservationEvent or a USER message (a fresh instruction).
     Interleaved ActionEvents and agent/env messages do NOT reset. Drives the
     Cluster 2 circuit breaker. Failures from non-critical informational tools
-    are TRANSPARENT, as are failures from debug infrastructure. They neither
-    increment nor reset the streak (a real product failure before them is still
-    counted)."""
+    are TRANSPARENT, as are failures from debug infrastructure and the finish
+    gate's host probes. They neither increment nor reset the streak (a real
+    product failure before them is still counted)."""
     tool_by_action = {
         e.id: e.tool_call.tool_name
         for e in events
         if isinstance(e, ActionEvent) and e.tool_call is not None
     }
-    # Host probes (the finish gate re-running a recorded check) are not the model's
-    # attempts: their results neither increment nor reset the streak.
     probe_ids = {e.id for e in events if isinstance(e, ActionEvent) and e.meta.get("verify_probe")}
     streak: list[AgentErrorEvent] = []
     for e in reversed(events):
-        if isinstance(e, ObservationEvent | AgentErrorEvent) and e.action_id in probe_ids:
+        if _transparent_to_the_breaker(e, tool_by_action, probe_ids):
             continue
         if isinstance(e, AgentErrorEvent):
-            if e.failure_class in _NON_PRODUCT_FAILURE_CLASSES:
-                continue
-            action_id = e.action_id
-            if (
-                action_id is not None
-                and tool_by_action.get(action_id) in _NONCRITICAL_FAILURE_TOOLS
-            ):
-                continue  # cosmetic bookkeeping error — transparent to the breaker
             streak.append(e)
         elif isinstance(e, ObservationEvent):
             break
