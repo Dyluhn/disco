@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "0f18b0b259ba5b5092f13f0edc073504d839d5fc",
+  "source_identity": "eefb4f5b8b8eacf9473aecb760520a706c7bda20",
   "collected": {
     "counts": {
-      "packages": 12249,
+      "packages": 12256,
       "harness": 1571,
       "integrations": 9,
       "tests": 458
     },
-    "total": 14287,
+    "total": 14294,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -7580,6 +7580,13 @@
         "packages/core/tests/test_snapshot_binary.py::test_permission_error_emits_unreadable_note",
         "packages/core/tests/test_snapshot_binary.py::test_preamble_contains_silent_context_instruction_and_existing_guidance",
         "packages/core/tests/test_snapshot_binary.py::test_stray_nul_past_1kb_in_mostly_text_file_is_NOT_omitted",
+        "packages/core/tests/test_snapshot_cache.py::test_cache_keeps_only_the_working_set",
+        "packages/core/tests/test_snapshot_cache.py::test_file_missing_from_the_hash_map_is_read_the_old_way",
+        "packages/core/tests/test_snapshot_cache.py::test_hash_failure_falls_back_to_reading_everything",
+        "packages/core/tests/test_snapshot_cache.py::test_no_shell_means_no_hashes",
+        "packages/core/tests/test_snapshot_cache.py::test_only_the_changed_file_is_read_again_and_reported_stale",
+        "packages/core/tests/test_snapshot_cache.py::test_parse_sha256sum_handles_missing_and_escaped_lines",
+        "packages/core/tests/test_snapshot_cache.py::test_unchanged_turn_hashes_once_and_reads_nothing",
         "packages/core/tests/test_snapshot_truncation.py::test_large_file_truncation_guidance",
         "packages/core/tests/test_snapshot_truncation.py::test_small_file_no_truncation_guidance",
         "packages/core/tests/test_state.py::test_iteration_counts_actions_in_current_run",
@@ -14308,9 +14315,9 @@
     }
   },
   "mapping_static": {
-    "identity": "0f18b0b259ba5b5092f13f0edc073504d839d5fc",
-    "python_test_file_count": 962,
-    "python_static_test_id_count": 11750,
+    "identity": "eefb4f5b8b8eacf9473aecb760520a706c7bda20",
+    "python_test_file_count": 963,
+    "python_static_test_id_count": 11757,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -14930,6 +14937,7 @@
       "packages/core/tests/test_skill_mount.py",
       "packages/core/tests/test_skills.py",
       "packages/core/tests/test_snapshot_binary.py",
+      "packages/core/tests/test_snapshot_cache.py",
       "packages/core/tests/test_snapshot_truncation.py",
       "packages/core/tests/test_state.py",
       "packages/core/tests/test_steer_authorizes_weakening.py",
@@ -22724,6 +22732,13 @@
       "packages/core/tests/test_snapshot_binary.py::test_permission_error_emits_unreadable_note",
       "packages/core/tests/test_snapshot_binary.py::test_preamble_contains_silent_context_instruction_and_existing_guidance",
       "packages/core/tests/test_snapshot_binary.py::test_stray_nul_past_1kb_in_mostly_text_file_is_NOT_omitted",
+      "packages/core/tests/test_snapshot_cache.py::test_cache_keeps_only_the_working_set",
+      "packages/core/tests/test_snapshot_cache.py::test_file_missing_from_the_hash_map_is_read_the_old_way",
+      "packages/core/tests/test_snapshot_cache.py::test_hash_failure_falls_back_to_reading_everything",
+      "packages/core/tests/test_snapshot_cache.py::test_no_shell_means_no_hashes",
+      "packages/core/tests/test_snapshot_cache.py::test_only_the_changed_file_is_read_again_and_reported_stale",
+      "packages/core/tests/test_snapshot_cache.py::test_parse_sha256sum_handles_missing_and_escaped_lines",
+      "packages/core/tests/test_snapshot_cache.py::test_unchanged_turn_hashes_once_and_reads_nothing",
       "packages/core/tests/test_snapshot_truncation.py::test_large_file_truncation_guidance",
       "packages/core/tests/test_snapshot_truncation.py::test_small_file_no_truncation_guidance",
       "packages/core/tests/test_state.py::test_iteration_counts_actions_in_current_run",
@@ -43502,6 +43517,44 @@
           "packages/core/tests/test_self_host_data.py::test_snapshot_coordinates_frontend_after_both_writers",
           "packages/core/tests/test_self_host_data.py::test_snapshot_preserves_a_partial_writer_state",
           "packages/core/tests/test_self_host_data.py::test_snapshot_preserves_an_intentionally_stopped_frontend"
+        ],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-54-VIEW-CACHE",
+      "root": "packages",
+      "source_identity_before": "0f18b0b259ba5b5092f13f0edc073504d839d5fc",
+      "source_identity_after": "eefb4f5b8b8eacf9473aecb760520a706c7bda20",
+      "collected_roots": {
+        "packages": {
+          "before_count": 12249,
+          "after_count": 12256,
+          "added_ids": [
+            "packages/core/tests/test_snapshot_cache.py::test_cache_keeps_only_the_working_set",
+            "packages/core/tests/test_snapshot_cache.py::test_file_missing_from_the_hash_map_is_read_the_old_way",
+            "packages/core/tests/test_snapshot_cache.py::test_hash_failure_falls_back_to_reading_everything",
+            "packages/core/tests/test_snapshot_cache.py::test_no_shell_means_no_hashes",
+            "packages/core/tests/test_snapshot_cache.py::test_only_the_changed_file_is_read_again_and_reported_stale",
+            "packages/core/tests/test_snapshot_cache.py::test_parse_sha256sum_handles_missing_and_escaped_lines",
+            "packages/core/tests/test_snapshot_cache.py::test_unchanged_turn_hashes_once_and_reads_nothing"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [
+          "packages/core/tests/test_snapshot_cache.py"
+        ],
+        "python_static_test_ids": [
+          "packages/core/tests/test_snapshot_cache.py::test_cache_keeps_only_the_working_set",
+          "packages/core/tests/test_snapshot_cache.py::test_file_missing_from_the_hash_map_is_read_the_old_way",
+          "packages/core/tests/test_snapshot_cache.py::test_hash_failure_falls_back_to_reading_everything",
+          "packages/core/tests/test_snapshot_cache.py::test_no_shell_means_no_hashes",
+          "packages/core/tests/test_snapshot_cache.py::test_only_the_changed_file_is_read_again_and_reported_stale",
+          "packages/core/tests/test_snapshot_cache.py::test_parse_sha256sum_handles_missing_and_escaped_lines",
+          "packages/core/tests/test_snapshot_cache.py::test_unchanged_turn_hashes_once_and_reads_nothing"
         ],
         "typescript_test_files": [],
         "typescript_static_test_ids": [],

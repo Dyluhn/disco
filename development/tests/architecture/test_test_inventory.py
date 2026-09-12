@@ -695,8 +695,8 @@ class TestMappingStatic:
             # TypeScript, each one-to-one in a file that still exists — and are
             # recorded in `renamed_test_transitions`; the counts below are net
             # of them, since a rename removes one identity and adds another.
-            "python_test_file_count": 962,
-            "python_static_test_id_count": 11750,
+            "python_test_file_count": 963,
+            "python_static_test_id_count": 11757,
             "typescript_test_file_count": 305,
             "typescript_static_test_id_count": 1610,
         }
@@ -1142,7 +1142,7 @@ class TestCollectedCounts:
             # TypeScript, each one-to-one in a file that still exists — and are
             # recorded in `renamed_test_transitions`; the counts below are net
             # of them, since a rename removes one identity and adds another.
-            "packages": 12249,
+            "packages": 12256,
             # 1288 from PKG-03-EDIT-EVIDENCE: +24 in the `harness` root, the
             # edit-evidence producer acceptance. The new ids land here and not
             # under `packages` because the producer is harness code; the
@@ -1279,7 +1279,7 @@ class TestCollectedCounts:
         }
         assert set(collected["roots"]) == set(test_inventory.PYTHON_ROOTS)
         assert collected["counts"] == expected
-        assert collected["total"] == 14287 == sum(expected.values())
+        assert collected["total"] == 14294 == sum(expected.values())
         for root in test_inventory.PYTHON_ROOTS:
             ids = collected["roots"][root]
             assert len(ids) == expected[root]
@@ -1295,7 +1295,7 @@ class TestCollectedCounts:
         problems: list[str] = []
         result = test_inventory._check_collected_ids(baseline, REPO_ROOT, problems)
         assert problems == []
-        assert result == {"collected_total": 14287}
+        assert result == {"collected_total": 14294}
 
         drifted = copy.deepcopy(baseline)
         drifted["collected"]["roots"]["tests"] = list(
@@ -1314,9 +1314,9 @@ class TestBaselineValidation:
         assert result == {
             "ok": True,
             "problems": [],
-            "python_static_ids": 11750,
+            "python_static_ids": 11757,
             "typescript_static_ids": 1610,
-            "collected_total": 14287,
+            "collected_total": 14294,
         }
 
         latest_identity = test_inventory.subprocess.check_output(
