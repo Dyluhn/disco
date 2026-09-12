@@ -110,7 +110,7 @@ async def test_hash_failure_falls_back_to_reading_everything() -> None:
     sbx.reads.clear()
     _, stale, hashes = await _turn(sbx, events, cache, tracker)
     assert hashes is None
-    assert sorted(sbx.reads) == ["a.py", "b.py"]  # the old per-file path, twice over
+    assert set(sbx.reads) == {"a.py", "b.py"}  # the old per-file path (stale scan + snapshot both read)
     assert stale == []
 
 

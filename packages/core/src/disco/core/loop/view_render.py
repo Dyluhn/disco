@@ -448,6 +448,9 @@ class ViewBuilder:
         # Bytes of the working set keyed by hash — one hash exec per turn decides
         # which files are read again (see SnapshotCache).
         self._snapshot_cache: SnapshotCache = SnapshotCache()
+        # The current turn's working-set hash map (set by _compute_stale_paths, read by
+        # _build_snapshot); None when the hash exec was unavailable this turn.
+        self._turn_hashes: dict[str, str] | None = None
 
     def _resolve_caps(self) -> ContextCaps:
         """CW-2/CW-6 — resolve this turn's context caps from the capability gate
@@ -633,10 +636,10 @@ class ViewBuilder:
             events = await self._loop._events()
         context_pack_active = context_pack_enabled()
         view = await self._project_view(events, include_context_pack=context_pack_active)
-        sbx, hashes, stale = await self._compute_stale_paths(events)
+        sbx, stale = await self._compute_stale_paths(events)
         with log_span("loop.view.snapshot", cached=len(self._snapshot_cache)):
             snapshot, pinned_full, snapshot_receipts = await self._build_snapshot(
-                sbx, events, stale, caps, hashes=hashes
+                sbx, events, stale, caps, hashes=self._turn_hashes
             )
         for _p in pinned_full:
             _ground_read(self._loop, _p)
@@ -658,12 +661,12 @@ class ViewBuilder:
 
     async def _compute_stale_paths(
         self, events: list[Event]
-    ) -> tuple[Sandbox | None, dict[str, str] | None, list[str]]:
+    ) -> tuple[Sandbox | None, list[str]]:
         """W2 — identify files whose disk SHA diverged from the snapshot's last view.
 
         One hash exec over the working set serves both this scan and the snapshot's
-        read decisions; when it is unavailable both fall back to per-file reads.
-        Returns (sandbox, hash map or None, stale paths).
+        read decisions (left in ``self._turn_hashes``); when it is unavailable both
+        fall back to per-file reads.
         """
         sbx = getattr(getattr(self._loop, "executor", None), "sandbox", None)
         reconcile_mutation_receipts(self._file_tracker, events)
@@ -676,7 +679,8 @@ class ViewBuilder:
                 hashes = await working_set_hashes(sbx, working_set)
                 span["hashed"] = len(hashes) if hashes is not None else -1
             stale = await self._file_tracker.stale_paths(sbx, working_set, hashes=hashes)
-        return sbx, hashes, stale
+        self._turn_hashes = hashes
+        return sbx, stale
 
     async def _build_snapshot(
         self,

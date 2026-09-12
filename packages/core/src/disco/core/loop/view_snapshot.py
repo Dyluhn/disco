@@ -86,12 +86,13 @@ def _parse_sha256sum(stdout: str) -> dict[str, str]:
     hashes: dict[str, str] = {}
     for line in (stdout or "").splitlines():
         parts = line.split("  ", 1)
-        if len(parts) != 2 or len(parts[0]) != 64:
+        if len(parts) != 2:
             continue
-        digest, path = parts
-        if digest.startswith("\\"):  # GNU escapes odd path bytes with a leading backslash
-            digest = digest[1:]
-        hashes[path.strip()] = digest
+        # GNU marks a line whose name needed escaping with a leading backslash.
+        digest, path = parts[0].lstrip("\\"), parts[1].strip()
+        if len(digest) != 64:
+            continue
+        hashes[path] = digest
     return hashes
 
 
