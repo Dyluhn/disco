@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-public-api-v1",
-  "source_identity": "968eae971cbab06bcaec54b00269346591edd072",
+  "source_identity": "764b03797a562b6bc1485def24c69c0174944bad",
   "python_initializers": [
     {
       "path": "packages/agent-server/src/disco/agent_server/__init__.py",
@@ -8727,12 +8727,13 @@
           "kind": "class",
           "signature": "class ContextPack(BaseModel)",
           "members": [
-            "def from_ledger(cls, ledger: ContextLedger, *, policy: CompactionPolicy | None=None, allowed_next_actions: tuple[str, ...]=(), todo_text: str | None=None, design_direction: str | None=None) -> ContextPack"
+            "def from_ledger(cls, ledger: ContextLedger, *, policy: CompactionPolicy | None=None, allowed_next_actions: tuple[str, ...]=(), todo_text: str | None=None, design_direction: str | None=None, checks_text: str | None=None) -> ContextPack"
           ],
           "fields": [
             "active_contract: str | None",
             "active_goal: str | None",
             "allowed_next_actions: tuple[str, ...]",
+            "current_checks: str | None",
             "current_todo: str | None",
             "current_version: int",
             "design_direction: str | None",
@@ -32757,6 +32758,14 @@
       "target_sha256": "c7e7d0d848c3d53eeee72102a6a7dbb8bd6f3fe695ecc1be8d2ce12b4dbe7253",
       "owner_package": "PKG-47-REFERENCE-PACKS",
       "reason": "PKG-47-REFERENCE-PACKS: Reference Packs: the writer port on ToolContext/DefaultToolExecutor, the bound-pack store on ConversationRuntime, three tools in the free-form scope, the packs router, and the frontend picker/section/API/hooks/types"
+    },
+    {
+      "surface": "python",
+      "path": "packages/core/src/disco/core/context/__init__.py",
+      "public_name": "ContextPack",
+      "target_sha256": "dbf1f03f98a0677eb18fb03a11e5599163a1c78b7b19f17e0133fde88a2265ce",
+      "owner_package": "PKG-49-CHECK-LEDGER-SHOW",
+      "reason": "PKG-49-CHECK-LEDGER-SHOW: Check ledger phase 2: SourceKind gains CHECKS and ContextPack gains current_checks / checks_text (member transitions); no other public-API change"
     }
   ],
   "compatibility_bridges": [],
@@ -32892,6 +32901,24 @@
       "owner_package": "PKG-19-V30-INTEGRATION",
       "accepting_commit": "41cecbab85195f473ac8c4f773f5106efadeab83",
       "accepting_receipt": "2026-07-28/STATUS.md"
+    },
+    {
+      "surface": "python",
+      "path": "packages/core/src/disco/core/context/__init__.py",
+      "public_name": "ContextPack",
+      "origin": "disco.core.context.pack.ContextPack",
+      "removed_members": [
+        "def from_ledger(cls, ledger: ContextLedger, *, policy: CompactionPolicy | None=None, allowed_next_actions: tuple[str, ...]=(), todo_text: str | None=None, design_direction: str | None=None) -> ContextPack"
+      ],
+      "added_members": [
+        "current_checks: str | None",
+        "def from_ledger(cls, ledger: ContextLedger, *, policy: CompactionPolicy | None=None, allowed_next_actions: tuple[str, ...]=(), todo_text: str | None=None, design_direction: str | None=None, checks_text: str | None=None) -> ContextPack"
+      ],
+      "old_signature_sha256": "4e013aa2f0c02dcef5efe38a88868270ded805877382d8f2f1d46b839baa4901",
+      "new_signature_sha256": "efdc78b93413923ab923300681acca7e5043ac1a8e15c1606bd9114dc8b07dcf",
+      "owner_package": "PKG-49-CHECK-LEDGER-SHOW",
+      "accepting_commit": "48b75baa1c1f265caad1c1438083ebe13e30af4c",
+      "accepting_receipt": "Check ledger phase 2: SourceKind gains CHECKS and ContextPack gains current_checks / checks_text (member transitions); no other public-API change"
     },
     {
       "surface": "python",
