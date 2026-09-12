@@ -327,6 +327,10 @@ class _FinalizeService(_FinishGateComponent):
             return Disp.CONTINUE
 
         events = await self._loop._events()
+        if not await self._coordinator.stale_checks_gate_passed(events):
+            return Disp.CONTINUE
+
+        events = await self._loop._events()
         disp = await self._coordinator.verification.run_finish_verify_gates(step, events)
         if disp is Disp.CONTINUE:
             return Disp.CONTINUE

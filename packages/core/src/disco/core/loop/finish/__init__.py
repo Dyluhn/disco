@@ -33,6 +33,7 @@ from .common import (
 from .content_gates import _ContentGateService
 from .finalize import _FinalizeService
 from .verification_surface import FinishVerificationSurface
+from .check_gate import _StaleChecksGateService
 from .verify_gates import (
     _BrowserVerifyGateService,
     _ExportRenderGateService,
@@ -92,6 +93,7 @@ class FinishGate:
         self._browser_verify = _BrowserVerifyGateService(loop, self)
         self._export_render = _ExportRenderGateService(loop, self)
         self._render_verify = _RenderVerifyGateService(loop, self)
+        self._stale_checks = _StaleChecksGateService(loop, self)
         self.verification = FinishVerificationSurface(self)
 
     def __setattr__(self, name, value):
@@ -105,6 +107,7 @@ class FinishGate:
                 "_browser_verify",
                 "_export_render",
                 "_render_verify",
+                "_stale_checks",
             ):
                 service = self.__dict__.get(service_name)
                 if service is not None:
@@ -137,6 +140,9 @@ class FinishGate:
 
     async def dictated_content_gate_passed(self, events):
         return await self._content.dictated_content_gate_passed(events)
+
+    async def stale_checks_gate_passed(self, events):
+        return await self._stale_checks.stale_checks_gate_passed(events)
 
     async def _detect_preview_url(self):
         return await self._browser_verify._detect_preview_url()

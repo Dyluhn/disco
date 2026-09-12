@@ -136,6 +136,7 @@ class _AgentLoopCompatibility:
     _finish_seal_timeout_s: float
     _dod_refusals: int
     _dictated_content_refusals: int
+    _stale_check_refusals: int
     _lock: asyncio.Lock
     _pause_requested: asyncio.Event
     _retry_interrupt: asyncio.Event

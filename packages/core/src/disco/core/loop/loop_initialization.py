@@ -251,6 +251,7 @@ def _initialize_verification_and_control(
     # REL-RC-O — consecutive dictated-content finish refusals. The actual
     # literals are event-derived; this counter only bounds refuse/continue.
     loop._dictated_content_refusals = 0
+    loop._stale_check_refusals = 0
     loop._lock = asyncio.Lock()
     # WALK-18 — cooperative pause flag. pause() SETS it WITHOUT taking
     # self._lock (so a pause lands while the in-flight turn holds the lock,

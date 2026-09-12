@@ -562,3 +562,99 @@ async def test_changed_source_or_kill_switch_executes(monkeypatch) -> None:
     for cid in ("k1", "k2", "k3"):
         await _drive(loop2, _action("shell", cid, command="bash smoke.sh"))
     assert len(ex2.calls) == 3
+
+
+# --- phase 4: the finish gate re-runs stale checks ---------------------------------
+
+
+class _GateExecutor(_ProfileExecutor):
+    """file_edit mutates; shell exits with the next code from `codes` (default 0)."""
+
+    def __init__(self, sandbox: _Sandbox | None, codes: list[int] | None = None) -> None:
+        super().__init__(sandbox)
+        self._codes = list(codes or [])
+
+    async def execute(self, call):
+        if call.tool_name == "shell":
+            self.calls.append(call)
+            code = self._codes.pop(0) if self._codes else 0
+            return ToolResult(
+                call_id=call.call_id, tool_name="shell", success=code == 0,
+                content="24/24 PASS" if code == 0 else "FAIL: search medications",
+                error=None if code == 0 else f"command exited {code}",
+                structured={"exit_code": code},
+            )
+        return await super().execute(call)
+
+
+async def _seed_stale_check(loop) -> list[Event]:
+    await _drive(loop, _action("shell", "c1", command="bash smoke.sh"))
+    return await _drive(loop, _action("file_edit", "e1", path="src/a.js", old="a", new="b"))
+
+
+def _shell_calls(ex) -> list:
+    return [c for c in ex.calls if c.tool_name == "shell"]
+
+
+def _gate_messages(events: list[Event]) -> list[str]:
+    return [
+        e.message.content
+        for e in events
+        if getattr(e, "meta", {}).get("diagnostic") == "stale_checks_gate"
+    ]
+
+
+async def test_gate_reruns_the_stale_check_as_a_host_probe_and_passes(monkeypatch) -> None:
+    monkeypatch.setenv("DISCO_CHECK_MEMO", "off")
+    ex = _GateExecutor(_Sandbox([DIGEST_A, DIGEST_A] + [DIGEST_B] * 8), codes=[0, 0])  # the edit changes the source
+    loop = _make_loop(ex)
+    events = await _seed_stale_check(loop)
+    assert [s.state for s in check_ledger.check_statuses(events)] == ["stale"]
+
+    assert await loop._finish.stale_checks_gate_passed(events) is True
+    events = await loop.store.get_events(CID)
+    probe = [e for e in events if isinstance(e, ActionEvent) and e.meta.get("verify_probe")]
+    assert len(probe) == 1 and probe[0].tool_call.arguments == {"command": "bash smoke.sh", "force": True}
+    assert len(_shell_calls(ex)) == 2  # the original run and the gate's rerun
+    assert [s.state for s in check_ledger.check_statuses(events)] == ["current"]
+    assert _gate_messages(events) == []
+
+
+async def test_gate_refuses_when_the_rerun_fails_twice_and_names_the_check(monkeypatch) -> None:
+    monkeypatch.setenv("DISCO_CHECK_MEMO", "off")
+    ex = _GateExecutor(_Sandbox([DIGEST_A, DIGEST_A] + [DIGEST_B] * 10), codes=[0, 1, 1])
+    loop = _make_loop(ex)
+    events = await _seed_stale_check(loop)
+
+    assert await loop._finish.stale_checks_gate_passed(events) is False
+    events = await loop.store.get_events(CID)
+    assert len(_shell_calls(ex)) == 3  # original + run + one flake retry
+    [message] = _gate_messages(events)
+    assert "1 recorded check that passed earlier fail on the current source" in message
+    assert "`bash smoke.sh` passed at step 2; now exit 1." in message
+    assert "FAIL: search medications" in message
+    assert "Finish refused (1 of 3)" in message
+
+
+async def test_gate_lets_finish_through_on_the_third_refusal(monkeypatch) -> None:
+    monkeypatch.setenv("DISCO_CHECK_MEMO", "off")
+    ex = _GateExecutor(_Sandbox([DIGEST_A, DIGEST_A] + [DIGEST_B] * 28), codes=[0] + [1] * 20)
+    loop = _make_loop(ex)
+    events = await _seed_stale_check(loop)
+    assert await loop._finish.stale_checks_gate_passed(events) is False
+    # same source, same recorded probe failure: refused again without re-running
+    assert await loop._finish.stale_checks_gate_passed(await loop.store.get_events(CID)) is False
+    assert len(_shell_calls(ex)) == 3
+    assert await loop._finish.stale_checks_gate_passed(await loop.store.get_events(CID)) is True
+    messages = _gate_messages(await loop.store.get_events(CID))
+    assert len(messages) == 3 and "refusal 3 of 3" in messages[-1]
+
+
+async def test_gate_is_a_no_op_without_stale_checks(monkeypatch) -> None:
+    monkeypatch.setenv("DISCO_CHECK_MEMO", "off")
+    ex = _GateExecutor(_Sandbox([DIGEST_A] * 6))
+    loop = _make_loop(ex)
+    events = await _drive(loop, _action("shell", "c1", command="bash smoke.sh"))   # current, not stale
+    assert await loop._finish.stale_checks_gate_passed(events) is True
+    assert len(_shell_calls(ex)) == 1
+    assert await loop._finish.stale_checks_gate_passed([]) is True

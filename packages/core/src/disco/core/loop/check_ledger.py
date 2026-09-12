@@ -138,6 +138,7 @@ class CheckRecord:
     exit_code: int | None
     sessions_before: tuple[str, ...]
     sessions_after: tuple[str, ...]
+    probe: bool = False  # run by the host (finish gate), not by the agent
 
     @property
     def passed(self) -> bool:
@@ -156,6 +157,7 @@ class CheckRecord:
 def check_records(events: list[Event]) -> list[CheckRecord]:
     """Every recorded check in seq order, from observation and error events alike."""
     records: list[CheckRecord] = []
+    probes = {e.id for e in events if isinstance(e, ActionEvent) and e.meta.get("verify_probe")}
     for event in events:
         if not isinstance(event, ObservationEvent | AgentErrorEvent) or event.seq is None:
             continue
@@ -166,6 +168,7 @@ def check_records(events: list[Event]) -> list[CheckRecord]:
             CheckRecord(
                 seq=event.seq,
                 action_id=event.action_id,
+                probe=event.action_id in probes,
                 fingerprint=str(raw.get("fingerprint") or ""),
                 tree_before=raw.get("tree_before"),
                 tree_after=raw.get("tree_after"),
@@ -286,6 +289,7 @@ def mutations(events: list[Event]) -> list[Mutation]:
 class CheckStatus:
     fingerprint: str
     command: str
+    tool: str
     seq: int
     exit_code: int | None
     state: str  # "current" | "stale" | "failed" | "flaky"
@@ -336,10 +340,12 @@ def check_statuses(events: list[Event], *, limit: int = CHECKS_SHOWN) -> list[Ch
             state = "stale"
         else:
             state = "current"
+        action = actions.get(record.action_id)
         statuses.append(
             CheckStatus(
                 fingerprint=record.fingerprint,
-                command=_command_text(actions.get(record.action_id)),
+                command=_command_text(action),
+                tool=action.tool_call.tool_name if action is not None and action.tool_call else "",
                 seq=record.seq,
                 exit_code=record.exit_code,
                 state=state,

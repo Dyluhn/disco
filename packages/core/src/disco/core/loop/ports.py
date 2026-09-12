@@ -259,6 +259,7 @@ class GateCounterPort(Protocol):
     _dod_refusals: int
 
     _dictated_content_refusals: int
+    _stale_check_refusals: int
 
     _finish_verify_refusals: int
 
