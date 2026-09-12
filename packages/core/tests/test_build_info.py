@@ -22,11 +22,23 @@ def test_commit_alone_is_the_label(monkeypatch) -> None:
     assert bi.build_info().label() == "3f9c1a2"
 
 
-def test_checkout_fallback_or_unknown(monkeypatch) -> None:
+def test_image_file_wins_over_the_checkout(monkeypatch, tmp_path: Path) -> None:
+    for name in ("DISCO_BUILD_TAG", "DISCO_BUILD_COMMIT", "PMX_BUILD_TAG", "PMX_BUILD_COMMIT"):
+        monkeypatch.delenv(name, raising=False)
+    info_file = tmp_path / "BUILD_INFO.json"
+    info_file.write_text('{"tag": "v0.3.0", "commit": "3f9c1a2"}')
+    monkeypatch.setenv("DISCO_BUILD_INFO_FILE", str(info_file))
+    assert bi.build_info() == bi.BuildInfo("v0.3.0", "3f9c1a2", "image")
+    info_file.write_text('{"tag": "unknown", "commit": "unknown"}')
+    assert bi.build_info().source != "image"  # an all-unknown file is not an identity
+
+
+def test_checkout_fallback_or_unknown(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.delenv("DISCO_BUILD_TAG", raising=False)
     monkeypatch.delenv("DISCO_BUILD_COMMIT", raising=False)
     monkeypatch.delenv("PMX_BUILD_TAG", raising=False)
     monkeypatch.delenv("PMX_BUILD_COMMIT", raising=False)
+    monkeypatch.setenv("DISCO_BUILD_INFO_FILE", str(tmp_path / "absent.json"))
     info = bi.build_info()
     if info.source == "checkout":
         assert info.commit != bi.UNKNOWN and info.tag == bi.UNKNOWN

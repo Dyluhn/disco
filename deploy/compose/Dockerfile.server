@@ -152,6 +152,9 @@ RUN chmod +x /entrypoint.sh
 # DISCO_BUILD_TAG / DISCO_BUILD_COMMIT are exported before `compose ... --build`.
 ARG DISCO_BUILD_TAG=unknown
 ARG DISCO_BUILD_COMMIT=unknown
+# Written as a file as well as ENV: Podman's builder can reuse the cached ENV layer
+# across differing build-arg values, while a RUN that reads the arg is rebuilt.
+RUN printf '{"tag": "%s", "commit": "%s"}\n' "$DISCO_BUILD_TAG" "$DISCO_BUILD_COMMIT" > /app/BUILD_INFO.json
 ENV PATH=/app/.venv/bin:$PATH \
     PYTHONUNBUFFERED=1 \
     DISCO_BUILD_TAG=${DISCO_BUILD_TAG} \

@@ -9,6 +9,7 @@ guess.
 
 from __future__ import annotations
 
+import json
 import subprocess
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -16,6 +17,7 @@ from pathlib import Path
 from .env import disco_env
 
 UNKNOWN = "unknown"
+DEFAULT_BUILD_INFO_FILE = "/app/BUILD_INFO.json"  # written by deploy/compose/Dockerfile.server
 
 
 @dataclass(frozen=True)
@@ -51,9 +53,23 @@ def _checkout_commit(start: Path) -> str | None:
     return None
 
 
+def _image_file() -> tuple[str, str]:
+    """The tag and commit the image build wrote, or unknowns when there is no file."""
+    path = Path(disco_env("BUILD_INFO_FILE", DEFAULT_BUILD_INFO_FILE))
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return UNKNOWN, UNKNOWN
+    tag = str(data.get("tag") or "").strip() or UNKNOWN
+    commit = str(data.get("commit") or "").strip() or UNKNOWN
+    return tag, commit
+
+
 def build_info() -> BuildInfo:
     tag = (disco_env("BUILD_TAG") or "").strip() or UNKNOWN
     commit = (disco_env("BUILD_COMMIT") or "").strip() or UNKNOWN
+    if tag == UNKNOWN and commit == UNKNOWN:
+        tag, commit = _image_file()
     if commit != UNKNOWN or tag != UNKNOWN:
         return BuildInfo(tag=tag, commit=commit, source="image")
     checkout = _checkout_commit(Path(__file__).resolve())
