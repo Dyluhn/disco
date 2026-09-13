@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "668e55c063b21ef999e18c0e74fb917f6b79b43d",
+  "source_identity": "66532e47c849959a61bbc3869b31c8e3b6c674ed",
   "collected": {
     "counts": {
-      "packages": 12291,
+      "packages": 12294,
       "harness": 1571,
       "integrations": 9,
       "tests": 458
     },
-    "total": 14329,
+    "total": 14332,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -7112,6 +7112,9 @@
         "packages/core/tests/test_request_budget.py::TestB_PreviewAbsentRaisesNone::test_preview_returns_none_makes_one_call",
         "packages/core/tests/test_request_budget.py::TestC_SnipsFirst::test_snips_first_assert_emit_sequence",
         "packages/core/tests/test_request_budget.py::TestD_CondenserFallback::test_condenser_receives_events_and_fresh_view",
+        "packages/core/tests/test_request_budget.py::TestDeferredCondensation::test_condenser_without_the_seam_condenses_as_before",
+        "packages/core/tests/test_request_budget.py::TestDeferredCondensation::test_hard_pressure_condenses_at_once_when_a_batch_has_aged",
+        "packages/core/tests/test_request_budget.py::TestDeferredCondensation::test_hard_pressure_that_forgetting_cannot_end_is_deferred_until_a_batch",
         "packages/core/tests/test_request_budget.py::TestE_FailOpen::test_agent_view_superseded_at_snip_assert_propagates",
         "packages/core/tests/test_request_budget.py::TestE_FailOpen::test_condenser_raises_proceeds_to_model_call",
         "packages/core/tests/test_request_budget.py::TestE_FailOpen::test_context_pack_raises_then_condenser_returns_none_calls_model",
@@ -14350,9 +14353,9 @@
     }
   },
   "mapping_static": {
-    "identity": "668e55c063b21ef999e18c0e74fb917f6b79b43d",
+    "identity": "66532e47c849959a61bbc3869b31c8e3b6c674ed",
     "python_test_file_count": 963,
-    "python_static_test_id_count": 11777,
+    "python_static_test_id_count": 11780,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -22390,7 +22393,10 @@
       "packages/core/tests/test_request_budget.py::test_within_budget_emits_scalar_event",
       "packages/core/tests/test_request_budget_loop.py::test_compacted_context_pack_emits_scalar_event",
       "packages/core/tests/test_request_budget_loop.py::test_compaction_policy_default_raises_still_calls_model",
+      "packages/core/tests/test_request_budget_loop.py::test_condenser_without_the_seam_condenses_as_before",
       "packages/core/tests/test_request_budget_loop.py::test_context_window_exceeded_after_preview_still_hard_resets",
+      "packages/core/tests/test_request_budget_loop.py::test_hard_pressure_condenses_at_once_when_a_batch_has_aged",
+      "packages/core/tests/test_request_budget_loop.py::test_hard_pressure_that_forgetting_cannot_end_is_deferred_until_a_batch",
       "packages/core/tests/test_request_budget_loop.py::test_inspect_off_emits_zero_events",
       "packages/core/tests/test_request_budget_loop.py::test_logging_exception_does_not_change_behavior",
       "packages/core/tests/test_request_budget_loop.py::test_no_output_reserve_below_cutoff_calls_model",
@@ -43597,6 +43603,34 @@
           "packages/tools/tests/test_reference_pack_tool.py::test_no_arguments_returns_the_catalog",
           "packages/tools/tests/test_reference_pack_tool.py::test_registered_read_only_and_in_the_build_scope",
           "packages/tools/tests/test_reference_pack_tool.py::test_unknown_id_fails_and_lists_the_ids"
+        ],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-60-DRIVER-BATCH",
+      "root": "packages",
+      "source_identity_before": "668e55c063b21ef999e18c0e74fb917f6b79b43d",
+      "source_identity_after": "66532e47c849959a61bbc3869b31c8e3b6c674ed",
+      "collected_roots": {
+        "packages": {
+          "before_count": 12291,
+          "after_count": 12294,
+          "added_ids": [
+            "packages/core/tests/test_request_budget.py::TestDeferredCondensation::test_condenser_without_the_seam_condenses_as_before",
+            "packages/core/tests/test_request_budget.py::TestDeferredCondensation::test_hard_pressure_condenses_at_once_when_a_batch_has_aged",
+            "packages/core/tests/test_request_budget.py::TestDeferredCondensation::test_hard_pressure_that_forgetting_cannot_end_is_deferred_until_a_batch"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [],
+        "python_static_test_ids": [
+          "packages/core/tests/test_request_budget_loop.py::test_condenser_without_the_seam_condenses_as_before",
+          "packages/core/tests/test_request_budget_loop.py::test_hard_pressure_condenses_at_once_when_a_batch_has_aged",
+          "packages/core/tests/test_request_budget_loop.py::test_hard_pressure_that_forgetting_cannot_end_is_deferred_until_a_batch"
         ],
         "typescript_test_files": [],
         "typescript_static_test_ids": [],
