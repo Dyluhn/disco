@@ -379,19 +379,23 @@ class LLMSummarizingCondenser:
             derived_soft, derived_hard = budget_tokens, hard_budget_tokens
         self._max = max_tokens if max_tokens is not None else derived_soft
         self._hard = hard_max_tokens if hard_max_tokens is not None else derived_hard
-        # A soft trigger waits until this much forgettable history has aged out of the
-        # recent window; otherwise a view whose fixed part (system prompt, context pack,
-        # workspace snapshot, the kept turns) sits above the soft line would pay one
-        # summarizer call per turn to forget two events. Derived from the soft→hard band
-        # so it is model-neutral; the hard trigger never waits.
+        # A condensation waits until this much forgettable history has aged out of the
+        # recent window, unless it ends hard pressure at once; otherwise a view whose fixed
+        # part (system prompt, tool schemas, workspace snapshot, the kept turns) sits above
+        # the line would pay one summarizer call per turn to forget two events. Derived
+        # from the soft→hard band so it scales with the window: ~5.9 k tokens at 131 k,
+        # ~360 at 8 k (small windows need frequent condensation), 0 when the band is 0.
         band = max(0, self._hard - self._max)
-        self.min_batch_tokens = (
-            min_batch_tokens if min_batch_tokens is not None else max(1_000, int(band * 0.3))
-        )
+        self.min_batch_tokens = min_batch_tokens if min_batch_tokens is not None else int(band * 0.3)
         self._keep_head = keep_head
         self._keep_recent = keep_recent
         self._min_forget = min_forget
         self._summary_input_chars = max(1, summary_input_chars)
+
+    @property
+    def hard_max_tokens(self) -> int:
+        """The estimate above which condensation is mandatory — when it can help."""
+        return self._hard
 
     def should_condense(self, view: View, *, token_count: int | None) -> CondensationRequest | None:
         if token_count is None:

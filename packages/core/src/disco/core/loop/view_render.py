@@ -357,14 +357,28 @@ def _drop_context_pack_owned_history(messages: list[LLMMessage]) -> list[LLMMess
     ]
 
 
-def _worth_a_summarizer_call(condenser: object, events: list[Event]) -> bool:
-    """Soft condensation batches: only when the condenser can say how much history has aged
-    out AND that amount reaches its batch size. Condensers without the seam behave as before."""
+def _worth_a_summarizer_call(
+    condenser: object, events: list[Event], *, estimate: int, soft: bool
+) -> bool:
+    """Whether a condensation now is worth its summarizer call.
+
+    A soft trigger waits until a batch of history has aged out. A hard trigger runs at
+    once when forgetting that history brings the estimate back under the hard line; when
+    it cannot — the view's fixed part (system prompt, tool schemas, workspace snapshot,
+    kept turns) already sits above the line — condensing two events per turn changes
+    nothing, so it batches like a soft one. Pharmacy run 5 measured 108.7 k estimated
+    tokens against a 104.9 k hard line and 91 summarizer calls in 135 iterations.
+    Condensers without the seam behave as before.
+    """
     forgettable = getattr(condenser, "forgettable_tokens", None)
     batch = getattr(condenser, "min_batch_tokens", None)
+    hard = getattr(condenser, "hard_max_tokens", None)
     if not callable(forgettable) or not isinstance(batch, int):
         return True
-    return int(cast(Callable[[list[Event]], int], forgettable)(events)) >= batch
+    removable = int(cast(Callable[[list[Event]], int], forgettable)(events))
+    if not soft and isinstance(hard, int) and estimate - removable < hard:
+        return True  # this condensation ends the hard pressure
+    return removable >= batch
 
 
 class ViewBuilder:
@@ -681,8 +695,10 @@ class ViewBuilder:
                 view = await self._project_view(events, include_context_pack=context_pack_active)
                 est = signals.estimate_tokens(view) + snap_tokens
                 req = self._loop.condenser.should_condense(view, token_count=est)
-        if req is not None and req.soft and not _worth_a_summarizer_call(self._loop.condenser, events):
-            req = None  # aged history too small to summarize yet; the hard trigger never waits
+        if req is not None and not _worth_a_summarizer_call(
+            self._loop.condenser, events, estimate=est, soft=req.soft
+        ):
+            req = None  # aged history too small to summarize yet, or condensing cannot end the pressure
         if req is not None:
             tombstone = await self._loop.condenser.condense(
                 events, view, summarizer=self._loop.summarizer
