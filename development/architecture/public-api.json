@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-public-api-v1",
-  "source_identity": "334388f5d6ea5f4e43fb64a730bf7f3388a52d41",
+  "source_identity": "668e55c063b21ef999e18c0e74fb917f6b79b43d",
   "python_initializers": [
     {
       "path": "packages/agent-server/src/disco/agent_server/__init__.py",
@@ -3536,6 +3536,7 @@
             "async def condense(self, events: list[Event], view: View, *, summarizer: Summarizer, reason: str='tokens', artifact_paths: list[str] | None=None) -> CondensationEvent | None",
             "def __init__(self, *, context_window: int | None=None, soft_frac: float=0.65, hard_frac: float=0.8, max_tokens: int | None=None, hard_max_tokens: int | None=None, keep_head: int=1, keep_recent: int=6, min_forget: int=2, budget_tokens: int=24000, hard_budget_tokens: int=32000, summary_input_chars: int=384000, min_batch_tokens: int | None=None) -> None",
             "def forgettable_tokens(self, events: list[Event]) -> int",
+            "def hard_max_tokens(self) -> int",
             "def should_condense(self, view: View, *, token_count: int | None) -> CondensationRequest | None"
           ],
           "fields": []
@@ -32963,9 +32964,9 @@
       "surface": "python",
       "path": "packages/core/src/disco/core/__init__.py",
       "public_name": "LLMSummarizingCondenser",
-      "target_sha256": "3e4090ac76c795f5d5f23a37e573d9851d26694a190ddb83cc933ae2c35da0bd",
-      "owner_package": "PKG-57-CONDENSE-BATCH",
-      "reason": "PKG-57-CONDENSE-BATCH: Condensation batching: LLMSummarizingCondenser gains forgettable_tokens and min_batch_tokens (member transition); no initializer or frontend change"
+      "target_sha256": "e82da8c62ecb85fc9a0fc88219e454ff8d56a20e1e1ac1276e234d9861e76c65",
+      "owner_package": "PKG-59-HARD-BATCH",
+      "reason": "PKG-59-HARD-BATCH: Hard batching: LLMSummarizingCondenser gains hard_max_tokens (member transition); no initializer or frontend change"
     }
   ],
   "compatibility_bridges": [],
@@ -33293,6 +33294,21 @@
     },
     {
       "surface": "python",
+      "path": "packages/core/src/disco/core/__init__.py",
+      "public_name": "LLMSummarizingCondenser",
+      "origin": "disco.core.view.LLMSummarizingCondenser",
+      "removed_members": [],
+      "added_members": [
+        "def hard_max_tokens(self) -> int"
+      ],
+      "old_signature_sha256": "3ebe93d95926a0dc8d0b2e11aabc5c76d1de11f9eb0b0986a6aff6ecf0eabb67",
+      "new_signature_sha256": "1c855ae5ca53c0c2b537450242387442400bbd65e0701e53d61e1e1d54a8641d",
+      "owner_package": "PKG-59-HARD-BATCH",
+      "accepting_commit": "91eb58c6e7f6b8ff15f6c1079f20511a451e55ac",
+      "accepting_receipt": "Hard batching: LLMSummarizingCondenser gains hard_max_tokens (member transition); no initializer or frontend change"
+    },
+    {
+      "surface": "python",
       "path": "packages/core/src/disco/core/loop/__init__.py",
       "public_name": "AgentLoop",
       "origin": "disco.core.loop.engine.AgentLoop",
@@ -33401,24 +33417,6 @@
       "owner_package": "PKG-11-SETTINGS",
       "accepting_commit": "a0e4b9b356e650b8b8beb531f3579df4f490f8a0",
       "accepting_receipt": "2026-08-01/PKG-11-EPIC/EPIC-11B-ACCEPTANCE-RECEIPT.md"
-    },
-    {
-      "surface": "python",
-      "path": "packages/core/src/disco/core/__init__.py",
-      "public_name": "LLMSummarizingCondenser",
-      "origin": "disco.core.view.LLMSummarizingCondenser",
-      "removed_members": [
-        "def __init__(self, *, context_window: int | None=None, soft_frac: float=0.65, hard_frac: float=0.8, max_tokens: int | None=None, hard_max_tokens: int | None=None, keep_head: int=1, keep_recent: int=6, min_forget: int=2, budget_tokens: int=24000, hard_budget_tokens: int=32000, summary_input_chars: int=384000) -> None"
-      ],
-      "added_members": [
-        "def __init__(self, *, context_window: int | None=None, soft_frac: float=0.65, hard_frac: float=0.8, max_tokens: int | None=None, hard_max_tokens: int | None=None, keep_head: int=1, keep_recent: int=6, min_forget: int=2, budget_tokens: int=24000, hard_budget_tokens: int=32000, summary_input_chars: int=384000, min_batch_tokens: int | None=None) -> None",
-        "def forgettable_tokens(self, events: list[Event]) -> int"
-      ],
-      "old_signature_sha256": "9679fa155dc8d1f2900a2e25960ea31ba4f5c9d68d5eb0aea0d97a173687290b",
-      "new_signature_sha256": "3ebe93d95926a0dc8d0b2e11aabc5c76d1de11f9eb0b0986a6aff6ecf0eabb67",
-      "owner_package": "PKG-57-CONDENSE-BATCH",
-      "accepting_commit": "c701407f03b054ace4d64d69c1aec0ff3d2a5e25",
-      "accepting_receipt": "Condensation batching: LLMSummarizingCondenser gains forgettable_tokens and min_batch_tokens (member transition); no initializer or frontend change"
     },
     {
       "surface": "python",

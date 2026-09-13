@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "334388f5d6ea5f4e43fb64a730bf7f3388a52d41",
+  "source_identity": "668e55c063b21ef999e18c0e74fb917f6b79b43d",
   "collected": {
     "counts": {
-      "packages": 12290,
+      "packages": 12291,
       "harness": 1571,
       "integrations": 9,
       "tests": 458
     },
-    "total": 14328,
+    "total": 14329,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -4806,6 +4806,7 @@
         "packages/core/tests/test_condenser.py::test_condense_makes_progress_guard_no_churn_on_tiny_history",
         "packages/core/tests/test_condenser.py::test_empty_summary_is_not_emitted",
         "packages/core/tests/test_condenser.py::test_forgettable_tokens_counts_only_what_the_next_condensation_would_remove",
+        "packages/core/tests/test_condenser.py::test_hard_pressure_condenses_at_once_when_it_ends_the_pressure_and_batches_when_it_cannot",
         "packages/core/tests/test_condenser.py::test_long_task_condenses_and_keeps_going",
         "packages/core/tests/test_condenser.py::test_min_batch_tokens_derives_from_the_soft_to_hard_band",
         "packages/core/tests/test_condenser.py::test_should_condense_fires_only_past_the_bound",
@@ -14349,9 +14350,9 @@
     }
   },
   "mapping_static": {
-    "identity": "334388f5d6ea5f4e43fb64a730bf7f3388a52d41",
+    "identity": "668e55c063b21ef999e18c0e74fb917f6b79b43d",
     "python_test_file_count": 963,
-    "python_static_test_id_count": 11776,
+    "python_static_test_id_count": 11777,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -20491,6 +20492,7 @@
       "packages/core/tests/test_condenser.py::test_condense_makes_progress_guard_no_churn_on_tiny_history",
       "packages/core/tests/test_condenser.py::test_empty_summary_is_not_emitted",
       "packages/core/tests/test_condenser.py::test_forgettable_tokens_counts_only_what_the_next_condensation_would_remove",
+      "packages/core/tests/test_condenser.py::test_hard_pressure_condenses_at_once_when_it_ends_the_pressure_and_batches_when_it_cannot",
       "packages/core/tests/test_condenser.py::test_long_task_condenses_and_keeps_going",
       "packages/core/tests/test_condenser.py::test_min_batch_tokens_derives_from_the_soft_to_hard_band",
       "packages/core/tests/test_condenser.py::test_should_condense_fires_only_past_the_bound",
@@ -42958,6 +42960,30 @@
           "packages/core/tests/test_condenser.py::test_forgettable_tokens_counts_only_what_the_next_condensation_would_remove",
           "packages/core/tests/test_condenser.py::test_min_batch_tokens_derives_from_the_soft_to_hard_band",
           "packages/core/tests/test_condenser.py::test_soft_pressure_waits_for_a_batch_then_condenses_once"
+        ],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-59-HARD-BATCH",
+      "root": "packages",
+      "source_identity_before": "334388f5d6ea5f4e43fb64a730bf7f3388a52d41",
+      "source_identity_after": "668e55c063b21ef999e18c0e74fb917f6b79b43d",
+      "collected_roots": {
+        "packages": {
+          "before_count": 12290,
+          "after_count": 12291,
+          "added_ids": [
+            "packages/core/tests/test_condenser.py::test_hard_pressure_condenses_at_once_when_it_ends_the_pressure_and_batches_when_it_cannot"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [],
+        "python_static_test_ids": [
+          "packages/core/tests/test_condenser.py::test_hard_pressure_condenses_at_once_when_it_ends_the_pressure_and_batches_when_it_cannot"
         ],
         "typescript_test_files": [],
         "typescript_static_test_ids": [],
