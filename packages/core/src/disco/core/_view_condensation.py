@@ -387,6 +387,10 @@ class LLMSummarizingCondenser:
         # ~360 at 8 k (small windows need frequent condensation), 0 when the band is 0.
         band = max(0, self._hard - self._max)
         self.min_batch_tokens = min_batch_tokens if min_batch_tokens is not None else int(band * 0.3)
+        # Above this estimate a condensation is never deferred, whatever the batch: the
+        # drift batching allows stops two thirds of a band above the hard line (0.90 of
+        # the window at the default 0.65/0.80 fractions); no band → the hard line itself.
+        self.ceiling_tokens = self._hard + int(band * 2 / 3)
         self._keep_head = keep_head
         self._keep_recent = keep_recent
         self._min_forget = min_forget

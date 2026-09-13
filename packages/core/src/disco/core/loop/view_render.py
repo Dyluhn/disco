@@ -368,13 +368,18 @@ def worth_a_summarizer_call(
     kept turns) already sits above the line — condensing two events per turn changes
     nothing, so it batches like a soft one. Pharmacy run 5 measured 108.7 k estimated
     tokens against a 104.9 k hard line and 91 summarizer calls in 135 iterations.
+    Batching is never allowed to carry the estimate past the condenser's ceiling
+    (run 7 peaked at 123.5 k of 131 k); there, every trigger condenses as before.
     Condensers without the seam behave as before.
     """
     forgettable = getattr(condenser, "forgettable_tokens", None)
     batch = getattr(condenser, "min_batch_tokens", None)
     hard = getattr(condenser, "hard_max_tokens", None)
+    ceiling = getattr(condenser, "ceiling_tokens", None)
     if not callable(forgettable) or not isinstance(batch, int):
         return True
+    if isinstance(ceiling, int) and estimate >= ceiling:
+        return True  # the drift batching allows ends here, whatever has aged
     removable = int(cast(Callable[[list[Event]], int], forgettable)(events))
     if not soft and isinstance(hard, int) and estimate - removable < hard:
         return True  # this condensation ends the hard pressure
