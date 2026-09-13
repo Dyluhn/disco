@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "66532e47c849959a61bbc3869b31c8e3b6c674ed",
+  "source_identity": "9b03fa00423146bc5ce02764a69035d77341151d",
   "collected": {
     "counts": {
-      "packages": 12294,
+      "packages": 12295,
       "harness": 1571,
       "integrations": 9,
       "tests": 458
     },
-    "total": 14332,
+    "total": 14333,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -4798,6 +4798,7 @@
         "packages/core/tests/test_compose_interpolation_portability.py::test_compose_file_exists",
         "packages/core/tests/test_compose_interpolation_portability.py::test_healthcheck_arguments_have_no_shell_metacharacters",
         "packages/core/tests/test_compose_interpolation_portability.py::test_no_nested_variable_interpolation",
+        "packages/core/tests/test_condenser.py::test_batching_never_carries_the_estimate_past_the_ceiling",
         "packages/core/tests/test_condenser.py::test_c10_agent_error_obs_pairs_like_a_turn_observation",
         "packages/core/tests/test_condenser.py::test_c10_boundary_never_splits_action_from_observation",
         "packages/core/tests/test_condenser.py::test_c10_keep_recent_counts_complete_turns_not_raw_events",
@@ -14353,9 +14354,9 @@
     }
   },
   "mapping_static": {
-    "identity": "66532e47c849959a61bbc3869b31c8e3b6c674ed",
+    "identity": "9b03fa00423146bc5ce02764a69035d77341151d",
     "python_test_file_count": 963,
-    "python_static_test_id_count": 11780,
+    "python_static_test_id_count": 11781,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -20487,6 +20488,7 @@
       "packages/core/tests/test_compose_interpolation_portability.py::test_compose_file_exists",
       "packages/core/tests/test_compose_interpolation_portability.py::test_healthcheck_arguments_have_no_shell_metacharacters",
       "packages/core/tests/test_compose_interpolation_portability.py::test_no_nested_variable_interpolation",
+      "packages/core/tests/test_condenser.py::test_batching_never_carries_the_estimate_past_the_ceiling",
       "packages/core/tests/test_condenser.py::test_c10_agent_error_obs_pairs_like_a_turn_observation",
       "packages/core/tests/test_condenser.py::test_c10_boundary_never_splits_action_from_observation",
       "packages/core/tests/test_condenser.py::test_c10_keep_recent_counts_complete_turns_not_raw_events",
@@ -42938,6 +42940,30 @@
           "packages/core/tests/test_compose_interpolation_portability.py::test_compose_file_exists",
           "packages/core/tests/test_compose_interpolation_portability.py::test_healthcheck_arguments_have_no_shell_metacharacters",
           "packages/core/tests/test_compose_interpolation_portability.py::test_no_nested_variable_interpolation"
+        ],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-61-CEILING",
+      "root": "packages",
+      "source_identity_before": "66532e47c849959a61bbc3869b31c8e3b6c674ed",
+      "source_identity_after": "9b03fa00423146bc5ce02764a69035d77341151d",
+      "collected_roots": {
+        "packages": {
+          "before_count": 12294,
+          "after_count": 12295,
+          "added_ids": [
+            "packages/core/tests/test_condenser.py::test_batching_never_carries_the_estimate_past_the_ceiling"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [],
+        "python_static_test_ids": [
+          "packages/core/tests/test_condenser.py::test_batching_never_carries_the_estimate_past_the_ceiling"
         ],
         "typescript_test_files": [],
         "typescript_static_test_ids": [],
