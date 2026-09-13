@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "9b03fa00423146bc5ce02764a69035d77341151d",
+  "source_identity": "d5f1ecbc92d0ff86ec5ee08accbbd67b64dcc89d",
   "collected": {
     "counts": {
-      "packages": 12295,
+      "packages": 12296,
       "harness": 1571,
       "integrations": 9,
       "tests": 458
     },
-    "total": 14333,
+    "total": 14334,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -7187,6 +7187,7 @@
         "packages/core/tests/test_resource_context.py::test_pointer_coverage_requires_same_resource_revision_and_exact_range",
         "packages/core/tests/test_resource_context.py::test_redundant_pointer_requires_covering_read_body_in_this_request",
         "packages/core/tests/test_resource_context.py::test_redundant_pointer_requires_the_exact_covering_read_bytes",
+        "packages/core/tests/test_resource_context.py::test_reference_packs_and_context_files_are_read_inputs_not_working_set",
         "packages/core/tests/test_resource_context.py::test_reread_does_not_change_the_single_file_snapshot_slot",
         "packages/core/tests/test_resource_context.py::test_reread_keeps_cacheable_workspace_snapshot_byte_stable",
         "packages/core/tests/test_resource_context.py::test_rereads_do_not_reorder_the_workspace_state_working_set",
@@ -14354,9 +14355,9 @@
     }
   },
   "mapping_static": {
-    "identity": "9b03fa00423146bc5ce02764a69035d77341151d",
+    "identity": "d5f1ecbc92d0ff86ec5ee08accbbd67b64dcc89d",
     "python_test_file_count": 963,
-    "python_static_test_id_count": 11781,
+    "python_static_test_id_count": 11782,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -22435,6 +22436,7 @@
       "packages/core/tests/test_resource_context.py::test_pointer_coverage_requires_same_resource_revision_and_exact_range",
       "packages/core/tests/test_resource_context.py::test_redundant_pointer_requires_covering_read_body_in_this_request",
       "packages/core/tests/test_resource_context.py::test_redundant_pointer_requires_the_exact_covering_read_bytes",
+      "packages/core/tests/test_resource_context.py::test_reference_packs_and_context_files_are_read_inputs_not_working_set",
       "packages/core/tests/test_resource_context.py::test_reread_does_not_change_the_single_file_snapshot_slot",
       "packages/core/tests/test_resource_context.py::test_reread_keeps_cacheable_workspace_snapshot_byte_stable",
       "packages/core/tests/test_resource_context.py::test_rereads_do_not_reorder_the_workspace_state_working_set",
@@ -43657,6 +43659,30 @@
           "packages/core/tests/test_request_budget_loop.py::test_condenser_without_the_seam_condenses_as_before",
           "packages/core/tests/test_request_budget_loop.py::test_hard_pressure_condenses_at_once_when_a_batch_has_aged",
           "packages/core/tests/test_request_budget_loop.py::test_hard_pressure_that_forgetting_cannot_end_is_deferred_until_a_batch"
+        ],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-62-SNAPSHOT-INPUTS",
+      "root": "packages",
+      "source_identity_before": "9b03fa00423146bc5ce02764a69035d77341151d",
+      "source_identity_after": "d5f1ecbc92d0ff86ec5ee08accbbd67b64dcc89d",
+      "collected_roots": {
+        "packages": {
+          "before_count": 12295,
+          "after_count": 12296,
+          "added_ids": [
+            "packages/core/tests/test_resource_context.py::test_reference_packs_and_context_files_are_read_inputs_not_working_set"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [],
+        "python_static_test_ids": [
+          "packages/core/tests/test_resource_context.py::test_reference_packs_and_context_files_are_read_inputs_not_working_set"
         ],
         "typescript_test_files": [],
         "typescript_static_test_ids": [],
