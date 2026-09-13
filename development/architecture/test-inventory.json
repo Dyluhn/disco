@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "d8f38be11acd26f8c9e252c57ae6251c6092960e",
+  "source_identity": "334388f5d6ea5f4e43fb64a730bf7f3388a52d41",
   "collected": {
     "counts": {
-      "packages": 12288,
+      "packages": 12290,
       "harness": 1571,
       "integrations": 9,
       "tests": 458
     },
-    "total": 14326,
+    "total": 14328,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -4660,6 +4660,7 @@
         "packages/core/tests/test_check_ledger.py::test_agreeing_hits_are_not_disagreements",
         "packages/core/tests/test_check_ledger.py::test_browser_line_counts_steps_and_identical_repeats_since_the_last_edit",
         "packages/core/tests/test_check_ledger.py::test_browser_observation_carries_a_step_record",
+        "packages/core/tests/test_check_ledger.py::test_busy_sessions_ask_for_the_cheap_listing_when_the_manager_offers_it",
         "packages/core/tests/test_check_ledger.py::test_changed_source_or_kill_switch_executes",
         "packages/core/tests/test_check_ledger.py::test_check_fingerprint_ignores_force",
         "packages/core/tests/test_check_ledger.py::test_check_statuses_current_stale_failed_and_excludes_mutating_runs",
@@ -11812,6 +11813,7 @@
         "packages/tools/tests/test_shell_sessions.py::test_generic_foreground_kill_preserves_background_rematerialization",
         "packages/tools/tests/test_shell_sessions.py::test_integration_scenarios",
         "packages/tools/tests/test_shell_sessions.py::test_kill_then_recreate",
+        "packages/tools/tests/test_shell_sessions.py::test_list_without_output_is_one_tmux_call_and_reads_busy_from_the_foreground_command",
         "packages/tools/tests/test_shell_sessions.py::test_marker_parse_exit_0",
         "packages/tools/tests/test_shell_sessions.py::test_marker_parse_exit_7",
         "packages/tools/tests/test_shell_sessions.py::test_old_prompt_before_new_foreground_command_does_not_false_idle",
@@ -14347,9 +14349,9 @@
     }
   },
   "mapping_static": {
-    "identity": "d8f38be11acd26f8c9e252c57ae6251c6092960e",
+    "identity": "334388f5d6ea5f4e43fb64a730bf7f3388a52d41",
     "python_test_file_count": 963,
-    "python_static_test_id_count": 11774,
+    "python_static_test_id_count": 11776,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -20358,6 +20360,7 @@
       "packages/core/tests/test_check_ledger.py::test_agreeing_hits_are_not_disagreements",
       "packages/core/tests/test_check_ledger.py::test_browser_line_counts_steps_and_identical_repeats_since_the_last_edit",
       "packages/core/tests/test_check_ledger.py::test_browser_observation_carries_a_step_record",
+      "packages/core/tests/test_check_ledger.py::test_busy_sessions_ask_for_the_cheap_listing_when_the_manager_offers_it",
       "packages/core/tests/test_check_ledger.py::test_changed_source_or_kill_switch_executes",
       "packages/core/tests/test_check_ledger.py::test_check_fingerprint_ignores_force",
       "packages/core/tests/test_check_ledger.py::test_check_statuses_current_stale_failed_and_excludes_mutating_runs",
@@ -26237,6 +26240,7 @@
       "packages/tools/tests/test_shell_sessions.py::test_generic_foreground_kill_preserves_background_rematerialization",
       "packages/tools/tests/test_shell_sessions.py::test_integration_scenarios",
       "packages/tools/tests/test_shell_sessions.py::test_kill_then_recreate",
+      "packages/tools/tests/test_shell_sessions.py::test_list_without_output_is_one_tmux_call_and_reads_busy_from_the_foreground_command",
       "packages/tools/tests/test_shell_sessions.py::test_marker_parse_exit_0",
       "packages/tools/tests/test_shell_sessions.py::test_marker_parse_exit_7",
       "packages/tools/tests/test_shell_sessions.py::test_old_prompt_before_new_foreground_command_does_not_false_idle",
@@ -42739,6 +42743,32 @@
           "packages/core/tests/test_check_ledger.py::test_finish_fact_needs_all_current_checks_and_a_quiet_stretch",
           "packages/core/tests/test_check_ledger.py::test_finish_fact_resets_after_an_edit",
           "packages/core/tests/test_check_ledger.py::test_no_checks_and_no_browser_steps_renders_nothing"
+        ],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-58-BUSY-SESSIONS",
+      "root": "packages",
+      "source_identity_before": "d8f38be11acd26f8c9e252c57ae6251c6092960e",
+      "source_identity_after": "334388f5d6ea5f4e43fb64a730bf7f3388a52d41",
+      "collected_roots": {
+        "packages": {
+          "before_count": 12288,
+          "after_count": 12290,
+          "added_ids": [
+            "packages/core/tests/test_check_ledger.py::test_busy_sessions_ask_for_the_cheap_listing_when_the_manager_offers_it",
+            "packages/tools/tests/test_shell_sessions.py::test_list_without_output_is_one_tmux_call_and_reads_busy_from_the_foreground_command"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [],
+        "python_static_test_ids": [
+          "packages/core/tests/test_check_ledger.py::test_busy_sessions_ask_for_the_cheap_listing_when_the_manager_offers_it",
+          "packages/tools/tests/test_shell_sessions.py::test_list_without_output_is_one_tmux_call_and_reads_busy_from_the_foreground_command"
         ],
         "typescript_test_files": [],
         "typescript_static_test_ids": [],
