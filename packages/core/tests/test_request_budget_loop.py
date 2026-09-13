@@ -865,3 +865,68 @@ class TestL_ViewOfRaisingInCondenserFallback:
         assert step is not None
         assert step.finished
         assert agent.calls == 1
+
+
+class TestDeferredCondensation:
+    """Pharmacy run 6 (L59): the driver's request-budget path condensed on its own, past the
+    view builder's batch rule — 91 of 93 condensations forgot fewer than the batch (median
+    258 tokens). The same rule now guards this path."""
+
+    def _agent(self):
+        est = RequestBudgetEstimate(
+            driver_context_window=65536,
+            max_output_tokens=None,
+            canonical_payload_bytes=400_000,
+            messages_json_bytes=380_000,
+            tools_json_bytes=20_000,
+            message_count=4,
+            tool_count=5,
+        )
+        return PreviewScriptedAgent([finish_step()], budget_estimate=est), est
+
+    class _Seam(FakeCondenser):
+        def __init__(self, *, removable: int, batch: int, hard: int):
+            super().__init__(request=CondensationRequest(soft=False, reason="tokens"), tombstone=None)
+            self._removable, self.min_batch_tokens, self.hard_max_tokens = removable, batch, hard
+
+        def forgettable_tokens(self, events):
+            return self._removable
+
+    async def _preview(self, cond):
+        agent, est = self._agent()
+        mp = pytest.MonkeyPatch()
+        mp.setenv("DISCO_CONTEXT_PACK", "0")
+        try:
+            loop, store = build_loop(agent, condenser=cond, conversation_id=CID)
+            await loop.send_message("hi")
+            events = await store.get_events(CID)
+            view = View(
+                messages=[LLMMessage(role="user", content="hi")],
+                visible_seqs=[e.seq for e in events if e.seq is not None],
+                total_events=len(events),
+                forgotten_count=0,
+            )
+            tools = loop._driver.tools_for_step(
+                suppress_meta_tools=False, force_submit_only=False, force_read_tools=None,
+                blocked_tools=frozenset(), mode=OperatingMode.INTERACTIVE,
+                available_tools=loop.executor.available_tools(),
+            )
+            return await loop._driver._try_request_budget_preview(view, events, OperatingMode.INTERACTIVE, None, tools), est
+        finally:
+            mp.undo()
+
+    async def test_hard_pressure_that_forgetting_cannot_end_is_deferred_until_a_batch(self) -> None:
+        cond = self._Seam(removable=300, batch=5_000, hard=52_000)   # floor far above the line, one aged turn
+        disp, est = await self._preview(cond)
+        assert est.pressure_tokens > cond.hard_max_tokens
+        assert disp is None and cond.should_calls == 1 and cond.condense_calls == 0
+
+    async def test_hard_pressure_condenses_at_once_when_a_batch_has_aged(self) -> None:
+        cond = self._Seam(removable=6_000, batch=5_000, hard=52_000)
+        disp, _ = await self._preview(cond)
+        assert cond.condense_calls == 1
+
+    async def test_condenser_without_the_seam_condenses_as_before(self) -> None:
+        cond = FakeCondenser(request=CondensationRequest(soft=False, reason="tokens"), tombstone=None)
+        disp, _ = await self._preview(cond)
+        assert cond.condense_calls == 1

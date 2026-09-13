@@ -530,6 +530,13 @@ class Driver:
             )
             return Disp.CONTINUE
 
+        # --- worth a summarizer call? (the same rule the view builder applies) ---
+        if not view_render.worth_a_summarizer_call(
+            self._loop.condenser, events, estimate=p.pressure_tokens, soft=req.soft
+        ):
+            self._log_budget_event(outcome="deferred", estimate=p, kind=pressure_kind)
+            return None
+
         # --- condenser (fail-open: no_progress → normal provider call) ---
         await self._loop._assert_current_agent_view()
         try:
@@ -558,7 +565,7 @@ class Driver:
     def _log_budget_event(
         self,
         *,
-        outcome: Literal["unavailable", "within_budget", "compacted", "no_progress"],
+        outcome: Literal["unavailable", "within_budget", "compacted", "no_progress", "deferred"],
         estimate: RequestBudgetEstimate | None = None,
         kind: Literal["soft", "hard"] | None = None,
         method: Literal["context_pack", "condenser"] | None = None,

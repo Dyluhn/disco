@@ -644,23 +644,23 @@ async def test_forgettable_tokens_counts_only_what_the_next_condensation_would_r
 async def test_soft_pressure_waits_for_a_batch_then_condenses_once():
     """A view whose fixed part sits above the soft line must not pay one summarizer call per
     turn to forget two events. The loop condenses when a batch of history has aged out."""
-    from disco.core.loop.view_render import _worth_a_summarizer_call
+    from disco.core.loop.view_render import worth_a_summarizer_call
 
     condenser = LLMSummarizingCondenser(keep_head=1, keep_recent=2, min_forget=2, min_batch_tokens=40)
-    worth = lambda events: _worth_a_summarizer_call(condenser, events, estimate=90, soft=True)  # noqa: E731
+    worth = lambda events: worth_a_summarizer_call(condenser, events, estimate=90, soft=True)  # noqa: E731
     assert worth(await _seed_pairs(3)) is False   # one aged turn (~25 tokens)
     assert worth(await _seed_pairs(6)) is True    # four aged turns
 
     class Bare:  # a condenser without the seam keeps today's behaviour
         pass
 
-    assert _worth_a_summarizer_call(Bare(), await _seed_pairs(3), estimate=90, soft=True) is True
+    assert worth_a_summarizer_call(Bare(), await _seed_pairs(3), estimate=90, soft=True) is True
 
 
 async def test_hard_pressure_condenses_at_once_when_it_ends_the_pressure_and_batches_when_it_cannot():
     """Run 5: 108.7 k estimated tokens against a 104.9 k hard line — forgetting two events per
     turn could never get under it, yet it paid a summarizer call every turn."""
-    from disco.core.loop.view_render import _worth_a_summarizer_call
+    from disco.core.loop.view_render import worth_a_summarizer_call
 
     condenser = LLMSummarizingCondenser(
         max_tokens=60, hard_max_tokens=100, keep_head=1, keep_recent=2, min_forget=2, min_batch_tokens=40
@@ -671,8 +671,8 @@ async def test_hard_pressure_condenses_at_once_when_it_ends_the_pressure_and_bat
     assert 0 < removable < 40
 
     # Just over the hard line: forgetting one aged turn brings it under → run now.
-    assert _worth_a_summarizer_call(condenser, one_turn, estimate=100 + removable - 1, soft=False) is True
+    assert worth_a_summarizer_call(condenser, one_turn, estimate=100 + removable - 1, soft=False) is True
     # Floor far above the hard line: one turn changes nothing → wait for the batch …
-    assert _worth_a_summarizer_call(condenser, one_turn, estimate=400, soft=False) is False
+    assert worth_a_summarizer_call(condenser, one_turn, estimate=400, soft=False) is False
     # … and condense once the batch has aged out, still above the line.
-    assert _worth_a_summarizer_call(condenser, four_turns, estimate=400, soft=False) is True
+    assert worth_a_summarizer_call(condenser, four_turns, estimate=400, soft=False) is True

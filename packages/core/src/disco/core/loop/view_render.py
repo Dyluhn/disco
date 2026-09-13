@@ -357,7 +357,7 @@ def _drop_context_pack_owned_history(messages: list[LLMMessage]) -> list[LLMMess
     ]
 
 
-def _worth_a_summarizer_call(
+def worth_a_summarizer_call(
     condenser: object, events: list[Event], *, estimate: int, soft: bool
 ) -> bool:
     """Whether a condensation now is worth its summarizer call.
@@ -695,7 +695,7 @@ class ViewBuilder:
                 view = await self._project_view(events, include_context_pack=context_pack_active)
                 est = signals.estimate_tokens(view) + snap_tokens
                 req = self._loop.condenser.should_condense(view, token_count=est)
-        if req is not None and not _worth_a_summarizer_call(
+        if req is not None and not worth_a_summarizer_call(
             self._loop.condenser, events, estimate=est, soft=req.soft
         ):
             req = None  # aged history too small to summarize yet, or condensing cannot end the pressure

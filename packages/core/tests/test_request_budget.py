@@ -1105,3 +1105,7 @@ class TestL_ViewOfRaisingInCondenserFallback(_loop_cases.TestL_ViewOfRaisingInCo
         await super().test_view_of_raises_only_when_condenser_attempted_still_calls_model(
             monkeypatch
         )
+
+
+class TestDeferredCondensation(_loop_cases.TestDeferredCondensation):
+    """PKG-60: the driver's budget path applies the condensation batch rule."""
