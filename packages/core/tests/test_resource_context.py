@@ -709,6 +709,22 @@ def test_rereads_do_not_reorder_the_workspace_state_working_set():
     assert _workspace_paths_from_events(read_only) == ([], ["r2.py", "r1.py"])
 
 
+def test_reference_packs_and_context_files_are_read_inputs_not_working_set():
+    """Pharmacy run 7: the snapshot re-injected 142 KB of reference-pack text every turn
+    (207 KB total) because the agent had *read* the packs. Inputs the host placed for
+    reading stay one read away; only files the agent writes there count."""
+    events = [
+        _read("/workspace/references/socket-io-v4/PACK.md"),
+        _read("references/email/nodemailer-smtp-transport.md"),
+        _read(".disco/context/direction_tokens.css"),
+        _read("src/server.js"),
+        _write("src/public/app.js"),
+    ]
+    assert _workspace_paths_from_events(events) == (["src/public/app.js"], ["src/server.js"])
+    # a write into an input directory is the agent's own file and stays in the snapshot
+    assert _workspace_paths_from_events([_write("references/notes.md")]) == (["references/notes.md"], [])
+
+
 def test_reread_keeps_cacheable_workspace_snapshot_byte_stable():
     sandbox = _Sandbox({"a.py": b"a = 1\n", "b.py": b"b = 2\n"})
     before_events = [_write("a.py"), _write("b.py")]

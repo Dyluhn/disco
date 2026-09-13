@@ -146,6 +146,13 @@ def _describe_llm_error(e: LLMError) -> str:
     return f"{head}: {reason}"
 
 
+# Inputs the host placed in the workspace for the agent to *read*: bound reference
+# packs (`references/<slug>/…`) and the durable context files (`.disco/…`). They are
+# static, often large (Pharmacy run 7: 142 KB of pack text in a 207 KB snapshot, every
+# turn) and one read away; the snapshot is for the files the agent is building.
+_SNAPSHOT_INPUT_PREFIXES = ("references/", ".disco/")
+
+
 def _workspace_paths_from_events(events: list[Event]) -> tuple[list[str], list[str]]:
     """Return (mutated, read_only) working-set paths, each de-duplicated and
     MOST-RECENT FIRST. A path counted as mutated if it was EVER written/edited —
@@ -153,7 +160,9 @@ def _workspace_paths_from_events(events: list[Event]) -> tuple[list[str], list[s
     are never pushed out of the snapshot window by read-heavy exploration
     (steelman finding #1). Mirrors Aider's "files in the chat" — bounded +
     relevant. Reads the raw event list directly, so a file touched long ago (and
-    since forgotten/condensed from the View) still counts: it is still on disk."""
+    since forgotten/condensed from the View) still counts: it is still on disk.
+    Host-placed inputs (reference packs, `.disco/` context) never enter the
+    read-only bucket; a file the agent wrote there still counts as mutated."""
     mutated: dict[str, None] = {}
     read_only: dict[str, None] = {}
     for e in events:
@@ -174,6 +183,8 @@ def _workspace_paths_from_events(events: list[Event]) -> tuple[list[str], list[s
             # CURRENT WORKSPACE prefix (or change which files fit its cap).
             # The just-completed read remains high-attention in the causal tool
             # result; snapshot order advances only on a real mutation action.
+            if p.startswith(_SNAPSHOT_INPUT_PREFIXES):
+                continue  # reference packs and context files are inputs, not the build
             if p not in mutated and p not in read_only:
                 read_only[p] = None
     return list(reversed(mutated.keys())), list(reversed(read_only.keys()))
