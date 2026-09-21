@@ -96,23 +96,17 @@ if TYPE_CHECKING:
     )
 
     class _LoopFacet(
-
         ContextGroundingPort,
-
         ConversationModePort,
-
         LoopEventPort,
-
         PlanLifecyclePort,
-
         ToolExecutionPort,
-
         Protocol,
-
     ):
         """The loop capability this module uses: context grounding, conversation mode, the event
         log, the plan lifecycle, tool execution.
         """
+
 
 _LOG = logging.getLogger("disco.loop")
 
@@ -207,9 +201,7 @@ def _has_post_approval_proposal(events: list[Event], approval_seq: int) -> bool:
     approval as the active handoff if a caller accidentally materializes a
     view while that gate is parked.
     """
-    return any(
-        isinstance(event, PlanEvent) and (event.seq or 0) > approval_seq for event in events
-    )
+    return any(isinstance(event, PlanEvent) and (event.seq or 0) > approval_seq for event in events)
 
 
 def _has_post_approval_action(events: list[Event], approval_seq: int) -> bool:
@@ -618,9 +610,7 @@ class ViewBuilder:
         # keeps a caller from carrying a stale list forward.
         return view, events
 
-    async def _compute_stale_paths(
-        self, events: list[Event]
-    ) -> tuple[Sandbox | None, list[str]]:
+    async def _compute_stale_paths(self, events: list[Event]) -> tuple[Sandbox | None, list[str]]:
         """W2 — identify files whose disk SHA diverged from the snapshot's last view.
 
         One hash exec over the working set serves both this scan and the snapshot's
@@ -703,7 +693,8 @@ class ViewBuilder:
         if req is not None and not worth_a_summarizer_call(
             self._loop.condenser, events, estimate=est, soft=req.soft
         ):
-            req = None  # aged history too small to summarize yet, or condensing cannot end the pressure
+            # Aged history is too small, or condensing cannot end the pressure.
+            req = None
         if req is not None:
             tombstone = await self._loop.condenser.condense(
                 events, view, summarizer=self._loop.summarizer

@@ -45,6 +45,7 @@ if TYPE_CHECKING:
     class _LoopFacet(ConversationModePort, LoopEventPort, ToolExecutionPort, Protocol):
         """The loop capability this module uses: mode, the event log, tools."""
 
+
 _LOG = logging.getLogger("disco.loop")
 _ERROR_DETAIL_CAP = 600
 _DELIVERED_DETAIL_CAP = 80_000
@@ -233,9 +234,7 @@ def _answered_question_reminder(
     # template. The two excluded tools are owned by the oracle's scope change.
     from .dedup_generic_notice import _w39_generic_reminder
 
-    remind, prior_seq, text = _w39_generic_reminder(
-        call.tool_name, call.arguments, events
-    )
+    remind, prior_seq, text = _w39_generic_reminder(call.tool_name, call.arguments, events)
     if not remind:
         return None
     _LOG.info(
@@ -298,8 +297,7 @@ async def _prepare_observation(
     from .dedup_generic_notice import _W39_GENERIC_EXCLUDED
 
     is_generic = (
-        call.tool_name not in _W39_NOTICE_TOOLS
-        and call.tool_name not in _W39_GENERIC_EXCLUDED
+        call.tool_name not in _W39_NOTICE_TOOLS and call.tool_name not in _W39_GENERIC_EXCLUDED
     )
     if not loop._assist and call.tool_name not in _W39_NOTICE_TOOLS and not is_generic:
         return False, None
@@ -540,13 +538,13 @@ async def _annotate_result(
         check = meta.get("check") or {}
         busy: list[str] = list(check.get("sessions_after") or [])
         if tool == "server_status":
-            busy = list(
-                await check_ledger._busy_sessions(getattr(loop.executor, "sandbox", None))
-            )
+            busy = list(await check_ledger._busy_sessions(getattr(loop.executor, "sandbox", None)))
         lines.extend(s.render() for s in check_ledger.stale_sessions(events, busy))
     if not lines:
         return result
-    return result.model_copy(update={"content": (result.content or "").rstrip() + "\n" + "\n".join(lines)})
+    return result.model_copy(
+        update={"content": (result.content or "").rstrip() + "\n" + "\n".join(lines)}
+    )
 
 
 async def _answer_from_record(

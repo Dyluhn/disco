@@ -90,14 +90,18 @@ class Doctor:
         self.health["agent-server"] = body
         if body.get("status") == "ok":
             return Check("agent-server", "PASS", f"ok, version {body.get('version', '?')}")
-        failing = {k: v for k, v in (body.get("checks") or {}).items() if str(v).startswith("error")}
+        failing = {
+            k: v for k, v in (body.get("checks") or {}).items() if str(v).startswith("error")
+        }
         return Check("agent-server", "FAIL", f"degraded: {failing or body}")
 
     def check_app_server(self) -> Check:
         body, error = self._get_json(f"{self.app_url}/api/health")
         if body is None:
             return Check(
-                "app-server", "WARN", f"not reachable from here at {self.app_url} ({error}); pass --app-url"
+                "app-server",
+                "WARN",
+                f"not reachable from here at {self.app_url} ({error}); pass --app-url",
             )
         self.health["app-server"] = body
         return Check("app-server", "PASS", f"ok, version {body.get('version', '?')}")
@@ -105,7 +109,9 @@ class Doctor:
     def check_sandbox(self) -> Check:
         headers = self._loopback_session()
         if headers is None:
-            return Check("sandbox", "SKIP", "no loopback session (run inside the agent-server container)")
+            return Check(
+                "sandbox", "SKIP", "no loopback session (run inside the agent-server container)"
+            )
         try:
             resp = self._client.get(f"{self.agent_url}/api/sandbox/health", headers=headers)
             body = resp.json()
@@ -114,7 +120,11 @@ class Doctor:
         self.sandbox = body
         if body.get("reachable"):
             return Check("sandbox", "PASS", f"{body.get('backend', '?')} reachable")
-        return Check("sandbox", "FAIL", _shorten(f"{body.get('backend', '?')}: {body.get('detail', 'unreachable')}"))
+        return Check(
+            "sandbox",
+            "FAIL",
+            _shorten(f"{body.get('backend', '?')}: {body.get('detail', 'unreachable')}"),
+        )
 
     def check_disk(self) -> Check:
         return check_disk(self.env)
@@ -137,9 +147,19 @@ class Doctor:
                 check=False,
             )
         except subprocess.TimeoutExpired:
-            return Check("driver model", "FAIL", f"disco-verify --quick did not finish in {MODEL_CHECK_TIMEOUT_S}s")
-        tail = " | ".join(line for line in (proc.stdout + proc.stderr).splitlines()[-4:] if line.strip())
-        return Check("driver model", "PASS" if proc.returncode == 0 else "FAIL", _shorten(tail or f"exit {proc.returncode}"))
+            return Check(
+                "driver model",
+                "FAIL",
+                f"disco-verify --quick did not finish in {MODEL_CHECK_TIMEOUT_S}s",
+            )
+        tail = " | ".join(
+            line for line in (proc.stdout + proc.stderr).splitlines()[-4:] if line.strip()
+        )
+        return Check(
+            "driver model",
+            "PASS" if proc.returncode == 0 else "FAIL",
+            _shorten(tail or f"exit {proc.returncode}"),
+        )
 
     def run(self) -> list[Check]:
         return [
@@ -173,18 +193,32 @@ class Doctor:
         headers = self._loopback_session()
         if headers is None:
             return []
-        listing, _ = self._get_json(f"{self.agent_url}/conversations?limit={BUNDLE_CONVERSATIONS}", headers=headers)
+        listing, _ = self._get_json(
+            f"{self.agent_url}/conversations?limit={BUNDLE_CONVERSATIONS}", headers=headers
+        )
         ids = listing.get("conversation_ids", []) if isinstance(listing, dict) else []
         shapes: list[dict[str, Any]] = []
         for cid in [str(c) for c in ids if c][:BUNDLE_CONVERSATIONS]:
-            state, _ = self._get_json(f"{self.agent_url}/conversations/{cid}/state", headers=headers)
+            state, _ = self._get_json(
+                f"{self.agent_url}/conversations/{cid}/state", headers=headers
+            )
             events, _ = self._get_json(
                 f"{self.agent_url}/conversations/{cid}/events?limit={BUNDLE_EVENTS_PER_CONVERSATION}",
                 headers=headers,
             )
-            status = (state or {}).get("execution_status") or (state or {}).get("status") if isinstance(state, dict) else None
+            status = (
+                (state or {}).get("execution_status") or (state or {}).get("status")
+                if isinstance(state, dict)
+                else None
+            )
             items = events.get("events", []) if isinstance(events, dict) else []
-            shapes.append({"conversation_id": cid, "status": status, "events": [_event_shape(e) for e in items]})
+            shapes.append(
+                {
+                    "conversation_id": cid,
+                    "status": status,
+                    "events": [_event_shape(e) for e in items],
+                }
+            )
         return shapes
 
     # --- transport helpers ---------------------------------------------------------
@@ -269,7 +303,8 @@ def check_secret_key(env: dict[str, str]) -> Check:
     return Check(
         "secret key",
         "WARN",
-        "none of DISCO_SECRET_KEY / DISCO_AUTH_SECRET set; encrypted settings will not survive a restart",
+        "none of DISCO_SECRET_KEY / DISCO_AUTH_SECRET set; encrypted settings will not "
+        "survive a restart",
     )
 
 
@@ -317,13 +352,17 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--no-model", action="store_true", help="skip the driver-model check")
     ap.add_argument("--bundle", metavar="PATH", help="also write a redacted JSON support bundle")
     args = ap.parse_args(argv)
-    doctor = Doctor(agent_url=args.agent_url, app_url=args.app_url, run_model_check=not args.no_model)
+    doctor = Doctor(
+        agent_url=args.agent_url, app_url=args.app_url, run_model_check=not args.no_model
+    )
     checks = doctor.run()
     print(render(checks))
     if args.bundle:
         path = Path(args.bundle)
         path.write_text(json.dumps(doctor.bundle(checks), indent=2, default=str))
-        print(f"support bundle written to {path} — attach it to the bug report (secrets are redacted)")
+        print(
+            f"support bundle written to {path} — attach it to the bug report (secrets are redacted)"
+        )
     return 1 if any(c.status == "FAIL" for c in checks) else 0
 
 

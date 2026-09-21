@@ -228,9 +228,7 @@ def _summary_probe_call_ids(events: list[Event]) -> set[str]:
     }
 
 
-def _summary_span_messages(
-    events: list[Event], start_seq: int, end_seq: int
-) -> list[LLMMessage]:
+def _summary_span_messages(events: list[Event], start_seq: int, end_seq: int) -> list[LLMMessage]:
     probe_ids = _summary_probe_call_ids(events)
     messages: list[LLMMessage] = []
     for event in events:
@@ -386,7 +384,9 @@ class LLMSummarizingCondenser:
         # from the soft→hard band so it scales with the window: ~5.9 k tokens at 131 k,
         # ~360 at 8 k (small windows need frequent condensation), 0 when the band is 0.
         band = max(0, self._hard - self._max)
-        self.min_batch_tokens = min_batch_tokens if min_batch_tokens is not None else int(band * 0.3)
+        self.min_batch_tokens = (
+            min_batch_tokens if min_batch_tokens is not None else int(band * 0.3)
+        )
         # Above this estimate a condensation is never deferred, whatever the batch: the
         # drift batching allows stops two thirds of a band above the hard line (0.90 of
         # the window at the default 0.65/0.80 fractions); no band → the hard line itself.

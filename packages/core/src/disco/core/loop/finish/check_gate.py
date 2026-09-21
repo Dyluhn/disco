@@ -13,7 +13,16 @@ from __future__ import annotations
 
 from typing import cast
 
-from ...events import ActionEvent, AgentErrorEvent, Event, EventSource, LLMMessage, MessageEvent, ObservationEvent, ToolCall
+from ...events import (
+    ActionEvent,
+    AgentErrorEvent,
+    Event,
+    EventSource,
+    LLMMessage,
+    MessageEvent,
+    ObservationEvent,
+    ToolCall,
+)
 from .. import check_ledger
 from .common import _FinishGateComponent, signals
 from .verify_gate_parts.probe_events import latest_event_for_action
@@ -46,7 +55,9 @@ class _StaleChecksGateService(_FinishGateComponent):
                 failures.append((status, probe.exit_code, _probe_output(events, probe)))
                 continue
             original = actions.get(record.action_id)
-            arguments = dict(original.tool_call.arguments) if original and original.tool_call else {}
+            arguments = (
+                dict(original.tool_call.arguments) if original and original.tool_call else {}
+            )
             arguments["command"] = status.command
             exit_code, output = await self._rerun(arguments)
             if exit_code != 0:
@@ -173,4 +184,3 @@ def _refusal_message(
         message=LLMMessage(role="user", content="\n".join(lines)),
         meta={"diagnostic": "stale_checks_gate"},
     )
-

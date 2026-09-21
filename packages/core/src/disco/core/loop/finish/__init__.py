@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from .check_gate import _StaleChecksGateService
 from .common import (
     _DICTATED_CONTENT_REFUSAL_CAP,
     _DOD_REFUSAL_CAP,
@@ -33,7 +34,6 @@ from .common import (
 from .content_gates import _ContentGateService
 from .finalize import _FinalizeService
 from .verification_surface import FinishVerificationSurface
-from .check_gate import _StaleChecksGateService
 from .verify_gates import (
     _BrowserVerifyGateService,
     _ExportRenderGateService,
@@ -198,19 +198,13 @@ class FinishGate:
         )
 
     async def _model_judged_verdict(self, deliverable, events, host_verdict):
-        return await self._host_verify._model_judged_verdict(
-            deliverable, events, host_verdict
-        )
+        return await self._host_verify._model_judged_verdict(deliverable, events, host_verdict)
 
     async def _governed_check_deliverables(self, deliverable, events, **kwargs):
-        return await self._host_verify._governed_check_deliverables(
-            deliverable, events, **kwargs
-        )
+        return await self._host_verify._governed_check_deliverables(deliverable, events, **kwargs)
 
     async def _run_host_verifier_check(self, deliverable, events, **kwargs):
-        return await self._host_verify._run_host_verifier_check(
-            deliverable, events, **kwargs
-        )
+        return await self._host_verify._run_host_verifier_check(deliverable, events, **kwargs)
 
     async def _with_host_verification_profile(self, deliverable, events):
         return await self._host_verify._with_host_verification_profile(deliverable, events)

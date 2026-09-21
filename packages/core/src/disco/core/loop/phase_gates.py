@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING, cast
 
 from ..events import (
     ActionEvent,
-    AgentErrorEvent,
     AlternativeOption,
     AlternativesEvent,
     ConversationStatus,
@@ -599,9 +598,7 @@ class ProgressGateMixin(_ValveHost):
         actions_after_marker = sum(
             1
             for event in events
-            if isinstance(event, ActionEvent)
-            and event.seq is not None
-            and event.seq > marker_seq
+            if isinstance(event, ActionEvent) and event.seq is not None and event.seq > marker_seq
         )
         await self.land_blocked(
             reason="no_progress",

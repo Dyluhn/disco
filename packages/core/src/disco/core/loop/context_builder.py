@@ -28,8 +28,8 @@ from ..context import (
     SourcePriority as SourcePriority,
 )
 from ..context.compaction import resolved_ranges_from_events
-from . import check_ledger
 from ..events import Event, EventSource, MessageEvent, PlanEvent
+from . import check_ledger
 from .context_rendering import (
     _BLOCK_CLOSE as _BLOCK_CLOSE,
 )

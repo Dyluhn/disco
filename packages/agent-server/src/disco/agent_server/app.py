@@ -40,12 +40,12 @@ from .host_proxy import HostPreviewProxyMiddleware, make_preview_session_resolve
 from .host_service_bus import make_host_service_bus_router
 from .host_token_store import HostTokenStore
 from .routes import (
-    make_diagnostics_router,
     make_activity_router,
     make_conversation_library_router,
     make_conversations_router,
     make_debug_router,
     make_deck_editor_router,
+    make_diagnostics_router,
     make_export_router,
     make_files_router,
     make_health_router,

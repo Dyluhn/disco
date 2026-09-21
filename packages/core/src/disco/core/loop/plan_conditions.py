@@ -77,21 +77,16 @@ if TYPE_CHECKING:
     from .ports import ConversationModePort, LoopEventPort, PlanLifecyclePort, ToolExecutionPort
 
     class _LoopFacet(
-
         ConversationModePort,
-
         LoopEventPort,
-
         PlanLifecyclePort,
-
         ToolExecutionPort,
-
         Protocol,
-
     ):
         """The loop capability this module uses: conversation mode, the event log, the plan
         lifecycle, tool execution.
         """
+
 
 _LOG = logging.getLogger("disco.loop")
 _PROGRESS_TOOLS = frozenset({"plan_step", "update_plan_progress"})
@@ -121,23 +116,18 @@ def _context_evidence_line(event: Event) -> str | None:
         state = "success" if event.tool_result.success else "failure"
         exit_code = (event.tool_result.structured or {}).get("exit_code")
         exit_note = f" exit {exit_code}" if isinstance(exit_code, int) else ""
-        return f"- seq {event.seq} OBSERVED result: {event.tool_result.tool_name} {state}{exit_note}"
+        return (
+            f"- seq {event.seq} OBSERVED result: {event.tool_result.tool_name} {state}{exit_note}"
+        )
     if isinstance(event, VerifierVerdictEvent):
         state = "PASS" if event.verified else "FAIL"
-        return (
-            f"- seq {event.seq} HOST VERIFICATION {state}: "
-            f"{event.artifact_path or 'artifact'}"
-        )
+        return f"- seq {event.seq} HOST VERIFICATION {state}: {event.artifact_path or 'artifact'}"
     return None
 
 
-def _context_ranged_events(
-    events: list[Event], start_seq: int, end_seq: int
-) -> list[Event]:
+def _context_ranged_events(events: list[Event], start_seq: int, end_seq: int) -> list[Event]:
     return [
-        event
-        for event in events
-        if event.seq is not None and start_seq <= event.seq <= end_seq
+        event for event in events if event.seq is not None and start_seq <= event.seq <= end_seq
     ]
 
 
@@ -149,7 +139,10 @@ def _context_chronology(ranged: list[Event]) -> list[str]:
 def _context_verification(ranged: list[Event]) -> str:
     verdicts = [event for event in ranged if isinstance(event, VerifierVerdictEvent)]
     if not verdicts:
-        return "HOST VERIFICATION: none. Tool results above are observed facts; the step marks are the agent's."
+        return (
+            "HOST VERIFICATION: none. Tool results above are observed facts; "
+            "the step marks are the agent's."
+        )
     return "HOST VERIFICATION: " + ", ".join(
         "PASS" if event.verified else "FAIL" for event in verdicts
     )
@@ -166,14 +159,11 @@ def _context_step_summary(
     actions = [
         event
         for event in ranged
-        if isinstance(event, ActionEvent)
-        and event.tool_call.tool_name not in _PROGRESS_TOOLS
+        if isinstance(event, ActionEvent) and event.tool_call.tool_name not in _PROGRESS_TOOLS
     ]
     chronology = _context_chronology(ranged)
     verification = _context_verification(ranged)
-    claims = "; ".join(
-        f"{idx} '{latest_plan.steps[idx - 1].title}'" for idx in indices
-    )
+    claims = "; ".join(f"{idx} '{latest_plan.steps[idx - 1].title}'" for idx in indices)
     last_desc = _context_tool_summary(actions[-1]) if actions else "none"
     plural = "" if len(actions) == 1 else "s"
     return "\n".join(
@@ -351,9 +341,7 @@ class PlanStepConditions:
         ordered = sorted(set(indices))
         index_key = "-".join(str(idx) for idx in ordered)
         noun = "step" if len(ordered) == 1 else "steps"
-        range_id = (
-            f"cxr_plan_{noun}_{latest_plan.revision}_{index_key}_{start_seq}_{end_seq}"
-        )
+        range_id = f"cxr_plan_{noun}_{latest_plan.revision}_{index_key}_{start_seq}_{end_seq}"
         if any(
             isinstance(e, ContextResolvedEvent)
             and e.reason == "plan_step_done"
@@ -361,9 +349,7 @@ class PlanStepConditions:
             for e in events
         ):
             return
-        summary = _context_step_summary(
-            events, latest_plan, ordered, start_seq, end_seq
-        )
+        summary = _context_step_summary(events, latest_plan, ordered, start_seq, end_seq)
         try:
             ref = await store.write_summary(range_id, summary)
         except Exception:  # noqa: BLE001 - context marks are best-effort
@@ -380,7 +366,10 @@ class PlanStepConditions:
                 predicate_fingerprint(predicate) if predicate is not None else None
             )
         mark = context_mark_resolved(
-            start_seq, end_seq, reason="plan_step_done", range_id=range_id,
+            start_seq,
+            end_seq,
+            reason="plan_step_done",
+            range_id=range_id,
         ).model_copy(
             update={
                 "source": EventSource.SYSTEM,
@@ -559,7 +548,8 @@ class PlanStepConditions:
 
 
 async def _check_file_exists(
-    predicate: FileExistsPredicate, sbx: Any,
+    predicate: FileExistsPredicate,
+    sbx: Any,
 ) -> tuple[bool, str]:
     """Check whether `predicate.path` exists, resolved in the SANDBOX's own namespace."""
     from pathlib import Path
@@ -574,8 +564,7 @@ async def _check_file_exists(
             root_str = str(root)
             candidate_str = str(candidate)
             if not (
-                candidate_str == root_str
-                or candidate_str.startswith(root_str.rstrip("/") + "/")
+                candidate_str == root_str or candidate_str.startswith(root_str.rstrip("/") + "/")
             ):
                 return (False, f"file_exists: path escapes workspace ({path_str})")
         except (OSError, ValueError) as exc:
@@ -601,7 +590,8 @@ async def _check_file_exists(
 
 
 async def _check_command(
-    predicate: CommandExitPredicate, sbx: Any,
+    predicate: CommandExitPredicate,
+    sbx: Any,
 ) -> tuple[bool, str]:
     """Run `predicate.cmd` against `predicate.expect_exit` (default 0)."""
     timeout = 5.0

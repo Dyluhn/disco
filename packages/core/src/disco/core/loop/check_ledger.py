@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import inspect
 import re
-
 import shlex
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
@@ -100,7 +99,9 @@ async def _busy_sessions(sandbox: object) -> tuple[str, ...]:
         return ()
     try:
         cheap = "output" in inspect.signature(list_sessions).parameters
-        infos = await cast(Callable[..., Awaitable[Any]], list_sessions)(**({"output": False} if cheap else {}))
+        infos = await cast(Callable[..., Awaitable[Any]], list_sessions)(
+            **({"output": False} if cheap else {})
+        )
     except Exception:  # noqa: BLE001 — same fail-closed rule as the digest
         return ()
     return tuple(sorted(info.name for info in infos if getattr(info, "busy", False)))
@@ -296,13 +297,17 @@ def written_paths(events: list[Event]) -> frozenset[str]:
     return frozenset(m.path.strip("/") for m in mutations(events) if m.path)
 
 
-_LOOPBACK = re.compile(r"\b(localhost|127\.0\.0\.1|0\.0\.0\.0|host\.docker\.internal)\b|\[::1\]|https?://[^/\s]+:\d{2,5}")
+_LOOPBACK = re.compile(
+    r"\b(localhost|127\.0\.0\.1|0\.0\.0\.0|host\.docker\.internal)\b|\[::1\]|https?://[^/\s]+:\d{2,5}"
+)
 _RUNNERS = re.compile(
-    r"(^|[\s;&|(])(npm (test|run|start)|pnpm (test|run)|yarn (test|run)|npx |pytest|python3? -m pytest|"
+    r"(^|[\s;&|(])(npm (test|run|start)|pnpm (test|run)|yarn (test|run)|npx |pytest|"
+    r"python3? -m pytest|"
     r"go test|make( |$)|vitest|jest|mocha|playwright)"
 )
 _SCRIPT_RUN = re.compile(
-    r"(^|[\s;&|(])(bash|sh|zsh|node|deno|bun|tsx|ts-node|python3?|ruby|perl|php|go run)\s+(\./)?[\w./-]+\.\w+"
+    r"(^|[\s;&|(])(bash|sh|zsh|node|deno|bun|tsx|ts-node|python3?|ruby|perl|php|go run)"
+    r"\s+(\./)?[\w./-]+\.\w+"
 )
 _TOKEN_SPLIT = re.compile(r"[\s;&|()<>\"'`=,]+")
 
@@ -438,7 +443,8 @@ class StaleSession:
     def render(self) -> str:
         return (
             f"[session '{self.name}' has been running since step {self.started_seq}; source "
-            f"changed since ({self.changed_by.describe()}) — it is serving old code until restarted]"
+            f"changed since ({self.changed_by.describe()}) — "
+            "it is serving old code until restarted]"
         )
 
 
@@ -494,7 +500,10 @@ def memo_enabled() -> bool:
 
 
 def check_fingerprint(tool_call: Any) -> str:
-    """The call's identity for the ledger: `force` asks for execution, it is not a different check."""
+    (
+        "The call's identity for the ledger: `force` asks for execution, "
+        "it is not a different check."
+    )
     arguments = {k: v for k, v in (tool_call.arguments or {}).items() if k != FORCE_ARG}
     return tool_call_fingerprint(tool_call.tool_name, arguments)
 
@@ -572,7 +581,9 @@ def memo_meta(action: ActionEvent, before: CheckSnapshot, source: CheckRecord) -
 
 BROWSER_TOOL = "browser"
 QUIET_ACTIONS = 12  # verification actions on unchanged source before the finish fact is stated
-VERIFICATION_TOOLS = frozenset({"shell", "shell_exec", "browser", "server_status", "preview_status"})
+VERIFICATION_TOOLS = frozenset(
+    {"shell", "shell_exec", "browser", "server_status", "preview_status"}
+)
 
 
 def browser_step_meta(action: ActionEvent, content: str, events: list[Event]) -> dict[str, Any]:
@@ -603,8 +614,13 @@ class BrowserSummary:
     repeated: int  # steps identical (call + url) to an earlier step since then
 
     def render(self) -> str:
-        since = f"since the last source change (step {self.since_seq})" if self.since_seq else "so far"
-        return f"Browser: {self.steps} steps {since}; {self.repeated} repeated an identical earlier step."
+        since = (
+            f"since the last source change (step {self.since_seq})" if self.since_seq else "so far"
+        )
+        return (
+            f"Browser: {self.steps} steps {since}; "
+            f"{self.repeated} repeated an identical earlier step."
+        )
 
 
 def browser_summary(events: list[Event]) -> BrowserSummary | None:
@@ -653,7 +669,8 @@ def finish_fact(events: list[Event], statuses: list[CheckStatus]) -> str | None:
         return None
     return (
         f"No source change since step {since} ({count} verification actions since); all "
-        f"{len(statuses)} recorded checks are current. Nothing is stale for the finish gate to re-run."
+        f"{len(statuses)} recorded checks are current. "
+        "Nothing is stale for the finish gate to re-run."
     )
 
 

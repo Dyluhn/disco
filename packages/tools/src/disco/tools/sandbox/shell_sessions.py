@@ -35,7 +35,9 @@ _LOG = logging.getLogger(__name__)
 _PREFIX = "disco"  # WRITE side: new tmux sessions are disco-*
 _LEGACY_PREFIX = "pmx"  # READ side: still swept on teardown (no orphans across rename)
 _VIEW_TAIL_CHARS = 10_000
-_SHELL_COMMANDS = frozenset({"bash", "sh", "dash", "zsh", "fish", "ash"})  # an idle pane's foreground
+_SHELL_COMMANDS = frozenset(
+    {"bash", "sh", "dash", "zsh", "fish", "ash"}
+)  # an idle pane's foreground
 _EXEC_RETURN_CHARS = 6_000
 _POLL_S = 0.5
 _EXEC_WAIT_S = 15.0
@@ -520,7 +522,9 @@ class ShellSessionManager:
             session, _, command = line.strip().partition("\t")
             name = _short_session_name(self.namespace, session)
             if name is not None:
-                busy[name] = busy.get(name, False) or (bool(command) and command not in _SHELL_COMMANDS)
+                busy[name] = busy.get(name, False) or (
+                    bool(command) and command not in _SHELL_COMMANDS
+                )
         return [SessionInfo(name=n, busy=b, last_lines="") for n, b in sorted(busy.items())]
 
     async def list(self, *, output: bool = True) -> list[SessionInfo]:
@@ -541,4 +545,3 @@ class ShellSessionManager:
                 last_lines = "\n".join(view.output.split("\n")[-3:])
                 sessions.append(SessionInfo(name=name, busy=view.running, last_lines=last_lines))
         return sessions
-
