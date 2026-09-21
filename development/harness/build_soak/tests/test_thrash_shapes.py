@@ -42,7 +42,6 @@ from typing import Any
 import pytest
 from disco.core import script_identity
 from disco.core.tool_fingerprint import tool_call_fingerprint
-
 from harness.build_soak import failure_codes as fc
 from harness.build_soak.oracles import _thrash_shapes as shapes
 from harness.build_soak.oracles import _thrash_shell

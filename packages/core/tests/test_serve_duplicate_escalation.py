@@ -39,11 +39,9 @@ from disco.core.events import (
     EventSource,
     ObservationEvent,
     PlanEvent,
+    PlanStep,
     ToolCall,
     ToolResult,
-)
-from disco.core.events import (
-    PlanStep,
 )
 from disco.core.loop.turn_control import (
     _serve_duplicate_guidance,

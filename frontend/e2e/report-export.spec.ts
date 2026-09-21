@@ -13,14 +13,13 @@ test.describe("Deep Research → export controls", () => {
     page,
   }) => {
     await page.goto("/");
-    await page.getByRole("button", { name: /^scope:/i }).click();
-    await page.getByRole("menuitem", { name: /deep research/i }).click();
+    await page.getByRole("radio", { name: "Deep Research" }).click();
     const input = page.getByPlaceholder(/ask a research question/i);
     await input.fill("What is the current state of solid-state battery commercialization?");
     await input.press("Enter");
-    // DR's plan gate overrides the shared PlanPanel label to "Approve research plan"
-    // (DeepResearchSurface.tsx approveLabel) — distinct from the Build surface's "Approve & build".
-    await page.getByRole("button", { name: /approve research plan/i }).click();
+    // Research starts immediately; there is no plan-approval gate.
+    await expect(page.locator("[data-dr-brief]")).toBeVisible();
+    await expect(page.locator('[data-disco-control="approve-plan"]')).toHaveCount(0);
 
     // Report assembled → export controls appear.
     const md = page.getByRole("button", { name: /^MD$/ });

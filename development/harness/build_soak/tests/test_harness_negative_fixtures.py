@@ -17,7 +17,6 @@ import json
 
 import pytest
 from _eventlog import clean_smoke_log
-
 from harness.build_soak import failure_codes as fc
 from harness.product_build import STATIC_SITE_SMOKE, classify_dossier, write_dossier
 from harness.product_build.classify_captured import classify_capture

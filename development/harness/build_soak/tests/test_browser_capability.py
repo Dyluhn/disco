@@ -15,7 +15,6 @@ from typing import Any
 
 import pytest
 import yaml
-
 from harness.build_soak.browser_capability import (
     BROWSER_RUNTIME_CLAIM_KINDS,
     CAPABILITY_AVAILABLE,

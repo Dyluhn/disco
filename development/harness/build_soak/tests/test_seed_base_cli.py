@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pytest
-
 from harness.build_soak._runner.cli import _argument_parser, _CliFailure, _select_scenarios
 
 

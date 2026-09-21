@@ -149,6 +149,7 @@ describe("useBuildStream — file_stream agent_view_id gating", () => {
         event: {
           id: "ev_view",
           kind: "workspace_mutation",
+          paths: [],
           operation: "agent.view-admitted",
           agent_view_id: "aview_good",
           source: "system",
@@ -180,6 +181,7 @@ describe("useBuildStream — file_stream agent_view_id gating", () => {
         event: {
           id: "ev_view2",
           kind: "workspace_mutation",
+          paths: [],
           operation: "agent.view-admitted",
           agent_view_id: "aview_write",
           source: "system",
@@ -214,6 +216,7 @@ describe("useBuildStream — file_stream agent_view_id gating", () => {
         event: {
           id: "ev_view3",
           kind: "workspace_mutation",
+          paths: [],
           operation: "agent.view-admitted",
           agent_view_id: "aview_concat",
           source: "system",
@@ -261,6 +264,7 @@ describe("useBuildStream — file_stream agent_view_id gating", () => {
         event: {
           id: "ev_v1",
           kind: "workspace_mutation",
+          paths: [],
           operation: "agent.view-admitted",
           agent_view_id: "aview_v1",
           source: "system",
@@ -283,6 +287,7 @@ describe("useBuildStream — file_stream agent_view_id gating", () => {
         event: {
           id: "ev_v2",
           kind: "workspace_mutation",
+          paths: [],
           operation: "agent.view-admitted",
           agent_view_id: "aview_v2",
           source: "system",
@@ -322,6 +327,7 @@ describe("useBuildStream — v1 run intent cycle", () => {
         event: {
           id: "ev_a1",
           kind: "workspace_mutation",
+          paths: [],
           operation: "agent.view-admitted",
           agent_view_id: "aview_a1",
           source: "system",
@@ -338,6 +344,7 @@ describe("useBuildStream — v1 run intent cycle", () => {
         event: {
           id: "ev_i2",
           kind: "workspace_mutation",
+          paths: [],
           operation: "agent.run-intent.user-turn",
           run_protocol_version: 1,
           source: "system",
@@ -362,6 +369,7 @@ describe("useBuildStream — v1 run intent cycle", () => {
         event: {
           id: "ev_a1",
           kind: "workspace_mutation",
+          paths: [],
           operation: "agent.view-admitted",
           agent_view_id: "aview_a1",
           source: "system",
@@ -374,6 +382,7 @@ describe("useBuildStream — v1 run intent cycle", () => {
         event: {
           id: "ev_i2",
           kind: "workspace_mutation",
+          paths: [],
           operation: "agent.run-intent.user-turn",
           run_protocol_version: 1,
           source: "system",
@@ -386,6 +395,7 @@ describe("useBuildStream — v1 run intent cycle", () => {
         event: {
           id: "ev_a2",
           kind: "workspace_mutation",
+          paths: [],
           operation: "agent.view-admitted",
           agent_view_id: "aview_a2",
           source: "system",
@@ -448,6 +458,7 @@ describe("useBuildStream — v1 run intent cycle", () => {
         event: {
           id: "ev_a2",
           kind: "workspace_mutation",
+          paths: [],
           operation: "agent.view-admitted",
           agent_view_id: "aview_a2",
           source: "system",
@@ -486,6 +497,7 @@ describe("useBuildStream — v1 run intent cycle", () => {
         event: {
           id: "ev_a2",
           kind: "workspace_mutation",
+          paths: [],
           operation: "agent.view-admitted",
           agent_view_id: "aview_a2",
           source: "system",

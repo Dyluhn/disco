@@ -4,7 +4,6 @@ present-but-malformed→FAIL(EDIT_ORACLE_EVIDENCE_MALFORMED), and the SKIP-safe 
 from __future__ import annotations
 
 from _eventlog import clean_smoke_log
-
 from harness.build_soak import failure_codes as fc
 from harness.build_soak.classify import classify
 from harness.build_soak.oracles import (

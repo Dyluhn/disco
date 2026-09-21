@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import pytest
 from disco.tools.sandbox.base import ExecResult, SandboxSpec
-
 from harness.cassette import Cassette, CassetteMiss
 from harness.sandbox import RecordingSandboxService, ReplaySandboxService
 

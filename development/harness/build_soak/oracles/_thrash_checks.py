@@ -29,11 +29,9 @@ from ..events import (
 )
 from . import _thrash_shapes as shapes
 from ._thrash_helpers import (
-    approved_plan_predicate_scope,
     largest_background_script_restart_group,
     largest_semantic_shell_repeat_group,
     recovered_blocked_marker,
-    trusted_mutation_receipt_outcome,
 )
 from ._thrash_no_observation import is_no_observation_streak
 from ._thrash_shell import _SHELL_TOOLS

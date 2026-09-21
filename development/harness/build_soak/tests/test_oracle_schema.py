@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pytest
-
 from harness.build_soak.oracles.schema import (
     FAILED,
     OK,

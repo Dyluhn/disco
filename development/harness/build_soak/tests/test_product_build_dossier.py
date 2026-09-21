@@ -8,7 +8,6 @@ from dataclasses import replace
 
 import pytest
 from _eventlog import action, clean_smoke_log, msg, observation, plan, status
-
 from harness.build_soak import failure_codes as fc
 from harness.product_build import (
     EXPORT_SMOKE,

@@ -14,7 +14,6 @@ from __future__ import annotations
 import os
 
 import pytest
-
 from harness.build_soak.run import _relay_log_path
 from harness.build_soak.tests.conftest import _LEDGER_ENV_VARS
 

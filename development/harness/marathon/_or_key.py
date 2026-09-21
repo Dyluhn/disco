@@ -3,7 +3,6 @@
 import os
 import sys
 
-
 _CREDENTIAL_ENV = "DISCO_OPENROUTER_API_KEY"
 
 

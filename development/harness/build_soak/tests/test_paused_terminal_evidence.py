@@ -51,7 +51,6 @@ from typing import Any
 
 import pytest
 from _eventlog import action, msg, observation, plan, status
-
 from harness.build_soak import failure_codes as fc
 from harness.build_soak.adapters.disco_api import DiscoApiClient
 from harness.build_soak.run import run_once

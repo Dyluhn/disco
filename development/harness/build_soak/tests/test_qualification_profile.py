@@ -12,7 +12,6 @@ from pathlib import Path
 
 import pytest
 import yaml
-
 from harness.build_soak import profile as prof
 from harness.build_soak.run import _BATCH_SUMMARY_NAME, batch_summary_name
 from harness.reliability.run import _build_soak_result

@@ -409,7 +409,7 @@ describe("ProvidersSection — generic provider objects", () => {
     expect(screen.getByText(/Most current models accept 128k/i)).toBeInTheDocument();
 
     fireEvent.click(
-      screen.getByRole("button", { name: "Enable", exact: true }),
+      screen.getByRole("button", { name: "Enable" }),
     );
     await waitFor(() =>
       expect(lastEnableBody).toEqual({

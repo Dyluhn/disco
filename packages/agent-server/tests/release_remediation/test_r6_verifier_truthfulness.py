@@ -410,16 +410,16 @@ def _require_anchor_commit() -> None:
     )
 
 
-def _materialize_anchor_tree(dest: Path) -> Path:
-    """Extract the ratified tree at ``_ACCEPTANCE_ANCHOR`` into ``dest``.
+def _materialize_committed_tree(dest: Path) -> Path:
+    """Extract HEAD so the committed manifest and frozen bytes share one identity.
 
-    A throwaway extraction rather than ``git worktree add``: this repository already
-    carries hundreds of registered worktrees, and a test must not add one.
+    The historical campaign-diff audit below keeps its separate acceptance
+    anchor. Its older tree cannot be paired with the current manifest after
+    the repository restructure. This copy also isolates the tampering probes.
     """
-    _require_anchor_commit()
     dest.mkdir(parents=True, exist_ok=True)
     archive = subprocess.run(
-        ["git", "archive", _ACCEPTANCE_ANCHOR], cwd=_REPO_ROOT, capture_output=True, check=True
+        ["git", "archive", "HEAD"], cwd=_REPO_ROOT, capture_output=True, check=True
     ).stdout
     with tarfile.open(fileobj=io.BytesIO(archive)) as tar:
         tar.extractall(dest, filter="data")
@@ -515,12 +515,9 @@ def test_final_verdict_is_false_when_any_gate_fails(override: dict[str, object])
     assert verify._final_verdict(**base) is False
 
 
-# Certification-only: the positive precondition requires the COMMITTED closeout manifest
-# to verify clean against the tree it ratified (``_ACCEPTANCE_ANCHOR``, materialized
-# fresh) — a binding that only the C9 certification lane regenerates.
-# ``integration``-marked per the repo convention: excluded from the default
-# `-m "not integration"` unit selection, runnable explicitly / in the advisory lane. The
-# assertion itself is unchanged.
+# Certification-only: the positive precondition verifies the current committed
+# manifest against the same committed tree, then proves hash and file removal
+# failures. The historical campaign-diff audit remains independently anchored.
 @pytest.mark.integration
 def test_frozen_manifest_check_fails_on_deleted_or_replaced_frozen_file(tmp_path: Path) -> None:
     """Criterion 2: a frozen file missing from reality, or a frozen file whose hash was
@@ -534,19 +531,28 @@ def test_frozen_manifest_check_fails_on_deleted_or_replaced_frozen_file(tmp_path
         "the committed manifest must carry frozen entries, or nothing below is a real check"
     )
 
-    # The COMMITTED manifest, against the tree it was ratified over. Comparing it to the
-    # working tree instead would report a later campaign's edits as closeout drift.
-    ratified = _materialize_anchor_tree(tmp_path / "ratified")
-    ok_now, now_note = verify._verify_frozen_manifest(ratified, stored, note)
-    assert ok_now is True, f"the committed manifest must verify clean on the ratified tree: {now_note}"
+    # Check the live checkout too: a dirty frozen file cannot hide behind the
+    # clean archive used by the destructive negative controls below.
+    ok_checkout, checkout_note = verify._verify_frozen_manifest(_REPO_ROOT, stored, note)
+    assert ok_checkout is True, checkout_note
+    committed = _materialize_committed_tree(tmp_path / "committed")
+    committed_manifest, committed_note = verify._load_manifest(committed)
+    assert committed_manifest == stored, "working and committed acceptance manifests differ"
+    ok_now, now_note = verify._verify_frozen_manifest(committed, committed_manifest, committed_note)
+    assert ok_now is True, f"committed manifest must verify against its own tree: {now_note}"
 
     # Mutate a single stored hash → drift (this is what replacing a frozen artifact with
     # placeholder text looks like to the byte-hash check).
     tampered = json.loads(json.dumps(stored))  # deep copy
     some_file = next(iter(tampered["files"]))
     tampered["files"][some_file] = "0" * 64
-    ok_drift, drift_note = verify._verify_frozen_manifest(ratified, tampered, "loaded")
+    ok_drift, drift_note = verify._verify_frozen_manifest(committed, tampered, "loaded")
     assert ok_drift is False and "drift" in drift_note.lower()
+
+    # A missing accepted file must fail independently of hash tampering.
+    (committed / "development/notes/export-track1-closeout-work-orders.md").unlink()
+    ok_missing, missing_note = verify._verify_frozen_manifest(committed, stored, note)
+    assert ok_missing is False and "missing" in missing_note.lower()
 
 
 # ---- Criterion 5 positive counterpart (needs the real npm toolchain) ------------
@@ -611,7 +617,11 @@ def test_run_frontend_lane_green_true_on_all_passed_browser_report(tmp_path: Pat
     )
     keep = set(green_present)
     frontend_inventory = {name: {} for name in green_present}
-    vitest_rel = Path(str(manifest_mod.FRONTEND_VITEST_DIR).removeprefix("current/")).relative_to("frontend").parts
+    vitest_rel = (
+        Path(str(manifest_mod.FRONTEND_VITEST_DIR).removeprefix("current/"))
+        .relative_to("frontend")
+        .parts
+    )
 
     mirror_repo = tmp_path / "repo"
     evidence_dir = tmp_path / "evidence"
@@ -619,7 +629,11 @@ def test_run_frontend_lane_green_true_on_all_passed_browser_report(tmp_path: Pat
     _mirror_frontend(_REPO_ROOT / "frontend", mirror_repo / "frontend", vitest_rel, keep)
 
     # An all-passed, full-spec-set browser report present in the evidence dir.
-    e2e_dir = mirror_repo / "frontend" / manifest_mod.FRONTEND_E2E_DIR.removeprefix("current/").split("/", 1)[1]
+    e2e_dir = (
+        mirror_repo
+        / "frontend"
+        / manifest_mod.FRONTEND_E2E_DIR.removeprefix("current/").split("/", 1)[1]
+    )
     specs = {p.name for p in e2e_dir.glob("*.spec.ts")}
     assert specs, "the mirror must expose the frozen e2e spec set"
     (evidence_dir / "frontend-e2e.json").write_text(

@@ -18,7 +18,6 @@ from typing import Any
 import pytest
 import test_api_runner as legacy
 from _eventlog import clean_smoke_log
-
 from harness.build_soak import run as old_run
 from harness.build_soak._test_support.api_runner.helpers_core import (
     _client,

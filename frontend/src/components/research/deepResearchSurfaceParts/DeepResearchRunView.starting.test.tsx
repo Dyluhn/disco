@@ -82,7 +82,7 @@ describe("DeepResearchRunView — the start-up state does not pretend", () => {
     run.activity = deriveActivity([{
       id: "writing", kind: "action", seq: 1,
       timestamp: "2026-09-02T10:00:00.000Z", thought: "Writing",
-      tool_call: { id: "phase", tool_name: "phase", arguments: { phase: "writing" } },
+      tool_call: { tool_name: "phase", arguments: { phase: "writing" } },
     }]);
     run.stats = { ...STATS, phase: "writing" };
     render(<DeepResearchRunView r={run} />);

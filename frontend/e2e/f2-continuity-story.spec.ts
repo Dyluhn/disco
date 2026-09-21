@@ -42,12 +42,12 @@ test("the run-continuity surfaces say what the run reported", async ({ page }) =
 
   const resumed = page.locator('[data-f2="resumed"]');
   await expect(resumed).toContainText("Turn 1 of 8");
-  await expect(resumed.locator("[data-dr-carried]")).toHaveText("9 carried from before Stop");
+  await expect(resumed.locator("[data-dr-carried]")).toHaveText("9 retained from earlier research");
   await resumed.screenshot({ path: path.join(OUT, "05-resumed-carried-pool.png") });
 
   const buffered = page.locator('[data-f2="buffered"]');
   await expect(buffered).toContainText(
-    "Model producing (this driver does not report progress while it works)",
+    "Waiting for model reply (this driver does not report progress while it works)",
   );
   await expect(buffered).not.toContainText("Nothing reported for");
   await buffered.screenshot({ path: path.join(OUT, "06-buffered-driver.png") });

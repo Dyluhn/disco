@@ -7,7 +7,6 @@ import json
 
 from _eventlog import action, agent_error, awaiting, clean_smoke_log, msg, observation, plan, status
 from disco.core.loop.engine_contracts import _planning_tool_refusal_message
-
 from harness.build_soak.classify import (
     classify,
     classify_run_folder,

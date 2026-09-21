@@ -39,7 +39,10 @@ def _frames() -> list[dict]:
             "type": "final",
             "answer": {
                 "query": "q",
-                "summary": "A substantive answer explains the result and its important caveats [[p0]].",
+                "summary": (
+                    "A substantive answer explains the result "
+                    "and its important caveats [[p0]]."
+                ),
                 "sections": [
                     {
                         "id": "s0",

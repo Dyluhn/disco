@@ -7,7 +7,6 @@ import json
 
 import pytest
 from _eventlog import clean_smoke_log
-
 from harness.build_soak.classify import classify_run_folder
 from harness.build_soak.product_evidence import (
     validate_product_evidence,

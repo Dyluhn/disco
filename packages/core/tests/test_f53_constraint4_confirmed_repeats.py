@@ -208,9 +208,7 @@ async def test_plan_verifier_failure_count_is_keyed_on_its_own_blocking_label():
     )
 
     loop = _FakeLoop(with_seqs([_prior_notice("dod_unmet"), _prior_notice("dod_unmet")]))
-    await emit_plan_verifier_failure_notice(
-        loop, _plan(), _failure(), [_FakeResult("p", "r")]
-    )
+    await emit_plan_verifier_failure_notice(loop, _plan(), _failure(), [_FakeResult("p", "r")])
 
     assert "did not clear it" not in loop.env_bodies()[0], (
         "a different blocking condition is a first fire, not a repeat"
@@ -585,4 +583,9 @@ async def test_notice_repeat_counts_the_blocking_label_off_the_log():
         with_seqs([_prior_notice("plan_verifier_failed"), _prior_notice("plan_verifier_failed")])
     )
     assert await _notice_repeat(loop, "plan_verifier_failed") == 3
-    assert await _notice_repeat(_FakeLoop(with_seqs([_prior_notice("dod_unmet")])), "plan_verifier_failed") == 1
+    assert (
+        await _notice_repeat(
+            _FakeLoop(with_seqs([_prior_notice("dod_unmet")])), "plan_verifier_failed"
+        )
+        == 1
+    )

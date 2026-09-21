@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import pytest
-
 from harness.build_soak import failure_codes as fc
 from harness.build_soak.classify import classify
 from harness.build_soak.oracles.thrash import ThrashOracle

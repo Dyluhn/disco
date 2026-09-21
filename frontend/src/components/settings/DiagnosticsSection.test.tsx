@@ -60,7 +60,7 @@ describe("DiagnosticsSection", () => {
   });
 
   it("copies the payload as JSON", async () => {
-    const writeText = vi.fn(() => Promise.resolve());
+    const writeText = vi.fn<(text: string) => Promise<void>>(() => Promise.resolve());
     Object.assign(navigator, { clipboard: { writeText } });
     render(<DiagnosticsSection />);
     await userEvent.click(screen.getByRole("button", { name: /Copy diagnostics/i }));

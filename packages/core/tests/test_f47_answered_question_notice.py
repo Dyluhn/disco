@@ -570,7 +570,6 @@ def test_generic_notice_exclusion_is_oracle_owned():
     tool has a notice (generic or richer). This test proves that invariant.
     """
     from disco.core.loop.dedup_generic_notice import _W39_GENERIC_EXCLUDED
-
     from harness.build_soak.oracles.thrash import _longest_identical_streak
 
     # No silent exclusions: the only essential exclusions are the richer

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from _eventlog import action, agent_error, awaiting, msg, observation, plan, status
-
 from harness.build_soak.events import normalize_events
 from harness.build_soak.oracles.revision import RevisionOracle
 

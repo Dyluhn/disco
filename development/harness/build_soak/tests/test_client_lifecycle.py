@@ -6,7 +6,6 @@ import asyncio
 from pathlib import Path
 
 import pytest
-
 from harness.build_soak._test_support.api_runner.helpers_transport import FakeTransport
 from harness.build_soak.adapters.disco_api import DiscoApiClient
 

@@ -26,12 +26,12 @@ function holdEvents(): AgentEvent[] {
     id: "evt_hold_1",
     kind: "action",
     timestamp: AT,
+    thought: "",
     tool_call: {
-      id: "tc_hold_1",
       tool_name: holdAction.tool_name,
       arguments: holdAction.arguments as unknown as Record<string, unknown>,
     },
-  } as ActionEvent;
+  };
   return [event];
 }
 

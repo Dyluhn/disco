@@ -102,24 +102,22 @@ def test_bare_inner_map_without_wrapper_key() -> None:
 
 
 def test_single_server_without_name_derives_one() -> None:
-    blob = json.dumps(
-        {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-memory"]}
-    )
+    blob = json.dumps({"command": "npx", "args": ["-y", "@modelcontextprotocol/server-memory"]})
     (row,) = parse_mcp_import(blob)
     assert row["name"] == "server_memory"
     assert any("no server name" in w for w in row["warnings"])
 
 
 def test_vscode_servers_key_and_http_type_alias() -> None:
-    blob = json.dumps(
-        {"servers": {"fetch": {"type": "http", "url": "https://example.com/mcp"}}}
-    )
+    blob = json.dumps({"servers": {"fetch": {"type": "http", "url": "https://example.com/mcp"}}})
     (row,) = parse_mcp_import(blob)
     assert row["transport"] == "streamable_http"
 
 
 def test_markdown_fences_and_trailing_commas_tolerated() -> None:
-    blob = '```json\n{\n "mcpServers": {\n  "fs": {\n   "command": "npx fs-server",\n  },\n },\n}\n```'
+    blob = (
+        '```json\n{\n "mcpServers": {\n  "fs": {\n   "command": "npx fs-server",\n  },\n },\n}\n```'
+    )
     (row,) = parse_mcp_import(blob)
     assert row["name"] == "fs"
     assert row.get("error") is None

@@ -12,7 +12,6 @@ from contextlib import closing
 from pathlib import Path
 
 import pytest
-
 from scripts import self_host_data as lifecycle
 
 

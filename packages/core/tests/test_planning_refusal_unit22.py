@@ -23,8 +23,8 @@ from __future__ import annotations
 
 import pytest
 from _buildsoak_fakes import BuildExecutor, build_plan_loop
-from disco.core.loop.driver_retry import _PLANNING_TOOL_REFUSAL_NEEDLE
 from disco.core import AgentErrorEvent
+from disco.core.loop.driver_retry import _PLANNING_TOOL_REFUSAL_NEEDLE
 from loop_fakes import ScriptedAgent, action_step
 
 
@@ -38,7 +38,8 @@ async def _collect_planning_refusals(*, shells_before_plan: int) -> list[AgentEr
     steps.append(_submit_plan_step("plan after refusals"))
     agent = ScriptedAgent(steps)
     executor = BuildExecutor()
-    # Mirror the escalation test's readonly shape so force_submit_read_calls_remaining is deterministic
+    # Mirror the escalation test's readonly shape so
+    # force_submit_read_calls_remaining is deterministic.
     executor.readonly_tool_names = lambda: frozenset(  # type: ignore[attr-defined]
         {"file_read", "file_list", "search", "extract", "think"}
     )
@@ -51,7 +52,9 @@ async def _collect_planning_refusals(*, shells_before_plan: int) -> list[AgentEr
     await loop.run()
     events = await store.get_events(f"ut22-repetition-{shells_before_plan}")
     refusals = [
-        e for e in events if isinstance(e, AgentErrorEvent) and _PLANNING_TOOL_REFUSAL_NEEDLE in e.error
+        e
+        for e in events
+        if isinstance(e, AgentErrorEvent) and _PLANNING_TOOL_REFUSAL_NEEDLE in e.error
     ]
     return refusals
 

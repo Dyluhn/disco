@@ -21,7 +21,6 @@ mis-adjudicate, not that they are easy to satisfy.
 from __future__ import annotations
 
 import pytest
-
 from harness.build_soak import failure_codes as fc
 from harness.build_soak.oracles import TARGETED_EDIT_ORACLES
 from harness.build_soak.product_evidence import validate_product_evidence

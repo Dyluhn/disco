@@ -22,7 +22,6 @@ import os
 from pathlib import Path
 
 import pytest
-
 from harness.build_soak.adapters.disco_api import DiscoApiClient, HttpTransport
 from harness.build_soak.run import load_scenarios, run_once
 

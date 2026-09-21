@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import sqlite3
 import sys
+from pathlib import Path
 
 import pytest
 from disco.core import SecurityRisk
@@ -27,7 +28,6 @@ from disco.tools.mcp.migrations import (
 from disco.tools.mcp.pool import McpPool
 
 from packages.tools.tests.mcp_fakes import FAKE_TOOL_DESCRIPTORS
-from pathlib import Path
 
 # The uv workspace root moved under current/ in the three-bucket restructure,
 # so a spawned interpreter no longer finds `packages` on its path via cwd.

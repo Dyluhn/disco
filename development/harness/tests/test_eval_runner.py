@@ -13,7 +13,6 @@ from disco.retrieval.models import (
     Passage,
     VerifiedClaim,
 )
-
 from harness.eval_runner import diff_baseline, score_research
 
 

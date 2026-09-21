@@ -336,12 +336,12 @@ async def test_weakening_refusal_count_is_keyed_on_its_own_blocking_label():
 async def test_weakening_refusal_still_discards_and_still_continues():
     """The repair is additive at the rendering seam: the durable side effects
     (predicate discard, RUNNING status, recoverable CONTINUE) are unchanged."""
+    from disco.core.events import StatusEvent
     from disco.core.loop.plan_revisions import (
         PLAN_WEAKENING_BLOCKER,
         PLAN_WEAKENING_DETAIL,
         reject_plan_weakening,
     )
-    from disco.core.events import StatusEvent
 
     diff = _FakeDiff(dropped=[_FakePredicate("file_exists:index.html")])
     loop = _FakeLoop(events=[_prior_weakening_refusal(PLAN_WEAKENING_BLOCKER)])

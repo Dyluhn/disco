@@ -45,7 +45,9 @@ class _Sandbox:
         for path in self.files:
             if f"{path} " in cmd + " " or cmd.endswith(path) or path in cmd:
                 lines.append(f"{hashlib.sha256(self.files[path]).hexdigest()}  {path}")
-        return SimpleNamespace(exit_code=0, stdout="\n".join(lines) + "\n", stderr="", timed_out=False)
+        return SimpleNamespace(
+            exit_code=0, stdout="\n".join(lines) + "\n", stderr="", timed_out=False
+        )
 
     async def read_file(self, path: str) -> bytes:
         self.reads.append(path)
@@ -81,7 +83,9 @@ async def test_unchanged_turn_hashes_once_and_reads_nothing() -> None:
     assert sbx.execs == 1 and sorted(sbx.reads) == ["a.py", "b.py"]
 
     second, stale, hashes = await _turn(sbx, events, cache, tracker)
-    assert sbx.execs == 2 and sorted(sbx.reads) == ["a.py", "b.py"], "no re-read on an unchanged turn"
+    assert sbx.execs == 2 and sorted(sbx.reads) == ["a.py", "b.py"], (
+        "no re-read on an unchanged turn"
+    )
     assert second is not None and first is not None and second.content == first.content
     assert stale == [] and hashes is not None and set(hashes) == {"a.py", "b.py"}
 
@@ -110,7 +114,10 @@ async def test_hash_failure_falls_back_to_reading_everything() -> None:
     sbx.reads.clear()
     _, stale, hashes = await _turn(sbx, events, cache, tracker)
     assert hashes is None
-    assert set(sbx.reads) == {"a.py", "b.py"}  # the old per-file path (stale scan + snapshot both read)
+    assert set(sbx.reads) == {
+        "a.py",
+        "b.py",
+    }  # the old per-file path (stale scan + snapshot both read)
     assert stale == []
 
 
@@ -129,9 +136,13 @@ async def test_file_missing_from_the_hash_map_is_read_the_old_way() -> None:
 async def test_cache_keeps_only_the_working_set() -> None:
     sbx = _Sandbox({"a.py": b"a", "b.py": b"b", "old.py": b"o"})
     cache, tracker = SnapshotCache(), FileStateTracker()
-    await workspace_snapshot_message(sbx, _events("old.py"), tracker=tracker, hashes=None, cache=cache)
+    await workspace_snapshot_message(
+        sbx, _events("old.py"), tracker=tracker, hashes=None, cache=cache
+    )
     assert len(cache) == 1
-    await workspace_snapshot_message(sbx, _events("a.py", "b.py"), tracker=tracker, hashes=None, cache=cache)
+    await workspace_snapshot_message(
+        sbx, _events("a.py", "b.py"), tracker=tracker, hashes=None, cache=cache
+    )
     assert len(cache) == 2 and cache.get("old.py", hashlib.sha256(b"o").hexdigest()) is None
 
 

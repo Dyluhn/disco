@@ -5,7 +5,8 @@ The owner caught a fail-open: the non-live lane set green from ``exit_code == 0`
 but pytest exits 0 with SKIPPED / xfailed tests (and a non-strict xpass records as a plain
 pass, while a vanished/deselected test is simply absent) — so a lane with real skips was
 wrongly GREEN. The correction runs every governed pytest lane under a purpose-built
-reporting plugin (``development/scripts/closeout_pytest_report.py``) that writes ``{nodeid: category}``
+reporting plugin (``development/scripts/closeout_pytest_report.py``) that writes
+``{nodeid: category}``
 honestly typed from pytest's own report objects, and the verifier requires
 ``selected == represented-as-passed`` exactly.
 

@@ -24,7 +24,6 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 from _writer_doubles import assessed_review
-
 from disco.core.llm import (
     CompletionRequest,
     CompletionResponse,

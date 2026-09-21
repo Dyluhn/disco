@@ -28,6 +28,7 @@ test.describe("Build → plan → stream → confirm", () => {
     await confirmRun.click();
 
     // The activity feed renders the agent's work in plain language.
+    await page.getByRole("button", { name: "Expand agent history" }).click();
     await expect(page.getByText(/wrote fizzbuzz\.py/i)).toBeVisible();
   });
 

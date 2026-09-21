@@ -9,6 +9,7 @@ Anti-gaming bar (from master brief):
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 
 import pytest
 from disco.core import SecurityRisk
@@ -21,7 +22,6 @@ from disco.tools.mcp.config import McpServerConfig, McpSettings
 from disco.tools.mcp.pool import McpPool
 
 from packages.tools.tests.mcp_fakes import FAKE_TOOL_DESCRIPTORS
-from pathlib import Path
 
 # The uv workspace root moved under current/ in the three-bucket restructure,
 # so a spawned interpreter no longer finds `packages` on its path via cwd.

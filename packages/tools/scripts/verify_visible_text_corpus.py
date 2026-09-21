@@ -81,9 +81,8 @@ CLOAKED: list[tuple[str, str]] = [
 def main() -> int:
     import disco.tools.builtin._browser_daemon as daemon_mod
     from disco.tools.builtin.browser import _installed_chromium_executable
-    from playwright.sync_api import sync_playwright
-
     from harness.build_soak.oracles.output_truth import _content_normalized
+    from playwright.sync_api import sync_playwright
 
     executable = _installed_chromium_executable()
     if executable is None:

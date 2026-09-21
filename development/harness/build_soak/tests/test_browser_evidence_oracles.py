@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from _eventlog import clean_smoke_log
-
 from harness.build_soak.classify import classify
 from harness.build_soak.oracles.browser_evidence import (
     BrowserWSOracle,

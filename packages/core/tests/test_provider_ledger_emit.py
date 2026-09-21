@@ -133,7 +133,8 @@ async def test_ledger_record_shape_and_harness_roundtrip(tmp_path, monkeypatch) 
 
     spec = importlib.util.spec_from_file_location(
         "provider_ledger",
-        pathlib.Path(__file__).resolve().parents[3] / "development/harness/build_soak/provider_ledger.py",
+        pathlib.Path(__file__).resolve().parents[3]
+        / "development/harness/build_soak/provider_ledger.py",
     )
     mod = importlib.util.module_from_spec(spec)
     sys.modules["provider_ledger"] = mod

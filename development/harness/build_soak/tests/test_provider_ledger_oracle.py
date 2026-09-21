@@ -6,7 +6,6 @@ from __future__ import annotations
 import json
 
 from _eventlog import clean_smoke_log
-
 from harness.build_soak.classify import classify
 from harness.build_soak.oracles.provider_ledger import ProviderLedgerOracle
 from harness.build_soak.provider_ledger import (

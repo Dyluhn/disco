@@ -15,7 +15,6 @@ an unknown `model_override` by falling back to the default driver silently.
 from __future__ import annotations
 
 import pytest
-
 from harness.build_soak._runner.drive_start import start_scenario
 from harness.build_soak._runner.scenario_io import (
     ContextWindowPinError,

@@ -8,10 +8,10 @@ from __future__ import annotations
 
 import asyncio
 import sys
+from pathlib import Path
 
 import pytest
 from disco.tools.mcp.stdio import McpStdioClient, _clean_base_env
-from pathlib import Path
 
 # The uv workspace root moved under current/ in the three-bucket restructure,
 # so a spawned interpreter no longer finds `packages` on its path via cwd.

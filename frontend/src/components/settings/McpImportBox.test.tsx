@@ -85,7 +85,7 @@ describe("McpImportBox", () => {
   });
 
   it("previews via POST /api/mcp/servers/import with the raw text and dry_run", async () => {
-    const stub = vi.fn(async () => jsonResponse(previewResult(false)));
+    const stub = vi.fn<typeof fetch>(async () => jsonResponse(previewResult(false)));
     vi.stubGlobal("fetch", stub);
     renderBox();
 

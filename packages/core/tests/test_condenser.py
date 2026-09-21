@@ -628,15 +628,23 @@ def test_min_batch_tokens_derives_from_the_soft_to_hard_band():
     c = LLMSummarizingCondenser(context_window=131_072)
     assert c.min_batch_tokens == int((int(131_072 * 0.80) - int(131_072 * 0.65)) * 0.3)  # 5,898
     assert LLMSummarizingCondenser(context_window=8_000).min_batch_tokens == 360  # scales down
-    assert LLMSummarizingCondenser(max_tokens=100, hard_max_tokens=100).min_batch_tokens == 0  # no band → as before
-    assert c.ceiling_tokens == int(131_072 * 0.80) + int((int(131_072 * 0.80) - int(131_072 * 0.65)) * 2 / 3)  # ≈ 0.90 × window
-    assert LLMSummarizingCondenser(max_tokens=100, hard_max_tokens=100).ceiling_tokens == 100  # no band → the hard line
+    assert (
+        LLMSummarizingCondenser(max_tokens=100, hard_max_tokens=100).min_batch_tokens == 0
+    )  # no band → as before
+    assert c.ceiling_tokens == int(131_072 * 0.80) + int(
+        (int(131_072 * 0.80) - int(131_072 * 0.65)) * 2 / 3
+    )  # ≈ 0.90 × window
+    assert (
+        LLMSummarizingCondenser(max_tokens=100, hard_max_tokens=100).ceiling_tokens == 100
+    )  # no band → the hard line
     assert LLMSummarizingCondenser(min_batch_tokens=50).min_batch_tokens == 50
 
 
 async def test_forgettable_tokens_counts_only_what_the_next_condensation_would_remove():
     condenser = LLMSummarizingCondenser(keep_head=1, keep_recent=2, min_forget=2)
-    assert condenser.forgettable_tokens(await _seed_pairs(2)) == 0  # nothing older than the kept turns
+    assert (
+        condenser.forgettable_tokens(await _seed_pairs(2)) == 0
+    )  # nothing older than the kept turns
     events = await _seed_pairs(6)  # 4 aged turns
     aged = condenser.forgettable_tokens(events)
     assert aged > 0
@@ -648,10 +656,12 @@ async def test_soft_pressure_waits_for_a_batch_then_condenses_once():
     turn to forget two events. The loop condenses when a batch of history has aged out."""
     from disco.core.loop.view_render import worth_a_summarizer_call
 
-    condenser = LLMSummarizingCondenser(keep_head=1, keep_recent=2, min_forget=2, min_batch_tokens=40)
+    condenser = LLMSummarizingCondenser(
+        keep_head=1, keep_recent=2, min_forget=2, min_batch_tokens=40
+    )
     worth = lambda events: worth_a_summarizer_call(condenser, events, estimate=90, soft=True)  # noqa: E731
-    assert worth(await _seed_pairs(3)) is False   # one aged turn (~25 tokens)
-    assert worth(await _seed_pairs(6)) is True    # four aged turns
+    assert worth(await _seed_pairs(3)) is False  # one aged turn (~25 tokens)
+    assert worth(await _seed_pairs(6)) is True  # four aged turns
 
     class Bare:  # a condenser without the seam keeps today's behaviour
         pass
@@ -659,22 +669,32 @@ async def test_soft_pressure_waits_for_a_batch_then_condenses_once():
     assert worth_a_summarizer_call(Bare(), await _seed_pairs(3), estimate=90, soft=True) is True
 
 
-async def test_hard_pressure_condenses_at_once_when_it_ends_the_pressure_and_batches_when_it_cannot():
+async def test_hard_pressure_condenses_at_once_when_it_ends_the_pressure_and_batches_when_it_cannot(
+):
     """Run 5: 108.7 k estimated tokens against a 104.9 k hard line — forgetting two events per
     turn could never get under it, yet it paid a summarizer call every turn."""
     from disco.core.loop.view_render import worth_a_summarizer_call
 
     condenser = LLMSummarizingCondenser(
-        max_tokens=10, hard_max_tokens=100, keep_head=1, keep_recent=2, min_forget=2, min_batch_tokens=40
+        max_tokens=10,
+        hard_max_tokens=100,
+        keep_head=1,
+        keep_recent=2,
+        min_forget=2,
+        min_batch_tokens=40,
     )  # soft 10, hard 100, ceiling 160
-    one_turn = await _seed_pairs(3)          # one aged turn, under the batch
-    four_turns = await _seed_pairs(6)        # four aged turns, over the batch
+    one_turn = await _seed_pairs(3)  # one aged turn, under the batch
+    four_turns = await _seed_pairs(6)  # four aged turns, over the batch
     removable = condenser.forgettable_tokens(one_turn)
     assert 0 < removable < 40 < condenser.forgettable_tokens(four_turns)
 
     # Just over the hard line: forgetting one aged turn brings it under → run now.
-    assert worth_a_summarizer_call(condenser, one_turn, estimate=100 + removable - 1, soft=False) is True
-    # Floor above the hard line (under the ceiling): one turn cannot end the pressure → wait for the batch …
+    assert (
+        worth_a_summarizer_call(condenser, one_turn, estimate=100 + removable - 1, soft=False)
+        is True
+    )
+    # Floor above the hard line (under the ceiling): one turn cannot end
+    # the pressure, so wait for the batch.
     stuck = 100 + removable + 1
     assert stuck < condenser.ceiling_tokens
     assert worth_a_summarizer_call(condenser, one_turn, estimate=stuck, soft=False) is False
@@ -687,10 +707,27 @@ async def test_batching_never_carries_the_estimate_past_the_ceiling():
     trigger condenses whatever has aged, soft or hard, batch or not."""
     from disco.core.loop.view_render import worth_a_summarizer_call
 
-    condenser = LLMSummarizingCondenser(max_tokens=10, hard_max_tokens=100, keep_head=1, keep_recent=2, min_forget=2, min_batch_tokens=40)
+    condenser = LLMSummarizingCondenser(
+        max_tokens=10,
+        hard_max_tokens=100,
+        keep_head=1,
+        keep_recent=2,
+        min_forget=2,
+        min_batch_tokens=40,
+    )
     assert condenser.ceiling_tokens == 100 + int(90 * 2 / 3)  # 160
     one_turn = await _seed_pairs(3)  # one aged turn, under the batch
     stuck = 100 + condenser.forgettable_tokens(one_turn) + 1
-    assert worth_a_summarizer_call(condenser, one_turn, estimate=stuck, soft=False) is False   # above hard, under the ceiling: batch
-    assert worth_a_summarizer_call(condenser, one_turn, estimate=condenser.ceiling_tokens, soft=False) is True
-    assert worth_a_summarizer_call(condenser, one_turn, estimate=condenser.ceiling_tokens + 50, soft=True) is True
+    assert (
+        worth_a_summarizer_call(condenser, one_turn, estimate=stuck, soft=False) is False
+    )  # above hard, under the ceiling: batch
+    assert (
+        worth_a_summarizer_call(condenser, one_turn, estimate=condenser.ceiling_tokens, soft=False)
+        is True
+    )
+    assert (
+        worth_a_summarizer_call(
+            condenser, one_turn, estimate=condenser.ceiling_tokens + 50, soft=True
+        )
+        is True
+    )

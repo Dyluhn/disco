@@ -18,7 +18,6 @@ say what actually happened.
 from __future__ import annotations
 
 import pytest
-
 from harness.build_soak import failure_codes as fc
 from harness.build_soak.oracles.scenario_lifecycle import ScenarioLifecycleOracle
 

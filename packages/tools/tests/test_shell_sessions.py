@@ -1069,7 +1069,10 @@ async def test_list_without_output_is_one_tmux_call_and_reads_busy_from_the_fore
     manager = ShellSessionManager(get_inst)
     infos = await manager.list(output=False)
     assert [(i.name, i.busy, i.last_lines) for i in infos] == [
-        ("install", False, ""), ("legacy-server", True, ""), ("mailpit", True, ""), ("preview-node", True, ""),
+        ("install", False, ""),
+        ("legacy-server", True, ""),
+        ("mailpit", True, ""),
+        ("preview-node", True, ""),
     ]
     assert [c for c in inst.cmd_log if "tmux" in c] == [
         "tmux list-panes -a -F '#{session_name}\t#{pane_current_command}'"

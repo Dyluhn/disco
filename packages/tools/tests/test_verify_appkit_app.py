@@ -47,6 +47,7 @@ from disco.tools.builtin.verify_appkit_app import (
     inspect_submit_support,
     inspect_worker,
 )
+from disco.tools.builtin.verify_appkit_app import build_verdict as _build_verdict
 
 
 @pytest.fixture
@@ -1553,7 +1554,6 @@ async def test_extra_unauthenticated_lead_route_fails_worker_contract(stub_brows
 # and hit the identical-call limit of 2. `web_app_probe.compute_verdict` already
 # carried this guidance (b61e09e6); this sibling module never received it.
 
-from disco.tools.builtin.verify_appkit_app import build_verdict as _build_verdict
 
 
 def _check(name: str, passed: bool) -> dict:

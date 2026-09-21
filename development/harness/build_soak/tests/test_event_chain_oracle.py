@@ -14,7 +14,6 @@ from _eventlog import (
     plan,
     status,
 )
-
 from harness.build_soak.events import normalize_events
 from harness.build_soak.oracles.event_chain import EventChainOracle
 

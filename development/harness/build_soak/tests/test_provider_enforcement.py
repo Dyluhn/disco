@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import pytest
-
 from harness.build_soak.run import _require_exact_provider
 
 

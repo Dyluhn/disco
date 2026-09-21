@@ -6,8 +6,8 @@ only usable with the right app secret (else the store is `locked` and yields Non
 
 from __future__ import annotations
 
-import stat
 import os
+import stat
 import sys
 from pathlib import Path
 

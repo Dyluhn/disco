@@ -22,15 +22,6 @@ if str(_REPO_ROOT) not in sys.path:
 from disco.core import ToolResult  # noqa: E402
 from disco.core.events import event_to_json_dict  # noqa: E402
 from disco.core.llm import OperatingMode, ToolSpec  # noqa: E402
-from loop_fakes import (  # noqa: E402
-    AgentStep,
-    FakeExecutor,
-    ScriptedAgent,
-    action_step,
-    build_loop,
-    finish_step,
-)
-
 from harness.build_soak.classify import classify  # noqa: E402
 from harness.build_soak.fixtures.fake_model import (  # noqa: E402
     malformed_plan,
@@ -42,6 +33,14 @@ from harness.build_soak.fixtures.fake_tools import (  # noqa: E402
     FakeToolWorld,
     build_recording_executor,
     make_prose_step_builder,
+)
+from loop_fakes import (  # noqa: E402
+    AgentStep,
+    FakeExecutor,
+    ScriptedAgent,
+    action_step,
+    build_loop,
+    finish_step,
 )
 
 _TOOLS = ["submit_plan", "file_read", "file_list", "search", "extract", "file_write", "shell"]

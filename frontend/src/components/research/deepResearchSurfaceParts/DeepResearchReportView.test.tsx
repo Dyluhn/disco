@@ -22,7 +22,7 @@ vi.mock("../NeedMoreCard", () => ({
 const report: ReportEvent = {
   id: "report-1",
   seq: 3,
-  ts: "2026-08-16T00:00:00Z",
+  timestamp: "2026-08-16T00:00:00Z",
   kind: "report",
   source: "agent",
   query: "What shipped?",

@@ -69,6 +69,7 @@ vi.mock("@/api/agent", () => ({
               markdown: "Quantum computing remains an active engineering field.",
               cited_passage_ids: [],
               confidence: "low",
+              disputed_notes: [],
               unsupported_count: 0,
             },
           ],

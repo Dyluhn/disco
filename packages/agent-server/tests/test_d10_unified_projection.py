@@ -43,7 +43,6 @@ from disco.core.events import (
 )
 from disco.retrieval.models import SearchHit
 from fastapi.testclient import TestClient
-
 from harness.cassette import Cassette, cassette_key
 from harness.projection import project_cassette_rows
 
@@ -353,7 +352,9 @@ def test_cassette_disk_load_still_works() -> None:
     the replay_runner relies on are intact."""
     from pathlib import Path
 
-    cas_path = Path(__file__).resolve().parents[3] / "development" / "harness" / "cassettes" / "demo.jsonl"
+    cas_path = (
+        Path(__file__).resolve().parents[3] / "development" / "harness" / "cassettes" / "demo.jsonl"
+    )
     if not cas_path.exists():
         pytest.skip("harness demo cassette not present")
     cas = Cassette.load(cas_path)

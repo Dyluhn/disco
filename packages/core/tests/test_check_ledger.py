@@ -13,10 +13,9 @@ Contract:
 
 from __future__ import annotations
 
-import pytest
-
 from dataclasses import dataclass
 
+import pytest
 from disco.core import (
     ActionEvent,
     AgentErrorEvent,
@@ -120,7 +119,9 @@ def _make_loop(executor) -> object:
 
 
 def _action(tool: str, call_id: str, **arguments) -> ActionEvent:
-    return ActionEvent(thought="t", tool_call=ToolCall(tool_name=tool, call_id=call_id, arguments=arguments))
+    return ActionEvent(
+        thought="t", tool_call=ToolCall(tool_name=tool, call_id=call_id, arguments=arguments)
+    )
 
 
 async def _drive(loop, action: ActionEvent) -> list[Event]:
@@ -164,7 +165,9 @@ async def test_failed_shell_run_records_on_the_error_event() -> None:
 
 async def test_shell_exec_is_recorded_too() -> None:
     loop = _make_loop(_ShellExecutor(_Sandbox([DIGEST_A, DIGEST_B])))
-    events = await _drive(loop, _action("shell_exec", "c1", session="s", command="node server.js &"))
+    events = await _drive(
+        loop, _action("shell_exec", "c1", session="s", command="node server.js &")
+    )
 
     record = _record(events)
     assert record["tree_before"] == DIGEST_A
@@ -211,7 +214,10 @@ async def test_busy_sessions_ask_for_the_cheap_listing_when_the_manager_offers_i
 
         async def list(self, *, output: bool = True):
             self.calls.append(output)
-            return [type("I", (), {"name": "preview", "busy": True})(), type("I", (), {"name": "install", "busy": False})()]
+            return [
+                type("I", (), {"name": "preview", "busy": True})(),
+                type("I", (), {"name": "install", "busy": False})(),
+            ]
 
     class _Box:
         sessions = _Manager()
@@ -239,8 +245,15 @@ def test_digest_command_prunes_dependency_dirs_and_runtime_state() -> None:
 # --- (d) memo hits over the record -------------------------------------------------
 
 
-def _obs(call_id: str, command: str, *, before: str | None, after: str | None, exit_code: int = 0,
-         sessions: tuple[str, ...] = ()) -> list[Event]:
+def _obs(
+    call_id: str,
+    command: str,
+    *,
+    before: str | None,
+    after: str | None,
+    exit_code: int = 0,
+    sessions: tuple[str, ...] = (),
+) -> list[Event]:
     action = _action("shell", call_id, command=command)
     meta = check_ledger.check_meta(
         action,
@@ -250,7 +263,10 @@ def _obs(call_id: str, command: str, *, before: str | None, after: str | None, e
     )
     result = ToolResult(call_id=call_id, tool_name="shell", success=exit_code == 0, content="")
     if exit_code == 0:
-        return [action, ObservationEvent(tool_result=result, action_id=action.id, meta={"check": meta})]
+        return [
+            action,
+            ObservationEvent(tool_result=result, action_id=action.id, meta={"check": meta}),
+        ]
     return [action, AgentErrorEvent(error="exit", action_id=action.id, meta={"check": meta})]
 
 
@@ -332,19 +348,30 @@ MUTATE = ActionProfile(capabilities=frozenset({EffectCapability.WORKSPACE_MUTATE
 def _edit(call_id: str, path: str) -> list[Event]:
     action = _action("file_edit", call_id, path=path, old="a", new="b")
     result = ToolResult(
-        call_id=call_id, tool_name="file_edit", success=True, content="edited", action_profile=MUTATE
+        call_id=call_id,
+        tool_name="file_edit",
+        success=True,
+        content="edited",
+        action_profile=MUTATE,
     )
     return [action, ObservationEvent(tool_result=result, action_id=action.id)]
 
 
-def _pure(call_id: str, command: str, *, exit_code: int = 0, sessions: tuple[str, ...] = ()) -> list[Event]:
-    return _obs(call_id, command, before=DIGEST_A, after=DIGEST_A, exit_code=exit_code, sessions=sessions)
+def _pure(
+    call_id: str, command: str, *, exit_code: int = 0, sessions: tuple[str, ...] = ()
+) -> list[Event]:
+    return _obs(
+        call_id, command, before=DIGEST_A, after=DIGEST_A, exit_code=exit_code, sessions=sessions
+    )
 
 
 def _running_session(call_id: str, name: str, command: str) -> list[Event]:
     action = _action("shell_exec", call_id, session=name, command=command)
     result = ToolResult(
-        call_id=call_id, tool_name="shell_exec", success=True, content="still running",
+        call_id=call_id,
+        tool_name="shell_exec",
+        success=True,
+        content="still running",
         structured={"running": True},
     )
     return [action, ObservationEvent(tool_result=result, action_id=action.id)]
@@ -352,10 +379,10 @@ def _running_session(call_id: str, name: str, command: str) -> list[Event]:
 
 def test_mutations_are_edits_and_tree_changing_shell_runs_only() -> None:
     events = with_seqs(
-        _edit("e1", "src/a.js")                                          # seq 1-2: mutation
-        + _pure("c1", "bash smoke.sh")                                    # seq 3-4: pure, not a mutation
-        + _obs("c2", "npm install", before=DIGEST_A, after=DIGEST_B)      # seq 5-6: changed tree
-        + _obs("c3", "ls", before=None, after=None)                       # seq 7-8: unknown digest
+        _edit("e1", "src/a.js")  # seq 1-2: mutation
+        + _pure("c1", "bash smoke.sh")  # seq 3-4: pure, not a mutation
+        + _obs("c2", "npm install", before=DIGEST_A, after=DIGEST_B)  # seq 5-6: changed tree
+        + _obs("c3", "ls", before=None, after=None)  # seq 7-8: unknown digest
     )
     found = check_ledger.mutations(events)
     assert [(m.seq, m.tool, m.path) for m in found] == [
@@ -367,11 +394,11 @@ def test_mutations_are_edits_and_tree_changing_shell_runs_only() -> None:
 
 def test_check_statuses_current_stale_failed_and_excludes_mutating_runs() -> None:
     events = with_seqs(
-        _pure("c1", "bash smoke.sh")                                      # seq 1-2 → stale (edit follows)
-        + _pure("c2", "curl localhost:3000/api/me", exit_code=7)          # seq 3-4 → failed
-        + _edit("e1", "src/email.js")                                     # seq 5-6
-        + _obs("c4", "npm install", before=DIGEST_A, after=DIGEST_B)      # seq 7-8: excluded
-        + _pure("c3", "node rt-test.mjs")                                 # seq 9-10 → current
+        _pure("c1", "bash smoke.sh")  # seq 1-2 → stale (edit follows)
+        + _pure("c2", "curl localhost:3000/api/me", exit_code=7)  # seq 3-4 → failed
+        + _edit("e1", "src/email.js")  # seq 5-6
+        + _obs("c4", "npm install", before=DIGEST_A, after=DIGEST_B)  # seq 7-8: excluded
+        + _pure("c3", "node rt-test.mjs")  # seq 9-10 → current
     )
     statuses = check_ledger.check_statuses(events)
     assert [(s.command, s.state, s.seq) for s in statuses] == [
@@ -405,8 +432,10 @@ def test_no_checks_renders_nothing() -> None:
 
 def test_staled_line_names_only_current_passing_checks() -> None:
     events = with_seqs(
-        _pure("c1", "bash smoke.sh") + _pure("c2", "bash lint.sh", exit_code=1)
-        + _edit("e0", "x.js") + _pure("c3", "node rt.mjs")
+        _pure("c1", "bash smoke.sh")
+        + _pure("c2", "bash lint.sh", exit_code=1)
+        + _edit("e0", "x.js")
+        + _pure("c3", "node rt.mjs")
     )
     line = check_ledger.staled_checks_line(events)
     assert line == "[staled 1 recorded check: node rt.mjs — re-run after your changes]"
@@ -414,9 +443,9 @@ def test_staled_line_names_only_current_passing_checks() -> None:
 
 def test_stale_sessions_started_before_a_source_change() -> None:
     events = with_seqs(
-        _running_session("s1", "server", "node server.js")   # seq 1-2
-        + _edit("e1", "src/routes.js")                        # seq 3-4
-        + _running_session("s2", "mailpit", "./mailpit")      # seq 5-6, after the edit
+        _running_session("s1", "server", "node server.js")  # seq 1-2
+        + _edit("e1", "src/routes.js")  # seq 3-4
+        + _running_session("s2", "mailpit", "./mailpit")  # seq 5-6, after the edit
     )
     stale = check_ledger.stale_sessions(events, ["server", "mailpit", "unknown"])
     assert [(s.name, s.started_seq, s.changed_by.seq) for s in stale] == [("server", 2, 4)]
@@ -433,14 +462,20 @@ class _ProfileExecutor(_ShellExecutor):
         if call.tool_name == "file_edit":
             self.calls.append(call)
             return ToolResult(
-                call_id=call.call_id, tool_name="file_edit", success=True,
-                content="edited src/a.js", action_profile=MUTATE,
+                call_id=call.call_id,
+                tool_name="file_edit",
+                success=True,
+                content="edited src/a.js",
+                action_profile=MUTATE,
             )
         if call.tool_name == "shell_exec":
             self.calls.append(call)
             return ToolResult(
-                call_id=call.call_id, tool_name="shell_exec", success=True,
-                content="session 'server' — still running", structured={"running": True},
+                call_id=call.call_id,
+                tool_name="shell_exec",
+                success=True,
+                content="session 'server' — still running",
+                structured={"running": True},
             )
         return await super().execute(call)
 
@@ -493,7 +528,9 @@ class _SeqExecutor(_ShellExecutor):
         self.calls.append(call)
         code = self._codes.pop(0) if self._codes else 0
         return ToolResult(
-            call_id=call.call_id, tool_name=call.tool_name, success=code == 0,
+            call_id=call.call_id,
+            tool_name=call.tool_name,
+            success=code == 0,
             content=f"run #{len(self.calls)} output" if code == 0 else "",
             error=None if code == 0 else f"command exited {code}",
             structured={"exit_code": code},
@@ -511,7 +548,11 @@ def test_repeatable_needs_one_agreeing_repeat_and_no_disagreement() -> None:
     two = check_ledger.check_records(with_seqs(_pure("c1", "bash t.sh") + _pure("c2", "bash t.sh")))
     assert check_ledger.repeatable(fp, two) is True
     flaky = check_ledger.check_records(
-        with_seqs(_pure("c1", "bash t.sh") + _pure("c2", "bash t.sh", exit_code=1) + _pure("c3", "bash t.sh"))
+        with_seqs(
+            _pure("c1", "bash t.sh")
+            + _pure("c2", "bash t.sh", exit_code=1)
+            + _pure("c3", "bash t.sh")
+        )
     )
     assert check_ledger.repeatable(fp, flaky) is False
     assert check_ledger.flaky_fingerprints(flaky) == frozenset({fp})
@@ -520,7 +561,9 @@ def test_repeatable_needs_one_agreeing_repeat_and_no_disagreement() -> None:
 def test_check_fingerprint_ignores_force() -> None:
     plain = _action("shell", "a", command="ls")
     forced = _action("shell", "b", command="ls", force=True)
-    assert check_ledger.check_fingerprint(plain.tool_call) == check_ledger.check_fingerprint(forced.tool_call)
+    assert check_ledger.check_fingerprint(plain.tool_call) == check_ledger.check_fingerprint(
+        forced.tool_call
+    )
     assert check_ledger.forced(forced) and not check_ledger.forced(plain)
 
 
@@ -530,7 +573,7 @@ async def test_third_identical_run_is_answered_from_the_record(monkeypatch) -> N
     ex = _SeqExecutor(sandbox, [0, 0, 0, 0])
     loop = _make_loop(ex)
     await _drive(loop, _action("shell", "c1", command="bash smoke.sh"))
-    await _drive(loop, _action("shell", "c2", command="bash smoke.sh"))   # first repeat executes
+    await _drive(loop, _action("shell", "c2", command="bash smoke.sh"))  # first repeat executes
     assert len(ex.calls) == 2
     events = await _drive(loop, _action("shell", "c3", command="bash smoke.sh"))
     assert len(ex.calls) == 2, "the proven-repeatable third run must not execute"
@@ -541,9 +584,7 @@ async def test_third_identical_run_is_answered_from_the_record(monkeypatch) -> N
     assert obs.tool_result.structured == {"exit_code": 0, "memo_of_seq": 4}
     assert obs.meta["check"]["memo_of"] == 4 and obs.meta["check"]["exit_code"] == 0
     # the memo is the notice: no W-39 reminder follows it
-    assert not any(
-        e.seq > obs.seq and getattr(e, "message", None) is not None for e in events
-    )
+    assert not any(e.seq > obs.seq and getattr(e, "message", None) is not None for e in events)
     # and the record keeps counting hits without executing
     assert [(r.seq, s.seq) for r, s in check_ledger.memo_hits(events)] == [(4, 2), (obs.seq, 4)]
 
@@ -565,7 +606,9 @@ async def test_a_disagreeing_repeat_makes_the_command_flaky_and_never_memoised(m
     ex = _SeqExecutor(_Sandbox([DIGEST_A] * 8), [0, 1, 0, 0])
     loop = _make_loop(ex)
     await _drive(loop, _action("shell", "c1", command="bash flaky.sh"))
-    await _drive(loop, _action("shell", "c2", command="bash flaky.sh"))   # exits 1 on the same source
+    await _drive(
+        loop, _action("shell", "c2", command="bash flaky.sh")
+    )  # exits 1 on the same source
     await _drive(loop, _action("shell", "c3", command="bash flaky.sh"))
     events = await _drive(loop, _action("shell", "c4", command="bash flaky.sh"))
     assert len(ex.calls) == 4
@@ -576,11 +619,13 @@ async def test_a_disagreeing_repeat_makes_the_command_flaky_and_never_memoised(m
 
 async def test_changed_source_or_kill_switch_executes(monkeypatch) -> None:
     monkeypatch.delenv("DISCO_CHECK_MEMO", raising=False)
-    ex = _SeqExecutor(_Sandbox([DIGEST_A, DIGEST_A, DIGEST_A, DIGEST_A, DIGEST_B, DIGEST_B]), [0, 0, 0])
+    ex = _SeqExecutor(
+        _Sandbox([DIGEST_A, DIGEST_A, DIGEST_A, DIGEST_A, DIGEST_B, DIGEST_B]), [0, 0, 0]
+    )
     loop = _make_loop(ex)
     await _drive(loop, _action("shell", "c1", command="bash smoke.sh"))
     await _drive(loop, _action("shell", "c2", command="bash smoke.sh"))
-    await _drive(loop, _action("shell", "c3", command="bash smoke.sh"))   # digest B now → executes
+    await _drive(loop, _action("shell", "c3", command="bash smoke.sh"))  # digest B now → executes
     assert len(ex.calls) == 3
 
     monkeypatch.setenv("DISCO_CHECK_MEMO", "off")
@@ -606,7 +651,9 @@ class _GateExecutor(_ProfileExecutor):
             self.calls.append(call)
             code = self._codes.pop(0) if self._codes else 0
             return ToolResult(
-                call_id=call.call_id, tool_name="shell", success=code == 0,
+                call_id=call.call_id,
+                tool_name="shell",
+                success=code == 0,
                 content="24/24 PASS" if code == 0 else "FAIL: search medications",
                 error=None if code == 0 else f"command exited {code}",
                 structured={"exit_code": code},
@@ -633,7 +680,9 @@ def _gate_messages(events: list[Event]) -> list[str]:
 
 async def test_gate_reruns_the_stale_check_as_a_host_probe_and_passes(monkeypatch) -> None:
     monkeypatch.setenv("DISCO_CHECK_MEMO", "off")
-    ex = _GateExecutor(_Sandbox([DIGEST_A, DIGEST_A] + [DIGEST_B] * 8), codes=[0, 0])  # the edit changes the source
+    ex = _GateExecutor(
+        _Sandbox([DIGEST_A, DIGEST_A] + [DIGEST_B] * 8), codes=[0, 0]
+    )  # the edit changes the source
     loop = _make_loop(ex)
     events = await _seed_stale_check(loop)
     assert [s.state for s in check_ledger.check_statuses(events)] == ["stale"]
@@ -641,7 +690,10 @@ async def test_gate_reruns_the_stale_check_as_a_host_probe_and_passes(monkeypatc
     assert await loop._finish.stale_checks_gate_passed(events) is True
     events = await loop.store.get_events(CID)
     probe = [e for e in events if isinstance(e, ActionEvent) and e.meta.get("verify_probe")]
-    assert len(probe) == 1 and probe[0].tool_call.arguments == {"command": "bash smoke.sh", "force": True}
+    assert len(probe) == 1 and probe[0].tool_call.arguments == {
+        "command": "bash smoke.sh",
+        "force": True,
+    }
     assert len(_shell_calls(ex)) == 2  # the original run and the gate's rerun
     assert [s.state for s in check_ledger.check_statuses(events)] == ["current"]
     assert _gate_messages(events) == []
@@ -678,9 +730,10 @@ async def test_gate_lets_finish_through_on_the_third_refusal(monkeypatch) -> Non
 
 
 LONG_COMMAND = (
-    "cd /workspace && export PATH=\"/workspace/bin:$PATH\" && \\\n"
-    "TS=$(date +%s) && echo \"=== 1. register ===\" && curl -s -X POST http://127.0.0.1:8000/api/auth/register "
-    "-H 'Content-Type: application/json' -d \"{\\\"email\\\":\\\"p$TS@example.com\\\"}\" | head -c 300"
+    'cd /workspace && export PATH="/workspace/bin:$PATH" && \\\n'
+    'TS=$(date +%s) && echo "=== 1. register ===" && '
+    'curl -s -X POST http://127.0.0.1:8000/api/auth/register '
+    '-H \'Content-Type: application/json\' -d "{\\"email\\":\\"p$TS@example.com\\"}" | head -c 300'
 )
 
 
@@ -726,15 +779,24 @@ async def test_probe_results_do_not_touch_the_circuit_breaker_streak(monkeypatch
     events = await _seed_stale_check(loop)
     assert await loop._finish.stale_checks_gate_passed(events) is False
     events = await loop.store.get_events(CID)
-    assert sum(1 for e in events if isinstance(e, AgentErrorEvent)) == 2  # the two probe failures exist
+    assert (
+        sum(1 for e in events if isinstance(e, AgentErrorEvent)) == 2
+    )  # the two probe failures exist
     assert signals.count_recent_failures(events) == 0
 
     real = _action("shell", "r1", command="false")
     real_error = AgentErrorEvent(error="command exited 1", action_id=real.id)
-    probe = ActionEvent(thought="gate", tool_call=ToolCall(tool_name="shell", arguments={"command": "true"}),
-                        meta={"verify_probe": True})
-    probe_ok = ObservationEvent(action_id=probe.id, tool_result=ToolResult(
-        call_id="p", tool_name="shell", success=True, content="", structured={"exit_code": 0}))
+    probe = ActionEvent(
+        thought="gate",
+        tool_call=ToolCall(tool_name="shell", arguments={"command": "true"}),
+        meta={"verify_probe": True},
+    )
+    probe_ok = ObservationEvent(
+        action_id=probe.id,
+        tool_result=ToolResult(
+            call_id="p", tool_name="shell", success=True, content="", structured={"exit_code": 0}
+        ),
+    )
     assert signals.count_recent_failures([real, real_error, probe, probe_ok]) == 1
 
 
@@ -742,40 +804,61 @@ async def test_probe_results_do_not_touch_the_circuit_breaker_streak(monkeypatch
     ("command", "written", "expected"),
     [
         ("bash check.sh", {"check.sh", "index.html"}, True),
-        ("ls -la public/", {"public/app.js"}, True),                       # a directory of a written file
+        ("ls -la public/", {"public/app.js"}, True),  # a directory of a written file
         ("node server/index.js --check", {"server/index.js"}, True),
         ("./scripts/smoke.sh", {"scripts/smoke.sh"}, True),
-        ("bash smoke.sh", set(), True),                                     # a script file, however it got there
+        ("bash smoke.sh", set(), True),  # a script file, however it got there
         ("node rt-test.mjs && echo ok", set(), True),
-        ("python3 -c \"print(1)\"", set(), False),                          # an interpreter without a script
-        ("curl -s http://127.0.0.1:8000/api/health", set(), True),         # loopback server
-        ("python3 -c \"import urllib.request as U;U.urlopen('http://localhost:5173/')\"", set(), True),
+        ('python3 -c "print(1)"', set(), False),  # an interpreter without a script
+        ("curl -s http://127.0.0.1:8000/api/health", set(), True),  # loopback server
+        (
+            "python3 -c \"import urllib.request as U;U.urlopen('http://localhost:5173/')\"",
+            set(),
+            True,
+        ),
         ("npm test", set(), True),
         ("cd server && make check", set(), True),
         ("which mailpit || echo 'no mailpit in PATH'", {"index.html"}, False),
         ("find / -name 'mailpit*' -type f 2>/dev/null | head", {"server/index.js"}, False),
-        ('cd /tmp && curl -sL -o mailpit.tar.gz "https://github.com/axllent/mailpit/releases/latest/x.tar.gz"',
-         {"server/index.js"}, False),
+        (
+            'cd /tmp && curl -sL -o mailpit.tar.gz "https://github.com/axllent/mailpit/releases/latest/x.tar.gz"',
+            {"server/index.js"},
+            False,
+        ),
         ("which go docker 2>/dev/null; go version", set(), False),
         ("", {"index.html"}, False),
     ],
 )
-def test_verifies_source_names_a_written_file_a_script_a_loopback_server_or_a_runner(command, written, expected) -> None:
+def test_verifies_source_names_a_written_file_a_script_a_loopback_server_or_a_runner(
+    command, written, expected
+) -> None:
     assert check_ledger.verifies_source(command, frozenset(written)) is expected
 
 
 def test_written_paths_come_from_the_agents_mutations() -> None:
-    events = with_seqs(_edit("e1", "src/email.js") + _pure("c1", "bash check.sh") + _edit("e2", "/public/app.js"))
+    events = with_seqs(
+        _edit("e1", "src/email.js") + _pure("c1", "bash check.sh") + _edit("e2", "/public/app.js")
+    )
     assert check_ledger.written_paths(events) == frozenset({"src/email.js", "public/app.js"})
 
 
 async def test_gate_does_not_rerun_setup_commands_that_cannot_depend_on_source(monkeypatch) -> None:
-    """Run 3 re-ran `which mailpit`, `find / -name mailpit*` and a GitHub download at finish (V-37)."""
+    """Run 3 repeated setup checks at finish (V-37).
+
+    It re-ran `which mailpit`, `find / -name mailpit*`, and a GitHub download.
+    """
     monkeypatch.setenv("DISCO_CHECK_MEMO", "off")
-    ex = _GateExecutor(_Sandbox([DIGEST_A] * 6 + [DIGEST_B] * 8), codes=[0, 0, 0])  # three agent runs on A
+    ex = _GateExecutor(
+        _Sandbox([DIGEST_A] * 6 + [DIGEST_B] * 8), codes=[0, 0, 0]
+    )  # three agent runs on A
     loop = _make_loop(ex)
     await _drive(loop, _action("shell", "c0", command="which mailpit || echo 'no mailpit in PATH'"))
-    await _drive(loop, _action("shell", "c1", command='cd /tmp && curl -sL -o mp.tgz "https://github.com/x/y/z.tgz"'))
+    await _drive(
+        loop,
+        _action(
+            "shell", "c1", command='cd /tmp && curl -sL -o mp.tgz "https://github.com/x/y/z.tgz"'
+        ),
+    )
     await _drive(loop, _action("shell", "c2", command="bash check.sh"))
     events = await _drive(loop, _action("file_edit", "e1", path="check.sh", old="a", new="b"))
     assert [s.state for s in check_ledger.check_statuses(events)] == ["stale", "stale", "stale"]
@@ -797,7 +880,11 @@ async def test_gate_reruns_with_the_agents_own_arguments(monkeypatch) -> None:
     await _drive(loop, _action("shell", "c1", command="bash check.sh", timeout_s=30))
     events = await _drive(loop, _action("file_edit", "e1", path="check.sh", old="a", new="b"))
     assert await loop._finish.stale_checks_gate_passed(events) is True
-    [probe] = [e for e in await loop.store.get_events(CID) if isinstance(e, ActionEvent) and e.meta.get("verify_probe")]
+    [probe] = [
+        e
+        for e in await loop.store.get_events(CID)
+        if isinstance(e, ActionEvent) and e.meta.get("verify_probe")
+    ]
     assert probe.tool_call.arguments == {"command": "bash check.sh", "timeout_s": 30, "force": True}
 
 
@@ -807,22 +894,31 @@ def test_probe_pairs_are_not_identical_action_error_cycles_for_the_stuck_detecto
     def pairs(meta: dict) -> list[Event]:
         out: list[Event] = []
         for _ in range(3):
-            a = ActionEvent(thought="gate", tool_call=ToolCall(tool_name="shell", arguments={"command": "bash x.sh"}), meta=meta)
+            a = ActionEvent(
+                thought="gate",
+                tool_call=ToolCall(tool_name="shell", arguments={"command": "bash x.sh"}),
+                meta=meta,
+            )
             out += [a, AgentErrorEvent(error="command exited 2", action_id=a.id)]
         return out
 
-    assert StuckDetector().evaluate(with_seqs(pairs({}))).is_stuck is True           # the model's own loop
+    assert StuckDetector().evaluate(with_seqs(pairs({}))).is_stuck is True  # the model's own loop
     assert StuckDetector().evaluate(with_seqs(pairs({"verify_probe": True}))).is_stuck is False
 
 
 def test_recent_failures_lists_only_the_models_errors_most_recent_first() -> None:
     from disco.core.loop import signals
 
-    a = _action("shell", "a", command="false"); ea = AgentErrorEvent(error="exit 1 (a)", action_id=a.id)
-    probe = ActionEvent(thought="gate", tool_call=ToolCall(tool_name="shell", arguments={"command": "bash x.sh"}),
-                        meta={"verify_probe": True})
+    a = _action("shell", "a", command="false")
+    ea = AgentErrorEvent(error="exit 1 (a)", action_id=a.id)
+    probe = ActionEvent(
+        thought="gate",
+        tool_call=ToolCall(tool_name="shell", arguments={"command": "bash x.sh"}),
+        meta={"verify_probe": True},
+    )
     ep = AgentErrorEvent(error="exit 2 (probe)", action_id=probe.id)
-    b = _action("shell", "b", command="false"); eb = AgentErrorEvent(error="exit 1 (b)", action_id=b.id)
+    b = _action("shell", "b", command="false")
+    eb = AgentErrorEvent(error="exit 1 (b)", action_id=b.id)
     streak = signals.recent_failures([a, ea, probe, ep, b, eb])
     assert [e.error for e in streak] == ["exit 1 (b)", "exit 1 (a)"]
     assert signals.count_recent_failures([a, ea, probe, ep, b, eb]) == 2
@@ -832,7 +928,9 @@ async def test_gate_is_a_no_op_without_stale_checks(monkeypatch) -> None:
     monkeypatch.setenv("DISCO_CHECK_MEMO", "off")
     ex = _GateExecutor(_Sandbox([DIGEST_A] * 6))
     loop = _make_loop(ex)
-    events = await _drive(loop, _action("shell", "c1", command="bash smoke.sh"))   # current, not stale
+    events = await _drive(
+        loop, _action("shell", "c1", command="bash smoke.sh")
+    )  # current, not stale
     assert await loop._finish.stale_checks_gate_passed(events) is True
     assert len(_shell_calls(ex)) == 1
     assert await loop._finish.stale_checks_gate_passed([]) is True
@@ -849,9 +947,17 @@ class _BrowserExecutor(_ProfileExecutor):
             self.calls.append(call)
             url = (call.arguments or {}).get("url") or "http://localhost:3000/"
             return ToolResult(
-                call_id=call.call_id, tool_name="browser", success=True,
-                content=f"[UNTRUSTED WEB CONTENT]\nURL: {url}\nTITLE: Shop\nELEMENTS:\n  1[:] <button>Sign in</button>\n[END]\nscreenshot: .pmx/screenshots/0001.png",
-                action_profile=ActionProfile(capabilities=frozenset({EffectCapability.WEB_OBSERVE})),
+                call_id=call.call_id,
+                tool_name="browser",
+                success=True,
+                content=(
+                    f"[UNTRUSTED WEB CONTENT]\nURL: {url}\nTITLE: Shop\nELEMENTS:\n"
+                    "  1[:] <button>Sign in</button>\n[END]\n"
+                    "screenshot: .pmx/screenshots/0001.png"
+                ),
+                action_profile=ActionProfile(
+                    capabilities=frozenset({EffectCapability.WEB_OBSERVE})
+                ),
             )
         return await super().execute(call)
 
@@ -860,7 +966,9 @@ async def test_browser_observation_carries_a_step_record(monkeypatch) -> None:
     monkeypatch.setenv("DISCO_CHECK_MEMO", "off")
     loop = _make_loop(_BrowserExecutor(_Sandbox([DIGEST_A] * 4)))
     await _drive(loop, _action("file_edit", "e1", path="src/a.js", old="a", new="b"))
-    events = await _drive(loop, _action("browser", "b1", action="navigate", url="http://localhost:3000/"))
+    events = await _drive(
+        loop, _action("browser", "b1", action="navigate", url="http://localhost:3000/")
+    )
     obs = _last_obs(events)
     step = obs.meta["step"]
     assert step["url"] == "http://localhost:3000/" and len(step["dom_hash"]) == 64
@@ -868,22 +976,36 @@ async def test_browser_observation_carries_a_step_record(monkeypatch) -> None:
     assert step["mutation_seq"] == 2  # the edit's observation
 
 
-async def test_browser_line_counts_steps_and_identical_repeats_since_the_last_edit(monkeypatch) -> None:
+async def test_browser_line_counts_steps_and_identical_repeats_since_the_last_edit(
+    monkeypatch,
+) -> None:
     monkeypatch.setenv("DISCO_CHECK_MEMO", "off")
     loop = _make_loop(_BrowserExecutor(_Sandbox([DIGEST_A] * 6)))
     await _drive(loop, _action("file_edit", "e1", path="src/a.js", old="a", new="b"))
     await _drive(loop, _action("browser", "b1", action="navigate", url="http://localhost:3000/"))
     await _drive(loop, _action("browser", "b2", action="click", click_text="Sign in"))
-    events = await _drive(loop, _action("browser", "b3", action="navigate", url="http://localhost:3000/"))
+    events = await _drive(
+        loop, _action("browser", "b3", action="navigate", url="http://localhost:3000/")
+    )
     summary = check_ledger.browser_summary(events)
     assert summary is not None and (summary.since_seq, summary.steps, summary.repeated) == (2, 3, 1)
-    assert "Browser: 3 steps since the last source change (step 2); 1 repeated an identical earlier step." == summary.render()
+    assert (
+        "Browser: 3 steps since the last source change (step 2); "
+        "1 repeated an identical earlier step."
+        == summary.render()
+    )
     block = check_ledger.render_checks_block(events)
-    assert block is not None and block.splitlines()[0] == check_ledger.CHECKS_HEADER and "Browser: 3 steps" in block
+    assert (
+        block is not None
+        and block.splitlines()[0] == check_ledger.CHECKS_HEADER
+        and "Browser: 3 steps" in block
+    )
 
 
 def _quiet_events(n_verification: int, *, failed: bool = False) -> list[Event]:
-    evs: list[Event] = _edit("e0", "src/a.js") + _pure("c0", "bash smoke.sh", exit_code=1 if failed else 0)
+    evs: list[Event] = _edit("e0", "src/a.js") + _pure(
+        "c0", "bash smoke.sh", exit_code=1 if failed else 0
+    )
     for i in range(n_verification):
         evs += _pure(f"v{i}", f"curl localhost:3000/api/{i}")
     return with_seqs(evs)
@@ -893,7 +1015,10 @@ def test_finish_fact_needs_all_current_checks_and_a_quiet_stretch() -> None:
     quiet = _quiet_events(check_ledger.QUIET_ACTIONS)
     fact = check_ledger.finish_fact(quiet, check_ledger.check_statuses(quiet, limit=None))
     assert fact is not None
-    assert fact.startswith("No source change since step 2 (13 verification actions since); all 13 recorded checks are current.")
+    assert fact.startswith(
+        "No source change since step 2 (13 verification actions since); "
+        "all 13 recorded checks are current."
+    )
     assert "Nothing is stale for the finish gate to re-run." in fact
     assert fact in (check_ledger.render_checks_block(quiet) or "")
 
@@ -901,7 +1026,9 @@ def test_finish_fact_needs_all_current_checks_and_a_quiet_stretch() -> None:
     assert check_ledger.finish_fact(short, check_ledger.check_statuses(short, limit=None)) is None
 
     failing = _quiet_events(check_ledger.QUIET_ACTIONS, failed=True)
-    assert check_ledger.finish_fact(failing, check_ledger.check_statuses(failing, limit=None)) is None
+    assert (
+        check_ledger.finish_fact(failing, check_ledger.check_statuses(failing, limit=None)) is None
+    )
 
 
 def test_finish_fact_resets_after_an_edit() -> None:

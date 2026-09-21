@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import pytest
 from _eventlog import action, awaiting, clean_smoke_log, msg, observation, plan, status, to_db_rows
-
 from harness.build_soak.classify import classify
 
 _PLAN_SCN = {"id": "s", "assertions": {"event_chain": {"require_plan_before_execution": True}}}

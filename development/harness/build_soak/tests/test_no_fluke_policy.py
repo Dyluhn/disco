@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import pytest
 from _eventlog import action, awaiting, msg, observation, plan, status
-
 from harness.build_soak.classify import classify, intermittent_classification
 
 

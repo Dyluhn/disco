@@ -13,7 +13,6 @@ builds its own workspace, no campaign paths, no skips.
 from __future__ import annotations
 
 import pytest
-
 from harness.build_soak.adapters.disco_api import BrowserEvidenceCollectionError
 
 _REL = ".pmx/screenshots/0001-navigate.png"

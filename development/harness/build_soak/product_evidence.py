@@ -47,7 +47,8 @@ _SLICE_FIELDS: dict[str, dict[str, type]] = {
         "volume_scope": str,
     },
     # PKG-03-EDIT-EVIDENCE — the five P8D edit slices. Admitted together with their
-    # producer (development/harness/product_build/edit_evidence.py) and never ahead of it: a slice the
+    # producer (development/harness/product_build/edit_evidence.py), never ahead of it:
+    # a slice the
     # writer accepts but nothing produces is a false affordance, and it is what let these
     # five oracles SKIP unnoticed across 2082 frozen classifications.
     "targeted_edit": {"edited_files": list, "expected_files": list},

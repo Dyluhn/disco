@@ -36,7 +36,8 @@ from disco.core.llm.prompts import DriverPrompts
 # is `stream: true` plus the `stream_options` the assembler already attaches to
 # every streamed request; message/tool bytes are byte-for-byte unchanged.
 # Re-accepted 2026-09-11 (PKG-46, reworded in PKG-47): the driver system prompt
-# gained the playbook guidance and, for the executor, the Reference Pack rule (a planner bullet beside the starter-kit and
+# gained playbook guidance and the executor Reference Pack rule (a planner
+# bullet beside the starter-kit and
 # trusted-component bullets, and an executor rule), so the planning and resume
 # request bytes and their token budgets moved; keys, roles, tools and
 # max_tokens are unchanged.

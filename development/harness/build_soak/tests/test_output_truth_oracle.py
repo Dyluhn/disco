@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import pytest
 from _eventlog import clean_smoke_log
-
 from harness.build_soak.events import normalize_events
 from harness.build_soak.oracles.output_truth import OutputTruthOracle
 

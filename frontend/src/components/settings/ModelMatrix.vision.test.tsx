@@ -8,7 +8,7 @@ const state = vi.hoisted(() => ({
   assignments: {
     default_model: "primary",
     vision_model: null,
-    roles: {},
+    roles: { rag_answerer: "primary", query_rewriter: "primary", summarizer: "primary" },
   } as ModelAssignments,
 }));
 
@@ -48,7 +48,7 @@ describe("ModelMatrix — honest vision guidance", () => {
     state.assignments = {
       default_model: "primary",
       vision_model: null,
-      roles: {},
+      roles: { rag_answerer: "primary", query_rewriter: "primary", summarizer: "primary" },
     };
   });
 

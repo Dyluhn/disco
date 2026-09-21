@@ -722,7 +722,10 @@ def test_reference_packs_and_context_files_are_read_inputs_not_working_set():
     ]
     assert _workspace_paths_from_events(events) == (["src/public/app.js"], ["src/server.js"])
     # a write into an input directory is the agent's own file and stays in the snapshot
-    assert _workspace_paths_from_events([_write("references/notes.md")]) == (["references/notes.md"], [])
+    assert _workspace_paths_from_events([_write("references/notes.md")]) == (
+        ["references/notes.md"],
+        [],
+    )
 
 
 def test_reread_keeps_cacheable_workspace_snapshot_byte_stable():

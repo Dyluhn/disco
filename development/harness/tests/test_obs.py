@@ -7,7 +7,6 @@ Run: uv run pytest development/harness/tests/test_obs.py
 from __future__ import annotations
 
 from disco.core.obs import log_event, log_span
-
 from harness.logcap import capture_spans, ends, sequence
 
 

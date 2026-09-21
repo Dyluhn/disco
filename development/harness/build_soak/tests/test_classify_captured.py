@@ -8,7 +8,6 @@ import json
 
 import pytest
 from _eventlog import action, msg, observation, plan, status
-
 from harness.product_build.classify_captured import classify_capture, main
 
 _LEDGER = [{"host": "api.minimaxi.chat", "model": "MiniMax-M3"}]

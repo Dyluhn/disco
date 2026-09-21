@@ -12,6 +12,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useParams } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ScopeId } from "@/shell/mode";
 import { ModeProvider } from "@/shell/ModeProvider";
 import {
   deriveAssemblingSections,
@@ -33,7 +34,7 @@ function ResumeRoute() {
   return <DeepResearchSurface resumeCid={cid ?? null} />;
 }
 
-function renderSurface(onScopeChange?: (next: "standard" | "deep_research") => void) {
+function renderSurface(onScopeChange?: (next: ScopeId) => void) {
   const qc = new QueryClient({
     defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } },
   });

@@ -9,7 +9,6 @@ import sys
 from pathlib import Path
 
 import pytest
-
 from harness.product_build.minimax_relay import (
     MAX_TOKENS_CAP,
     conversation_id_from_headers,

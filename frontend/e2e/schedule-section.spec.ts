@@ -40,6 +40,7 @@ test.describe("Build → schedule a re-run", () => {
     await input.press("Enter");
     await page.getByRole("button", { name: /approve & build/i }).click();
     await page.getByRole("button", { name: /approve & run/i }).click();
+    await page.getByRole("button", { name: "Expand agent history" }).click();
     await expect(page.getByText(/wrote fizzbuzz\.py/i)).toBeVisible();
 
     // The settled build now exposes the schedule section (it has a cid).

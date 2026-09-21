@@ -63,7 +63,6 @@ from disco.core import (
     ConversationStatus,
     Event,
     EventSource,
-    LLMMessage,
     MessageEvent,
     StatusEvent,
 )
