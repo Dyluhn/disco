@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "d5f1ecbc92d0ff86ec5ee08accbbd67b64dcc89d",
+  "source_identity": "bc9a8c72d6c3933fe123b35d1242c56071d1ec24",
   "collected": {
     "counts": {
       "packages": 12296,
@@ -14355,7 +14355,7 @@
     }
   },
   "mapping_static": {
-    "identity": "d5f1ecbc92d0ff86ec5ee08accbbd67b64dcc89d",
+    "identity": "bc9a8c72d6c3933fe123b35d1242c56071d1ec24",
     "python_test_file_count": 963,
     "python_static_test_id_count": 11782,
     "python_test_files": [
@@ -38837,6 +38837,41 @@
         "tests": {
           "before_count": 452,
           "after_count": 452,
+          "added_ids": []
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [],
+        "python_static_test_ids": [],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-63-SHIPPING-LINT",
+      "root": "multiple",
+      "source_identity_before": "d5f1ecbc92d0ff86ec5ee08accbbd67b64dcc89d",
+      "source_identity_after": "bc9a8c72d6c3933fe123b35d1242c56071d1ec24",
+      "collected_roots": {
+        "packages": {
+          "before_count": 12296,
+          "after_count": 12296,
+          "added_ids": []
+        },
+        "harness": {
+          "before_count": 1571,
+          "after_count": 1571,
+          "added_ids": []
+        },
+        "integrations": {
+          "before_count": 9,
+          "after_count": 9,
+          "added_ids": []
+        },
+        "tests": {
+          "before_count": 458,
+          "after_count": 458,
           "added_ids": []
         }
       },
