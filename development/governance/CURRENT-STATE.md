@@ -1,5 +1,26 @@
 # Current State
 
+## 2026-09-21 validation cleanup
+
+Package **PKG-64-VALIDATION-CLEANUP** fixes the remaining validation failures
+from the September 20 audit. Frontend fixtures now match the event types and
+mock signatures; the full TypeScript check passes without new suppressions.
+Browser tests use the current research controls and expand completed agent
+history before inspecting it. Existing visual baselines are unchanged.
+The manifest regression pairs the current committed manifest with the same
+committed tree, verifies the live checkout too, and rejects both hash tampering
+and missing files. The separate historical campaign-diff audit retains its
+original anchor. Frozen acceptance files and hashes are unchanged.
+Broad Python lint now passes; the lint-only edits preserve executable ASTs
+apart from import cleanup. No collected test IDs are added or removed.
+
+The owner instructed **“Skip the billing crap, continue on”** after authorizing
+regeneration with **“I authorize”**. Continue this validation cleanup and its
+source landing using local checks; record the GitHub billing/spending-limit
+failure rather than treating hosted CI as green. Evidence and final receipts:
+`/var/home/dylan/AI-Work/disco-validation-cleanup-20260921/`.
+The earlier status below records the pre-cleanup results.
+
 ## 2026-09-20 shipping-lint validation update
 
 Package **PKG-63-SHIPPING-LINT** advances the validated source from `6cb51219`
