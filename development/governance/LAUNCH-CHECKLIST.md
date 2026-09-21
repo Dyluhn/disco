@@ -1,5 +1,27 @@
 # Launch Checklist — release readiness
 
+## 2026-09-20 shipping-lint validation update
+
+Package **PKG-63-SHIPPING-LINT** advances the validated source from `6cb51219`
+through `04a915e1`. The repair clears all 42 shipping Python lint findings;
+parsed code is unchanged apart from import ordering and one unused import.
+Both source and repaired full Python runs passed 12,646 tests (one skipped).
+The baseline frontend suite passed 1,541 tests, the harness passed 1,565
+(two skipped), standalone integrations passed nine, and sandbox isolation
+passed five. The integration lane passed 102, skipped six, and failed one
+historical frozen-manifest path check; the two affected files retain their
+exact accepted bytes. Five fixture-browser tests have stale UI expectations,
+and the full frontend test-file typecheck has 27 errors. Broader Python lint
+debt also remains. These failures are not waived or reported as passing.
+
+The owner authorized the prescribed authority regeneration and seal rebaseline
+on 2026-09-20 with **“I authorize”**, following the explanation that the lint
+repair needs updated public-API and test-inventory source/landing identities.
+No test IDs, API contracts, or sealed engineering standards are changed.
+Evidence: `/var/home/dylan/AI-Work/disco-release-validation-20260920/`.
+This is source maintenance, not a release, image publication, or deployment.
+The older dated status below is retained as historical context.
+
 **Status: MUTABLE.** Updated 2026-09-09. The Deep Research closeout below is current. The remaining August 19 inventory is historical and has not been recertified by this work.
 
 ## Deep Research
