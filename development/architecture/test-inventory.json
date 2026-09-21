@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "bc9a8c72d6c3933fe123b35d1242c56071d1ec24",
+  "source_identity": "9f16e3ccae79da4d81e62acd93a14598eecae6a2",
   "collected": {
     "counts": {
       "packages": 12296,
@@ -14355,7 +14355,7 @@
     }
   },
   "mapping_static": {
-    "identity": "bc9a8c72d6c3933fe123b35d1242c56071d1ec24",
+    "identity": "9f16e3ccae79da4d81e62acd93a14598eecae6a2",
     "python_test_file_count": 963,
     "python_static_test_id_count": 11782,
     "python_test_files": [
@@ -29210,13 +29210,13 @@
         "scope": "pytest.fixture(autouse=True)"
       },
       {
-        "path": "packages/agent-server/tests/integration/test_task_supervision.py",
-        "line": 44,
+        "path": "packages/agent-server/tests/test_kill_generation_guard.py",
+        "line": 43,
         "fixture": "_deploy_lock_dir",
         "scope": "pytest.fixture(autouse=True)"
       },
       {
-        "path": "packages/agent-server/tests/test_kill_generation_guard.py",
+        "path": "packages/agent-server/tests/integration/test_task_supervision.py",
         "line": 44,
         "fixture": "_deploy_lock_dir",
         "scope": "pytest.fixture(autouse=True)"
@@ -29523,7 +29523,7 @@
       },
       {
         "path": "packages/app-server/tests/test_mcp_import.py",
-        "line": 219,
+        "line": 217,
         "fixture": "client",
         "scope": "pytest.fixture"
       },
@@ -29631,7 +29631,7 @@
       },
       {
         "path": "packages/agent-server/tests/test_d10_unified_projection.py",
-        "line": 54,
+        "line": 53,
         "fixture": "client_with_runtime",
         "scope": "pytest.fixture"
       },
@@ -29733,7 +29733,7 @@
       },
       {
         "path": "packages/app-server/tests/test_mcp_import.py",
-        "line": 206,
+        "line": 204,
         "fixture": "config_state",
         "scope": "pytest.fixture"
       },
@@ -29745,7 +29745,7 @@
       },
       {
         "path": "packages/app-server/tests/test_mcp_import.py",
-        "line": 201,
+        "line": 199,
         "fixture": "config_store",
         "scope": "pytest.fixture"
       },
@@ -30141,7 +30141,7 @@
       },
       {
         "path": "packages/tools/tests/test_verify_appkit_app.py",
-        "line": 53,
+        "line": 54,
         "fixture": "stub_browser",
         "scope": "pytest.fixture"
       },
@@ -30403,7 +30403,7 @@
       {
         "framework": "pytest",
         "path": "harness/build_soak/tests/test_live_api_smoke.py",
-        "line": 33,
+        "line": 32,
         "marker": "pytest.mark.skipif",
         "source": ""
       },
@@ -30431,7 +30431,7 @@
       {
         "framework": "pytest",
         "path": "packages/agent-server/tests/test_d10_unified_projection.py",
-        "line": 358,
+        "line": 359,
         "marker": "pytest.skip",
         "source": "pytest.skip(\"harness demo cassette not present\")"
       },
@@ -30550,7 +30550,7 @@
       {
         "framework": "pytest",
         "path": "packages/agent-server/tests/release_remediation/test_r6_verifier_truthfulness.py",
-        "line": 606,
+        "line": 612,
         "marker": "pytest.skip",
         "source": "pytest.skip(\"needs the node/npm/npx toolchain\")"
       },
@@ -30584,17 +30584,17 @@
       },
       {
         "framework": "pytest",
+        "path": "harness/build_soak/tests/test_efficiency.py",
+        "line": 718,
+        "marker": "pytest.mark.skipif",
+        "source": ""
+      },
+      {
+        "framework": "pytest",
         "path": "packages/tools/tests/test_browser_daemon.py",
         "line": 718,
         "marker": "pytest.skip",
         "source": "pytest.skip(\"installed Chromium is required\")"
-      },
-      {
-        "framework": "pytest",
-        "path": "harness/build_soak/tests/test_efficiency.py",
-        "line": 719,
-        "marker": "pytest.mark.skipif",
-        "source": ""
       },
       {
         "framework": "pytest",
@@ -30613,7 +30613,7 @@
       {
         "framework": "pytest",
         "path": "harness/build_soak/tests/test_efficiency.py",
-        "line": 748,
+        "line": 747,
         "marker": "pytest.mark.skipif",
         "source": ""
       },
@@ -38853,6 +38853,41 @@
       "root": "multiple",
       "source_identity_before": "d5f1ecbc92d0ff86ec5ee08accbbd67b64dcc89d",
       "source_identity_after": "bc9a8c72d6c3933fe123b35d1242c56071d1ec24",
+      "collected_roots": {
+        "packages": {
+          "before_count": 12296,
+          "after_count": 12296,
+          "added_ids": []
+        },
+        "harness": {
+          "before_count": 1571,
+          "after_count": 1571,
+          "added_ids": []
+        },
+        "integrations": {
+          "before_count": 9,
+          "after_count": 9,
+          "added_ids": []
+        },
+        "tests": {
+          "before_count": 458,
+          "after_count": 458,
+          "added_ids": []
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [],
+        "python_static_test_ids": [],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-64-VALIDATION-CLEANUP",
+      "root": "multiple",
+      "source_identity_before": "bc9a8c72d6c3933fe123b35d1242c56071d1ec24",
+      "source_identity_after": "9f16e3ccae79da4d81e62acd93a14598eecae6a2",
       "collected_roots": {
         "packages": {
           "before_count": 12296,
