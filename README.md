@@ -52,9 +52,9 @@ command that says what is wrong.
 
 ## What it looks like
 
-| Search and Deep Research | A finished Build, with its live preview |
+| Search and Deep Research | A site built with Disco |
 |---|---|
-| ![The home screen: one prompt box, Search or Deep Research](docs/assets/screenshots/home.png) | ![A finished Build beside the preview of the site it made](docs/assets/screenshots/build-preview.png) |
+| ![The home screen: one prompt box, Search or Deep Research](docs/assets/screenshots/home.png) | ![Northlake Roasters, a North Shore coffee-company site built with Disco](docs/assets/showcase/northlake/desktop.png) |
 
 **A Deep Research report** — how the Black Death reshaped Europe's labour market: 54
 searches, 16 sources, every sentence checked against the evidence (37 of 137 supported,
@@ -71,24 +71,22 @@ spoken overview.
 |---|---|
 | ![The PDF's cover page](docs/assets/showcase/report-pdf-cover.png) | ![The audio overview player at the end of the report](docs/assets/showcase/audio-overview-player.png) |
 
-**An app the Build agent made, shipped as a compose stack.** One paragraph asked for
-Ledgerline, a personal expense tracker: a FastAPI + SQLite API, a React/Vite/TypeScript
-front end served by nginx with `/api` proxied, two services and a named volume. The
-downloaded source was brought up on a fresh VM with nothing but
-`docker compose up -d --build`; these are captures of that running stack, not of a preview.
+**A coffee-company site built with Disco: Northlake Roasters**, on the North Shore of Lake Superior.
 
-| Dashboard on the running stack | Phone |
+| Desktop | Phone |
 |---|---|
-| ![Ledgerline's dashboard: monthly total, entries, top category, the category chart](docs/assets/showcase/ledgerline/dashboard.png) | ![The same dashboard on a phone](docs/assets/showcase/ledgerline/mobile.png) |
+| ![Northlake Roasters: small-batch coffee roasted by the lake](docs/assets/showcase/northlake/desktop.png) | ![Northlake Roasters on a phone](docs/assets/showcase/northlake/mobile.png) |
 
-[The whole page](docs/assets/showcase/ledgerline/dashboard-full.png) ·
-[`docker-compose.yml`](docs/assets/showcase/ledgerline/docker-compose.yml) ·
-[the README it wrote](docs/assets/showcase/ledgerline/README.md) ·
-[the agent verifying its own form in a browser mid-build](docs/assets/showcase/ledgerline/agent-verifying-the-form.png).
-A static site from one paragraph, for contrast: [a ceramics studio](docs/assets/screenshots/site-kiln-full.jpg).
+[See the full coffee-company page](docs/assets/showcase/northlake/full.png).
 
-Every capture is from a stock install on a fresh VM at the commit that shipped it; the
-deck is also exported as [PowerPoint](docs/assets/showcase/black-death-labour-markets.pptx).
+**Compose export example:** [Ledgerline's dashboard](docs/assets/showcase/ledgerline/dashboard.png),
+[`docker-compose.yml`](docs/assets/showcase/ledgerline/docker-compose.yml), and
+[the generated README](docs/assets/showcase/ledgerline/README.md) document a separate
+FastAPI + SQLite and React app brought up with `docker compose up -d --build`.
+
+The coffee-site captures show the exported launch-site demo. The research and
+Compose captures are from the original VM validation; the research deck is also
+available as [PowerPoint](docs/assets/showcase/black-death-labour-markets.pptx).
 
 ## Surfaces
 
