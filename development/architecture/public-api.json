@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-public-api-v1",
-  "source_identity": "f2c409e87f53cd3b6072b32ed4d6da6936776050",
+  "source_identity": "8479d27f7ec8421f443302156b52e17880074ec7",
   "python_initializers": [
     {
       "path": "packages/agent-server/src/disco/agent_server/__init__.py",
@@ -25660,6 +25660,11 @@
       "public_declarations": [
         {
           "kind": "function",
+          "name": "qualificationMarkdown",
+          "signature": "export function qualificationMarkdown(report: ReportEvent, cite: (text: string) => string): string[]"
+        },
+        {
+          "kind": "function",
           "name": "reportQualifications",
           "signature": "export function reportQualifications(report: ReportEvent): string[]"
         }
@@ -31160,6 +31165,14 @@
       "public_name": "DepthBound",
       "target_sha256": "c8665a4306b4470f55a5ce0946e5f786cf72c590082c0f07b1f2d5c988a66a67",
       "owner_package": "PKG-24-RESEARCH-RELIABILITY",
+      "reason": "Provider-neutral request controls, recoverable research activity, review reserves, and retained export qualifications."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/reportQualifications.ts",
+      "public_name": "qualificationMarkdown",
+      "target_sha256": "06ca235af21e6ea5efa06e24ef66130d8ffb8d714cd1774278685666b5fcd7ca",
+      "owner_package": "PKG-25-RESEARCH-CI",
       "reason": "Provider-neutral request controls, recoverable research activity, review reserves, and retained export qualifications."
     },
     {

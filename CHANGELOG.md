@@ -28,6 +28,36 @@
   prove each one inside the sandbox. The build prompts point at the playbooks the
   way they point at starter kits and trusted components.
 
+## v0.2.1 - 2026-09-23
+
+### Fixed
+
+- Recover long-source reading and final editorial review after a model returns
+  reasoning without a visible answer. Retries remain bounded, preserve the full
+  evidence, and survive Stop, restart, and resume without resetting spent work.
+- Recognize reasoning output consistently across streaming and buffered
+  OpenAI-compatible responses, and display activity during the final review.
+- Retry an optional request-control rejection once before output begins, using
+  the original request without the rejected overlay. Routing, credentials,
+  tools, history, and token limits remain intact.
+- Preserve evidence-check counts, unresolved findings, unavailable/incomplete
+  review status, and unresearched angles in Markdown and PDF downloads.
+- Preserve causal direction and applicability conditions in drafting and review
+  instructions. Remaining findings are disclosed; automated review is fallible.
+- Detect legacy Compose v1 and provide the Compose v2 correction before launch.
+
+### Changed
+
+- Request extensions and reasoning controls use explicit model configuration,
+  independent of endpoint names, provider labels, or model names. Existing
+  setups that relied on inferred vendor options should configure their endpoint's
+  supported fields in the model's request-policy editor. No special-case registry
+  is used. An endpoint that ignores a control may still spend time reasoning;
+  Quick limits research work, not elapsed wall-clock time.
+- New research runs reserve two final review decisions while preserving their
+  initial review allocation. Saved legacy runs retain their recorded limits.
+- Default published Compose image tag is `v0.2.1`.
+
 ## v0.2.0 - 2026-09-10
 
 First published release; everything since the 2026-07-03 tag.

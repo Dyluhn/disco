@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "f2c409e87f53cd3b6072b32ed4d6da6936776050",
+  "source_identity": "8479d27f7ec8421f443302156b52e17880074ec7",
   "collected": {
     "counts": {
       "packages": 12462,
@@ -14531,7 +14531,7 @@
     }
   },
   "mapping_static": {
-    "identity": "f2c409e87f53cd3b6072b32ed4d6da6936776050",
+    "identity": "8479d27f7ec8421f443302156b52e17880074ec7",
     "python_test_file_count": 973,
     "python_static_test_id_count": 11835,
     "python_test_files": [
@@ -39181,6 +39181,41 @@
         "tests": {
           "before_count": 458,
           "after_count": 458,
+          "added_ids": []
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [],
+        "python_static_test_ids": [],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-25-RESEARCH-CI",
+      "root": "multiple",
+      "source_identity_before": "f2c409e87f53cd3b6072b32ed4d6da6936776050",
+      "source_identity_after": "8479d27f7ec8421f443302156b52e17880074ec7",
+      "collected_roots": {
+        "packages": {
+          "before_count": 12462,
+          "after_count": 12462,
+          "added_ids": []
+        },
+        "harness": {
+          "before_count": 1571,
+          "after_count": 1571,
+          "added_ids": []
+        },
+        "integrations": {
+          "before_count": 9,
+          "after_count": 9,
+          "added_ids": []
+        },
+        "tests": {
+          "before_count": 468,
+          "after_count": 468,
           "added_ids": []
         }
       },
