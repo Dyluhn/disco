@@ -16,6 +16,7 @@
 
 import { agentFetch, agentHttpBase, agentLive, agentSend, fixtureDelay } from "./client";
 import { normalizePassageMarkdown } from "./deepResearchParts/passageNormalize";
+import { reportQualifications } from "@/lib/reportQualifications";
 import { canonicalWorkKey } from "@/lib/sources";
 import type { ReportEvent, ReportSection } from "@/types/agent";
 
@@ -281,6 +282,16 @@ export function serializeReportToMarkdown(
   // serializer is never given.
   lines.push(`> Question: ${report.query}`);
   lines.push("");
+  const qualifications = reportQualifications(report);
+  if (qualifications.length) {
+    lines.push("## Evidence and review qualifications", "");
+    for (const note of qualifications) {
+      const text = subCitationMarkers(note, numbers)
+        .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+        .replace(/([\\`*_{}\[\]()#+|>~])/g, "\\$1").replace(/\n/g, " ");
+      lines.push(text, "");
+    }
+  }
   lines.push("## Executive Summary");
   lines.push("");
   lines.push(

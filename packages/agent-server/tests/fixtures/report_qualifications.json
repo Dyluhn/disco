@@ -1,0 +1,45 @@
+{
+  "kind": "report",
+  "source": "agent",
+  "query": "Interaction evidence",
+  "summary": "A source-backed summary [[p1]].",
+  "sections": [
+    {
+      "id": "s1",
+      "title": "Findings",
+      "markdown": "A qualified conclusion [[p1]].",
+      "cited_passage_ids": [
+        "p1"
+      ]
+    }
+  ],
+  "passages": [
+    {
+      "id": "p1",
+      "source_title": "Primary record",
+      "source_url": "https://example.org/record"
+    }
+  ],
+  "all_hits": [],
+  "meta": {
+    "review_outcome": "incomplete",
+    "grounding_counts": {
+      "supported": 2,
+      "contradicted": 1,
+      "unresolved": 3,
+      "unavailable": 4
+    },
+    "review_notes": [
+      "The causal direction needs qualification [[p1]].",
+      "<img src=\"https://example.org/tracker\"> **not markup**",
+      null,
+      ""
+    ],
+    "unverified_sentences": [
+      "The other participant must fail [[p1]]."
+    ],
+    "untested_angles": [
+      "Long-term behavior"
+    ]
+  }
+}

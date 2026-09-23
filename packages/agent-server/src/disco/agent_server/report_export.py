@@ -63,6 +63,7 @@ from ._report_normalize import (
     _normalized_report,
     _split_table_row,
 )
+from ._report_qualifications import report_qualifications
 from .title_service import fallback_title
 
 logger = logging.getLogger(__name__)
@@ -138,6 +139,15 @@ def serialize_markdown(
     lines.append("")
     lines.append(f"> Question: {report.query}")
     lines.append("")
+    qualifications = report_qualifications(report)
+    if qualifications:
+        lines.extend(["## Evidence and review qualifications", ""])
+        for note in qualifications:
+            # Metadata is prose, not executable HTML or Markdown structure.
+            text = _sub_citation_markers(note, numbers)
+            text = _html.escape(text, quote=False)
+            text = re.sub(r"([\\`*_{}\[\]()#+|>~])", r"\\\1", text)
+            lines.extend([text.replace("\n", " "), ""])
     lines.append("## Executive Summary")
     lines.append("")
     lines.append(_sub_citation_markers(report.summary, numbers) or "*(no summary)*")
@@ -625,6 +635,17 @@ def _build_pdf_html(
 
     # ---- executive summary ----
     summary_html = _pdf_summary_html(report, cite_map, pal)
+    qualifications = report_qualifications(report)
+    qualifications_html = ""
+    if qualifications:
+        paragraphs = "".join(
+            f"<p>{_html.escape(_sub_citation_markers(note, cite_map))}</p>"
+            for note in qualifications
+        )
+        qualifications_html = (
+            '<section class="report-qualifications">'
+            "<h2>Evidence and review qualifications</h2>" + paragraphs + "</section>"
+        )
 
     # ---- sections ----
     sections_html = _pdf_sections_html(sections, cite_map, pal)
@@ -657,6 +678,7 @@ def _build_pdf_html(
         f"{running_header}\n"
         f"{cover_html}\n"
         f"{toc_html}\n"
+        f"{qualifications_html}\n"
         f"{summary_html}\n"
         f"{sections_html}\n"
         f"{bounded_html}\n"
