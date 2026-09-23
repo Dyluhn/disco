@@ -41,6 +41,7 @@ import {
   formatDuration,
   heartbeatReading,
   modelIsBuffered,
+  modelRetryRemaining,
   researchPhaseLabel,
   signalReading,
   writerLegLeads,
@@ -191,6 +192,7 @@ function StatsRow({
               // 2:00" next to "Waiting for model reply (this driver does not report
               // progress while it works) · 2:00".
               modelIsBuffered(activity),
+              modelRetryRemaining(activity, nowMs),
             )}
             className="text-[0.78rem]"
           />
@@ -217,7 +219,7 @@ function QuietNote({
   /** The collapsed hold line, when one is up and already explains the quiet. */
   holdLine: ActiveHold | null;
 }) {
-  if (holdLine !== null || modelIsBuffered(activity)) return null;
+  if (holdLine !== null || modelIsBuffered(activity) || (modelRetryRemaining(activity, nowMs) ?? 0) > 0) return null;
   const lastEventAt = activity.lastEventAt;
   if (lastEventAt === null) return null;
   const signal = signalReading(lastEventAt, nowMs, lastEventAt);

@@ -59,7 +59,15 @@ def test_qwen38_on_opencode_forwards_explicit_nonthinking_without_glm_policy(str
 
 
 @pytest.mark.parametrize("stream", [False, True])
-@pytest.mark.parametrize("model", ["deepseek-v4-flash:0731", "deepseek-v4-flash"])
+@pytest.mark.parametrize(
+    "model",
+    [
+        "deepseek-v4-flash:0731",
+        "deepseek-v4-flash",
+        "deepseek-v4.1-flash",
+        "deepseek-v4.1-flash:cloud",
+    ],
+)
 def test_ollama_deepseek_flash_forwards_explicit_nonthinking(stream, model):
     request = CompletionRequest(
         profile=CapabilityProfile(role=ModelRole.RAG_ANSWERER),

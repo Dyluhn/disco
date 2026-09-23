@@ -18,7 +18,8 @@ at call start with ``streams=False``.
 
 Three rules make the signal worth trusting:
 
-* **Only observed chunks produce a report.** There is no timer. A stream that
+* **Only observed boundaries produce a report.** Request start and router
+  backoff are labelled waiting/backoff, with zero delivered output. There is no timer. A stream that
   has gone quiet emits nothing, and the silence is the caller's to interpret —
   which is the honest reading of a quiet stream, and the one the UI renders.
 * **The count is deliveries, never an estimate.** ``tokens_streamed`` counts SSE
@@ -43,9 +44,9 @@ import time
 from collections.abc import Awaitable, Callable, Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from itertools import count
-from typing import Any
+from typing import Any, Literal
 
 _LOG = logging.getLogger(__name__)
 
@@ -84,7 +85,7 @@ class StreamProgress:
     reasoning_tokens: int
     #: Seconds since the call was made.
     seconds: float
-    #: True on the first report of this stream (the prefill→decode transition).
+    #: True on the first report of this stream (normally the request-start boundary).
     first: bool
     #: True on the last report of this stream.
     final: bool
@@ -92,6 +93,8 @@ class StreamProgress:
     #: response, so this is the ONLY report the call will ever make. See
     #: :meth:`StreamProgressReporter.buffered_start`.
     streams: bool = True
+    state: Literal["waiting", "generating", "backoff"] = "generating"
+    details: dict[str, Any] = field(default_factory=dict)
 
 
 ProgressObserver = Callable[[StreamProgress], Awaitable[None]]
@@ -131,7 +134,22 @@ def reporter_for(metadata: Mapping[str, Any] | None) -> StreamProgressReporter |
     observer = _OBSERVER.get()
     if observer is None:
         return None
-    return StreamProgressReporter(observer, inspect_stage=_inspect_stage(metadata))
+    return StreamProgressReporter(
+        observer,
+        inspect_stage=_inspect_stage(metadata),
+        details={
+            key: (metadata or {})[key]
+            for key in ("source_id", "chunk", "chunks")
+            if key in (metadata or {})
+        },
+    )
+
+
+async def waiting_reporter_for(metadata: Mapping[str, Any] | None) -> StreamProgressReporter | None:
+    reporter = reporter_for(metadata)
+    if reporter is not None:
+        await reporter.waiting()
+    return reporter
 
 
 class StreamProgressReporter:
@@ -142,11 +160,14 @@ class StreamProgressReporter:
         observer: ProgressObserver,
         *,
         inspect_stage: str | None = None,
+        details: dict[str, Any] | None = None,
         interval_s: float = PROGRESS_INTERVAL_S,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._observer = observer
         self._stage = inspect_stage
+        self._details = details or {}
+        self._state: Literal["waiting", "generating", "backoff"] = "generating"
         self._interval_s = interval_s
         self._clock = clock
         self._stream_id = next(_STREAM_IDS)
@@ -165,12 +186,34 @@ class StreamProgressReporter:
         """
         if content_deltas <= 0 and reasoning_deltas <= 0:
             return
+        first_output = self._content + self._reasoning == 0
+        self._state = "generating"
         self._content += max(0, content_deltas)
         self._reasoning += max(0, reasoning_deltas)
         now = self._clock()
-        if self._last_report is not None and now - self._last_report < self._interval_s:
+        if (
+            not first_output
+            and self._last_report is not None
+            and now - self._last_report < self._interval_s
+        ):
             return
         await self._report(now, final=False)
+
+    async def waiting(self) -> None:
+        """A request was started; no model output has arrived yet."""
+        self._state = "waiting"
+        await self._report(self._clock(), final=False)
+
+    async def retrying(self, attempt: int, delay: float, http_status: int | None) -> None:
+        """The router scheduled a retry; this is not a generation heartbeat."""
+        self._state = "backoff"
+        self._details = {
+            **self._details,
+            "attempt": attempt,
+            "retry_after_s": delay,
+            "http_status": http_status,
+        }
+        await self._report(self._clock(), final=True)
 
     async def buffered_start(self) -> None:
         """Announce a call whose transport will report nothing until it ends.
@@ -197,7 +240,7 @@ class StreamProgressReporter:
         announcing its close would be inventing the very signal this module
         exists to make honest.
         """
-        if self._last_report is None or self._closed:
+        if self._content + self._reasoning == 0 or self._closed:
             return
         self._closed = True
         await self._report(self._clock(), final=True)
@@ -216,6 +259,8 @@ class StreamProgressReporter:
             first=first,
             final=final,
             streams=streams,
+            state=self._state,
+            details=dict(self._details),
         )
         try:
             await self._observer(progress)

@@ -4,7 +4,7 @@ Model-neutral by construction. Disco runs local/open-weight models whose decode
 is 20-45 tok/s and whose thinking phases legitimately run for many minutes, so a
 total wall-clock ceiling cannot tell a slow-but-working model from a hung
 provider — it just punishes the models this product exists for. **A stall is the
-absence of progress, not the presence of duration.**
+absence of model progress, not the presence of duration.**
 
 The adapter therefore bounds three things and never the whole call:
 
@@ -24,7 +24,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator
+import math
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 
 import httpx
@@ -58,7 +59,7 @@ def _env_seconds(suffix: str, default: float) -> float:
     except ValueError:
         _LOG.warning("DISCO_%s is not a number; using %.0fs", suffix, default)
         return default
-    if value <= 0:
+    if not math.isfinite(value) or value <= 0:
         _LOG.warning("DISCO_%s must be > 0; using %.0fs", suffix, default)
         return default
     return value
@@ -122,8 +123,9 @@ async def iter_with_progress_timeout(
     provider_name: str,
     first_chunk_s: float,
     idle_s: float,
+    is_progress: Callable[[str], bool] | None = None,
 ) -> AsyncIterator[str]:
-    """Yield from ``source``, bounding time-to-first-item and inter-item idle.
+    """Yield from ``source``, bounding first meaningful output and meaningful-output idle.
 
     The two budgets are deliberately distinct: waiting for prefill to finish is
     not the same event as a stream going quiet halfway through decode. Either
@@ -132,8 +134,10 @@ async def iter_with_progress_timeout(
     retry of it is correct rather than harmful.
     """
     saw_first = False
+    clock = asyncio.get_running_loop().time
+    deadline = clock() + first_chunk_s
     while True:
-        budget = idle_s if saw_first else first_chunk_s
+        budget = max(0.0, deadline - clock())
         try:
             item = await asyncio.wait_for(anext(source), timeout=budget)
         except StopAsyncIteration:
@@ -144,8 +148,8 @@ async def iter_with_progress_timeout(
                 if saw_first
                 else f"no first chunk within {first_chunk_s:.0f}s"
             )
-            raise LLMTransientError(
-                f"request stalled ({phase})", provider=provider_name
-            ) from exc
-        saw_first = True
+            raise LLMTransientError(f"request stalled ({phase})", provider=provider_name) from exc
+        if is_progress is None or is_progress(item):
+            saw_first = True
+            deadline = clock() + idle_s
         yield item

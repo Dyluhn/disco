@@ -90,6 +90,11 @@ class SourceNotes(BaseModel):
     findings: list[SourceFinding] = Field(default_factory=list)
     contrary: list[ContraryNote] = Field(default_factory=list)
     chunks: int = 0
+    calls: int = 0
+    complete: bool = False
+    input_tokens: int = 0
+    output_tokens: int = 0
+    latency_ms: float = 0.0
     findings_rejected: int = 0
     ok: bool = True
     error: str | None = None

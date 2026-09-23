@@ -509,12 +509,17 @@ async def test_write_report_reads_a_long_source_and_puts_its_notes_in_the_draft_
     assert "The source reports figures for the observed window" in draft_prompt
     assert "Condition: observed window only." in draft_prompt
     assert "stated condition in the same sentence or table cell" in draft_prompt
-    assert [row for row in written.trail if row["kind"] == "source_reading"] == [
+    rows = [dict(row) for row in written.trail if row["kind"] == "source_reading"]
+    assert rows[0].pop("latency_ms") >= 0
+    assert rows == [
         {
             "kind": "source_reading",
             "source_id": "p1",
             "source_sha256": hashlib.sha256(passage.text.encode()).hexdigest(),
             "chunks": 3,
+            "calls": 3,
+            "input_tokens": 3,
+            "output_tokens": 3,
             "findings_accepted": 1,
             "findings_rejected": 0,
             "ok": True,

@@ -7,12 +7,14 @@ Run: uv run pytest development/harness/tests/test_replay_runner.py
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 from disco.core import LLMMessage
 from disco.core.events import (
     ActionEvent,
+    EventAdapter,
     EventSource,
     MessageEvent,
     ObservationEvent,
@@ -140,6 +142,24 @@ def test_legacy_plan_fixture_is_detected() -> None:
 _FIXTURE = Path(__file__).resolve().parents[1] / "cassettes" / "loop_demo.events.jsonl"
 
 
+def _with_reading_checkpoints(recorded_outputs):
+    """Apply the captured host-event migration without weakening replay equality."""
+    migration = json.loads(_FIXTURE.with_name("loop_demo.reading-checkpoints.json").read_text())
+    before = {row["before_event_id"]: row["events"] for row in migration["insertions"]}
+    expected = []
+    for event in recorded_outputs:
+        for row in before.pop(event.id, []):
+            added = EventAdapter.validate_python(row)
+            assert added.kind == "action"
+            assert added.thought == "Deep Research: research_checkpoint_commit"
+            assert added.tool_call.arguments["stage"] == "writing"
+            expected.append(added)
+        expected.append(event)
+    assert not before, "migration references an event missing from the original capture"
+    assert len(expected) - len(recorded_outputs) == 36
+    return expected
+
+
 @pytest.mark.skipif(
     not _FIXTURE.exists(), reason="needs the captured loop fixture (make capture-loop)"
 )
@@ -168,7 +188,7 @@ async def test_deterministic_replay_reproduces_recorded_events():
         surface="deep_research",
     )
     _, recorded_outputs = split_io(recorded)
-    assert diff_sequences(recorded_outputs, outputs) == []
+    assert diff_sequences(_with_reading_checkpoints(recorded_outputs), outputs) == []
 
 
 def test_research_replay_ignores_transport_pulses_but_keeps_checkpoint_work():

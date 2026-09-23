@@ -86,6 +86,7 @@ export function subscribeFixture(cid: string, onFrame: (f: WSServerFrame) => voi
     for (const event of events) {
       if (cancelled) return;
       await fixtureDelay(120);
+      if (cancelled) return;
       onFrame({ type: "event", event });
     }
     if (final && !cancelled) onFrame({ type: "state", state: final });
@@ -96,6 +97,7 @@ export function subscribeFixture(cid: string, onFrame: (f: WSServerFrame) => voi
     onFrame({ type: "state", state: runningState() });
     if (cancelled) return;
     await fixtureDelay(120);
+    if (cancelled) return;
     onFrame({ type: "event", event });
     if (cancelled) return;
     atPlan = true;
@@ -118,6 +120,7 @@ export function subscribeFixture(cid: string, onFrame: (f: WSServerFrame) => voi
     onFrame({ type: "state", state: runningState() });
     if (cancelled) return;
     await fixtureDelay(120);
+    if (cancelled) return;
     onFrame({ type: "event", event: askQuestionEvent });
     if (cancelled) return;
     atAsk = true;
@@ -130,6 +133,7 @@ export function subscribeFixture(cid: string, onFrame: (f: WSServerFrame) => voi
     onFrame({ type: "state", state: runningState() });
     if (cancelled) return;
     await fixtureDelay(120);
+    if (cancelled) return;
     onFrame({ type: "event", event: clarifyEvent });
     if (cancelled) return;
     atAsk = true;

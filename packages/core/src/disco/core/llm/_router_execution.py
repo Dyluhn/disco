@@ -306,7 +306,7 @@ async def execute_complete(
                 )
                 raise
             end_attempt(attempt_context, outcome="error", error=exc, retry_scheduled=True)
-            await sleep_before_retry(attempt, backoff_base_s)
+            await sleep_before_retry(attempt, backoff_base_s, error=exc, metadata=req.metadata)
             attempt += 1
             continue
         except Exception as exc:  # noqa: BLE001 — preserve provider error behavior

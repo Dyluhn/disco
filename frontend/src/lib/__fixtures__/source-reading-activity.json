@@ -1,0 +1,30 @@
+{
+  "provenance": "Captured from the real source reader against Ollama DeepSeek v4.1 Flash, 2026-09-22; source texts retained from the affected research session. Timestamps are rebased only by the browser story.",
+  "waiting": {
+    "kind": "model_activity",
+    "payload": {
+      "stage": "source_reading",
+      "tokens_streamed": 0,
+      "seconds": 0.0,
+      "call_ordinal": 1,
+      "state": "waiting",
+      "source_id": "web_856494b5098d1c777a9c36b2",
+      "chunk": "1",
+      "chunks": "1"
+    },
+    "at": 1790124310.410144
+  },
+  "generating": {
+    "kind": "model_activity",
+    "payload": {
+      "stage": "source_reading",
+      "tokens_streamed": 1433,
+      "seconds": 5.8,
+      "call_ordinal": 1,
+      "source_id": "web_856494b5098d1c777a9c36b2",
+      "chunk": "1",
+      "chunks": "1"
+    },
+    "at": 1790124316.2231884
+  }
+}

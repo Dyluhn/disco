@@ -16,15 +16,17 @@ report; a quiet stream reports nothing.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import AsyncIterator, Callable
 
 import httpx
 
 from ._openai_timeouts import ProviderTimeouts, iter_with_progress_timeout
+from ._provider_retry import attach_retry_after, meaningful_sse_line
 from ._request_assembly import FinishReason
 from .errors import LLMTransientError
-from .stream_progress import reporter_for
+from .stream_progress import waiting_reporter_for
 from .types import (
     CompletionRequest,
     CompletionResponse,
@@ -275,9 +277,19 @@ async def _iter_stream_chunks(
         ) as resp:
             if resp.status_code >= 400:
                 body = await resp.aread()
-                raise_typed_fn(resp.status_code, body.decode("utf-8", "replace"))
+                try:
+                    raise_typed_fn(resp.status_code, body.decode("utf-8", "replace"))
+                except LLMTransientError as exc:
+                    attach_retry_after(exc, resp.headers)
+                    raise
             if _is_buffered_json(resp):
-                reshaped = _buffered_body_as_stream_line(await resp.aread())
+                try:
+                    body = await asyncio.wait_for(resp.aread(), timeouts.buffered_total_s)
+                except TimeoutError as exc:
+                    raise LLMTransientError(
+                        "buffered response timed out", provider=provider_name
+                    ) from exc
+                reshaped = _buffered_body_as_stream_line(body)
                 if reshaped is not None:
                     yield reshaped
                     # A complete buffered JSON envelope supplies the transport
@@ -289,6 +301,7 @@ async def _iter_stream_chunks(
                 provider_name=provider_name,
                 first_chunk_s=timeouts.first_chunk_s,
                 idle_s=timeouts.idle_s,
+                is_progress=meaningful_sse_line,
             ):
                 yield line
 
@@ -381,7 +394,7 @@ async def stream_complete(
     # report's `seconds` includes the prefill the caller actually waited out.
     # None whenever nobody installed an observer, which is every ordinary
     # completion in the product.
-    reporter = reporter_for(req.metadata)
+    reporter = await waiting_reporter_for(req.metadata)
     try:
         async for line in _iter_stream_chunks(
             client_factory=client_factory,

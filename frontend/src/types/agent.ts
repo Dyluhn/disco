@@ -1,3 +1,4 @@
+import type { ModelActivityDetails } from "./researchModelActivity";
 /**
  * Agent (Build) surface types — the TS mirror of the core event/state contract
  * (event-state-contract §2/§3) as it crosses the conversation WebSocket. The Build
@@ -278,7 +279,7 @@ export interface ResearchTurnPayload {
  *  only the follow-up indicator reads it (see `MODEL_STAGES` in
  *  `lib/deepResearchTraceParts/activity.ts`). */
 export type ModelActivityStage =
-  | "brief" | "research_turn" | "draft" | "review" | "rework"
+  | "brief" | "research_turn" | "source_reading" | "draft" | "review" | "rework"
   | "continuation" | "follow_up";
 
 /** `model_activity` — emitted at most every ~5 s while a provider stream is
@@ -286,7 +287,7 @@ export type ModelActivityStage =
  *  model is streaming slowly" from "nothing is happening". May be absent
  *  (a driver that streams without chunk visibility emits none); the UI renders
  *  it when present and never fabricates it. */
-export interface ModelActivityPayload {
+export interface ModelActivityPayload extends ModelActivityDetails {
   stage: ModelActivityStage;
   tokens_streamed: number;
   /** Seconds since the CALL WAS MADE, measured by the backend at emit —

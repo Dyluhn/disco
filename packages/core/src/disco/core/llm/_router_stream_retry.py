@@ -118,7 +118,7 @@ async def handle_stream_transient(
         state.attempt, recorded=state.recorded,
         outcome="error", error=exc, retry_scheduled=True,
     )
-    await sleep_before_retry(attempt, backoff_base_s)
+    await sleep_before_retry(attempt, backoff_base_s, error=exc, metadata=req.metadata)
     return None
 
 

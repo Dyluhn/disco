@@ -122,19 +122,28 @@ def raise_typed(
     and a bare status code leaves the operator guessing. The context-window
     error is classified to ``LLMContextWindowExceeded``.
     """
-    message, err_type = body_text, ""
+    message, err_type, err_code = body_text, "", ""
     try:
         j = json.loads(body_text)
         err = j.get("error", j) if isinstance(j, dict) else {}
         if isinstance(err, dict):
             message = err.get("message") or body_text
-            err_type = err.get("type") or ""
+            err_type = str(err.get("type") or "")
+            err_code = str(err.get("code") or "")
     except (json.JSONDecodeError, ValueError):
         pass
     message = message.strip() or f"HTTP {status}"
     safe_message = safe_error_fn(status, err_type)
     detail = sanitize_provider_detail(message) if status in _ACTIONABLE_STATUSES else ""
     try:
+        if status == 429 and {err_type.lower(), err_code.lower()} & {
+            "insufficient_quota",
+            "quota_exceeded",
+            "billing_hard_limit_reached",
+            "billing_not_active",
+            "credit_balance_exhausted",
+        }:
+            raise LLMError(safe_message, provider=provider_name)
         _classify_and_raise(
             provider_name,
             status,

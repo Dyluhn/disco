@@ -1,0 +1,986 @@
+{
+  "provenance": "2026-09-22: real runtime replay of unchanged loop_demo provider cassette. All original normalized events, source admissions, decisions, review and report compare exactly; only these 36 durable writer-reading commits were inserted. Original capture remains unchanged.",
+  "insertions": [
+    {
+      "before_event_id": "evt_3ebaa63ba9504ad38e090acd3ccc23ec",
+      "events": [
+        {
+          "id": "evt_306c054d0bdd49689b706c289b4a73ba",
+          "source": "agent",
+          "timestamp": "2026-09-23T00:57:39.389709Z",
+          "schema_version": 1,
+          "seq": 133,
+          "agent_view_id": null,
+          "meta": {},
+          "kind": "action",
+          "thought": "Deep Research: research_checkpoint_commit",
+          "tool_call": {
+            "tool_name": "research_checkpoint_commit",
+            "arguments": {
+              "schema_version": 1,
+              "conversation_id": "replay",
+              "run_id": "166f92c1f8fb4c7c95928eb1b2c1b1c2",
+              "checkpoint_id": "2052e8a8fdfe5804bf4906ea82c8f11945c7db8c9468eabcb71173748d181ad7",
+              "stage": "writing",
+              "turns_spent": 13,
+              "sources_spent": 12
+            },
+            "call_id": "call_f8b683be0e794ef289f506410c2f0a36"
+          },
+          "self_assessed_risk": "UNKNOWN",
+          "llm_response_id": null
+        },
+        {
+          "id": "evt_f90bbcee01cb49468c6c2c3dfdb7d7d5",
+          "source": "agent",
+          "timestamp": "2026-09-23T00:57:39.458983Z",
+          "schema_version": 1,
+          "seq": 134,
+          "agent_view_id": null,
+          "meta": {},
+          "kind": "action",
+          "thought": "Deep Research: research_checkpoint_commit",
+          "tool_call": {
+            "tool_name": "research_checkpoint_commit",
+            "arguments": {
+              "schema_version": 1,
+              "conversation_id": "replay",
+              "run_id": "166f92c1f8fb4c7c95928eb1b2c1b1c2",
+              "checkpoint_id": "ea50fd959b03f15f7afaaaec0de23f85e9c2ac6cce8b7b29ae6e090aa9b8495c",
+              "stage": "writing",
+              "turns_spent": 13,
+              "sources_spent": 12
+            },
+            "call_id": "call_2fd5544d0bf74e7f833d8064bcfa941b"
+          },
+          "self_assessed_risk": "UNKNOWN",
+          "llm_response_id": null
+        },
+        {
+          "id": "evt_dfb4b15d73fa4141bb5ca01de6af2d35",
+          "source": "agent",
+          "timestamp": "2026-09-23T00:57:39.480092Z",
+          "schema_version": 1,
+          "seq": 135,
+          "agent_view_id": null,
+          "meta": {},
+          "kind": "action",
+          "thought": "Deep Research: research_checkpoint_commit",
+          "tool_call": {
+            "tool_name": "research_checkpoint_commit",
+            "arguments": {
+              "schema_version": 1,
+              "conversation_id": "replay",
+              "run_id": "166f92c1f8fb4c7c95928eb1b2c1b1c2",
+              "checkpoint_id": "bafa9e989dfcf594c3a0818741a1faa0af7333bfdbe1f8290b9b6a051dc47262",
+              "stage": "writing",
+              "turns_spent": 13,
+              "sources_spent": 12
+            },
+            "call_id": "call_fe83779bd8c041d6b8d71d74b2b4d354"
+          },
+          "self_assessed_risk": "UNKNOWN",
+          "llm_response_id": null
+        },
+        {
+          "id": "evt_30518cac564548e8b19e183102a96c07",
+          "source": "agent",
+          "timestamp": "2026-09-23T00:57:39.529716Z",
+          "schema_version": 1,
+          "seq": 136,
+          "agent_view_id": null,
+          "meta": {},
+          "kind": "action",
+          "thought": "Deep Research: research_checkpoint_commit",
+          "tool_call": {
+            "tool_name": "research_checkpoint_commit",
+            "arguments": {
+              "schema_version": 1,
+              "conversation_id": "replay",
+              "run_id": "166f92c1f8fb4c7c95928eb1b2c1b1c2",
+              "checkpoint_id": "fe912c377b38016b60f2d3c1bb0220d01b84f51881dc85df8b4fc80640bcb710",
+              "stage": "writing",
+              "turns_spent": 13,
+              "sources_spent": 12
+            },
+            "call_id": "call_f00fb28018394971806b37014852f78b"
+          },
+          "self_assessed_risk": "UNKNOWN",
+          "llm_response_id": null
+        },
+        {
+          "id": "evt_a793e6baf14d43edbbb93e3eee2ad442",
+          "source": "agent",
+          "timestamp": "2026-09-23T00:57:39.536749Z",
+          "schema_version": 1,
+          "seq": 137,
+          "agent_view_id": null,
+          "meta": {},
+          "kind": "action",
+          "thought": "Deep Research: research_checkpoint_commit",
+          "tool_call": {
+            "tool_name": "research_checkpoint_commit",
+            "arguments": {
+              "schema_version": 1,
+              "conversation_id": "replay",
+              "run_id": "166f92c1f8fb4c7c95928eb1b2c1b1c2",
+              "checkpoint_id": "773939a8bc60149adf99630028df4b19886201d9e98d2f3a62f34a8fd8904857",
+              "stage": "writing",
+              "turns_spent": 13,
+              "sources_spent": 12
+            },
+            "call_id": "call_6226b10b952f44e5a54b046043b93621"
+          },
+          "self_assessed_risk": "UNKNOWN",
+          "llm_response_id": null
+        },
+        {
+          "id": "evt_8567d373402e4fa78375b70c9f7e68e0",
+          "source": "agent",
+          "timestamp": "2026-09-23T00:57:39.583461Z",
+          "schema_version": 1,
+          "seq": 138,
+          "agent_view_id": null,
+          "meta": {},
+          "kind": "action",
+          "thought": "Deep Research: research_checkpoint_commit",
+          "tool_call": {
+            "tool_name": "research_checkpoint_commit",
+            "arguments": {
+              "schema_version": 1,
+              "conversation_id": "replay",
+              "run_id": "166f92c1f8fb4c7c95928eb1b2c1b1c2",
+              "checkpoint_id": "7e85cc96d8d1f7271a60ca1e65cc81a5aed59268121b1d8472736b21a21fe0d5",
+              "stage": "writing",
+              "turns_spent": 13,
+              "sources_spent": 12
+            },
+            "call_id": "call_e87b8de58c994eb2a907b3bbbaff93a4"
+          },
+          "self_assessed_risk": "UNKNOWN",
+          "llm_response_id": null
+        },
+        {
+          "id": "evt_f0cd6464708942628dc9debf416880c8",
+          "source": "agent",
+          "timestamp": "2026-09-23T00:57:39.590461Z",
+          "schema_version": 1,
+          "seq": 139,
+          "agent_view_id": null,
+          "meta": {},
+          "kind": "action",
+          "thought": "Deep Research: research_checkpoint_commit",
+          "tool_call": {
+            "tool_name": "research_checkpoint_commit",
+            "arguments": {
+              "schema_version": 1,
+              "conversation_id": "replay",
+              "run_id": "166f92c1f8fb4c7c95928eb1b2c1b1c2",
+              "checkpoint_id": "acfd830f2acfec4d0a1817867365c18a86131808c9b3633072f94836347c66dd",
+              "stage": "writing",
+              "turns_spent": 13,
+              "sources_spent": 12
+            },
+            "call_id": "call_0090c064757f4c13a2b52829824989fa"
+          },
+          "self_assessed_risk": "UNKNOWN",
+          "llm_response_id": null
+        },
+        {
+          "id": "evt_38fde970533b436080f20e2c61bf62fd",
+          "source": "agent",
+          "timestamp": "2026-09-23T00:57:39.634168Z",
+          "schema_version": 1,
+          "seq": 140,
+          "agent_view_id": null,
+          "meta": {},
+          "kind": "action",
+          "thought": "Deep Research: research_checkpoint_commit",
+          "tool_call": {
+            "tool_name": "research_checkpoint_commit",
+            "arguments": {
+              "schema_version": 1,
+              "conversation_id": "replay",
+              "run_id": "166f92c1f8fb4c7c95928eb1b2c1b1c2",
+              "checkpoint_id": "4352e2b61758f508a0ea1ef1d593b33717cc85801d4cfa685383f9e6d5787b4a",
+              "stage": "writing",
+              "turns_spent": 13,
+              "sources_spent": 12
+            },
+            "call_id": "call_4a99dbb0e46f4c95868432fde0e41edb"
+          },
+          "self_assessed_risk": "UNKNOWN",
+          "llm_response_id": null
+        },
+        {
+          "id": "evt_fdca8f23f5704c9291fbbc20cb64dfc7",
+          "source": "agent",
+          "timestamp": "2026-09-23T00:57:39.641544Z",
+          "schema_version": 1,
+          "seq": 141,
+          "agent_view_id": null,
+          "meta": {},
+          "kind": "action",
+          "thought": "Deep Research: research_checkpoint_commit",
+          "tool_call": {
+            "tool_name": "research_checkpoint_commit",
+            "arguments": {
+              "schema_version": 1,
+              "conversation_id": "replay",
+              "run_id": "166f92c1f8fb4c7c95928eb1b2c1b1c2",
+              "checkpoint_id": "c622821584cca40013980b5e7d5b987cd949d95d14dd99521cff6034765db2d1",
+              "stage": "writing",
+              "turns_spent": 13,
+              "sources_spent": 12
+            },
+            "call_id": "call_974cd05f843249a0b6acbdc8dc1d3ab5"
+          },
+          "self_assessed_risk": "UNKNOWN",
+          "llm_response_id": null
+        },
+        {
+          "id": "evt_9fc2188451ff4986be9b5eee0ccdfb6c",
+          "source": "agent",
+          "timestamp": "2026-09-23T00:57:39.684753Z",
+          "schema_version": 1,
+          "seq": 142,
+          "agent_view_id": null,
+          "meta": {},
+          "kind": "action",
+          "thought": "Deep Research: research_checkpoint_commit",
+          "tool_call": {
+            "tool_name": "research_checkpoint_commit",
+            "arguments": {
+              "schema_version": 1,
+              "conversation_id": "replay",
+              "run_id": "166f92c1f8fb4c7c95928eb1b2c1b1c2",
+              "checkpoint_id": "488cdbec1ebc4cf4f732d5025e57b03c60c468eae876b4fb14c3b356b7ca92f5",
+              "stage": "writing",
+              "turns_spent": 13,
+              "sources_spent": 12
+            },
+            "call_id": "call_d4c7fcf2d45d4988b8a0c551838cda5c"
+          },
+          "self_assessed_risk": "UNKNOWN",
+          "llm_response_id": null
+        },
+        {
+          "id": "evt_b1bff013b56c4d3198ba01cc0279d938",
+          "source": "agent",
+          "timestamp": "2026-09-23T00:57:39.691639Z",
+          "schema_version": 1,
+          "seq": 143,
+          "agent_view_id": null,
+          "meta": {},
+          "kind": "action",
+          "thought": "Deep Research: research_checkpoint_commit",
+          "tool_call": {
+            "tool_name": "research_checkpoint_commit",
+            "arguments": {
+              "schema_version": 1,
+              "conversation_id": "replay",
+              "run_id": "166f92c1f8fb4c7c95928eb1b2c1b1c2",
+              "checkpoint_id": "93975ba8e03e823763b62e73f500c84d69f9443cf5deabee869436fe7ad0d637",
+              "stage": "writing",
+              "turns_spent": 13,
+              "sources_spent": 12
+            },
+            "call_id": "call_c06e432cd444410ea2c703ebf9311882"
+          },
+          "self_assessed_risk": "UNKNOWN",
+          "llm_response_id": null
+        }
+      ]
+    },
+    {
+      "before_event_id": "evt_71bfc5f2f1d24f83ace2c7830ff3226b",
+      "events": [
+        {
+          "id": "evt_b2ff94752fc44a7b8a61d779b9ffe974",
+          "source": "agent",
+          "timestamp": "2026-09-23T00:57:39.698640Z",
+          "schema_version": 1,
+          "seq": 145,
+          "agent_view_id": null,
+          "meta": {},
+          "kind": "action",
+          "thought": "Deep Research: research_checkpoint_commit",
+          "tool_call": {
+            "tool_name": "research_checkpoint_commit",
+            "arguments": {
+              "schema_version": 1,
+              "conversation_id": "replay",
+              "run_id": "166f92c1f8fb4c7c95928eb1b2c1b1c2",
+              "checkpoint_id": "570deb66b000483591920634e7d18d8e7ea49ab8ef0cf3fc6e81a4d627f3134c",
+              "stage": "writing",
+              "turns_spent": 13,
+              "sources_spent": 12
+            },
+            "call_id": "call_35c038b6a6694acd9c330c828befe82c"
+          },
+          "self_assessed_risk": "UNKNOWN",
+          "llm_response_id": null
+        },
+        {
+          "id": "evt_cf71b7554b824f6db8efb785b59170ca",
+          "source": "agent",
+          "timestamp": "2026-09-23T00:57:39.710830Z",
+          "schema_version": 1,
+          "seq": 146,
+          "agent_view_id": null,
+          "meta": {},
+          "kind": "action",
+          "thought": "Deep Research: research_checkpoint_commit",
+          "tool_call": {
+            "tool_name": "research_checkpoint_commit",
+            "arguments": {
+              "schema_version": 1,
+              "conversation_id": "replay",
+              "run_id": "166f92c1f8fb4c7c95928eb1b2c1b1c2",
+              "checkpoint_id": "ae0e178175ed8db4c601f6c603799802b7a1b197bb4dde31a598373fed438083",
+              "stage": "writing",
+              "turns_spent": 13,
+              "sources_spent": 12
+            },
+            "call_id": "call_65701ef4d6a7485c8d926987b0fcf401"
+          },
+          "self_assessed_risk": "UNKNOWN",
+          "llm_response_id": null
+        },
+        {
+          "id": "evt_341c83fe042f47e8be7ec33e93aba535",
+          "source": "agent",
+          "timestamp": "2026-09-23T00:57:39.717566Z",
+          "schema_version": 1,
+          "seq": 147,
+          "agent_view_id": null,
+          "meta": {},
+          "kind": "action",
+          "thought": "Deep Research: research_checkpoint_commit",
+          "tool_call": {
+            "tool_name": "research_checkpoint_commit",
+            "arguments": {
+              "schema_version": 1,
+              "conversation_id": "replay",
+              "run_id": "166f92c1f8fb4c7c95928eb1b2c1b1c2",
+              "checkpoint_id": "0ece226c3a6356a51128fdef88d2f60c120a59b4552113b9cd3d5df9bf85b8b4",
+              "stage": "writing",
+              "turns_spent": 13,
+              "sources_spent": 12
+            },
+            "call_id": "call_e787ac28a5814ba38b01f24961ff5153"
+          },
+          "self_assessed_risk": "UNKNOWN",
+          "llm_response_id": null
+        }
+      ]
+    },
+    {
+      "before_event_id": "evt_e68f5bca5e8e4a84a1bd18d48af4a706",
+      "events": [
+        {
+          "id": "evt_eec5bb05f8e44df7897cebae698eccc4",
+          "source": "agent",
+          "timestamp": "2026-09-23T00:57:39.724225Z",
+          "schema_version": 1,
+          "seq": 149,
+          "agent_view_id": null,
+          "meta": {},
+          "kind": "action",
+          "thought": "Deep Research: research_checkpoint_commit",
+          "tool_call": {
+            "tool_name": "research_checkpoint_commit",
+            "arguments": {
+              "schema_version": 1,
+              "conversation_id": "replay",
+              "run_id": "166f92c1f8fb4c7c95928eb1b2c1b1c2",
+              "checkpoint_id": "7f245090a79cc6877235ca9e510a3d41142ae75bddc50813883c8bb10fe4bb71",
+              "stage": "writing",
+              "turns_spent": 13,
+              "sources_spent": 12
+            },
+            "call_id": "call_9b46929163bb4f93a8018f83b6f198ed"
+          },
+          "self_assessed_risk": "UNKNOWN",
+          "llm_response_id": null
+        },
+        {
+          "id": "evt_663b7ccf26d34450a37dda1f787fa18e",
+          "source": "agent",
+          "timestamp": "2026-09-23T00:57:39.738557Z",
+          "schema_version": 1,
+          "seq": 150,
+          "agent_view_id": null,
+          "meta": {},
+          "kind": "action",
+          "thought": "Deep Research: research_checkpoint_commit",
+          "tool_call": {
+            "tool_name": "research_checkpoint_commit",
+            "arguments": {
+              "schema_version": 1,
+              "conversation_id": "replay",
+              "run_id": "166f92c1f8fb4c7c95928eb1b2c1b1c2",
+              "checkpoint_id": "f4af8b34d0cd8d5737c311b8284830dc30fb047f074edb8666884869870388fa",
+              "stage": "writing",
+              "turns_spent": 13,
+              "sources_spent": 12
+            },
+            "call_id": "call_5eda52428f58420698a6cea89e4d1078"
+          },
+          "self_assessed_risk": "UNKNOWN",
+          "llm_response_id": null
+        },
+        {
+          "id": "evt_9b493a8cbf3647a6a8fa970aa9bbc2c9",
+          "source": "agent",
+          "timestamp": "2026-09-23T00:57:39.745761Z",
+          "schema_version": 1,
+          "seq": 151,
+          "agent_view_id": null,
+          "meta": {},
+          "kind": "action",
+          "thought": "Deep Research: research_checkpoint_commit",
+          "tool_call": {
+            "tool_name": "research_checkpoint_commit",
+            "arguments": {
+              "schema_version": 1,
+              "conversation_id": "replay",
+              "run_id": "166f92c1f8fb4c7c95928eb1b2c1b1c2",
+              "checkpoint_id": "64a2614de1c0055347aa4f0d54ab46dc12514df641ba2862647b20700db7fbaf",
+              "stage": "writing",
+              "turns_spent": 13,
+              "sources_spent": 12
+            },
+            "call_id": "call_23093491e90d45498eb6e9c017a943ad"
+          },
+          "self_assessed_risk": "UNKNOWN",
+          "llm_response_id": null
+        }
+      ]
+    },
+    {
+      "before_event_id": "evt_862652e9be8942af9d188d1c231b6151",
+      "events": [
+        {
+          "id": "evt_194c0b634bbc4eb09f76119a5822d091",
+          "source": "agent",
+          "timestamp": "2026-09-23T00:57:39.752837Z",
+          "schema_version": 1,
+          "seq": 153,
+          "agent_view_id": null,
+          "meta": {},
+          "kind": "action",
+          "thought": "Deep Research: research_checkpoint_commit",
+          "tool_call": {
+            "tool_name": "research_checkpoint_commit",
+            "arguments": {
+              "schema_version": 1,
+              "conversation_id": "replay",
+              "run_id": "166f92c1f8fb4c7c95928eb1b2c1b1c2",
+              "checkpoint_id": "c4b9ba39f687553e8b703bd23b000777aa127627fe16239aa9b5583c35411a50",
+              "stage": "writing",
+              "turns_spent": 13,
+              "sources_spent": 12
+            },
+            "call_id": "call_cffd12873dea40389f44b3ce5e7d548b"
+          },
+          "self_assessed_risk": "UNKNOWN",
+          "llm_response_id": null
+        },
+        {
+          "id": "evt_1c2672c688844216bbd4d02bdb222974",
+          "source": "agent",
+          "timestamp": "2026-09-23T00:57:39.764670Z",
+          "schema_version": 1,
+          "seq": 154,
+          "agent_view_id": null,
+          "meta": {},
+          "kind": "action",
+          "thought": "Deep Research: research_checkpoint_commit",
+          "tool_call": {
+            "tool_name": "research_checkpoint_commit",
+            "arguments": {
+              "schema_version": 1,
+              "conversation_id": "replay",
+              "run_id": "166f92c1f8fb4c7c95928eb1b2c1b1c2",
+              "checkpoint_id": "4b56600c6dd1c48d536ea90eb93fa81bd23bbbdd8199364481a9a16475ed19a6",
+              "stage": "writing",
+              "turns_spent": 13,
+              "sources_spent": 12
+            },
+            "call_id": "call_aa1f43a3718642a780ce881fffd72085"
+          },
+          "self_assessed_risk": "UNKNOWN",
+          "llm_response_id": null
+        },
+        {
+          "id": "evt_e040f5e79d9f446cb4a1abd2fa4a77e9",
+          "source": "agent",
+          "timestamp": "2026-09-23T00:57:39.772185Z",
+          "schema_version": 1,
+          "seq": 155,
+          "agent_view_id": null,
+          "meta": {},
+          "kind": "action",
+          "thought": "Deep Research: research_checkpoint_commit",
+          "tool_call": {
+            "tool_name": "research_checkpoint_commit",
+            "arguments": {
+              "schema_version": 1,
+              "conversation_id": "replay",
+              "run_id": "166f92c1f8fb4c7c95928eb1b2c1b1c2",
+              "checkpoint_id": "f814b93b2ccf3e2854d0d555c2fadb852d49102c741016a77d0ab7ea42aa036f",
+              "stage": "writing",
+              "turns_spent": 13,
+              "sources_spent": 12
+            },
+            "call_id": "call_d2d67b809d93490aa4a32a9c0c4f43d9"
+          },
+          "self_assessed_risk": "UNKNOWN",
+          "llm_response_id": null
+        }
+      ]
+    },
+    {
+      "before_event_id": "evt_a14a31b9e6444f0187ca820bc9a20c7c",
+      "events": [
+        {
+          "id": "evt_974dae9c2bd045249d078e62f8cc1934",
+          "source": "agent",
+          "timestamp": "2026-09-23T00:57:39.779683Z",
+          "schema_version": 1,
+          "seq": 157,
+          "agent_view_id": null,
+          "meta": {},
+          "kind": "action",
+          "thought": "Deep Research: research_checkpoint_commit",
+          "tool_call": {
+            "tool_name": "research_checkpoint_commit",
+            "arguments": {
+              "schema_version": 1,
+              "conversation_id": "replay",
+              "run_id": "166f92c1f8fb4c7c95928eb1b2c1b1c2",
+              "checkpoint_id": "0491c028c962c496ed3a2f50d4fe4b9e288a19afa3f90445fd736cd66e4df266",
+              "stage": "writing",
+              "turns_spent": 13,
+              "sources_spent": 12
+            },
+            "call_id": "call_c10484639d1b4c4188e1e40e206094f4"
+          },
+          "self_assessed_risk": "UNKNOWN",
+          "llm_response_id": null
+        },
+        {
+          "id": "evt_01f1628ae29443b0a35476576c71f24a",
+          "source": "agent",
+          "timestamp": "2026-09-23T00:57:39.790166Z",
+          "schema_version": 1,
+          "seq": 158,
+          "agent_view_id": null,
+          "meta": {},
+          "kind": "action",
+          "thought": "Deep Research: research_checkpoint_commit",
+          "tool_call": {
+            "tool_name": "research_checkpoint_commit",
+            "arguments": {
+              "schema_version": 1,
+              "conversation_id": "replay",
+              "run_id": "166f92c1f8fb4c7c95928eb1b2c1b1c2",
+              "checkpoint_id": "8614788a3e13153c8ecdd1904c38cbe13d60bec37c695a522eacb786e995cd0b",
+              "stage": "writing",
+              "turns_spent": 13,
+              "sources_spent": 12
+            },
+            "call_id": "call_45931b3fa08242c69e98d3c7a075e055"
+          },
+          "self_assessed_risk": "UNKNOWN",
+          "llm_response_id": null
+        },
+        {
+          "id": "evt_af6a556a8c62464ea3f30e93cbb76e1b",
+          "source": "agent",
+          "timestamp": "2026-09-23T00:57:39.797552Z",
+          "schema_version": 1,
+          "seq": 159,
+          "agent_view_id": null,
+          "meta": {},
+          "kind": "action",
+          "thought": "Deep Research: research_checkpoint_commit",
+          "tool_call": {
+            "tool_name": "research_checkpoint_commit",
+            "arguments": {
+              "schema_version": 1,
+              "conversation_id": "replay",
+              "run_id": "166f92c1f8fb4c7c95928eb1b2c1b1c2",
+              "checkpoint_id": "6b6f0e577aa366fc74ac7be63da3f731451c0a1acc4365075babbd5394a5b4fc",
+              "stage": "writing",
+              "turns_spent": 13,
+              "sources_spent": 12
+            },
+            "call_id": "call_7bcae10d39b648678bff6a095ebabefd"
+          },
+          "self_assessed_risk": "UNKNOWN",
+          "llm_response_id": null
+        }
+      ]
+    },
+    {
+      "before_event_id": "evt_85ac335a0aa5456f961ad9175416d708",
+      "events": [
+        {
+          "id": "evt_17369ff9c7c1443e934a0ce7388a099c",
+          "source": "agent",
+          "timestamp": "2026-09-23T00:57:39.805234Z",
+          "schema_version": 1,
+          "seq": 161,
+          "agent_view_id": null,
+          "meta": {},
+          "kind": "action",
+          "thought": "Deep Research: research_checkpoint_commit",
+          "tool_call": {
+            "tool_name": "research_checkpoint_commit",
+            "arguments": {
+              "schema_version": 1,
+              "conversation_id": "replay",
+              "run_id": "166f92c1f8fb4c7c95928eb1b2c1b1c2",
+              "checkpoint_id": "3c9651ade44c7a1b3695c58cd66d002162ff5493024877fcbfdbabed794e7025",
+              "stage": "writing",
+              "turns_spent": 13,
+              "sources_spent": 12
+            },
+            "call_id": "call_96591c24953a44348eaa521e595d3fe4"
+          },
+          "self_assessed_risk": "UNKNOWN",
+          "llm_response_id": null
+        },
+        {
+          "id": "evt_c7417e8c11464937a69e4fabd5466929",
+          "source": "agent",
+          "timestamp": "2026-09-23T00:57:39.823566Z",
+          "schema_version": 1,
+          "seq": 162,
+          "agent_view_id": null,
+          "meta": {},
+          "kind": "action",
+          "thought": "Deep Research: research_checkpoint_commit",
+          "tool_call": {
+            "tool_name": "research_checkpoint_commit",
+            "arguments": {
+              "schema_version": 1,
+              "conversation_id": "replay",
+              "run_id": "166f92c1f8fb4c7c95928eb1b2c1b1c2",
+              "checkpoint_id": "2813add6b70b9e42806dc746c1af063a19b7a12e65fa4692a15f6b3ae69ce837",
+              "stage": "writing",
+              "turns_spent": 13,
+              "sources_spent": 12
+            },
+            "call_id": "call_8e89156175de4e1eb6bd32130b775d95"
+          },
+          "self_assessed_risk": "UNKNOWN",
+          "llm_response_id": null
+        },
+        {
+          "id": "evt_a33e1e94d604494891d486e63b212c1a",
+          "source": "agent",
+          "timestamp": "2026-09-23T00:57:39.831231Z",
+          "schema_version": 1,
+          "seq": 163,
+          "agent_view_id": null,
+          "meta": {},
+          "kind": "action",
+          "thought": "Deep Research: research_checkpoint_commit",
+          "tool_call": {
+            "tool_name": "research_checkpoint_commit",
+            "arguments": {
+              "schema_version": 1,
+              "conversation_id": "replay",
+              "run_id": "166f92c1f8fb4c7c95928eb1b2c1b1c2",
+              "checkpoint_id": "78242dddbacc8863f5c2c3e21a56ef9e9b8b5eec8616cc09f9517490611040d1",
+              "stage": "writing",
+              "turns_spent": 13,
+              "sources_spent": 12
+            },
+            "call_id": "call_2ae4231f1f98467baba27103f8fd1a31"
+          },
+          "self_assessed_risk": "UNKNOWN",
+          "llm_response_id": null
+        }
+      ]
+    },
+    {
+      "before_event_id": "evt_e213e2712a794755889bd8cbc982ec15",
+      "events": [
+        {
+          "id": "evt_901815287a974e5285475e8039eaa020",
+          "source": "agent",
+          "timestamp": "2026-09-23T00:57:39.838626Z",
+          "schema_version": 1,
+          "seq": 165,
+          "agent_view_id": null,
+          "meta": {},
+          "kind": "action",
+          "thought": "Deep Research: research_checkpoint_commit",
+          "tool_call": {
+            "tool_name": "research_checkpoint_commit",
+            "arguments": {
+              "schema_version": 1,
+              "conversation_id": "replay",
+              "run_id": "166f92c1f8fb4c7c95928eb1b2c1b1c2",
+              "checkpoint_id": "c46d3c50196ddc985d8a6237dcd372c467def805b89f77c94f1bc4df6ba8693a",
+              "stage": "writing",
+              "turns_spent": 13,
+              "sources_spent": 12
+            },
+            "call_id": "call_c955ee4313ec40289cdd46c94dc5237c"
+          },
+          "self_assessed_risk": "UNKNOWN",
+          "llm_response_id": null
+        },
+        {
+          "id": "evt_33e6b238ae1c4dee9dc807be819ca27b",
+          "source": "agent",
+          "timestamp": "2026-09-23T00:57:39.848758Z",
+          "schema_version": 1,
+          "seq": 166,
+          "agent_view_id": null,
+          "meta": {},
+          "kind": "action",
+          "thought": "Deep Research: research_checkpoint_commit",
+          "tool_call": {
+            "tool_name": "research_checkpoint_commit",
+            "arguments": {
+              "schema_version": 1,
+              "conversation_id": "replay",
+              "run_id": "166f92c1f8fb4c7c95928eb1b2c1b1c2",
+              "checkpoint_id": "43572a6c74422d6add942919bc85e2fb44066451763a6107660c4c8fd5b262a6",
+              "stage": "writing",
+              "turns_spent": 13,
+              "sources_spent": 12
+            },
+            "call_id": "call_9285829ac5734931832d4e4bd46aead8"
+          },
+          "self_assessed_risk": "UNKNOWN",
+          "llm_response_id": null
+        },
+        {
+          "id": "evt_a3f15d267fc347a4a47b1b9fd14a607f",
+          "source": "agent",
+          "timestamp": "2026-09-23T00:57:39.856337Z",
+          "schema_version": 1,
+          "seq": 167,
+          "agent_view_id": null,
+          "meta": {},
+          "kind": "action",
+          "thought": "Deep Research: research_checkpoint_commit",
+          "tool_call": {
+            "tool_name": "research_checkpoint_commit",
+            "arguments": {
+              "schema_version": 1,
+              "conversation_id": "replay",
+              "run_id": "166f92c1f8fb4c7c95928eb1b2c1b1c2",
+              "checkpoint_id": "e4ae5d142d3661626e8bba6a3761eb6fda667dd05fc9535005a153af97a7b975",
+              "stage": "writing",
+              "turns_spent": 13,
+              "sources_spent": 12
+            },
+            "call_id": "call_7a8a54bbcf144a3c99bd6a396d9a720e"
+          },
+          "self_assessed_risk": "UNKNOWN",
+          "llm_response_id": null
+        }
+      ]
+    },
+    {
+      "before_event_id": "evt_173d462449844c7090ef8fa8bfa5c66f",
+      "events": [
+        {
+          "id": "evt_f406d2baf8af4916b701fb35e0567e90",
+          "source": "agent",
+          "timestamp": "2026-09-23T00:57:39.863939Z",
+          "schema_version": 1,
+          "seq": 169,
+          "agent_view_id": null,
+          "meta": {},
+          "kind": "action",
+          "thought": "Deep Research: research_checkpoint_commit",
+          "tool_call": {
+            "tool_name": "research_checkpoint_commit",
+            "arguments": {
+              "schema_version": 1,
+              "conversation_id": "replay",
+              "run_id": "166f92c1f8fb4c7c95928eb1b2c1b1c2",
+              "checkpoint_id": "72dc064fb9444822993460b2718c03b44df7c90f648be3a47d322b5f7e379d51",
+              "stage": "writing",
+              "turns_spent": 13,
+              "sources_spent": 12
+            },
+            "call_id": "call_40dc79f47ac64bfa950d09f38e544f92"
+          },
+          "self_assessed_risk": "UNKNOWN",
+          "llm_response_id": null
+        },
+        {
+          "id": "evt_7b87075808b6420f99e3dc5a46fb0415",
+          "source": "agent",
+          "timestamp": "2026-09-23T00:57:39.878660Z",
+          "schema_version": 1,
+          "seq": 170,
+          "agent_view_id": null,
+          "meta": {},
+          "kind": "action",
+          "thought": "Deep Research: research_checkpoint_commit",
+          "tool_call": {
+            "tool_name": "research_checkpoint_commit",
+            "arguments": {
+              "schema_version": 1,
+              "conversation_id": "replay",
+              "run_id": "166f92c1f8fb4c7c95928eb1b2c1b1c2",
+              "checkpoint_id": "5b84a87444dfeb3186eeb897f8a96f3ba589d77436a5bceab06e9dd35be6d4e4",
+              "stage": "writing",
+              "turns_spent": 13,
+              "sources_spent": 12
+            },
+            "call_id": "call_2088d980c6034984ab729aa7af17f024"
+          },
+          "self_assessed_risk": "UNKNOWN",
+          "llm_response_id": null
+        },
+        {
+          "id": "evt_2721a00082814a9ea41a6bbf35cf81a8",
+          "source": "agent",
+          "timestamp": "2026-09-23T00:57:39.885936Z",
+          "schema_version": 1,
+          "seq": 171,
+          "agent_view_id": null,
+          "meta": {},
+          "kind": "action",
+          "thought": "Deep Research: research_checkpoint_commit",
+          "tool_call": {
+            "tool_name": "research_checkpoint_commit",
+            "arguments": {
+              "schema_version": 1,
+              "conversation_id": "replay",
+              "run_id": "166f92c1f8fb4c7c95928eb1b2c1b1c2",
+              "checkpoint_id": "523005578630d29e0f1fea7d080e89b4448b6860b91a840fed5c0ba17286b16a",
+              "stage": "writing",
+              "turns_spent": 13,
+              "sources_spent": 12
+            },
+            "call_id": "call_32504e1e46e84717b2c414326bb86054"
+          },
+          "self_assessed_risk": "UNKNOWN",
+          "llm_response_id": null
+        }
+      ]
+    },
+    {
+      "before_event_id": "evt_fbaf8e79633d42bf9667c22632d25d09",
+      "events": [
+        {
+          "id": "evt_978c1f44684f411786350fe393e10631",
+          "source": "agent",
+          "timestamp": "2026-09-23T00:57:39.893443Z",
+          "schema_version": 1,
+          "seq": 173,
+          "agent_view_id": null,
+          "meta": {},
+          "kind": "action",
+          "thought": "Deep Research: research_checkpoint_commit",
+          "tool_call": {
+            "tool_name": "research_checkpoint_commit",
+            "arguments": {
+              "schema_version": 1,
+              "conversation_id": "replay",
+              "run_id": "166f92c1f8fb4c7c95928eb1b2c1b1c2",
+              "checkpoint_id": "4ed7ce28ce8f2fa767db52d63d0bc1cf38a6c8560b989a4def6d915c5a7275f9",
+              "stage": "writing",
+              "turns_spent": 13,
+              "sources_spent": 12
+            },
+            "call_id": "call_6cd3009d409b40d99abc86fef7e29b5a"
+          },
+          "self_assessed_risk": "UNKNOWN",
+          "llm_response_id": null
+        },
+        {
+          "id": "evt_75b3b703062246e78773b14c79c4953a",
+          "source": "agent",
+          "timestamp": "2026-09-23T00:57:39.907103Z",
+          "schema_version": 1,
+          "seq": 174,
+          "agent_view_id": null,
+          "meta": {},
+          "kind": "action",
+          "thought": "Deep Research: research_checkpoint_commit",
+          "tool_call": {
+            "tool_name": "research_checkpoint_commit",
+            "arguments": {
+              "schema_version": 1,
+              "conversation_id": "replay",
+              "run_id": "166f92c1f8fb4c7c95928eb1b2c1b1c2",
+              "checkpoint_id": "d34ec2fa5c8bea24d4011ed6822383c4ff397753629cd76f62117235d4262e82",
+              "stage": "writing",
+              "turns_spent": 13,
+              "sources_spent": 12
+            },
+            "call_id": "call_7b15c4d7429642c2ae05645200ad4673"
+          },
+          "self_assessed_risk": "UNKNOWN",
+          "llm_response_id": null
+        },
+        {
+          "id": "evt_8e423b115d564ca4bfce92b396c86567",
+          "source": "agent",
+          "timestamp": "2026-09-23T00:57:39.914807Z",
+          "schema_version": 1,
+          "seq": 175,
+          "agent_view_id": null,
+          "meta": {},
+          "kind": "action",
+          "thought": "Deep Research: research_checkpoint_commit",
+          "tool_call": {
+            "tool_name": "research_checkpoint_commit",
+            "arguments": {
+              "schema_version": 1,
+              "conversation_id": "replay",
+              "run_id": "166f92c1f8fb4c7c95928eb1b2c1b1c2",
+              "checkpoint_id": "f8bd9e6f649408ad4cce97e649ea2afdfb221ca35fbde3eda697fa909c364ede",
+              "stage": "writing",
+              "turns_spent": 13,
+              "sources_spent": 12
+            },
+            "call_id": "call_33d3d4162162470383ab153b7e5d729a"
+          },
+          "self_assessed_risk": "UNKNOWN",
+          "llm_response_id": null
+        },
+        {
+          "id": "evt_8173484aa67c4a75a8c0933978639ce8",
+          "source": "agent",
+          "timestamp": "2026-09-23T00:57:39.919049Z",
+          "schema_version": 1,
+          "seq": 176,
+          "agent_view_id": null,
+          "meta": {},
+          "kind": "action",
+          "thought": "Deep Research: research_checkpoint_commit",
+          "tool_call": {
+            "tool_name": "research_checkpoint_commit",
+            "arguments": {
+              "schema_version": 1,
+              "conversation_id": "replay",
+              "run_id": "166f92c1f8fb4c7c95928eb1b2c1b1c2",
+              "checkpoint_id": "f8bd9e6f649408ad4cce97e649ea2afdfb221ca35fbde3eda697fa909c364ede",
+              "stage": "writing",
+              "turns_spent": 13,
+              "sources_spent": 12
+            },
+            "call_id": "call_7589594afc5541cb83f7408952456c4d"
+          },
+          "self_assessed_risk": "UNKNOWN",
+          "llm_response_id": null
+        }
+      ]
+    }
+  ]
+}

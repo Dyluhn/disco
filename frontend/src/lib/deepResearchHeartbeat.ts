@@ -57,7 +57,7 @@ export function ageSeconds(at: number | null, nowMs: number): number | null {
   return Math.max(0, Math.floor((nowMs - at) / 1000));
 }
 
-export type SignalLevel = "live" | "buffered" | "quiet" | "silent";
+export type SignalLevel = "live" | "buffered" | "backoff" | "quiet" | "silent";
 
 export interface SignalReading {
   level: SignalLevel;
@@ -87,8 +87,12 @@ export function signalReading(
   nowMs: number,
   sinceMs: number,
   buffered = false,
+  retryRemaining: number | null = null,
 ): SignalReading {
   const age = Math.max(0, Math.floor((nowMs - (lastEventAt ?? sinceMs)) / 1000));
+  if (retryRemaining !== null && retryRemaining > 0) {
+    return { level: "backoff", ageSeconds: age, label: `Provider backoff · ${formatDuration(retryRemaining)}` };
+  }
   if (age < SIGNAL_QUIET_AFTER_S) return { level: "live", ageSeconds: age, label: "Live" };
   if (buffered) {
     return { level: "buffered", ageSeconds: age, label: `Waiting for model reply · ${formatDuration(age)}` };
@@ -135,6 +139,7 @@ const ROUND_WORD: Record<string, string> = {
 /** Engine `phase` values that mean the WRITER is working — the evidence loop is
  *  over. Same vocabulary `researchPhaseLabel` maps to the writer's words. */
 const WRITER_PHASES: readonly string[] = [
+  "reading",
   "synthesize",
   "synthesizing",
   "write",
@@ -150,7 +155,7 @@ const WRITER_PHASES: readonly string[] = [
 ];
 
 /** `model_activity` stages that belong to the writer's calls, not a turn's. */
-const WRITER_STAGES: readonly string[] = ["draft", "review", "rework", "continuation"];
+const WRITER_STAGES: readonly string[] = ["source_reading", "draft", "review", "rework", "continuation"];
 
 function isWriterPhase(activity: DeepActivity): boolean {
   const phase = activity.phase;
@@ -301,6 +306,37 @@ function reasoningOnly(activity: DeepActivity, since: number | null): boolean {
   return reasoning !== undefined && reasoning > 0 && reasoning >= streamed;
 }
 
+export function modelRetryRemaining(activity: DeepActivity, nowMs: number): number | null {
+  const model = activity.modelActivity;
+  if (!model || model.payload.state !== "backoff") return null;
+  const transitions = [activity.phase, activity.turn, activity.round];
+  if (transitions.some((event) => event?.at != null && event.at > (model.at ?? 0))) return null;
+  return Math.max(0, (model.payload.retry_after_s ?? 0) - (ageSeconds(model.at, nowMs) ?? 0));
+}
+
+function modelStatusText(activity: DeepActivity, nowMs: number): string | null {
+  const model = activity.modelActivity;
+  if (!model) return null;
+  const p = model.payload;
+  if (p.state === "backoff") {
+    const elapsed = ageSeconds(model.at, nowMs) ?? 0;
+    const remaining = Math.max(0, (p.retry_after_s ?? 0) - elapsed);
+    return remaining > 0
+      ? `Provider retry ${p.attempt ?? 1} · waiting ${formatDuration(remaining)}`
+      : "Waiting for provider retry to start";
+  }
+  const phase = activity.phase?.payload;
+  const source = phase?.source && phase.sourcesTotal
+    ? `source ${phase.source} of ${phase.sourcesTotal}` : "source";
+  const chunk = p.chunk && p.chunks ? ` · part ${p.chunk} of ${p.chunks}` : "";
+  if (p.state === "waiting") return `Waiting for first model output${chunk}`;
+  if (p.stage === "source_reading") {
+    return `Reading ${source}${chunk} · ${reasoningOnly(activity, model.at) ? "thinking" : "receiving notes"}`;
+  }
+  return modelIsBuffered(activity)
+    ? "Waiting for model reply (this driver does not report progress while it works)" : null;
+}
+
 function phaseText(activity: DeepActivity): string | null {
   const phase = activity.phase;
   if (!phase) return null;
@@ -338,9 +374,7 @@ function pickNow(
     // A streamed heartbeat is only the duration source, never the now-line. A
     // BUFFERED one is the last thing that will be reported until the call
     // returns, so it has to speak for itself or the run goes silent behind it.
-    { key: "model", at: activity.modelActivity?.at ?? null, text: modelIsBuffered(activity)
-        ? "Waiting for model reply (this driver does not report progress while it works)"
-        : null },
+    { key: "model", at: activity.modelActivity?.at ?? null, text: modelStatusText(activity, nowMs) },
     { key: "phase", at: activity.phase?.at ?? null, text: phaseText(activity) },
     // Once the writer leads, a turn can no longer be the now-line: it would say
     // the run is searching under a line saying it is writing.

@@ -54,7 +54,14 @@ HoldReason = Literal["search_pool_cooling", "search_rate_starved"]
 #: with no heartbeat at all — 29–52 s of wire silence against a client that
 #: reconnects after 45.
 ModelActivityStage = Literal[
-    "brief", "research_turn", "draft", "review", "rework", "continuation", "follow_up"
+    "brief",
+    "research_turn",
+    "source_reading",
+    "draft",
+    "review",
+    "rework",
+    "continuation",
+    "follow_up",
 ]
 
 #: Stop, as the run's own event vocabulary records it. Alone among the names
@@ -217,6 +224,8 @@ def model_activity_stage(inspect_stage: str | None) -> ModelActivityStage | None
     # Checked first: `report_draft_continuation` is a continuation, not a draft.
     if inspect_stage.endswith("_continuation"):
         return "continuation"
+    if inspect_stage == "source_reading":
+        return "source_reading"
     if inspect_stage.startswith("research_turn"):
         return "research_turn"
     if inspect_stage.startswith("follow_up"):
@@ -240,6 +249,8 @@ async def emit_model_activity(
     call_ordinal: int,
     reasoning_tokens: int = 0,
     streams: bool = True,
+    state: str = "generating",
+    details: Mapping[str, Any] | None = None,
 ) -> None:
     """A provider stream is delivering — this is what it has delivered so far.
 
@@ -260,6 +271,23 @@ async def emit_model_activity(
         "seconds": round(seconds, 1),
         "call_ordinal": call_ordinal,
     }
+    if state != "generating":
+        payload["state"] = state
+    if details:
+        payload.update(
+            {
+                key: details[key]
+                for key in (
+                    "source_id",
+                    "chunk",
+                    "chunks",
+                    "attempt",
+                    "retry_after_s",
+                    "http_status",
+                )
+                if key in details
+            }
+        )
     if not streams:
         payload["streams"] = False
     if reasoning_tokens > 0:
@@ -296,6 +324,8 @@ class _ModelActivityHeartbeat:
             call_ordinal=self._ordinal(progress),
             reasoning_tokens=progress.reasoning_tokens,
             streams=progress.streams,
+            state=progress.state,
+            details=progress.details,
         )
 
     def _ordinal(self, progress: StreamProgress) -> int:

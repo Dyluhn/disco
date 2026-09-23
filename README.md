@@ -23,6 +23,7 @@ Python, Node or `uv` on the host; the stack pulls the published images (about
 
 ```bash
 sudo apt-get update && sudo apt-get install -y git podman docker-compose   # Debian 13
+# Ubuntu 24.04: install git podman docker-compose-v2 instead.
 # Ubuntu 24.04: ... git podman podman-compose
 git clone https://github.com/Dyluhn/disco.git
 cd disco
@@ -31,7 +32,7 @@ systemctl --user start dbus.socket
 loginctl enable-linger "$USER"
 systemctl --user enable --now podman.socket
 export DISCO_SANDBOX_SOCKET=$XDG_RUNTIME_DIR/podman/podman.sock
-podman compose up -d
+./deploy/compose/disco-compose up -d
 podman ps --format '{{.Names}} {{.Status}}'      # three containers Up (healthy)
 ```
 

@@ -22,7 +22,7 @@ class WriterCheckpoint(BaseModel):
     research_sha256: str = ""
     final: FinalReport
     draft_sha256: str
-    stage: Literal["review", "repair", "final_check", "complete"]
+    stage: Literal["reading", "review", "repair", "final_check", "complete"]
     budget: ReviewBudget
     findings: list[Finding] = Field(default_factory=list)
     review_outcome: str = "unavailable"
@@ -62,3 +62,30 @@ def writer_input_signature(
         ],
     }
     return hashlib.sha256(json.dumps(data, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+
+
+def reading_checkpoint(
+    checkpoint: WriterCheckpointFn | None,
+    signature: str,
+    research_signature: str,
+    limit: int,
+) -> Callable[[dict[str, SourceNotes]], Awaitable[None]]:
+    """Commit reading through the same owner as draft/review recovery."""
+
+    async def save(notes: dict[str, SourceNotes]) -> None:
+        if checkpoint is None:
+            return
+        empty = FinalReport(title="", summary="", sections=())
+        await checkpoint(
+            WriterCheckpoint(
+                input_sha256=signature,
+                research_sha256=research_signature,
+                final=empty,
+                draft_sha256=hashlib.sha256(empty.markdown.encode()).hexdigest(),
+                stage="reading",
+                budget=ReviewBudget(limit=limit),
+                source_notes=notes,
+            )
+        )
+
+    return save

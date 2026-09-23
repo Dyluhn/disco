@@ -452,9 +452,7 @@ class OpenAIProvider:
             timeouts=self._timeouts,
         )
 
-    async def _complete_buffered(
-        self, req: CompletionRequest, *, model: str
-    ) -> CompletionResponse:
+    async def _complete_buffered(self, req: CompletionRequest, *, model: str) -> CompletionResponse:
         """One buffered POST — the only path left with a wall-clock ceiling.
 
         Used by the Responses API (which this adapter does not stream) and by
@@ -489,7 +487,13 @@ class OpenAIProvider:
                 f"connection error ({type(exc).__name__})", provider=self.name
             ) from exc
         if resp.status_code >= 400:
-            self._raise_typed(resp.status_code, resp.text)
+            try:
+                self._raise_typed(resp.status_code, resp.text)
+            except LLMTransientError as exc:
+                from ._provider_retry import attach_retry_after
+
+                attach_retry_after(exc, resp.headers)
+                raise
         if _is_responses_endpoint(self._base):
             return _decode_responses_response(req=req, model=model, data=resp.json())
         return self._to_response(req, model, resp.json())

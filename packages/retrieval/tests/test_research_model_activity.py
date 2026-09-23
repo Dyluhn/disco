@@ -260,7 +260,9 @@ async def test_a_stream_that_delivers_nothing_produces_no_heartbeat() -> None:
             metadata={"conversation_id": "c1", "inspect_stage": "report_review"},
         )
 
-    assert seen == []
+    assert len(seen) == 1
+    assert seen[0][1]["state"] == "waiting"
+    assert seen[0][1]["tokens_streamed"] == 0
 
 
 async def test_outside_the_run_scope_nothing_is_emitted_at_all() -> None:

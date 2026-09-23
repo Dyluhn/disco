@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -83,10 +83,6 @@ _READER_TOKENS = 24_000
 #: there is nothing to work out, and every token spent working is a token not
 #: spent on the JSON. The writer and the reviewer still decide for themselves.
 _READER_THINKING = False
-
-#: The stage label every reader call declares itself by, in the inspect trace,
-#: the recorded model IO and the acceptance harness.
-STAGE = "source_reading"
 
 #: The stage label every reader call declares itself by, in the inspect trace,
 #: the recorded model IO and the acceptance harness.
@@ -190,6 +186,9 @@ class _Reply:
     text: str = ""
     parse_error: str | None = None
     provider_error: str | None = None
+    input_tokens: int = 0
+    output_tokens: int = 0
+    latency_ms: float = 0.0
 
 
 async def _reader_reply(
@@ -199,6 +198,8 @@ async def _reader_reply(
     conversation_id: str | None,
     attempt: int,
     should_cancel: ShouldCancelFn,
+    source_id: str,
+    part: tuple[int, int],
 ) -> _Reply:
     """One deterministic JSON-mode reader call, recorded like every writer call."""
     try:
@@ -207,7 +208,12 @@ async def _reader_reply(
                 router,
                 messages,
                 max_tokens=review_max_tokens(_READER_TOKENS),
-                metadata=_inspect_metadata(conversation_id, STAGE),
+                metadata={
+                    **(_inspect_metadata(conversation_id, STAGE) or {"inspect_stage": STAGE}),
+                    "source_id": source_id,
+                    "chunk": str(part[0]),
+                    "chunks": str(part[1]),
+                },
                 enable_thinking=_READER_THINKING,
             ),
             should_cancel,
@@ -226,11 +232,25 @@ async def _reader_reply(
         latency_ms=call.latency_ms,
         parse_error=error,
     )
-    return _Reply(payload, text=call.text, parse_error=error)
+    return _Reply(
+        payload,
+        text=call.text,
+        parse_error=error,
+        input_tokens=call.response.usage.input_tokens,
+        output_tokens=call.response.usage.output_tokens,
+        latency_ms=call.latency_ms,
+    )
 
 
 def _chunks(text: str) -> list[str]:
     return [text[start : start + CHUNK_CHARS] for start in range(0, len(text), CHUNK_CHARS)]
+
+
+async def _save_note(
+    checkpoint: Callable[[SourceNotes], Awaitable[None]] | None, notes: SourceNotes
+) -> None:
+    if checkpoint is not None:
+        await checkpoint(notes)
 
 
 async def _read_one_source(
@@ -241,6 +261,8 @@ async def _read_one_source(
     conversation_id: str | None,
     calls_allowed: int,
     should_cancel: ShouldCancelFn,
+    retained: SourceNotes | None = None,
+    checkpoint: Callable[[SourceNotes], Awaitable[None]] | None = None,
 ) -> tuple[SourceNotes, int]:
     """Read one source through as many chunks as its allowance covers.
 
@@ -248,10 +270,16 @@ async def _read_one_source(
     second unusable reply, or a provider failure, ends this source's read with
     whatever earlier chunks proved and ``ok=False``.
     """
-    notes = SourceNotes(source_sha256=hashlib.sha256(passage.text.encode()).hexdigest())
+    notes = (
+        retained.model_copy(deep=True)
+        if retained
+        else SourceNotes(source_sha256=hashlib.sha256(passage.text.encode()).hexdigest())
+    )
     chunks = _chunks(passage.text)
     calls = 0
     for number, chunk in enumerate(chunks, start=1):
+        if number <= notes.chunks:
+            continue
         if calls >= calls_allowed:
             _LOG.info(
                 "source_reading: %s stopped at chunk %d of %d on its call allowance",
@@ -270,15 +298,24 @@ async def _read_one_source(
                 ),
             ),
         ]
+        notes.calls += 1
+        await _save_note(checkpoint, notes)
         reply = await _reader_reply(
             router,
             messages,
             conversation_id=conversation_id,
-            attempt=calls + 1,
+            attempt=notes.calls,
             should_cancel=should_cancel,
+            source_id=passage.id,
+            part=(number, len(chunks)),
         )
         calls += 1
+        notes.input_tokens += reply.input_tokens
+        notes.output_tokens += reply.output_tokens
+        notes.latency_ms += reply.latency_ms
         if reply.payload is None and reply.provider_error is None and calls < calls_allowed:
+            notes.calls += 1
+            await _save_note(checkpoint, notes)
             reply = await _reader_reply(
                 router,
                 [
@@ -290,17 +327,52 @@ async def _read_one_source(
                     ),
                 ],
                 conversation_id=conversation_id,
-                attempt=calls + 1,
+                attempt=notes.calls,
                 should_cancel=should_cancel,
+                source_id=passage.id,
+                part=(number, len(chunks)),
             )
             calls += 1
+            notes.input_tokens += reply.input_tokens
+            notes.output_tokens += reply.output_tokens
+            notes.latency_ms += reply.latency_ms
         if reply.payload is None:
             notes.ok = False
             notes.error = reply.provider_error or reply.parse_error or "reader returned no notes"
             break
         _merge(notes, notes_from_payload(reply.payload, passage.text))
         notes.chunks = number
+        await _save_note(checkpoint, notes)
+    notes.complete = True
+    if notes.chunks < len(chunks) and notes.ok:
+        notes.ok = False
+        notes.error = "reader call allowance exhausted; remaining text uses source windows"
+    await _save_note(checkpoint, notes)
     return notes, calls
+
+
+def _retained_notes(
+    long_sources: Sequence[Passage], retained: Mapping[str, SourceNotes] | None,
+) -> dict[str, SourceNotes]:
+    return {
+        passage.id: retained[passage.id].model_copy(deep=True)
+        for passage in long_sources
+        if retained
+        and passage.id in retained
+        and retained[passage.id].source_sha256 == hashlib.sha256(passage.text.encode()).hexdigest()
+    }
+
+
+async def _finish_reading(
+    notes: dict[str, SourceNotes], calls_used: int,
+    checkpoint: Callable[[dict[str, SourceNotes]], Awaitable[None]] | None,
+) -> None:
+    for note in notes.values():
+        if not note.complete and calls_used >= MAX_READER_CALLS:
+            note.ok, note.complete = False, True
+            note.error = "reader run allowance exhausted; remaining text uses source windows"
+    if checkpoint is not None:
+        await checkpoint(notes)
 
 
 async def read_sources(
@@ -311,6 +383,8 @@ async def read_sources(
     conversation_id: str | None,
     emit: EmitFn,
     should_cancel: ShouldCancelFn,
+    retained: Mapping[str, SourceNotes] | None = None,
+    checkpoint: Callable[[dict[str, SourceNotes]], Awaitable[None]] | None = None,
 ) -> dict[str, SourceNotes]:
     """Read every source too long to be rendered whole, one call per source.
 
@@ -319,10 +393,20 @@ async def read_sources(
     fall back to their windows.
     """
     long_sources = [passage for passage in passages if len(passage.text) > READ_THRESHOLD_CHARS]
-    notes: dict[str, SourceNotes] = {}
-    calls_used = 0
+    notes = _retained_notes(long_sources, retained)
+    calls_used = sum(note.calls for note in notes.values())
     for number, passage in enumerate(long_sources, start=1):
-        allowance = min(MAX_CALLS_PER_SOURCE, MAX_READER_CALLS - calls_used)
+        prior = notes.get(passage.id)
+        if prior and (prior.complete or prior.chunks >= len(_chunks(passage.text))):
+            prior.complete = True
+            continue
+        if prior and prior.calls >= MAX_CALLS_PER_SOURCE:
+            prior.ok, prior.complete = False, True
+            prior.error = "reader call allowance exhausted; remaining text uses source windows"
+            continue
+        allowance = min(
+            MAX_CALLS_PER_SOURCE - (prior.calls if prior else 0), MAX_READER_CALLS - calls_used
+        )
         if allowance <= 0:
             _LOG.info(
                 "source_reading: run allowance of %d calls spent; %d source(s) keep their windows",
@@ -331,6 +415,12 @@ async def read_sources(
             )
             break
         await emit("phase", {"phase": "reading", "source": number, "of": len(long_sources)})
+
+        async def save(note: SourceNotes, source_id: str = passage.id) -> None:
+            notes[source_id] = note.model_copy(deep=True)
+            if checkpoint is not None:
+                await checkpoint({key: value.model_copy(deep=True) for key, value in notes.items()})
+
         source_notes, calls = await _read_one_source(
             router,
             passage,
@@ -338,9 +428,12 @@ async def read_sources(
             conversation_id=conversation_id,
             calls_allowed=allowance,
             should_cancel=should_cancel,
+            retained=prior,
+            checkpoint=save,
         )
         calls_used += calls
         notes[passage.id] = source_notes
+    await _finish_reading(notes, calls_used, checkpoint)
     return notes
 
 
@@ -352,6 +445,10 @@ def source_reading_trail(notes: Mapping[str, SourceNotes]) -> list[dict[str, Any
             "source_id": source_id,
             "source_sha256": note.source_sha256,
             "chunks": note.chunks,
+            "calls": note.calls,
+            "input_tokens": note.input_tokens,
+            "output_tokens": note.output_tokens,
+            "latency_ms": round(note.latency_ms, 1),
             "findings_accepted": len(note.findings),
             "findings_rejected": note.findings_rejected,
             "ok": note.ok,

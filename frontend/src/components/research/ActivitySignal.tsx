@@ -20,6 +20,7 @@ import type { SignalLevel, SignalReading } from "@/lib/deepResearchHeartbeat";
 
 const DOT: Record<SignalLevel, string> = {
   live: "size-1.5 rounded-full bg-accent",
+  backoff: "size-1.5 rounded-full border border-text-faint",
   buffered: "size-1.5 rounded-full border border-text-faint",
   quiet: "size-1.5 rounded-full border border-text-faint",
   silent: "size-2 rounded-full border border-warn",
@@ -27,6 +28,7 @@ const DOT: Record<SignalLevel, string> = {
 
 const TEXT: Record<SignalLevel, string> = {
   live: "text-accent",
+  backoff: "text-text-muted",
   buffered: "text-text-muted",
   quiet: "text-text-muted",
   silent: "text-warn",

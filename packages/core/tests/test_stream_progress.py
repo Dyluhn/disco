@@ -195,8 +195,9 @@ async def test_a_buffered_complete_still_reports_because_it_streams_underneath()
         response = await _stream_provider(content).complete(_req(), model="m1")
 
     assert response.text == "the answer"
-    assert [p.first for p in seen] == [True, False]
-    assert [p.final for p in seen] == [False, True]
+    assert [p.first for p in seen] == [True, False, False]
+    assert [p.final for p in seen] == [False, False, True]
+    assert seen[0].state == "waiting" and seen[0].tokens_streamed == 0
     assert seen[-1].tokens_streamed == 3  # two content deltas + one reasoning
     assert seen[-1].reasoning_tokens == 1
     assert seen[-1].inspect_stage == "report_review"
@@ -212,7 +213,8 @@ async def test_a_stream_that_only_carries_a_finish_reason_reports_nothing():
     with observe_stream_progress(observe):
         await _stream_provider(content).complete(_req(), model="m1")
 
-    assert seen == []
+    assert len(seen) == 1
+    assert seen[0].state == "waiting" and seen[0].tokens_streamed == 0
 
 
 async def test_two_calls_open_two_streams_with_distinct_identities():

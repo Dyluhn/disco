@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# Run rootless Podman with an explicitly checked Compose v2+ provider.
+set -euo pipefail
+repo_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
+
+is_modern_compose() {
+    local version
+    version="$("$1" version --short 2>/dev/null)" || return 1
+    [[ "$version" =~ ^v?([0-9]+)\. ]] && (( BASH_REMATCH[1] >= 2 ))
+}
+
+if [[ -n "${PODMAN_COMPOSE_PROVIDER:-}" ]]; then
+    if ! is_modern_compose "$PODMAN_COMPOSE_PROVIDER"; then
+        echo 'PODMAN_COMPOSE_PROVIDER must point to Compose v2 or later. Ubuntu 24.04: install docker-compose-v2, not docker-compose (v1).' >&2
+        exit 2
+    fi
+else
+    for provider in "${DOCKER_CONFIG:-$HOME/.docker}/cli-plugins/docker-compose" \
+                    /usr/libexec/docker/cli-plugins/docker-compose \
+                    /usr/lib/docker/cli-plugins/docker-compose \
+                    /usr/local/lib/docker/cli-plugins/docker-compose \
+                    "$(command -v docker-compose || true)"; do
+        if [[ -n "$provider" ]] && is_modern_compose "$provider"; then
+            export PODMAN_COMPOSE_PROVIDER="$provider"
+            break
+        fi
+    done
+    if [[ -z "${PODMAN_COMPOSE_PROVIDER:-}" ]]; then
+        echo 'Compose v2 or later is required. Ubuntu 24.04: sudo apt-get install docker-compose-v2. Set PODMAN_COMPOSE_PROVIDER to its executable path.' >&2
+        exit 2
+    fi
+fi
+
+# Validate interpolation and schema before a command can start containers.
+for argument in "$@"; do
+    case "$argument" in
+        up|create|start|restart)
+            podman compose -f "$repo_dir/compose.yaml" config --quiet
+            break
+            ;;
+    esac
+done
+exec podman compose -f "$repo_dir/compose.yaml" "$@"

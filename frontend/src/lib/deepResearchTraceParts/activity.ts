@@ -52,6 +52,7 @@ const TURN_PHASES: readonly string[] = [
 const MODEL_STAGES: readonly string[] = [
   "brief",
   "research_turn",
+  "source_reading",
   "draft",
   "review",
   "rework",
@@ -124,6 +125,24 @@ function parseModelActivity(
   // Same rule: present only when FALSE, which is the backend saying this is the
   // one heartbeat a buffered transport will send.
   if (args.streams === false) payload.streams = false;
+  if (args.state === "waiting" || args.state === "generating" || args.state === "backoff") {
+    payload.state = args.state;
+  }
+  if (typeof args.source_id === "string") payload.source_id = args.source_id;
+  for (const key of ["chunk", "chunks", "attempt", "retry_after_s", "http_status"] as const) {
+    const value = num(args[key]);
+    if (value !== null && value >= 0) payload[key] = value;
+  }
+  return payload;
+}
+
+function parsePhase(phase: string, args: Record<string, unknown>): DeepPhaseActivity {
+  const payload: DeepPhaseActivity = { phase, wordsStreamed: num(args.words_streamed) };
+  const source = num(args.source), total = num(args.of);
+  if (source !== null && total !== null) {
+    payload.source = source;
+    payload.sourcesTotal = total;
+  }
   return payload;
 }
 
@@ -246,7 +265,7 @@ function applyAction(
   } else if (name === "phase") {
     const phase = text(args.phase);
     if (phase) {
-      acc.phase = { payload: { phase, wordsStreamed: num(args.words_streamed) }, at };
+      acc.phase = { payload: parsePhase(phase, args), at };
     }
   } else if (name === "review" || name === "rework" || name === "continuation") {
     const payload = parseRound(name, args);

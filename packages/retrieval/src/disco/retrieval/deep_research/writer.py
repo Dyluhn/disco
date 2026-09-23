@@ -50,7 +50,12 @@ from ._synthesis_parts import _join_continuation_text
 from ._task_context import accepted_steering_context, research_reference_context
 from ._untested_angles import format_untested_angles, untested_angles
 from ._verifier_health import apply_verifier_degradation, verifier_failure_count
-from ._writer_checkpoint import WriterCheckpoint, WriterCheckpointFn, writer_input_signature
+from ._writer_checkpoint import (
+    WriterCheckpoint,
+    WriterCheckpointFn,
+    reading_checkpoint,
+    writer_input_signature,
+)
 from ._writer_evidence import _EVIDENCE_CHAR_BUDGET
 from ._writer_findings import (  # noqa: F401
     KIND_ABSENCE,
@@ -495,6 +500,8 @@ async def _prepare_writer_draft(
     emit: EmitFn,
     should_cancel: ShouldCancelFn,
 ) -> tuple[FinalReport, list[dict[str, Any]], WriterCheckpoint | None]:
+    if resume is not None and resume.stage == "reading":
+        resume = None
     if resume is not None and resume.input_sha256 == signature:
         return resume.final, list(resume.draft_trail), resume
     draft, _rounds, trail = await await_stoppable(
@@ -555,6 +562,7 @@ async def _writer_opening(
     emit: EmitFn,
     should_cancel: ShouldCancelFn,
     evidence_char_budget: int,
+    reading_checkpoint: Callable[[dict[str, SourceNotes]], Awaitable[None]] | None = None,
 ) -> tuple[list[LLMMessage], dict[str, SourceNotes], list[dict[str, Any]]]:
     """What the writer reads, and the reading that produced it.
 
@@ -568,7 +576,7 @@ async def _writer_opening(
     new trail rows: those are already in its retained draft trail.
     """
     notes, trail = (dict(resume.source_notes), []) if resume is not None else ({}, [])
-    if not notes:
+    if not notes or (resume is not None and resume.stage == "reading"):
         notes = await read_sources(
             outcome.passages,
             query=query,
@@ -576,6 +584,8 @@ async def _writer_opening(
             conversation_id=conversation_id,
             emit=emit,
             should_cancel=should_cancel,
+            retained=notes,
+            checkpoint=reading_checkpoint if resume is None or resume.stage == "reading" else None,
         )
         trail = source_reading_trail(notes)
     return (
@@ -681,6 +691,9 @@ async def write_report(
         emit=emit,
         should_cancel=should_cancel,
         evidence_char_budget=bound.evidence_char_budget,
+        reading_checkpoint=reading_checkpoint(
+            checkpoint, signature, research_signature, bound.review_decisions
+        ),
     )
     max_tokens = _writer_max_tokens(bound)
     final, trail, resume = await _prepare_writer_draft(

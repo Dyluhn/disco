@@ -137,6 +137,8 @@ export interface DeepObservationActivity {
 
 export interface DeepPhaseActivity {
   phase: string;
+  source?: number;
+  sourcesTotal?: number;
   /** Words streamed so far by the writer, when the phase event carried it. */
   wordsStreamed: number | null;
 }

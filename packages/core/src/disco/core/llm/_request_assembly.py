@@ -378,6 +378,28 @@ def _tool_arguments_to_wire(raw_arguments: object) -> tuple[str, bool]:
     return json.dumps(arguments, sort_keys=True), len(arguments) != len(raw_arguments)
 
 
+def _ollama_thinking_payload(base_url: str, model: str, enabled: bool | None) -> dict[str, Any]:
+    from urllib.parse import urlsplit
+
+    if (
+        enabled is False
+        and (urlsplit(base_url).hostname or "").lower() == "ollama.com"
+        and model.rsplit("/", 1)[-1].casefold().split(":", 1)[0]
+        in {"deepseek-v4-flash", "deepseek-v4.1-flash"}
+    ):
+        # Ollama exposes thinking control through its compatible API field.
+        # Preserve the caller's explicit nonthinking request on this tested model.
+        return {"reasoning_effort": "none"}
+    if (
+        enabled is False
+        and (urlsplit(base_url).hostname or "").lower() == "ollama.com"
+        and model.rsplit("/", 1)[-1].casefold().split(":", 1)[0] in {"glm-5.3", "glm-5.3-flash"}
+    ):
+        # Always-thinking models: request the lowest supported effort.
+        return {"reasoning_effort": "low"}
+    return {}
+
+
 def thinking_payload(
     base_url: str, model: str, enabled: bool | None, speaks_ctk: bool
 ) -> dict[str, Any]:
@@ -385,14 +407,8 @@ def thinking_payload(
 
     if host_requires_explicit_nonthinking(base_url):
         return {"thinking": {"type": "disabled"}}
-    if (
-        enabled is False
-        and (urlsplit(base_url).hostname or "").lower() == "ollama.com"
-        and model.rsplit("/", 1)[-1].casefold().split(":", 1)[0] == "deepseek-v4-flash"
-    ):
-        # Ollama exposes thinking control through its compatible API field.
-        # Preserve the caller's explicit nonthinking request on this tested model.
-        return {"reasoning_effort": "none"}
+    if ollama_policy := _ollama_thinking_payload(base_url, model, enabled):
+        return ollama_policy
     if glm53_lightweight_reasoning(base_url, model, enabled):
         return {"thinking": {"type": "enabled"}, "reasoning_effort": "low"}
     if (

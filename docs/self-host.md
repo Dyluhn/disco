@@ -20,30 +20,16 @@ release; the default is the tag the checkout was cut from.
 
 ```bash
 sudo apt-get update && sudo apt-get install -y git podman docker-compose   # Debian 13
-sudo apt-get update && sudo apt-get install -y git podman podman-compose   # Ubuntu 24.04
+sudo apt-get update && sudo apt-get install -y git podman docker-compose-v2   # Ubuntu 24.04
 ```
 
-Those two are the combinations this project installs and tests on. On any other
-distribution install `git`, `podman`, and a compose provider — prefer **Compose
-v2** (usually packaged as `docker-compose`), and fall back to `podman-compose`
-where Compose v2 is not packaged or is still the retired Python v1, which is the
-case on Ubuntu 24.04.
-
-`podman compose` is a thin wrapper that hands the file to whichever provider it
-finds, and the providers are not equivalent. Installing `docker-compose` does
-not install a Docker daemon and does not change which engine runs the
-containers.
-
-If your provider is `podman-compose` 1.3.x, `podman compose up` fails with
-
-```
-Error: invalid port format - format is [[hostIP:]hostPort:]containerPort
-```
-
-and, more quietly, hands the containers environment values that still read
-`${DISCO_ENCODER_TIER:-full}`. That version does not apply a `${VAR:-default}`
-when `VAR` is unset and is also one of the service's own environment keys.
-Install `docker-compose` and run `podman compose up -d` again.
+Use **Compose v2**. Ubuntu 24.04's `docker-compose` package is retired Python
+v1; it rejects the top-level `name: disco` with a misleading `^x-` schema error.
+Install `docker-compose-v2` on Ubuntu, and `docker-compose` on Debian 13.
+The `deploy/compose/disco-compose` wrapper selects and verifies a v2 provider
+and validates the configuration before starting containers. An explicit
+`PODMAN_COMPOSE_PROVIDER` is checked as well, so a stale v1 override fails early
+with the corrective instruction. Do not remove `name` to work around v1.
 
 **Rootless Podman** (the path this project's install testing actually covers):
 
@@ -55,8 +41,8 @@ systemctl --user start dbus.socket
 loginctl enable-linger "$USER"
 systemctl --user enable --now podman.socket
 export DISCO_SANDBOX_SOCKET=$XDG_RUNTIME_DIR/podman/podman.sock
-podman compose up -d
-podman compose logs app-server
+./deploy/compose/disco-compose up -d
+./deploy/compose/disco-compose logs app-server
 ```
 
 The two `systemctl --user` lines before `enable-linger` set up the per-user
@@ -184,7 +170,7 @@ grep for the banner — `logs | tail` will not do, healthcheck lines push the
 banner out of the last twenty lines within minutes:
 
 ```bash
-podman compose logs app-server | grep -A 8 "Disco self-host boot"
+./deploy/compose/disco-compose logs app-server | grep -A 8 "Disco self-host boot"
 ```
 
 Configure a driver model after boot in **Settings -> Models & Providers**, then
@@ -262,7 +248,7 @@ Type=oneshot
 RemainAfterExit=yes
 WorkingDirectory=%h/disco
 Environment=DISCO_SANDBOX_SOCKET=%t/podman/podman.sock
-ExecStart=/usr/bin/podman compose up -d
+ExecStart=/usr/bin/./deploy/compose/disco-compose up -d
 ExecStop=/usr/bin/podman compose down
 TimeoutStartSec=0
 
@@ -342,7 +328,7 @@ podman compose run --rm --no-deps app-server \
   python /app/scripts/rotate_secret_store.py --path /data/secrets.json migrate
 podman compose run --rm --no-deps app-server \
   python /app/scripts/rotate_secret_store.py --path /data/secrets.json verify
-podman compose up -d
+./deploy/compose/disco-compose up -d
 podman compose exec agent-server disco-verify --quick
 ```
 
@@ -356,7 +342,7 @@ the retired material leaves their environments:
 ```bash
 podman compose exec app-server \
   python /app/scripts/rotate_secret_store.py --path /data/secrets.json finalize
-podman compose up -d --force-recreate app-server agent-server
+./deploy/compose/disco-compose up -d --force-recreate app-server agent-server
 ```
 
 Before finalization, rollback is available. Stop the stack, restore the old key
@@ -372,7 +358,7 @@ Upgrade is backup-first, then pulls the release's images and starts the stack:
 ```bash
 .venv/bin/python development/scripts/self_host_data.py upgrade \
   --backup "$HOME/disco-pre-upgrade-$(date +%Y%m%d).tar.gz"
-podman compose logs app-server agent-server
+./deploy/compose/disco-compose logs app-server agent-server
 podman compose exec agent-server disco-verify --quick
 ```
 
@@ -382,7 +368,7 @@ Without the lifecycle script the update is:
 git pull                        # or: git checkout v0.2.0 — the tag pins DISCO_IMAGE_TAG
 podman compose down             # or: docker compose down
 podman compose pull
-podman compose up -d
+./deploy/compose/disco-compose up -d
 ```
 
 The `down` is required, and `upgrade` runs the same `down` internally for the
@@ -472,7 +458,7 @@ systemctl --user start dbus.socket
 loginctl enable-linger "$USER"
 systemctl --user enable --now podman.socket
 export DISCO_SANDBOX_SOCKET=$XDG_RUNTIME_DIR/podman/podman.sock
-podman compose up -d
+./deploy/compose/disco-compose up -d
 ```
 
 The first two lines start the per-user services the Podman install added;
