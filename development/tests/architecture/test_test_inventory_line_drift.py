@@ -24,13 +24,13 @@ def test_fixture_line_drift_preserves_historical_owner_without_new_addition():
     # inventory is validated against THAT historical authority instead
     # (inventory_static.check_inventory_metadata picks `historical` for those),
     # so renaming one of its fixtures is correctly not reported as absent.
-    # PKG-35-DEEP-RESEARCH-CLOSEOUT postdates the sealed baseline, so its claims
+    # PKG-24-RESEARCH-RELIABILITY postdates the latest replacement baseline; its claims
     # are checked against the live inventory, which is the case this guards.
     live = next(
         row
         for row in current
-        if row["path"] == "packages/core/tests/conftest.py"
-        and row["fixture"] == "_no_router_retry_backoff"
+        if row["path"] == "tests/architecture/test_reliability_replacements.py"
+        and row["fixture"] == "replacement_case"
     )
     live["line"] -= 2
 

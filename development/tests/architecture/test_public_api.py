@@ -878,7 +878,7 @@ class TestFrontendPublicApi:
         # split three download components and the image-gen setup note out of
         # their oversized parents. All additive at the module level; the four
         # moved public targets carry frontend target relocations.
-        assert len(live["frontend_modules"]) == 441
+        assert len(live["frontend_modules"]) == 445
         assert len(authority["contract_files"]) == 2
         assert all(set(row) == {"path", "sha256", "bytes"} for row in authority["contract_files"])
         assert module == {
