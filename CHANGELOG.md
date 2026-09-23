@@ -28,9 +28,11 @@
   prove each one inside the sandbox. The build prompts point at the playbooks the
   way they point at starter kits and trusted components.
 
-## v0.2.1 - 2026-09-23
+## v0.2.2 - 2026-09-23
 
 ### Fixed
+
+- Install Poppler in the release job before real PDF validation, matching CI.
 
 - Recover long-source reading and final editorial review after a model returns
   reasoning without a visible answer. Retries remain bounded, preserve the full
@@ -56,7 +58,7 @@
   Quick limits research work, not elapsed wall-clock time.
 - New research runs reserve two final review decisions while preserving their
   initial review allocation. Saved legacy runs retain their recorded limits.
-- Default published Compose image tag is `v0.2.1`.
+- Default published Compose image tag is `v0.2.2`.
 
 ## v0.2.0 - 2026-09-10
 

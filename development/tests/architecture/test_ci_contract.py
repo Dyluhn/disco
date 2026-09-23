@@ -316,6 +316,9 @@ class TestFullCIContract:
         steps = ci_contract._load_yaml(REPO_ROOT / ".github/workflows/release.yml")["jobs"]["draft-release"]["steps"]
         checkout = next(step for step in steps if step.get("uses", "").startswith("actions/checkout@"))
         assert checkout["with"]["fetch-depth"] == 0
+        tools = next(i for i, step in enumerate(steps) if "apt-get install -y poppler-utils" in step.get("run", ""))
+        tests = next(i for i, step in enumerate(steps) if step.get("name") == "Python unit suites")
+        assert tools < tests
 
     def test_precommit_passes(self):
         result = ci_contract.check_precommit()
