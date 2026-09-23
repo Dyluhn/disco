@@ -39,6 +39,10 @@ jobs:
         working-directory: frontend
         run: npm ci
 
+      # PDF export and artifact tests validate real bytes with Poppler.
+      - name: System tools for artifact validators
+        run: sudo apt-get update && sudo apt-get install -y poppler-utils
+
       - name: Soak freeze
         run: uv run python development/scripts/check_soak_freeze.py
 

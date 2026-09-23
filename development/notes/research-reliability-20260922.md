@@ -65,3 +65,15 @@ and unrelated deletion, missing replacements, altered history, or reuse of the
 allowance fail closed. Adversarial tests exercise these refusals. The authority
 and its implementation are included in the governance seal. Protected contract
 contents, collector scopes, and test execution requirements are unchanged.
+
+
+## Release-run prerequisite correction
+
+The v0.2.1 candidate passed both required CI runs (12,820 Python tests and
+1,551 frontend tests), but its separate release job lacked Poppler. Two real
+PDF tests correctly failed on missing pdfinfo/pdftotext. The release workflow
+now installs the same poppler-utils prerequisite as CI, with an existing
+contract test asserting that installation precedes unit execution. No test is
+skipped or weakened. The failed candidate tag remains preserved; v0.2.2 is
+the corrected release version. Application package bytes remain identical
+to the completed 37m54s live run on 839d90ad.
