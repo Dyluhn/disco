@@ -235,7 +235,7 @@ def model_activity_stage(inspect_stage: str | None) -> ModelActivityStage | None
         return "draft"
     if inspect_stage.startswith("report_rework"):
         return "rework"
-    if inspect_stage.startswith("report_review"):
+    if inspect_stage == "report_final_check" or inspect_stage.startswith("report_review"):
         return "review"
     return None
 

@@ -78,7 +78,7 @@ class DepthBound:
     initial_probe_count: int = 0
     minimum_research_turns: int = 1
     minimum_useful_sources: int = 1
-    review_decisions: int = 3  # includes malformed replies and post-repair verification
+    review_decisions: int = 4  # two initial decisions plus two for post-repair verification
 
     @property
     def report_spec(self) -> dict[str, int]:

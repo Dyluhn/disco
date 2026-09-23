@@ -370,13 +370,14 @@ async def test_the_shipped_sections_are_numbered_in_report_order() -> None:
 
 async def test_a_missing_model_verdict_is_recorded_on_the_report() -> None:
     """The report ships either way; `review_outcome` says which ruler ran."""
-    written, router, _captured = await _write([_GOOD, "", "", ""])
+    written, router, _captured = await _write([_GOOD, "", "", "", ""])
 
     assert written.review_outcome == REVIEW_OUTCOME_UNAVAILABLE
     assert router.stages == [
         "report_draft",
         "report_review",
         "report_review_reask",
+        "report_final_check",
         "report_final_check",
     ]
     assert _rows(written, "report_review")[0]["outcome"] == REVIEW_OUTCOME_UNAVAILABLE

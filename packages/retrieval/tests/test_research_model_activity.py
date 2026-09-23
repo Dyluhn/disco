@@ -88,6 +88,7 @@ def _progress(**overrides: Any) -> StreamProgress:
         ("report_continuation", "continuation"),
         (*REVIEW_STAGES[:1], "review"),
         ("report_review_reask", "review"),
+        ("report_final_check", "review"),
     ],
 )
 def test_every_declared_stage_the_run_records_maps_to_a_contract_stage(
@@ -197,7 +198,8 @@ async def test_the_ordinal_map_stays_bounded_when_streams_die_without_closing() 
 # ---- end to end through a real call site ------------------------------------
 
 
-async def test_a_real_review_call_emits_its_heartbeat_through_the_run_emitter() -> None:
+@pytest.mark.parametrize("stage", ["report_review", "report_final_check"])
+async def test_a_real_review_call_emits_its_heartbeat_through_the_run_emitter(stage) -> None:
     """`review_call` is a deep-research call site, unchanged by this lane: it
     declares its stage in metadata and the seam does the rest."""
     content = _sse(
@@ -208,7 +210,7 @@ async def test_a_real_review_call_emits_its_heartbeat_through_the_run_emitter() 
     router = _router(content)
     seen, emit = _emitter()
     messages = [LLMMessage(role="user", content="review this")]
-    metadata = {"conversation_id": "c1", "inspect_stage": "report_review"}
+    metadata = {"conversation_id": "c1", "inspect_stage": stage}
 
     with model_activity_events(emit):
         first = await review_call(router, messages, max_tokens=1_000, metadata=metadata)
@@ -322,7 +324,8 @@ def _buffered_router() -> DefaultLLMRouter:
     return DefaultLLMRouter(config, {"fake": provider})
 
 
-async def test_a_buffered_driver_reports_once_at_call_start_instead_of_going_silent() -> None:
+@pytest.mark.parametrize("stage", ["report_review", "report_final_check"])
+async def test_a_buffered_driver_reports_once_at_call_start_instead_of_going_silent(stage) -> None:
     """A Responses-API driver delivers everything in one POST.
 
     Nothing is observed for the whole call, so the run used to read "no signal
@@ -337,7 +340,7 @@ async def test_a_buffered_driver_reports_once_at_call_start_instead_of_going_sil
             _buffered_router(),
             [LLMMessage(role="user", content="review this")],
             max_tokens=1_000,
-            metadata={"conversation_id": "c1", "inspect_stage": "report_review"},
+            metadata={"conversation_id": "c1", "inspect_stage": stage},
         )
 
     assert len(seen) == 1

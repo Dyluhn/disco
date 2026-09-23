@@ -17,6 +17,15 @@ from ._source_lookup import SOURCE_LOOKUP_INSTRUCTION
 from ._writer_parts import decode_review_json
 from ._writer_prompts import EMPTY_REVIEW_REASK, MALFORMED_REVIEW_REASK
 
+CONCISE_REVIEW_INSTRUCTION = (
+    "\nProduce the review directly as the requested JSON. Do not rehearse the JSON or "
+    "repeatedly audit its formatting before answering. Copy the supplied claim IDs and "
+    "source ranges; the application validates those references. Keep each reason and fix "
+    "to a concise explanation of the evidence and its limits. Retain the full rubric, "
+    "consequential claim coverage, and required evidence checks. Uncertain support must "
+    "remain unresolved with a specific qualification; brevity is not a passing verdict."
+)
+
 
 @dataclass
 class ReviewBudget:
@@ -30,6 +39,16 @@ class ReviewBudget:
     last_verdict: dict[str, Any] | None = None
     complete: bool = False
     output_ceiling: int = 0
+    concise_review: bool = False
+
+    def record_feedback(self, text: str, feedback: str) -> None:
+        self.messages = list(self.messages)
+        if text.strip():
+            self.messages.append(LLMMessage(role="assistant", content=text))
+        else:
+            self.concise_review = True
+            feedback += CONCISE_REVIEW_INSTRUCTION
+        self.messages.append(LLMMessage(role="user", content=feedback))
 
     def ensure_output_capacity(self, initial: int) -> None:
         self.output_ceiling = min(RESEARCH_CEILING_CAP, max(initial, self.output_ceiling))

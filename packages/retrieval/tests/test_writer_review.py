@@ -89,7 +89,8 @@ async def test_an_empty_verdict_is_re_asked_naming_that_it_was_empty() -> None:
 
     assert payload == {"passes": True, "failures": []}
     assert attempts == 2
-    assert router.last_message(1) == EMPTY_REVIEW_REASK
+    assert router.last_message(1).startswith(EMPTY_REVIEW_REASK)
+    assert "Do not rehearse" in router.last_message(1)
 
 
 async def test_a_malformed_verdict_is_re_asked_with_the_parse_error() -> None:

@@ -102,3 +102,25 @@ Successful acceptance alone cannot prove an endpoint honored a setting. The
 fallback is local to the call, with no model-name rules or permanent capability
 cache. Fixed `body` options are preserved because dropping arbitrary routing or
 privacy constraints would change the operator's request.
+
+
+## Final review recovery
+
+New Quick runs allow four review decisions, including malformed and empty
+responses. Two decisions are reserved for checking the revised report, so an
+empty final check can recover once. Standard and Deep retain their four/five
+decision limits and now reserve two for final verification as well. Old
+checkpoints keep their recorded allowance; resume never replenishes calls.
+
+After an empty visible response, the reviewer receives a concise-output
+instruction with the same draft, evidence, rubric, and claim requirements.
+Blank assistant messages are not replayed. This strategy is checkpointed and
+carried into post-repair verification. Visible malformed replies retain their
+protocol feedback. The shared output ceiling and single prose-repair limit
+remain unchanged. Exhausted or invalid reviews remain visibly unavailable or
+incomplete; they cannot certify a report.
+
+The final-check stage now reports real streamed activity and buffered-call
+starts through the same review progress events as the initial review. It
+uses the stage declared by the request, with no inferred activity or
+model/provider-specific selection.

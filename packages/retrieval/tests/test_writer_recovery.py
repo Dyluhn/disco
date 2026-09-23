@@ -54,7 +54,7 @@ def reload_budget(budget):
     return adapter.validate_json(adapter.dump_json(budget))
 
 
-async def arc(router, saved, *, resume=None, stop=None):
+async def arc(router, saved, *, resume=None, stop=None, review_decisions=4):
     async def save(state):
         saved.append(WriterCheckpoint.model_validate_json(state.model_dump_json()))
 
@@ -76,6 +76,7 @@ async def arc(router, saved, *, resume=None, stop=None):
         should_cancel=stop,
         checkpoint=save,
         resume=resume,
+        review_decisions=review_decisions,
     )
 
 
@@ -291,7 +292,7 @@ def test_invalid_checkpoint_refuses_incoherent_boundary(field, value):
         WriterCheckpoint.model_validate(data)
 
 
-@pytest.mark.parametrize("spent", [1, 3])
+@pytest.mark.parametrize("spent", [1, bounds_for("quick").review_decisions])
 async def test_new_user_guidance_revises_draft_without_resetting_review_budget(spent):
     saved = []
 
@@ -314,7 +315,7 @@ async def test_new_user_guidance_revises_draft_without_resetting_review_budget(s
     )
     assert "Focus on the observed window" in revised.prompt(0)
     assert revised.calls == (2 if spent == 1 else 1)
-    assert saved[-1].budget.used == (2 if spent == 1 else 3)
+    assert saved[-1].budget.used == (2 if spent == 1 else bounds_for("quick").review_decisions)
     assert any(row["kind"] == "report_task_revision" for row in result.trail)
     assert saved[-1].research_sha256 == previous.research_sha256
     assert saved[-1].input_sha256 != previous.input_sha256
@@ -349,7 +350,7 @@ async def test_unused_repair_reserve_resolves_conflicting_verdict_without_new_bu
             assessed_verdict(),
         ]
     )
-    final, review, _ = await arc(router, saved)
+    final, review, _ = await arc(router, saved, review_decisions=3)
     assert final == FINAL and review.outcome == "verdict"
     assert router.stages == ["report_review", "report_review_reask", "report_final_check"]
     assert saved[-1].budget.used == saved[-1].budget.limit == 3
@@ -394,14 +395,14 @@ async def test_exhausted_conflict_feedback_keeps_one_scoped_repair_and_no_false_
     first = RecordingRouter(responses if stop_before_repair else [*responses, repair])
     if stop_before_repair:
         with pytest.raises(ResearchStopped):
-            await arc(first, saved, stop=lambda: first.calls == 3)
+            await arc(first, saved, review_decisions=3, stop=lambda: first.calls == 3)
         assert saved[-1].stage == "final_check" and not saved[-1].repair_started
         assert saved[-1].budget.used == 3 and saved[-1].budget.last_verdict
         second = RecordingRouter([repair])
         final, review, trail = await arc(second, saved, resume=saved[-1])
         stages = first.stages + second.stages
     else:
-        final, review, trail = await arc(first, saved)
+        final, review, trail = await arc(first, saved, review_decisions=3)
         stages = first.stages
     assert stages == ["report_review", "report_review_reask", "report_final_check", "report_rework"]
     assert final.summary != FINAL.summary and final.sections == FINAL.sections

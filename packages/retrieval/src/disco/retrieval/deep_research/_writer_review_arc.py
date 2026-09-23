@@ -60,7 +60,7 @@ async def _grade(state: WriterCheckpoint, ctx: _ArcContext, *, final_check: bool
         untested=ctx.untested,
         conversation_id=ctx.conversation_id,
         budget=state.budget,
-        reserve=0 if final_check else 1,
+        reserve=0 if final_check else (2 if state.budget.limit >= 4 else 1),
         final_check=final_check,
         should_cancel=ctx.should_cancel,
         checkpoint=save_decision,
@@ -146,7 +146,7 @@ async def _review_arc(
     conversation_id: str | None,
     emit: Any,
     should_cancel: ShouldCancelFn,
-    review_decisions: int = 3,
+    review_decisions: int = 4,
     checkpoint: WriterCheckpointFn | None = None,
     resume: WriterCheckpoint | None = None,
 ) -> tuple[FinalReport, _Review, list[dict[str, Any]]]:

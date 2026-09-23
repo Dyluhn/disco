@@ -32,7 +32,13 @@ from ._review_context import nli_context as _nli_context
 from ._review_context import quality_audit_context as _quality_audit_context
 from ._review_context import repair_validation_context
 from ._review_prompts import _REVIEW_SYSTEM, _SELF_REVIEW_PROMPT, RESEARCH_REPORT_RUBRIC
-from ._review_protocol import ReviewBudget, decode_review_decision, review_actions, review_feedback
+from ._review_protocol import (
+    CONCISE_REVIEW_INSTRUCTION,
+    ReviewBudget,
+    decode_review_decision,
+    review_actions,
+    review_feedback,
+)
 from ._source_notes import SourceNotes
 from ._stop import ShouldCancelFn, await_stoppable, raise_if_stopped
 from ._writer_findings import (
@@ -264,6 +270,8 @@ def _start_review_phase(
             + (CLAIM_REVIEW_INSTRUCTION if claims else ""),
         ),
     ]
+    if budget.concise_review:
+        budget.messages.append(LLMMessage(role="user", content=CONCISE_REVIEW_INSTRUCTION))
 
 
 async def _model_review(
@@ -358,12 +366,8 @@ async def _model_review(
             sources=sources is not None,
             claims=assess is not None,
         )
-        messages = [
-            *messages,
-            LLMMessage(role="assistant", content=call.text or ""),
-            LLMMessage(role="user", content=reask),
-        ]
-        budget.messages = messages
+        budget.record_feedback(call.text, reask)
+        messages = budget.messages
         await _save_review(checkpoint)
         raise_if_stopped(should_cancel, boundary="report_review_decision")
     return _cached_verdict(budget, assess)
