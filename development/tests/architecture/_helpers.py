@@ -561,6 +561,7 @@ PUBLIC_API_MEMBER_NAMES = frozenset(
         "LLMSummarizingCondenser",
         "McpPool",
         "ModelEntry",
+        "RoleFallbackSettings",
         "Passage",
         "ProviderSettings",
         "QueryRewriter",

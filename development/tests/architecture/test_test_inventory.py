@@ -232,6 +232,8 @@ class TestMappingStatic:
     def test_mapping_static_counts(self):
         baseline = test_inventory.load_test_inventory(REPO_ROOT)
         mapping = baseline["mapping_static"]
+        # Provider-neutral migration and export qualification inventory: exact
+        # additions/replacements are pinned in the 2026-09-23 authority receipts.
         expected_counts = {
             # 787 from Epic 11-C: packages/tools/tests/_appkit_verify_doubles.py,
             # the doubles extracted out of test_verify_appkit_app.py to clear
@@ -695,10 +697,10 @@ class TestMappingStatic:
             # TypeScript, each one-to-one in a file that still exists — and are
             # recorded in `renamed_test_transitions`; the counts below are net
             # of them, since a rename removes one identity and adds another.
-            "python_test_file_count": 963,
-            "python_static_test_id_count": 11782,
-            "typescript_test_file_count": 305,
-            "typescript_static_test_id_count": 1610,
+            "python_test_file_count": 973,
+            "python_static_test_id_count": 11835,
+            "typescript_test_file_count": 309,
+            "typescript_static_test_id_count": 1619,
         }
         assert mapping["identity"] == baseline["source_identity"]
         assert {key: mapping[key] for key in expected_counts} == expected_counts
@@ -738,7 +740,7 @@ class TestMappingStatic:
         # V38 isolates the real PDF probe in existing live-retrieval unit fixtures.
         # V51 adds five: the audio tolerance suite, the preview cockpit port
         # probes, the pairing-token CLI and the store title-uniqueness suite.
-        assert len(fixtures) == 206
+        assert len(fixtures) == 207
         assert fixtures == sorted(fixtures, key=_canonical_row)
         assert len({_canonical_row(row) for row in fixtures}) == len(fixtures)
         assert all(
@@ -834,12 +836,12 @@ class TestFrontendCollection:
                 len(frontend["vitest_files_list"]),
             )
             == (frontend["vitest_ids"], frontend["vitest_files"])
-            == (1541, 229)
+            == (1551, 231)
         )
         assert frontend["vitest_ids_list"] == sorted(frontend["vitest_ids_list"])
         assert frontend["vitest_files_list"] == sorted(frontend["vitest_files_list"])
-        assert len(set(frontend["vitest_ids_list"])) == 1541
-        assert len(set(frontend["vitest_files_list"])) == 229
+        assert len(set(frontend["vitest_ids_list"])) == 1551
+        assert len(set(frontend["vitest_files_list"])) == 231
         assert set(frontend["playwright_configs"]) == set(test_inventory.PLAYWRIGHT_CONFIGS)
         for config, authority in frontend["playwright_configs"].items():
             assert len(authority["ids"]) == authority["id_count"]
@@ -1142,7 +1144,7 @@ class TestCollectedCounts:
             # TypeScript, each one-to-one in a file that still exists — and are
             # recorded in `renamed_test_transitions`; the counts below are net
             # of them, since a rename removes one identity and adds another.
-            "packages": 12296,
+            "packages": 12462,
             # 1288 from PKG-03-EDIT-EVIDENCE: +24 in the `harness` root, the
             # edit-evidence producer acceptance. The new ids land here and not
             # under `packages` because the producer is harness code; the
@@ -1275,11 +1277,11 @@ class TestCollectedCounts:
             # for the two defects the V51 regeneration exposed, and
             # `tests/architecture/test_frontend_relocations.py` (+14 collected
             # against +11 static: one case is parametrized four ways): +28.
-            "tests": 458,
+            "tests": 468,
         }
         assert set(collected["roots"]) == set(test_inventory.PYTHON_ROOTS)
         assert collected["counts"] == expected
-        assert collected["total"] == 14334 == sum(expected.values())
+        assert collected["total"] == 14510 == sum(expected.values())
         for root in test_inventory.PYTHON_ROOTS:
             ids = collected["roots"][root]
             assert len(ids) == expected[root]
@@ -1295,7 +1297,7 @@ class TestCollectedCounts:
         problems: list[str] = []
         result = test_inventory._check_collected_ids(baseline, REPO_ROOT, problems)
         assert problems == []
-        assert result == {"collected_total": 14334}
+        assert result == {"collected_total": 14510}
 
         drifted = copy.deepcopy(baseline)
         drifted["collected"]["roots"]["tests"] = list(
@@ -1314,9 +1316,9 @@ class TestBaselineValidation:
         assert result == {
             "ok": True,
             "problems": [],
-            "python_static_ids": 11782,
-            "typescript_static_ids": 1610,
-            "collected_total": 14334,
+            "python_static_ids": 11835,
+            "typescript_static_ids": 1619,
+            "collected_total": 14510,
         }
 
         latest_identity = test_inventory.subprocess.check_output(

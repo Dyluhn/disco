@@ -304,10 +304,18 @@ class TestFullCIContract:
     def test_ci_passes(self):
         result = ci_contract.check_ci()
         assert result["ok"], result["problems"]
+        steps = ci_contract._load_yaml(REPO_ROOT / ".github/workflows/ci.yml")["jobs"]["required"]["steps"]
+        checkout = next(step for step in steps if step.get("uses", "").startswith("actions/checkout@"))
+        assert checkout["with"]["fetch-depth"] == 0
+        assert checkout["with"]["ref"] == "${{ github.event.pull_request.head.sha || github.sha }}"
+        assert any("git merge-base --is-ancestor" in step.get("run", "") for step in steps)
 
     def test_release_passes(self):
         result = ci_contract.check_release()
         assert result["ok"], result["problems"]
+        steps = ci_contract._load_yaml(REPO_ROOT / ".github/workflows/release.yml")["jobs"]["draft-release"]["steps"]
+        checkout = next(step for step in steps if step.get("uses", "").startswith("actions/checkout@"))
+        assert checkout["with"]["fetch-depth"] == 0
 
     def test_precommit_passes(self):
         result = ci_contract.check_precommit()
