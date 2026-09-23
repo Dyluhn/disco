@@ -108,9 +108,10 @@ privacy constraints would change the operator's request.
 
 New Quick runs allow four review decisions, including malformed and empty
 responses. Two decisions are reserved for checking the revised report, so an
-empty final check can recover once. Standard Deep and Exhaustive retain their four/five
-decision limits and now reserve two for final verification as well. Old
-checkpoints keep their recorded allowance; resume never replenishes calls.
+empty final check can recover once. Standard Deep and Exhaustive allow five/six decisions, preserving their
+original three/four initial decisions while reserving two for final verification. Old
+checkpoints keep their recorded allowance and original one-decision reserve,
+including resumes from source reading; resume never replenishes calls.
 
 After an empty visible response, the reviewer receives a concise-output
 instruction with the same draft, evidence, rubric, and claim requirements.

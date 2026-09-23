@@ -40,6 +40,8 @@ class ReviewBudget:
     complete: bool = False
     output_ceiling: int = 0
     concise_review: bool = False
+    # Missing in legacy checkpoints: retain their original one-decision reserve.
+    final_reserve: int = 1
 
     def record_feedback(self, text: str, feedback: str) -> None:
         self.messages = list(self.messages)

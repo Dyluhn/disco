@@ -53,6 +53,7 @@ from ._verifier_health import apply_verifier_degradation, verifier_failure_count
 from ._writer_checkpoint import (
     WriterCheckpoint,
     WriterCheckpointFn,
+    bind_writer_checkpoint,
     reading_checkpoint,
     writer_input_signature,
 )
@@ -692,7 +693,11 @@ async def write_report(
         should_cancel=should_cancel,
         evidence_char_budget=bound.evidence_char_budget,
         reading_checkpoint=reading_checkpoint(
-            checkpoint, signature, research_signature, bound.review_decisions
+            checkpoint,
+            signature,
+            research_signature,
+            bound.review_decisions,
+            final_reserve=bound.review_final_reserve,
         ),
     )
     max_tokens = _writer_max_tokens(bound)
@@ -711,12 +716,6 @@ async def write_report(
 
     trail = [*notes_trail, *trail]
 
-    async def save_writer(state: WriterCheckpoint) -> None:
-        state.input_sha256, state.draft_trail = signature, list(trail)
-        state.research_sha256, state.source_notes = research_signature, source_notes
-        if checkpoint is not None:
-            await checkpoint(state)
-
     final, review, review_trail = await _review_arc(
         router,
         base_messages,
@@ -733,7 +732,10 @@ async def write_report(
         emit=emit,
         should_cancel=should_cancel,
         review_decisions=bound.review_decisions,
-        checkpoint=save_writer,
+        final_reserve=bound.review_final_reserve,
+        checkpoint=bind_writer_checkpoint(
+            checkpoint, signature, research_signature, trail, source_notes
+        ),
         resume=resume,
     )
     trail.extend(review_trail)

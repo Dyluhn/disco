@@ -89,3 +89,54 @@ async def test_visible_malformed_reply_is_retained_for_protocol_repair():
     assert any(
         m.role == "assistant" and m.content == "{bad json" for m in router.requests[1].messages
     )
+
+
+@pytest.mark.parametrize("tier,initial", [("quick", 2), ("standard_deep", 3), ("exhaustive", 4)])
+async def test_each_tier_keeps_initial_review_work_and_two_final_attempts(tier, initial):
+    router = RecordingRouter(["{}"] * (initial - 1) + [FAILURE, REPAIR, ("", "length"), CLEAN])
+    saved = []
+    _, review, _ = await arc(router, saved, review_decisions=bounds_for(tier).review_decisions)
+    assert review.outcome == "verdict"
+    assert router.stages.index("report_rework") == initial
+    assert router.stages[-2:] == ["report_final_check", "report_final_check"]
+    assert saved[-1].budget.used == saved[-1].budget.limit == initial + 2
+
+
+def test_legacy_checkpoint_keeps_its_original_final_reserve():
+    from pydantic import TypeAdapter
+
+    data = TypeAdapter(ReviewBudget).dump_python(ReviewBudget(4))
+    data.pop("final_reserve", None)
+    data.pop("concise_review", None)
+    restored = TypeAdapter(ReviewBudget).validate_python(data)
+    assert restored.final_reserve == 1 and not restored.concise_review
+    assert restored.limit == 4
+
+
+async def test_reading_checkpoint_preserves_explicit_and_legacy_review_reserves():
+    from dataclasses import asdict
+
+    from disco.retrieval.deep_research._writer_checkpoint import (
+        WriterCheckpoint,
+        reading_checkpoint,
+    )
+    from disco.retrieval.deep_research.depth import DepthBound
+
+    saved = []
+
+    async def save(state):
+        saved.append(state)
+
+    bound = bounds_for("standard_deep")
+    await reading_checkpoint(
+        save, "input", "research", bound.review_decisions, final_reserve=bound.review_final_reserve
+    )({})
+    assert saved[-1].budget.final_reserve == 2
+    old = saved[-1].model_dump(mode="json")
+    del old["budget"]["final_reserve"]
+    assert WriterCheckpoint.model_validate(old).budget.final_reserve == 1
+    old_bound = asdict(bound)
+    del old_bound["review_final_reserve"]
+    old_bound["review_decisions"] = 4
+    restored = DepthBound(**old_bound)
+    assert restored.review_final_reserve == 1 and restored.review_decisions == 4

@@ -79,6 +79,7 @@ class DepthBound:
     minimum_research_turns: int = 1
     minimum_useful_sources: int = 1
     review_decisions: int = 4  # two initial decisions plus two for post-repair verification
+    review_final_reserve: int = 1  # legacy bounds retain their original reserve
 
     @property
     def report_spec(self) -> dict[str, int]:
@@ -102,6 +103,7 @@ _TIERS: dict[DepthTier, DepthBound] = {
     # 8 model turns; the three tiers' budgets are distinct and ordered
     # (quick < standard < exhaustive).
     DepthTier.QUICK: DepthBound(
+        review_final_reserve=2,
         max_sources=30,
         max_rounds_per_subq=2,
         max_research_turns=8,
@@ -122,6 +124,7 @@ _TIERS: dict[DepthTier, DepthBound] = {
     # 16 total after adaptive expansion) × up to 4 rounds; up to 90 admitted
     # passages. The default tier.
     DepthTier.STANDARD_DEEP: DepthBound(
+        review_final_reserve=2,
         max_sources=90,
         max_rounds_per_subq=4,
         max_research_turns=16,
@@ -131,7 +134,7 @@ _TIERS: dict[DepthTier, DepthBound] = {
         rerank_top_k=6,
         retrieval_depth="standard",
         writing_budget_tokens=14_000,
-        review_decisions=4,
+        review_decisions=5,
         min_evidence_passages=20,
         min_evidence_themes=5,
         min_evidence_sources=12,
@@ -142,6 +145,7 @@ _TIERS: dict[DepthTier, DepthBound] = {
     # Exhaustive: long-form survey. 10 starting probes (up to 32 total after
     # adaptive expansion) × up to 6 rounds; up to 240 admitted passages.
     DepthTier.EXHAUSTIVE: DepthBound(
+        review_final_reserve=2,
         max_sources=240,
         max_rounds_per_subq=6,
         max_research_turns=32,
@@ -152,7 +156,7 @@ _TIERS: dict[DepthTier, DepthBound] = {
         retrieval_depth="deep",
         writing_budget_tokens=24_000,
         evidence_char_budget=260_000,
-        review_decisions=5,
+        review_decisions=6,
         min_evidence_passages=40,
         min_evidence_themes=8,
         min_evidence_sources=24,

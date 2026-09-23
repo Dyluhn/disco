@@ -60,7 +60,7 @@ async def _grade(state: WriterCheckpoint, ctx: _ArcContext, *, final_check: bool
         untested=ctx.untested,
         conversation_id=ctx.conversation_id,
         budget=state.budget,
-        reserve=0 if final_check else (2 if state.budget.limit >= 4 else 1),
+        reserve=0 if final_check else state.budget.final_reserve,
         final_check=final_check,
         should_cancel=ctx.should_cancel,
         checkpoint=save_decision,
@@ -147,6 +147,7 @@ async def _review_arc(
     emit: Any,
     should_cancel: ShouldCancelFn,
     review_decisions: int = 4,
+    final_reserve: int | None = None,
     checkpoint: WriterCheckpointFn | None = None,
     resume: WriterCheckpoint | None = None,
 ) -> tuple[FinalReport, _Review, list[dict[str, Any]]]:
@@ -173,7 +174,12 @@ async def _review_arc(
             final=final,
             draft_sha256=hashlib.sha256(final.markdown.encode()).hexdigest(),
             stage="review",
-            budget=ReviewBudget(review_decisions),
+            budget=ReviewBudget(
+                review_decisions,
+                final_reserve=(2 if review_decisions >= 4 else 1)
+                if final_reserve is None
+                else final_reserve,
+            ),
         )
     )
     await ctx.save(state)

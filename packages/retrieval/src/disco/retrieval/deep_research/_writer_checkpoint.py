@@ -43,11 +43,31 @@ class WriterCheckpoint(BaseModel):
             raise ValueError("writer checkpoint exceeds its review allowance")
         if not 0 <= self.budget.output_ceiling <= RESEARCH_CEILING_CAP:
             raise ValueError("writer checkpoint exceeds its review output capacity")
+        if not 0 <= self.budget.final_reserve <= 2:
+            raise ValueError("writer checkpoint exceeds its final review reserve")
         return self
 
 
 WriterCheckpointFn = Callable[[WriterCheckpoint], Awaitable[None]]
 ReviewCheckpointFn = Callable[[], Awaitable[None]]
+
+
+def bind_writer_checkpoint(
+    checkpoint: WriterCheckpointFn | None,
+    signature: str,
+    research_signature: str,
+    trail: list[dict[str, Any]],
+    source_notes: dict[str, SourceNotes],
+) -> WriterCheckpointFn:
+    """Attach the immutable inputs and completed reading to each writing boundary."""
+
+    async def save(state: WriterCheckpoint) -> None:
+        state.input_sha256, state.draft_trail = signature, list(trail)
+        state.research_sha256, state.source_notes = research_signature, source_notes
+        if checkpoint is not None:
+            await checkpoint(state)
+
+    return save
 
 
 def writer_input_signature(
@@ -69,6 +89,8 @@ def reading_checkpoint(
     signature: str,
     research_signature: str,
     limit: int,
+    *,
+    final_reserve: int = 1,
 ) -> Callable[[dict[str, SourceNotes]], Awaitable[None]]:
     """Commit reading through the same owner as draft/review recovery."""
 
@@ -83,7 +105,7 @@ def reading_checkpoint(
                 final=empty,
                 draft_sha256=hashlib.sha256(empty.markdown.encode()).hexdigest(),
                 stage="reading",
-                budget=ReviewBudget(limit=limit),
+                budget=ReviewBudget(limit=limit, final_reserve=final_reserve),
                 source_notes=notes,
             )
         )
