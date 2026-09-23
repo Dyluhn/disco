@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-public-api-v1",
-  "source_identity": "9f16e3ccae79da4d81e62acd93a14598eecae6a2",
+  "source_identity": "f2c409e87f53cd3b6072b32ed4d6da6936776050",
   "python_initializers": [
     {
       "path": "packages/agent-server/src/disco/agent_server/__init__.py",
@@ -10861,6 +10861,7 @@
             "pricing_mode: Literal['metered', 'subscription', 'free', 'unknown'] | None",
             "provider: str",
             "quantization: str | None",
+            "request_policy: RequestPolicy",
             "requires_api_key: bool",
             "tier: Literal['standard', 'weak'] | None",
             "vision: bool | None"
@@ -11010,7 +11011,8 @@
             "api_key_env: str",
             "base_url: str",
             "enabled: bool",
-            "model: str"
+            "model: str",
+            "request_policy: RequestPolicy"
           ]
         },
         "RoleRouting": {
@@ -14985,6 +14987,7 @@
             "rerank_top_k: int",
             "retrieval_depth: Literal['shallow', 'standard', 'deep']",
             "review_decisions: int",
+            "review_final_reserve: int",
             "writing_budget_tokens: int"
           ]
         },
@@ -22293,6 +22296,16 @@
       ]
     },
     {
+      "path": "frontend/src/components/settings/RequestPolicyEditor.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "RequestPolicyEditor",
+          "signature": "export function RequestPolicyEditor({ editor }: { editor: ReturnType<typeof useRequestPolicyForm> })"
+        }
+      ]
+    },
+    {
       "path": "frontend/src/components/settings/RoleFallbackSection.tsx",
       "public_declarations": [
         {
@@ -22744,6 +22757,21 @@
           "kind": "variable",
           "name": "FIELD",
           "signature": "export const FIELD = \"w-full rounded-control border border-hairline bg-surface-1 px-inline py-hair font-ui text-[0.84rem] text-text outline-none focus:border-hairline-strong\";"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/settings/requestPolicyForm.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "modelUpsertPayload",
+          "signature": "export function modelUpsertPayload(form: ModelUpsert, policy: RequestPolicy): ModelUpsert"
+        },
+        {
+          "kind": "function",
+          "name": "useRequestPolicyForm",
+          "signature": "export function useRequestPolicyForm(initial: RequestPolicy | undefined)"
         }
       ]
     },
@@ -24847,13 +24875,18 @@
         },
         {
           "kind": "function",
+          "name": "modelRetryRemaining",
+          "signature": "export function modelRetryRemaining(activity: DeepActivity, nowMs: number): number | null"
+        },
+        {
+          "kind": "function",
           "name": "researchPhaseLabel",
           "signature": "export function researchPhaseLabel(phase: string): string"
         },
         {
           "kind": "function",
           "name": "signalReading",
-          "signature": "export function signalReading( lastEventAt: number | null, nowMs: number, sinceMs: number, buffered = false, ): SignalReading"
+          "signature": "export function signalReading( lastEventAt: number | null, nowMs: number, sinceMs: number, buffered = false, retryRemaining: number | null = null, ): SignalReading"
         },
         {
           "kind": "function",
@@ -24873,7 +24906,7 @@
         {
           "kind": "TypeAliasDeclaration",
           "name": "SignalLevel",
-          "signature": "export type SignalLevel = \"live\" | \"buffered\" | \"quiet\" | \"silent\";"
+          "signature": "export type SignalLevel = \"live\" | \"buffered\" | \"backoff\" | \"quiet\" | \"silent\";"
         },
         {
           "kind": "variable",
@@ -25008,7 +25041,7 @@
         {
           "kind": "InterfaceDeclaration",
           "name": "DeepPhaseActivity",
-          "signature": "export interface DeepPhaseActivity { phase: string; /** Words streamed so far by the writer, when the phase event carried it. */ wordsStreamed: number | null; }"
+          "signature": "export interface DeepPhaseActivity { phase: string; source?: number; sourcesTotal?: number; /** Words streamed so far by the writer, when the phase event carried it. */ wordsStreamed: number | null; }"
         },
         {
           "kind": "InterfaceDeclaration",
@@ -25619,6 +25652,16 @@
           "kind": "function",
           "name": "postPreviewLaunch",
           "signature": "export function postPreviewLaunch(launch: PreviewLaunch, target: string): void"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/lib/reportQualifications.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "reportQualifications",
+          "signature": "export function reportQualifications(report: ReportEvent): string[]"
         }
       ]
     },
@@ -26332,7 +26375,7 @@
         {
           "kind": "InterfaceDeclaration",
           "name": "ModelActivityPayload",
-          "signature": "export interface ModelActivityPayload { stage: ModelActivityStage; tokens_streamed: number; /** Seconds since the CALL WAS MADE, measured by the backend at emit \u2014 * prefill included (`core.llm.stream_progress.StreamProgress.seconds`). Not * since the first chunk: on a slow local model that would report a * four-minute call as a two-second one. */ seconds: number; call_ordinal: number; /** The reasoning-channel share of `tokens_streamed`, when the provider * exposed a separate reasoning channel. Absent otherwise (the backend omits * the key at 0). Equal to `tokens_streamed` means the model is producing and * none of it is visible output yet. */ reasoning_tokens?: number; /** False on the ONE heartbeat a BUFFERED transport emits, at call start with * nothing delivered (`core.llm.stream_progress.buffered_start`). The whole * answer arrives in a single response, so no further heartbeat is coming and * the silence after this one belongs to the transport, not the model. Absent * on a streamed call (the backend omits the key when true). */ streams?: boolean; }"
+          "signature": "export interface ModelActivityPayload extends ModelActivityDetails { stage: ModelActivityStage; tokens_streamed: number; /** Seconds since the CALL WAS MADE, measured by the backend at emit \u2014 * prefill included (`core.llm.stream_progress.StreamProgress.seconds`). Not * since the first chunk: on a slow local model that would report a * four-minute call as a two-second one. */ seconds: number; call_ordinal: number; /** The reasoning-channel share of `tokens_streamed`, when the provider * exposed a separate reasoning channel. Absent otherwise (the backend omits * the key at 0). Equal to `tokens_streamed` means the model is producing and * none of it is visible output yet. */ reasoning_tokens?: number; /** False on the ONE heartbeat a BUFFERED transport emits, at call start with * nothing delivered (`core.llm.stream_progress.buffered_start`). The whole * answer arrives in a single response, so no further heartbeat is coming and * the silence after this one belongs to the transport, not the model. Absent * on a streamed call (the backend omits the key when true). */ streams?: boolean; }"
         },
         {
           "kind": "InterfaceDeclaration",
@@ -26512,7 +26555,7 @@
         {
           "kind": "TypeAliasDeclaration",
           "name": "ModelActivityStage",
-          "signature": "export type ModelActivityStage = | \"brief\" | \"research_turn\" | \"draft\" | \"review\" | \"rework\" | \"continuation\" | \"follow_up\";"
+          "signature": "export type ModelActivityStage = | \"brief\" | \"research_turn\" | \"source_reading\" | \"draft\" | \"review\" | \"rework\" | \"continuation\" | \"follow_up\";"
         },
         {
           "kind": "TypeAliasDeclaration",
@@ -26812,12 +26855,12 @@
         {
           "kind": "InterfaceDeclaration",
           "name": "ModelInfo",
-          "signature": "export interface ModelInfo { id: string; // catalogue key, e.g. \"driver-local\" label: string; // human name shown in the UI provider: ModelProvider; // local (free) vs openrouter (paid overflow) /** per-million-token prices; both 0 for local. */ price_in_per_m: number; price_out_per_m: number; /** how the user pays; undefined \u2192 derived (price 0 \u2192 free, else metered). */ pricing_mode?: PricingMode; capabilities: Capability[]; /** Manual vision pin: null/undefined = auto-detect, true/false = override. */ vision?: boolean | null; /** Truthful effective UI state; absence is treated as unknown for older servers. */ vision_status?: \"vision\" | \"text-only\" | \"unknown\"; /** optional provenance note (e.g. quantization) shown as a quiet caption. */ note?: string; // raw editable fields (mirror the backend ModelDTO) so an edit form prefills the // real config, not the display view. model_id: string; base_url?: string | null; api_key_env?: string | null; requires_api_key?: boolean; context_window: number; max_output_tokens?: number | null; quantization?: string | null; }"
+          "signature": "export interface ModelInfo { request_policy?: RequestPolicy; id: string; // catalogue key, e.g. \"driver-local\" label: string; // human name shown in the UI provider: ModelProvider; // local (free) vs openrouter (paid overflow) /** per-million-token prices; both 0 for local. */ price_in_per_m: number; price_out_per_m: number; /** how the user pays; undefined \u2192 derived (price 0 \u2192 free, else metered). */ pricing_mode?: PricingMode; capabilities: Capability[]; /** Manual vision pin: null/undefined = auto-detect, true/false = override. */ vision?: boolean | null; /** Truthful effective UI state; absence is treated as unknown for older servers. */ vision_status?: \"vision\" | \"text-only\" | \"unknown\"; /** optional provenance note (e.g. quantization) shown as a quiet caption. */ note?: string; // raw editable fields (mirror the backend ModelDTO) so an edit form prefills the // real config, not the display view. model_id: string; base_url?: string | null; api_key_env?: string | null; requires_api_key?: boolean; context_window: number; max_output_tokens?: number | null; quantization?: string | null; }"
         },
         {
           "kind": "InterfaceDeclaration",
           "name": "ModelUpsert",
-          "signature": "export interface ModelUpsert { id: string; model_id: string; base_url?: string | null; api_key_env?: string | null; context_window: number; max_output_tokens?: number | null; quantization?: string | null; capabilities: Capability[]; /** null = auto-detect; true/false explicitly overrides detection. */ vision?: boolean | null; requires_api_key?: boolean; price_in_per_m: number; price_out_per_m: number; pricing_mode?: PricingMode; }"
+          "signature": "export interface ModelUpsert { request_policy?: RequestPolicy; id: string; model_id: string; base_url?: string | null; api_key_env?: string | null; context_window: number; max_output_tokens?: number | null; quantization?: string | null; capabilities: Capability[]; /** null = auto-detect; true/false explicitly overrides detection. */ vision?: boolean | null; requires_api_key?: boolean; price_in_per_m: number; price_out_per_m: number; pricing_mode?: PricingMode; }"
         },
         {
           "kind": "InterfaceDeclaration",
@@ -26866,8 +26909,13 @@
         },
         {
           "kind": "InterfaceDeclaration",
+          "name": "RequestPolicy",
+          "signature": "export interface RequestPolicy { body?: Record<string, unknown>; reasoning_enabled?: Record<string, unknown> | null; reasoning_disabled?: Record<string, unknown> | null; default_reasoning?: boolean | null; require_user_continuation?: boolean; cache_control?: boolean; }"
+        },
+        {
+          "kind": "InterfaceDeclaration",
           "name": "RoleFallbackConfig",
-          "signature": "export interface RoleFallbackConfig { enabled: boolean; base_url: string; model: string; api_key_env: string; }"
+          "signature": "export interface RoleFallbackConfig { request_policy?: RequestPolicy; enabled: boolean; base_url: string; model: string; api_key_env: string; }"
         },
         {
           "kind": "InterfaceDeclaration",
@@ -27063,6 +27111,16 @@
           "kind": "TypeAliasDeclaration",
           "name": "ReleaseEnvScope",
           "signature": "export type ReleaseEnvScope = \"runtime\" | \"build\";"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/types/researchModelActivity.ts",
+      "public_declarations": [
+        {
+          "kind": "InterfaceDeclaration",
+          "name": "ModelActivityDetails",
+          "signature": "export interface ModelActivityDetails { state?: \"waiting\" | \"generating\" | \"backoff\"; reasoning_control_fallback?: boolean; source_id?: string; chunk?: number; chunks?: number; attempt?: number; retry_after_s?: number; http_status?: number; }"
         }
       ]
     },
@@ -30899,22 +30957,6 @@
     {
       "surface": "frontend",
       "path": "frontend/src/types/models.ts",
-      "public_name": "ModelInfo",
-      "target_sha256": "613523903c2bcc3f04b1f696fb08d3a3e48e65cbff5fb5e665987b87dc210cfa",
-      "owner_package": "PKG-20-UX-RELIABILITY",
-      "reason": "Post-campaign UX reliability correction: preserve the public surface while adding explicit vision and keyless-provider configuration."
-    },
-    {
-      "surface": "frontend",
-      "path": "frontend/src/types/models.ts",
-      "public_name": "ModelUpsert",
-      "target_sha256": "be792570ccb90902b1ebd47ffbf677ba9995636cf9a67f5c073e04ad702e914a",
-      "owner_package": "PKG-20-UX-RELIABILITY",
-      "reason": "Post-campaign UX reliability correction: preserve the public surface while adding explicit vision and keyless-provider configuration."
-    },
-    {
-      "surface": "frontend",
-      "path": "frontend/src/types/models.ts",
       "public_name": "ProviderCreate",
       "target_sha256": "7876f2a9e7710f4d9f6e29849f38cf8cad1f07bfb0ec0d6a5551b1deb861eb01",
       "owner_package": "PKG-20-UX-RELIABILITY",
@@ -30933,14 +30975,6 @@
       "path": "frontend/src/types/models.ts",
       "public_name": "ProviderPreset",
       "target_sha256": "663b0d2fe42c39a9638602c5d24c969984eedcf98bc5c9fb76c60d58749224bd",
-      "owner_package": "PKG-20-UX-RELIABILITY",
-      "reason": "Post-campaign UX reliability correction: preserve the public surface while adding explicit vision and keyless-provider configuration."
-    },
-    {
-      "surface": "python",
-      "path": "packages/core/src/disco/core/llm/__init__.py",
-      "public_name": "ModelEntry",
-      "target_sha256": "df4e6e446dfef3a366ce819faa22d1a138151ce5634c2c51f3675f07be5e697b",
       "owner_package": "PKG-20-UX-RELIABILITY",
       "reason": "Post-campaign UX reliability correction: preserve the public surface while adding explicit vision and keyless-provider configuration."
     },
@@ -30983,6 +31017,150 @@
       "owner_package": "PKG-24-MOBILE-AND-RUNTIME-HONESTY",
       "target_sha256": "2dce15c744272407bcfd9e16df2d10f51ead0a0c83b0e1c16dedcf45a88b99b2",
       "reason": "Mobile-first-class pass: shared tap-target and scroll-fade primitives so every surface converges on one mobile idiom instead of four."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/RequestPolicyEditor.tsx",
+      "public_name": "RequestPolicyEditor",
+      "target_sha256": "5ac0b2074e9966acf83ea5e98d34676901cbcbbe12a3d372e7b7b5451fb11bc4",
+      "owner_package": "PKG-24-RESEARCH-RELIABILITY",
+      "reason": "Provider-neutral request controls, recoverable research activity, review reserves, and retained export qualifications."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/requestPolicyForm.ts",
+      "public_name": "modelUpsertPayload",
+      "target_sha256": "863455fc281de368b74b003ae72a0cce5a1ecc8bc7dca752b1c8f2650409a841",
+      "owner_package": "PKG-24-RESEARCH-RELIABILITY",
+      "reason": "Provider-neutral request controls, recoverable research activity, review reserves, and retained export qualifications."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/requestPolicyForm.ts",
+      "public_name": "useRequestPolicyForm",
+      "target_sha256": "b7bffbbe74784b70d1106e175bc9ce88eac3c16059119cfbec96e9c70ecb5334",
+      "owner_package": "PKG-24-RESEARCH-RELIABILITY",
+      "reason": "Provider-neutral request controls, recoverable research activity, review reserves, and retained export qualifications."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/deepResearchHeartbeat.ts",
+      "public_name": "SignalLevel",
+      "target_sha256": "03cc9050c0b71da4c9f800b18d8e32cd10374715edec928804a48d6f7f0d8218",
+      "owner_package": "PKG-24-RESEARCH-RELIABILITY",
+      "reason": "Provider-neutral request controls, recoverable research activity, review reserves, and retained export qualifications."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/deepResearchHeartbeat.ts",
+      "public_name": "modelRetryRemaining",
+      "target_sha256": "a7f71e06e52ef95ea8b9785b4218641ac1303e6792a9f6793c02224fb9ed1845",
+      "owner_package": "PKG-24-RESEARCH-RELIABILITY",
+      "reason": "Provider-neutral request controls, recoverable research activity, review reserves, and retained export qualifications."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/deepResearchHeartbeat.ts",
+      "public_name": "signalReading",
+      "target_sha256": "a8304f9ac88bf45cfd7476d5f01b12dc62cb20e8d20a83b77872425e2fed3ea9",
+      "owner_package": "PKG-24-RESEARCH-RELIABILITY",
+      "reason": "Provider-neutral request controls, recoverable research activity, review reserves, and retained export qualifications."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/deepResearchTrace.ts",
+      "public_name": "DeepPhaseActivity",
+      "target_sha256": "23345f3babf2be36e6af4a8f19400d1be69e409c572b0b75f9ba8b72e3a18cdb",
+      "owner_package": "PKG-24-RESEARCH-RELIABILITY",
+      "reason": "Provider-neutral request controls, recoverable research activity, review reserves, and retained export qualifications."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/reportQualifications.ts",
+      "public_name": "reportQualifications",
+      "target_sha256": "46284bd23df39b843c2d4648d1fd93364ac7f46bf10727788a41aaf418ef4472",
+      "owner_package": "PKG-24-RESEARCH-RELIABILITY",
+      "reason": "Provider-neutral request controls, recoverable research activity, review reserves, and retained export qualifications."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/agent.ts",
+      "public_name": "ModelActivityPayload",
+      "target_sha256": "2e954a7c4ef100995e2ddde1f6a1b45d021ba50f79368cb659f5e3f96e09ac0a",
+      "owner_package": "PKG-24-RESEARCH-RELIABILITY",
+      "reason": "Provider-neutral request controls, recoverable research activity, review reserves, and retained export qualifications."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/agent.ts",
+      "public_name": "ModelActivityStage",
+      "target_sha256": "6d5aa6128fc9a2254127bbc9ac936cdf81c1c2687d076a8246c79f0554cdd7a0",
+      "owner_package": "PKG-24-RESEARCH-RELIABILITY",
+      "reason": "Provider-neutral request controls, recoverable research activity, review reserves, and retained export qualifications."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/models.ts",
+      "public_name": "ModelInfo",
+      "target_sha256": "9cf69246cf9c02a0b8f8ac0cbe24be2650d704f583c9fe9e7becfc14ea552a3d",
+      "owner_package": "PKG-24-RESEARCH-RELIABILITY",
+      "reason": "Provider-neutral request controls, recoverable research activity, review reserves, and retained export qualifications."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/models.ts",
+      "public_name": "ModelUpsert",
+      "target_sha256": "16594b47e340211d5d2246a4d192b08738a33892f39d5a1f2804e085dfebf3b6",
+      "owner_package": "PKG-24-RESEARCH-RELIABILITY",
+      "reason": "Provider-neutral request controls, recoverable research activity, review reserves, and retained export qualifications."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/models.ts",
+      "public_name": "RequestPolicy",
+      "target_sha256": "f3297bb95dc715f09d861a2eb6a0f405e2a81963451c127bf0bd4294e1662daa",
+      "owner_package": "PKG-24-RESEARCH-RELIABILITY",
+      "reason": "Provider-neutral request controls, recoverable research activity, review reserves, and retained export qualifications."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/models.ts",
+      "public_name": "RoleFallbackConfig",
+      "target_sha256": "0cd9ea1b75c66b6be6e0f56a15b9151cdb84d235f02e13efead13fcf2594ecff",
+      "owner_package": "PKG-24-RESEARCH-RELIABILITY",
+      "reason": "Provider-neutral request controls, recoverable research activity, review reserves, and retained export qualifications."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/researchModelActivity.ts",
+      "public_name": "ModelActivityDetails",
+      "target_sha256": "68a0bc316e502a82ccaad8ef678894469e72b664313100bd4b7742f06faf9a06",
+      "owner_package": "PKG-24-RESEARCH-RELIABILITY",
+      "reason": "Provider-neutral request controls, recoverable research activity, review reserves, and retained export qualifications."
+    },
+    {
+      "surface": "python",
+      "path": "packages/core/src/disco/core/llm/__init__.py",
+      "public_name": "ModelEntry",
+      "target_sha256": "65fa6efc166907525cd0b006ff19ffc6be65da6c9e0c771105101749ad3d886b",
+      "owner_package": "PKG-24-RESEARCH-RELIABILITY",
+      "reason": "Provider-neutral request controls, recoverable research activity, review reserves, and retained export qualifications."
+    },
+    {
+      "surface": "python",
+      "path": "packages/core/src/disco/core/llm/__init__.py",
+      "public_name": "RoleFallbackSettings",
+      "target_sha256": "6bcec524f9bd442dc0416a485b57379b057780381ef7ad0e04abae0ce17ec606",
+      "owner_package": "PKG-24-RESEARCH-RELIABILITY",
+      "reason": "Provider-neutral request controls, recoverable research activity, review reserves, and retained export qualifications."
+    },
+    {
+      "surface": "python",
+      "path": "packages/retrieval/src/disco/retrieval/deep_research/__init__.py",
+      "public_name": "DepthBound",
+      "target_sha256": "c8665a4306b4470f55a5ce0946e5f786cf72c590082c0f07b1f2d5c988a66a67",
+      "owner_package": "PKG-24-RESEARCH-RELIABILITY",
+      "reason": "Provider-neutral request controls, recoverable research activity, review reserves, and retained export qualifications."
     },
     {
       "surface": "frontend",
@@ -31315,14 +31493,6 @@
     {
       "surface": "frontend",
       "path": "frontend/src/lib/deepResearchHeartbeat.ts",
-      "public_name": "SignalLevel",
-      "target_sha256": "c62d8077d0394f9c48e21ddf971f813061a59d6da85f9106f25f5b1098cbb79f",
-      "owner_package": "PKG-35-DEEP-RESEARCH-CLOSEOUT",
-      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
-    },
-    {
-      "surface": "frontend",
-      "path": "frontend/src/lib/deepResearchHeartbeat.ts",
       "public_name": "SignalReading",
       "target_sha256": "80a2fa65d5de78c126c533fd7c415971c7ca69e5da5b6e8422339617bce1a385",
       "owner_package": "PKG-35-DEEP-RESEARCH-CLOSEOUT",
@@ -31381,14 +31551,6 @@
       "path": "frontend/src/lib/deepResearchHeartbeat.ts",
       "public_name": "researchPhaseLabel",
       "target_sha256": "aa050c0e0bcc6b2196a2642586d9d92f9737bcaa9e01b607b69aaa8e70569461",
-      "owner_package": "PKG-35-DEEP-RESEARCH-CLOSEOUT",
-      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
-    },
-    {
-      "surface": "frontend",
-      "path": "frontend/src/lib/deepResearchHeartbeat.ts",
-      "public_name": "signalReading",
-      "target_sha256": "afb02e2adf74c77f270c417d47a831db4c06b6794717e6c3195169859f1067eb",
       "owner_package": "PKG-35-DEEP-RESEARCH-CLOSEOUT",
       "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
     },
@@ -31493,14 +31655,6 @@
       "path": "frontend/src/lib/deepResearchTrace.ts",
       "public_name": "DeepObservationActivity",
       "target_sha256": "fe93bb05418557f59e25b3256cba1c4172a5924a4e719a51ab4190119c6e3406",
-      "owner_package": "PKG-35-DEEP-RESEARCH-CLOSEOUT",
-      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
-    },
-    {
-      "surface": "frontend",
-      "path": "frontend/src/lib/deepResearchTrace.ts",
-      "public_name": "DeepPhaseActivity",
-      "target_sha256": "8d89f2ef77ce4dde11ba12d7abf20f9cb2b24c694feb2e56c37818aeafeacd10",
       "owner_package": "PKG-35-DEEP-RESEARCH-CLOSEOUT",
       "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
     },
@@ -31661,22 +31815,6 @@
       "path": "frontend/src/types/agent.ts",
       "public_name": "ErrorEvent",
       "target_sha256": "a307e6b56f282af0a5ed139f4f2cdf46bec09d3757a1cde54e1307fd6408018c",
-      "owner_package": "PKG-35-DEEP-RESEARCH-CLOSEOUT",
-      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
-    },
-    {
-      "surface": "frontend",
-      "path": "frontend/src/types/agent.ts",
-      "public_name": "ModelActivityPayload",
-      "target_sha256": "c569a8baf2af3e3f57c7515e584dda5f3f6f23471d1cca2ac5d5694f66fa7d22",
-      "owner_package": "PKG-35-DEEP-RESEARCH-CLOSEOUT",
-      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
-    },
-    {
-      "surface": "frontend",
-      "path": "frontend/src/types/agent.ts",
-      "public_name": "ModelActivityStage",
-      "target_sha256": "a0faf5a5d287b5641ae226e8f6c475e9d2b58915d155cc8e033fe35d18294fe7",
       "owner_package": "PKG-35-DEEP-RESEARCH-CLOSEOUT",
       "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
     },
@@ -31933,14 +32071,6 @@
       "path": "packages/retrieval/src/disco/retrieval/deep_research/__init__.py",
       "public_name": "DeepResearchRun",
       "target_sha256": "d00d21dd0d85fb82b237f55f79b7a6ba96d2e5dc8d80417dd93c87ad0c0dcac6",
-      "owner_package": "PKG-35-DEEP-RESEARCH-CLOSEOUT",
-      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
-    },
-    {
-      "surface": "python",
-      "path": "packages/retrieval/src/disco/retrieval/deep_research/__init__.py",
-      "public_name": "DepthBound",
-      "target_sha256": "8b811228228f2d65359f959186c7b7c7a441bdca5c8392bbb43dba1f9ea85b25",
       "owner_package": "PKG-35-DEEP-RESEARCH-CLOSEOUT",
       "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
     },
@@ -33154,21 +33284,6 @@
     },
     {
       "surface": "python",
-      "path": "packages/core/src/disco/core/llm/__init__.py",
-      "public_name": "ModelEntry",
-      "origin": "disco.core.llm.config.ModelEntry",
-      "removed_members": [],
-      "added_members": [
-        "requires_api_key: bool"
-      ],
-      "old_signature_sha256": "b565c4521a0c2d28a2b5ff9c36693a1fb76ae7bcdfa719a989a52f4a4cbc98ce",
-      "new_signature_sha256": "f2f828a8c70c16f8508026fd692ab8b1caff6fa1ec942eb3450c96374ead85b5",
-      "owner_package": "PKG-20-UX-RELIABILITY",
-      "accepting_commit": "6761fd10f0bc21ca96124c5a2dd5ac254894f371",
-      "accepting_receipt": "2026-07-28/STATUS.md"
-    },
-    {
-      "surface": "python",
       "path": "packages/core/src/disco/core/__init__.py",
       "public_name": "SqliteEventStore",
       "owner_package": "PKG-38-UI-FIXES-V51",
@@ -33612,29 +33727,6 @@
     },
     {
       "surface": "python",
-      "path": "packages/retrieval/src/disco/retrieval/deep_research/__init__.py",
-      "public_name": "DepthBound",
-      "owner_package": "PKG-35-DEEP-RESEARCH-CLOSEOUT",
-      "accepting_commit": "e0be83fb37b47d0e8e4cbdf9958c5c9c102564bb",
-      "accepting_receipt": "PKG-35-DEEP-RESEARCH-CLOSEOUT: exact source-backed declaration migration",
-      "origin": "disco.retrieval.deep_research.depth.DepthBound",
-      "removed_members": [
-        "max_wall_clock_s: int",
-        "report_max_words: int",
-        "report_min_words: int"
-      ],
-      "added_members": [
-        "evidence_char_budget: int",
-        "max_research_turns: int",
-        "minimum_research_turns: int",
-        "minimum_useful_sources: int",
-        "review_decisions: int"
-      ],
-      "old_signature_sha256": "7fd66574bc95f9ea4fd291b099056de790c821ae1e72531abe25ba39f3f273a3",
-      "new_signature_sha256": "56fb1cee64697161705169673f39367500e0ded7b160f4508ffa5db602df2fc1"
-    },
-    {
-      "surface": "python",
       "path": "packages/core/src/disco/core/__init__.py",
       "public_name": "ErrorEvent",
       "owner_package": "PKG-35-DEEP-RESEARCH-CLOSEOUT",
@@ -33647,6 +33739,51 @@
       ],
       "old_signature_sha256": "30b96192cc989c8bc67b6dc0c8594517c34a42559233538ed4b2a5d2b32da23e",
       "new_signature_sha256": "5a953c26aa2b2d1dee01d8c4620dce2be02382e6fba2bace4222301d21e536b9"
+    },
+    {
+      "surface": "python",
+      "path": "packages/core/src/disco/core/llm/__init__.py",
+      "public_name": "RoleFallbackSettings",
+      "origin": "disco.core.llm.config.RoleFallbackSettings",
+      "removed_members": [],
+      "added_members": [
+        "request_policy: RequestPolicy"
+      ],
+      "old_signature_sha256": "2169cfb80a6d512f148273d59f95e95df930c2371462776805480b754aa65119",
+      "new_signature_sha256": "393a3257c35753ce1584620c51af10744ed0fc285872fa6d7caf9b2afa50e726",
+      "owner_package": "PKG-24-RESEARCH-RELIABILITY",
+      "accepting_commit": "f2c409e87f53cd3b6072b32ed4d6da6936776050",
+      "accepting_receipt": "development/notes/research-reliability-20260922.md"
+    },
+    {
+      "surface": "python",
+      "path": "packages/core/src/disco/core/llm/__init__.py",
+      "public_name": "ModelEntry",
+      "origin": "disco.core.llm.config.ModelEntry",
+      "removed_members": [],
+      "added_members": [
+        "request_policy: RequestPolicy"
+      ],
+      "old_signature_sha256": "f2f828a8c70c16f8508026fd692ab8b1caff6fa1ec942eb3450c96374ead85b5",
+      "new_signature_sha256": "53982c64f51e02361cd3609c9d869e224943a9a14811c5aa3677d1c4e4759655",
+      "owner_package": "PKG-24-RESEARCH-RELIABILITY",
+      "accepting_commit": "f2c409e87f53cd3b6072b32ed4d6da6936776050",
+      "accepting_receipt": "development/notes/research-reliability-20260922.md"
+    },
+    {
+      "surface": "python",
+      "path": "packages/retrieval/src/disco/retrieval/deep_research/__init__.py",
+      "public_name": "DepthBound",
+      "origin": "disco.retrieval.deep_research.depth.DepthBound",
+      "removed_members": [],
+      "added_members": [
+        "review_final_reserve: int"
+      ],
+      "old_signature_sha256": "56fb1cee64697161705169673f39367500e0ded7b160f4508ffa5db602df2fc1",
+      "new_signature_sha256": "b53da74637c8cd93a49b0fbcffec101be64092124828c0aa880e49109fd097c9",
+      "owner_package": "PKG-24-RESEARCH-RELIABILITY",
+      "accepting_commit": "f2c409e87f53cd3b6072b32ed4d6da6936776050",
+      "accepting_receipt": "development/notes/research-reliability-20260922.md"
     },
     {
       "surface": "python",
@@ -33846,32 +33983,6 @@
       "owner_package": "PKG-26-LAUNCH-CLOSEOUT",
       "accepting_commit": "5bbb3c195d0a4f4c87e47caf2fdeca29a14c1464",
       "accepting_receipt": "automation/runtime/boundary-20260819-launch-closeout/BOUNDARY-RECEIPT.md"
-    },
-    {
-      "surface": "frontend",
-      "path": "frontend/src/types/models.ts",
-      "public_name": "ModelInfo",
-      "declaration_kind": "InterfaceDeclaration",
-      "old_signature": "export interface ModelInfo { id: string; // catalogue key, e.g. \"driver-local\" label: string; // human name shown in the UI provider: ModelProvider; // local (free) vs openrouter (paid overflow) /** per-million-token prices; both 0 for local. */ price_in_per_m: number; price_out_per_m: number; /** how the user pays; undefined \u2192 derived (price 0 \u2192 free, else metered). */ pricing_mode?: PricingMode; capabilities: Capability[]; /** Manual vision pin: null/undefined = auto-detect, true/false = override. */ vision?: boolean | null; /** optional provenance note (e.g. quantization) shown as a quiet caption. */ note?: string; // raw editable fields (mirror the backend ModelDTO) so an edit form prefills the // real config, not the display view. model_id: string; base_url?: string | null; api_key_env?: string | null; context_window: number; max_output_tokens?: number | null; quantization?: string | null; }",
-      "new_signature": "export interface ModelInfo { id: string; // catalogue key, e.g. \"driver-local\" label: string; // human name shown in the UI provider: ModelProvider; // local (free) vs openrouter (paid overflow) /** per-million-token prices; both 0 for local. */ price_in_per_m: number; price_out_per_m: number; /** how the user pays; undefined \u2192 derived (price 0 \u2192 free, else metered). */ pricing_mode?: PricingMode; capabilities: Capability[]; /** Manual vision pin: null/undefined = auto-detect, true/false = override. */ vision?: boolean | null; /** Truthful effective UI state; absence is treated as unknown for older servers. */ vision_status?: \"vision\" | \"text-only\" | \"unknown\"; /** optional provenance note (e.g. quantization) shown as a quiet caption. */ note?: string; // raw editable fields (mirror the backend ModelDTO) so an edit form prefills the // real config, not the display view. model_id: string; base_url?: string | null; api_key_env?: string | null; requires_api_key?: boolean; context_window: number; max_output_tokens?: number | null; quantization?: string | null; }",
-      "old_target_sha256": "3022672985420839ce33e70865b710ac971dd58648d023b4f4fb3ae88c010c34",
-      "new_target_sha256": "613523903c2bcc3f04b1f696fb08d3a3e48e65cbff5fb5e665987b87dc210cfa",
-      "owner_package": "PKG-20-UX-RELIABILITY",
-      "accepting_commit": "6761fd10f0bc21ca96124c5a2dd5ac254894f371",
-      "accepting_receipt": "2026-07-28/STATUS.md"
-    },
-    {
-      "surface": "frontend",
-      "path": "frontend/src/types/models.ts",
-      "public_name": "ModelUpsert",
-      "declaration_kind": "InterfaceDeclaration",
-      "old_signature": "export interface ModelUpsert { id: string; model_id: string; base_url?: string | null; api_key_env?: string | null; context_window: number; max_output_tokens?: number | null; quantization?: string | null; capabilities: Capability[]; /** null = auto-detect; true/false explicitly overrides detection. */ vision?: boolean | null; price_in_per_m: number; price_out_per_m: number; pricing_mode?: PricingMode; }",
-      "new_signature": "export interface ModelUpsert { id: string; model_id: string; base_url?: string | null; api_key_env?: string | null; context_window: number; max_output_tokens?: number | null; quantization?: string | null; capabilities: Capability[]; /** null = auto-detect; true/false explicitly overrides detection. */ vision?: boolean | null; requires_api_key?: boolean; price_in_per_m: number; price_out_per_m: number; pricing_mode?: PricingMode; }",
-      "old_target_sha256": "659ae8538f1b1fb3ba6d6bfccc6d7df8099304fc349004dfe69cc1931138ec10",
-      "new_target_sha256": "be792570ccb90902b1ebd47ffbf677ba9995636cf9a67f5c073e04ad702e914a",
-      "owner_package": "PKG-20-UX-RELIABILITY",
-      "accepting_commit": "6761fd10f0bc21ca96124c5a2dd5ac254894f371",
-      "accepting_receipt": "2026-07-28/STATUS.md"
     },
     {
       "surface": "frontend",
@@ -34782,6 +34893,110 @@
       "new_signature": "export const fixtureRunningEvents: AgentEvent[] = [ userMsg, statusRunning, briefAction, briefMsg, action(\"evt_phase_gather\", 10, \"phase\", { phase: \"gather\", mode: \"agent\", max_turns: 4 }), action(\"evt_search_1_1\", 11, \"search\", { subquestion: subq1, query: \"solid-state battery mass production 2026\", round: 1, rounds_max: 4, }), observation(\"evt_obs_1_1\", 12, \"evt_search_1_1\", \"observation\", true, { subquestion: subq1, round: 1, ok: true, added: 8, total_for_subq: 8, remaining_budget: 32, }), action(\"evt_search_1_2\", 14, \"search\", { subquestion: subq1, query: \"SK On Lexus Mercedes solid-state timeline\", round: 2, rounds_max: 4, }), observation(\"evt_obs_1_2\", 15, \"evt_search_1_2\", \"observation\", true, { subquestion: subq1, round: 2, ok: true, added: 6, total_for_subq: 14, remaining_budget: 26, }), action(\"evt_search_2_1\", 30, \"search\", { subquestion: subq2, query: \"solid-state battery interface stability dendrite suppression\", round: 1, rounds_max: 4, }), observation(\"evt_obs_2_1\", 31, \"evt_search_2_1\", \"observation\", true, { subquestion: subq2, round: 1, ok: true, added: 5, total_for_subq: 5, remaining_budget: 21, }), action(\"evt_search_3_1\", 40, \"search\", { subquestion: subq3, query: \"solid-state battery cost per kWh manufacturing scale economy\", round: 1, rounds_max: 4, }), observation(\"evt_obs_3_1\", 41, \"evt_search_3_1\", \"observation\", true, { subquestion: subq3, round: 1, ok: true, added: 5, total_for_subq: 5, remaining_budget: 16, }), // Writing is ONE whole-report pass (v2), so the writer emits a synthesize // phase + a section_done checkpoint per finalized section \u2014 never a // per-section \"now writing X\" action. action(\"evt_phase_synth_1\", 50, \"phase\", { phase: \"synthesize\", section: 1 }), action(\"evt_secdone_1\", 51, \"section_done\", { section_id: \"s0\", title: subq1, done: 1, }), action(\"evt_phase_synth_2\", 52, \"phase\", { phase: \"synthesize\", section: 2 }), action(\"evt_secdone_2\", 53, \"section_done\", { section_id: \"s1\", title: subq2, done: 2, }), action(\"evt_phase_synth_3\", 54, \"phase\", { phase: \"synthesize\", section: 3 }), action(\"evt_secdone_3\", 55, \"section_done\", { section_id: \"s2\", title: subq3, done: 3, }), action(\"evt_phase_coher\", 60, \"phase\", { phase: \"coherence\" }), ];",
       "old_target_sha256": "79c1fc01dd18735ed6b4d833fb062d25d9549c998ed2d42be034e4cc037c541f",
       "new_target_sha256": "1a2f75033bdbe7e1ca46792d3b42491cddc9471b5cb5d889609e5c20b60aaa9e"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/deepResearchTrace.ts",
+      "public_name": "DeepPhaseActivity",
+      "declaration_kind": "InterfaceDeclaration",
+      "old_signature": "export interface DeepPhaseActivity { phase: string; /** Words streamed so far by the writer, when the phase event carried it. */ wordsStreamed: number | null; }",
+      "new_signature": "export interface DeepPhaseActivity { phase: string; source?: number; sourcesTotal?: number; /** Words streamed so far by the writer, when the phase event carried it. */ wordsStreamed: number | null; }",
+      "old_target_sha256": "8d89f2ef77ce4dde11ba12d7abf20f9cb2b24c694feb2e56c37818aeafeacd10",
+      "new_target_sha256": "23345f3babf2be36e6af4a8f19400d1be69e409c572b0b75f9ba8b72e3a18cdb",
+      "owner_package": "PKG-24-RESEARCH-RELIABILITY",
+      "accepting_commit": "f2c409e87f53cd3b6072b32ed4d6da6936776050",
+      "accepting_receipt": "development/notes/research-reliability-20260922.md"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/agent.ts",
+      "public_name": "ModelActivityPayload",
+      "declaration_kind": "InterfaceDeclaration",
+      "old_signature": "export interface ModelActivityPayload { stage: ModelActivityStage; tokens_streamed: number; /** Seconds since the CALL WAS MADE, measured by the backend at emit \u2014 * prefill included (`core.llm.stream_progress.StreamProgress.seconds`). Not * since the first chunk: on a slow local model that would report a * four-minute call as a two-second one. */ seconds: number; call_ordinal: number; /** The reasoning-channel share of `tokens_streamed`, when the provider * exposed a separate reasoning channel. Absent otherwise (the backend omits * the key at 0). Equal to `tokens_streamed` means the model is producing and * none of it is visible output yet. */ reasoning_tokens?: number; /** False on the ONE heartbeat a BUFFERED transport emits, at call start with * nothing delivered (`core.llm.stream_progress.buffered_start`). The whole * answer arrives in a single response, so no further heartbeat is coming and * the silence after this one belongs to the transport, not the model. Absent * on a streamed call (the backend omits the key when true). */ streams?: boolean; }",
+      "new_signature": "export interface ModelActivityPayload extends ModelActivityDetails { stage: ModelActivityStage; tokens_streamed: number; /** Seconds since the CALL WAS MADE, measured by the backend at emit \u2014 * prefill included (`core.llm.stream_progress.StreamProgress.seconds`). Not * since the first chunk: on a slow local model that would report a * four-minute call as a two-second one. */ seconds: number; call_ordinal: number; /** The reasoning-channel share of `tokens_streamed`, when the provider * exposed a separate reasoning channel. Absent otherwise (the backend omits * the key at 0). Equal to `tokens_streamed` means the model is producing and * none of it is visible output yet. */ reasoning_tokens?: number; /** False on the ONE heartbeat a BUFFERED transport emits, at call start with * nothing delivered (`core.llm.stream_progress.buffered_start`). The whole * answer arrives in a single response, so no further heartbeat is coming and * the silence after this one belongs to the transport, not the model. Absent * on a streamed call (the backend omits the key when true). */ streams?: boolean; }",
+      "old_target_sha256": "c569a8baf2af3e3f57c7515e584dda5f3f6f23471d1cca2ac5d5694f66fa7d22",
+      "new_target_sha256": "2e954a7c4ef100995e2ddde1f6a1b45d021ba50f79368cb659f5e3f96e09ac0a",
+      "owner_package": "PKG-24-RESEARCH-RELIABILITY",
+      "accepting_commit": "f2c409e87f53cd3b6072b32ed4d6da6936776050",
+      "accepting_receipt": "development/notes/research-reliability-20260922.md"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/models.ts",
+      "public_name": "ModelInfo",
+      "declaration_kind": "InterfaceDeclaration",
+      "old_signature": "export interface ModelInfo { id: string; // catalogue key, e.g. \"driver-local\" label: string; // human name shown in the UI provider: ModelProvider; // local (free) vs openrouter (paid overflow) /** per-million-token prices; both 0 for local. */ price_in_per_m: number; price_out_per_m: number; /** how the user pays; undefined \u2192 derived (price 0 \u2192 free, else metered). */ pricing_mode?: PricingMode; capabilities: Capability[]; /** Manual vision pin: null/undefined = auto-detect, true/false = override. */ vision?: boolean | null; /** Truthful effective UI state; absence is treated as unknown for older servers. */ vision_status?: \"vision\" | \"text-only\" | \"unknown\"; /** optional provenance note (e.g. quantization) shown as a quiet caption. */ note?: string; // raw editable fields (mirror the backend ModelDTO) so an edit form prefills the // real config, not the display view. model_id: string; base_url?: string | null; api_key_env?: string | null; requires_api_key?: boolean; context_window: number; max_output_tokens?: number | null; quantization?: string | null; }",
+      "new_signature": "export interface ModelInfo { request_policy?: RequestPolicy; id: string; // catalogue key, e.g. \"driver-local\" label: string; // human name shown in the UI provider: ModelProvider; // local (free) vs openrouter (paid overflow) /** per-million-token prices; both 0 for local. */ price_in_per_m: number; price_out_per_m: number; /** how the user pays; undefined \u2192 derived (price 0 \u2192 free, else metered). */ pricing_mode?: PricingMode; capabilities: Capability[]; /** Manual vision pin: null/undefined = auto-detect, true/false = override. */ vision?: boolean | null; /** Truthful effective UI state; absence is treated as unknown for older servers. */ vision_status?: \"vision\" | \"text-only\" | \"unknown\"; /** optional provenance note (e.g. quantization) shown as a quiet caption. */ note?: string; // raw editable fields (mirror the backend ModelDTO) so an edit form prefills the // real config, not the display view. model_id: string; base_url?: string | null; api_key_env?: string | null; requires_api_key?: boolean; context_window: number; max_output_tokens?: number | null; quantization?: string | null; }",
+      "old_target_sha256": "613523903c2bcc3f04b1f696fb08d3a3e48e65cbff5fb5e665987b87dc210cfa",
+      "new_target_sha256": "9cf69246cf9c02a0b8f8ac0cbe24be2650d704f583c9fe9e7becfc14ea552a3d",
+      "owner_package": "PKG-24-RESEARCH-RELIABILITY",
+      "accepting_commit": "f2c409e87f53cd3b6072b32ed4d6da6936776050",
+      "accepting_receipt": "development/notes/research-reliability-20260922.md"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/models.ts",
+      "public_name": "ModelUpsert",
+      "declaration_kind": "InterfaceDeclaration",
+      "old_signature": "export interface ModelUpsert { id: string; model_id: string; base_url?: string | null; api_key_env?: string | null; context_window: number; max_output_tokens?: number | null; quantization?: string | null; capabilities: Capability[]; /** null = auto-detect; true/false explicitly overrides detection. */ vision?: boolean | null; requires_api_key?: boolean; price_in_per_m: number; price_out_per_m: number; pricing_mode?: PricingMode; }",
+      "new_signature": "export interface ModelUpsert { request_policy?: RequestPolicy; id: string; model_id: string; base_url?: string | null; api_key_env?: string | null; context_window: number; max_output_tokens?: number | null; quantization?: string | null; capabilities: Capability[]; /** null = auto-detect; true/false explicitly overrides detection. */ vision?: boolean | null; requires_api_key?: boolean; price_in_per_m: number; price_out_per_m: number; pricing_mode?: PricingMode; }",
+      "old_target_sha256": "be792570ccb90902b1ebd47ffbf677ba9995636cf9a67f5c073e04ad702e914a",
+      "new_target_sha256": "16594b47e340211d5d2246a4d192b08738a33892f39d5a1f2804e085dfebf3b6",
+      "owner_package": "PKG-24-RESEARCH-RELIABILITY",
+      "accepting_commit": "f2c409e87f53cd3b6072b32ed4d6da6936776050",
+      "accepting_receipt": "development/notes/research-reliability-20260922.md"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/models.ts",
+      "public_name": "RoleFallbackConfig",
+      "declaration_kind": "InterfaceDeclaration",
+      "old_signature": "export interface RoleFallbackConfig { enabled: boolean; base_url: string; model: string; api_key_env: string; }",
+      "new_signature": "export interface RoleFallbackConfig { request_policy?: RequestPolicy; enabled: boolean; base_url: string; model: string; api_key_env: string; }",
+      "old_target_sha256": "5daca6ee3f7b00e4ef9714336acc41d1d80abcb0441900ed3b9b37a9535a4a05",
+      "new_target_sha256": "0cd9ea1b75c66b6be6e0f56a15b9151cdb84d235f02e13efead13fcf2594ecff",
+      "owner_package": "PKG-24-RESEARCH-RELIABILITY",
+      "accepting_commit": "f2c409e87f53cd3b6072b32ed4d6da6936776050",
+      "accepting_receipt": "development/notes/research-reliability-20260922.md"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/agent.ts",
+      "public_name": "ModelActivityStage",
+      "declaration_kind": "TypeAliasDeclaration",
+      "old_signature": "export type ModelActivityStage = | \"brief\" | \"research_turn\" | \"draft\" | \"review\" | \"rework\" | \"continuation\" | \"follow_up\";",
+      "new_signature": "export type ModelActivityStage = | \"brief\" | \"research_turn\" | \"source_reading\" | \"draft\" | \"review\" | \"rework\" | \"continuation\" | \"follow_up\";",
+      "old_target_sha256": "a0faf5a5d287b5641ae226e8f6c475e9d2b58915d155cc8e033fe35d18294fe7",
+      "new_target_sha256": "6d5aa6128fc9a2254127bbc9ac936cdf81c1c2687d076a8246c79f0554cdd7a0",
+      "owner_package": "PKG-24-RESEARCH-RELIABILITY",
+      "accepting_commit": "f2c409e87f53cd3b6072b32ed4d6da6936776050",
+      "accepting_receipt": "development/notes/research-reliability-20260922.md"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/deepResearchHeartbeat.ts",
+      "public_name": "SignalLevel",
+      "declaration_kind": "TypeAliasDeclaration",
+      "old_signature": "export type SignalLevel = \"live\" | \"buffered\" | \"quiet\" | \"silent\";",
+      "new_signature": "export type SignalLevel = \"live\" | \"buffered\" | \"backoff\" | \"quiet\" | \"silent\";",
+      "old_target_sha256": "c62d8077d0394f9c48e21ddf971f813061a59d6da85f9106f25f5b1098cbb79f",
+      "new_target_sha256": "03cc9050c0b71da4c9f800b18d8e32cd10374715edec928804a48d6f7f0d8218",
+      "owner_package": "PKG-24-RESEARCH-RELIABILITY",
+      "accepting_commit": "f2c409e87f53cd3b6072b32ed4d6da6936776050",
+      "accepting_receipt": "development/notes/research-reliability-20260922.md"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/deepResearchHeartbeat.ts",
+      "public_name": "signalReading",
+      "declaration_kind": "function",
+      "old_signature": "export function signalReading( lastEventAt: number | null, nowMs: number, sinceMs: number, buffered = false, ): SignalReading",
+      "new_signature": "export function signalReading( lastEventAt: number | null, nowMs: number, sinceMs: number, buffered = false, retryRemaining: number | null = null, ): SignalReading",
+      "old_target_sha256": "afb02e2adf74c77f270c417d47a831db4c06b6794717e6c3195169859f1067eb",
+      "new_target_sha256": "a8304f9ac88bf45cfd7476d5f01b12dc62cb20e8d20a83b77872425e2fed3ea9",
+      "owner_package": "PKG-24-RESEARCH-RELIABILITY",
+      "accepting_commit": "f2c409e87f53cd3b6072b32ed4d6da6936776050",
+      "accepting_receipt": "development/notes/research-reliability-20260922.md"
     }
   ],
   "frontend_target_relocations": [

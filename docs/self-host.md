@@ -365,7 +365,7 @@ podman compose exec agent-server disco-verify --quick
 Without the lifecycle script the update is:
 
 ```bash
-git pull                        # or: git checkout v0.2.0 — the tag pins DISCO_IMAGE_TAG
+git pull                        # or: git checkout v0.2.1 — the tag pins DISCO_IMAGE_TAG
 podman compose down             # or: docker compose down
 podman compose pull
 ./deploy/compose/disco-compose up -d
@@ -732,7 +732,7 @@ write the redacted support bundle a bug report asks for.
 This proves the baked encoder and TTS assets are used with networking disabled:
 
 ```bash
-podman run --rm --network none ghcr.io/dyluhn/disco-server:v0.2.0 \
+podman run --rm --network none ghcr.io/dyluhn/disco-server:v0.2.1 \
   python /app/development/scripts/offline_asset_smoke.py
 ```
 
@@ -752,9 +752,9 @@ podman compose -f compose.yaml -f compose.build.yaml up -d --build
 Plain image builds, without compose:
 
 ```bash
-podman build -t ghcr.io/dyluhn/disco-server:v0.2.0 -f deploy/compose/Dockerfile.server .
-podman build -t ghcr.io/dyluhn/disco-frontend:v0.2.0 -f frontend/Dockerfile .
-podman build -t ghcr.io/dyluhn/disco-sandbox:v0.2.0 -f deploy/sandbox/Dockerfile .
+podman build -t ghcr.io/dyluhn/disco-server:v0.2.1 -f deploy/compose/Dockerfile.server .
+podman build -t ghcr.io/dyluhn/disco-frontend:v0.2.1 -f frontend/Dockerfile .
+podman build -t ghcr.io/dyluhn/disco-sandbox:v0.2.1 -f deploy/sandbox/Dockerfile .
 ```
 
 The published images are built by `.github/workflows/release.yml` on a tag

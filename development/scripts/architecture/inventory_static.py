@@ -442,12 +442,20 @@ def check_inventory_metadata(
     packages: set[str] = set()
     after_identities: set[str] = set()
     valid_rows: list[dict[str, Any]] = []
+    from .test_inventory_parts import _reliability
+
+    reliability = _reliability.historical_inventory(root, baseline, problems)
+    reliability_packages = (
+        {row["package"] for row in reliability["additive_transitions"]} if reliability else set()
+    )
     historical = _retirements.historical_inventory(root, baseline, problems)
     historical_packages = (
         {row["package"] for row in historical["additive_transitions"]} if historical else set()
     )
     for index, row in enumerate(transitions):
-        authority = historical if row.get("package") in historical_packages else baseline
+        authority = reliability if row.get("package") in reliability_packages else baseline
+        if row.get("package") in historical_packages:
+            authority = historical
         checked = _check_transition_row(
             row,
             index,

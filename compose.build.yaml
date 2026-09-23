@@ -10,7 +10,7 @@ services:
     build:
       context: .
       dockerfile: deploy/sandbox/Dockerfile
-    image: ghcr.io/dyluhn/disco-sandbox:${DISCO_IMAGE_TAG:-v0.2.0}
+    image: ghcr.io/dyluhn/disco-sandbox:${DISCO_IMAGE_TAG:-v0.2.1}
     entrypoint: ["true"]
     restart: "no"
 

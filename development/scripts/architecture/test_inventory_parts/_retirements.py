@@ -120,6 +120,12 @@ def regeneration_authorizations(
     mapping: dict[str, Any],
     relocated: dict[str, set[str]],
 ) -> dict[str, set[str]]:
+    from . import _reliability
+
+    if package == _reliability.PACKAGE:
+        return _reliability.regeneration_authorizations(
+            root, previous_identity, roots, mapping, relocated
+        )
     if package != PACKAGE:
         return {}
     record, old = authority(root)
@@ -129,9 +135,11 @@ def regeneration_authorizations(
 
 
 def _check_retired_count_owners(transitions: list[dict[str, Any]], problems: list[str]) -> None:
+    from . import _reliability
+
     for row in transitions:
         counts_by_root = row.get("collected_roots", {})
-        if not isinstance(counts_by_root, dict) or row.get("package") == PACKAGE:
+        if not isinstance(counts_by_root, dict) or row.get("package") in {PACKAGE, _reliability.PACKAGE}:
             continue
         if any(
             isinstance(counts, dict) and "retired_count" in counts
