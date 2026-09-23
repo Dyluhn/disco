@@ -31,3 +31,14 @@ export function reportQualifications(report: ReportEvent): string[] {
   }
   return notes;
 }
+
+/** Literal qualification prose, with the caller's existing citation numbering. */
+export function qualificationMarkdown(report: ReportEvent, cite: (text: string) => string): string[] {
+  const notes = reportQualifications(report);
+  if (!notes.length) return [];
+  return ["## Evidence and review qualifications", "", ...notes.flatMap(note => [
+    cite(note).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/([\\`*_{}[\]()#+|>~])/g, "\\$1").replace(/\n/g, " "),
+    "",
+  ])];
+}

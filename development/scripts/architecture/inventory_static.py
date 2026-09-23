@@ -415,6 +415,18 @@ def _check_transition_row(
     return row
 
 
+def _historical_authorities(root: Path, baseline: dict[str, Any], problems: list[str]):
+    from .test_inventory_parts import _reliability
+
+    reliability = _reliability.historical_inventory(root, baseline, problems)
+    historical = _retirements.historical_inventory(root, baseline, problems)
+    authorities: dict[str, dict[str, Any]] = {}
+    for snapshot in (reliability, historical):
+        if snapshot is not None:
+            authorities.update({row["package"]: snapshot for row in snapshot["additive_transitions"]})
+    return historical, authorities
+
+
 def check_inventory_metadata(
     baseline: dict[str, Any],
     root: Path,
@@ -442,20 +454,9 @@ def check_inventory_metadata(
     packages: set[str] = set()
     after_identities: set[str] = set()
     valid_rows: list[dict[str, Any]] = []
-    from .test_inventory_parts import _reliability
-
-    reliability = _reliability.historical_inventory(root, baseline, problems)
-    reliability_packages = (
-        {row["package"] for row in reliability["additive_transitions"]} if reliability else set()
-    )
-    historical = _retirements.historical_inventory(root, baseline, problems)
-    historical_packages = (
-        {row["package"] for row in historical["additive_transitions"]} if historical else set()
-    )
+    historical, authorities = _historical_authorities(root, baseline, problems)
     for index, row in enumerate(transitions):
-        authority = reliability if row.get("package") in reliability_packages else baseline
-        if row.get("package") in historical_packages:
-            authority = historical
+        authority = authorities.get(row.get("package"), baseline)
         checked = _check_transition_row(
             row,
             index,
