@@ -108,7 +108,7 @@ privacy constraints would change the operator's request.
 
 New Quick runs allow four review decisions, including malformed and empty
 responses. Two decisions are reserved for checking the revised report, so an
-empty final check can recover once. Standard and Deep retain their four/five
+empty final check can recover once. Standard Deep and Exhaustive retain their four/five
 decision limits and now reserve two for final verification as well. Old
 checkpoints keep their recorded allowance; resume never replenishes calls.
 
