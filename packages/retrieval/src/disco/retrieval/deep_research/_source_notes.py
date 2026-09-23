@@ -92,6 +92,8 @@ class SourceNotes(BaseModel):
     chunks: int = 0
     calls: int = 0
     complete: bool = False
+    # Durable recovery after an empty answer; chunk boundaries never change.
+    compact_reading: bool = False
     input_tokens: int = 0
     output_tokens: int = 0
     latency_ms: float = 0.0
