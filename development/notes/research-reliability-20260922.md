@@ -56,6 +56,12 @@ The source commit preserves its parent's public API and test authority bytes.
 Derived public API rows name exact additions and old/new member or declaration
 signatures; test inventory regeneration proves preservation of collected tests
 and records new tests. The landing is a sibling of that retained source commit,
-differing only in the authorized derived files. Governance implementation,
-protected contracts, collector scopes, and test execution requirements are not
-relaxed to accommodate this change.
+differing only in the authorized derived files. The test gate adds a finite, hash-pinned replacement authority for 51 collected
+identities: removed provider-inference assertions, preserved behavior under
+explicit configuration, and expanded parameterized review cases. Every old
+identity has an explicit disposition and required replacement IDs. The original
+receipts remain unchanged, the source must have the pinned baseline parent,
+and unrelated deletion, missing replacements, altered history, or reuse of the
+allowance fail closed. Adversarial tests exercise these refusals. The authority
+and its implementation are included in the governance seal. Protected contract
+contents, collector scopes, and test execution requirements are unchanged.

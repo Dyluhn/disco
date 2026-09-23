@@ -30,16 +30,16 @@ services:
   # 0 at once when the image is already there. Comment this service out for a
   # lean stack without the Build/Agent surfaces.
   sandbox-image:
-    image: ghcr.io/dyluhn/disco-server:${DISCO_IMAGE_TAG:-v0.2.0}
+    image: ghcr.io/dyluhn/disco-server:${DISCO_IMAGE_TAG:-v0.2.1}
     entrypoint: ["python", "/ensure_sandbox_image.py"]
     environment:
-      DISCO_SANDBOX_IMAGE_SOURCE: ghcr.io/dyluhn/disco-sandbox:${DISCO_IMAGE_TAG:-v0.2.0}
+      DISCO_SANDBOX_IMAGE_SOURCE: ghcr.io/dyluhn/disco-sandbox:${DISCO_IMAGE_TAG:-v0.2.1}
     volumes:
       - "${DISCO_SANDBOX_SOCKET:-/run/user/1000/podman/podman.sock}:/var/run/docker.sock"
     restart: "no"
 
   app-server:
-    image: ghcr.io/dyluhn/disco-server:${DISCO_IMAGE_TAG:-v0.2.0}
+    image: ghcr.io/dyluhn/disco-server:${DISCO_IMAGE_TAG:-v0.2.1}
     command: ["python", "-m", "disco.app_server"]
     entrypoint: ["/entrypoint.sh"]
     environment:
@@ -97,7 +97,7 @@ services:
         max-size: "20m"
 
   agent-server:
-    image: ghcr.io/dyluhn/disco-server:${DISCO_IMAGE_TAG:-v0.2.0} # same image as app-server, different command
+    image: ghcr.io/dyluhn/disco-server:${DISCO_IMAGE_TAG:-v0.2.1} # same image as app-server, different command
     command: ["python", "-m", "disco.agent_server"]
     entrypoint: ["/entrypoint.sh"]
     environment:
@@ -281,7 +281,7 @@ services:
         max-size: "20m"
 
   frontend:
-    image: ghcr.io/dyluhn/disco-frontend:${DISCO_IMAGE_TAG:-v0.2.0}
+    image: ghcr.io/dyluhn/disco-frontend:${DISCO_IMAGE_TAG:-v0.2.1}
     environment:
       # Blank explicit URLs → env.js defaults to SAME-ORIGIN relative prefixes
       # (/svc/app, /svc/agent) that this container's nginx proxies to the

@@ -35,6 +35,7 @@ PROTECTED: tuple[str, ...] = (
     "development/architecture/public-api.json",
     "development/architecture/test-inventory.json",
     "development/architecture/research-test-retirements.json",
+    "development/architecture/reliability-test-replacements.json",
     "development/architecture/research-api-closeout.json",
     "development/architecture/research-test-retirement-dispositions.json",
     "development/scripts/check_soak_freeze.py",
@@ -117,6 +118,7 @@ PROTECTED: tuple[str, ...] = (
     "development/scripts/architecture/test_inventory_parts/_splits.py",
     "development/scripts/architecture/test_inventory_parts/_transitions.py",
     "development/scripts/architecture/test_inventory_parts/_retirements.py",
+    "development/scripts/architecture/test_inventory_parts/_reliability.py",
     # PKG-38-UI-FIXES-V51: the rename authority. A renamed test identity read
     # as an unexplained deletion, and the only records that could sanction one
     # were a module-split relocation (which rules renames out by contract) and
