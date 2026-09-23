@@ -12,6 +12,7 @@ import re
 from collections.abc import Callable
 from typing import Any
 
+from ._reasoning_text import reasoning_text
 from ._request_assembly import FinishReason, _map_finish, sanitize_tool_name
 from .errors import (
     LLMAuthError,
@@ -339,8 +340,8 @@ def to_response(
     msg = choice.get("message") or {}
     usage = data.get("usage") or {}
     model_content = msg.get("content") or ""
-    reasoning_content = msg.get("reasoning_content")
-    reasoning_len = len(reasoning_content) if isinstance(reasoning_content, str) else 0
+    reasoning_content = reasoning_text(msg)
+    reasoning_len = len(reasoning_content)
     text = (req.assistant_prefill or "") + model_content
     raw_tool_calls = tool_calls_fn(msg.get("tool_calls"), req.tools)
     recovered: list[ProposedToolCall] = []

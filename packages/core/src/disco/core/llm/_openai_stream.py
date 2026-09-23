@@ -24,6 +24,7 @@ import httpx
 
 from ._openai_timeouts import ProviderTimeouts, iter_with_progress_timeout
 from ._provider_retry import attach_retry_after, meaningful_sse_line
+from ._reasoning_text import reasoning_text
 from ._request_assembly import FinishReason
 from .errors import LLMTransientError
 from .stream_progress import waiting_reporter_for
@@ -228,7 +229,7 @@ def _buffered_body_as_stream_line(body: bytes) -> str | None:
     raw_tool_calls = message.get("tool_calls")
     delta: dict = {
         "content": message.get("content"),
-        "reasoning_content": message.get("reasoning_content"),
+        "reasoning_content": reasoning_text(message),
     }
     if isinstance(raw_tool_calls, list):
         delta["tool_calls"] = [
@@ -327,7 +328,7 @@ def _process_delta(
     if piece:
         content.append(piece)
         chunks.append(StreamChunk(delta_text=piece))
-    reasoning_piece = delta.get("reasoning_content")
+    reasoning_piece = reasoning_text(delta)
     if reasoning_piece:
         reasoning_buf.append(reasoning_piece)
     new_last_idx = last_idx

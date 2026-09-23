@@ -8,6 +8,7 @@ import math
 from collections.abc import Mapping
 from email.utils import parsedate_to_datetime
 
+from ._reasoning_text import reasoning_text
 from .errors import LLMTransientError
 
 
@@ -50,7 +51,7 @@ def _choice_progress(choice: object) -> bool:
     delta = choice.get("delta") or {}
     if not isinstance(delta, dict):
         return False
-    if delta.get("content") or delta.get("reasoning_content"):
+    if delta.get("content") or reasoning_text(delta):
         return True
     for call in delta.get("tool_calls") or []:
         if isinstance(call, dict) and (call.get("function") or {}).get("arguments"):
