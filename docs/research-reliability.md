@@ -116,8 +116,10 @@ After an empty visible response, the reviewer receives a concise-output
 instruction with the same draft, evidence, rubric, and claim requirements.
 Blank assistant messages are not replayed. This strategy is checkpointed and
 carried into post-repair verification. Visible malformed replies retain their
-protocol feedback. The shared output ceiling and single prose-repair limit
-remain unchanged. Exhausted or invalid reviews remain visibly unavailable or
+protocol feedback. An empty response cut off at the output limit provisions
+the remaining retry at the existing 48,000-token hard cap; it no longer adds
+only a small increment to a capacity that produced no decision. Initial
+capacity, the shared hard cap, and the single prose-repair limit remain unchanged. Exhausted or invalid reviews remain visibly unavailable or
 incomplete; they cannot certify a report.
 
 The final-check stage now reports real streamed activity and buffered-call

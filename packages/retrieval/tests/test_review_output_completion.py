@@ -114,13 +114,13 @@ async def test_resume_after_cutoff_preserves_grown_capacity_and_reserved_decisio
             should_cancel=lambda: first.calls == 1,
         )
     resumed = saved[-1].budget
-    assert resumed.output_ceiling == 32000 and resumed.used == 1
+    assert resumed.output_ceiling == 48000 and resumed.used == 1
     second = RecordingRouter([json.dumps(CLEAN)])
     verdict, attempts = await _model_review(
         second, final.markdown, "context", conversation_id=None, budget=resumed, reserve=1
     )
     assert verdict == CLEAN and attempts == 2
-    assert second.calls == 1 and second.requests[0].max_tokens == 32000
+    assert second.calls == 1 and second.requests[0].max_tokens == 48000
     assert resumed.used == 2 and resumed.remaining == 1
     assert "larger output allowance" in second.prompt(0)
 

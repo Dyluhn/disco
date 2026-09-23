@@ -386,6 +386,10 @@ def _review_capacity_feedback(
         content_chars=len(text),
         output_tokens=response.usage.output_tokens,
     )
+    if not text.strip():
+        # No visible decision fit. Spend the remaining bounded attempt at the
+        # existing cap instead of buying only another small reasoning increment.
+        ceiling.tokens = RESEARCH_CEILING_CAP
     budget.output_ceiling = ceiling.tokens
     capacity = (
         "The next allowed request has a larger output allowance."
