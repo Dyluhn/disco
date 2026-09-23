@@ -278,6 +278,7 @@ async def emit_model_activity(
             {
                 key: details[key]
                 for key in (
+                    "reasoning_control_fallback",
                     "source_id",
                     "chunk",
                     "chunks",

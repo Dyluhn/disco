@@ -124,16 +124,21 @@ function parseModelActivity(
   if (reasoning !== null) payload.reasoning_tokens = reasoning;
   // Same rule: present only when FALSE, which is the backend saying this is the
   // one heartbeat a buffered transport will send.
+  if (args.reasoning_control_fallback === true) payload.reasoning_control_fallback = true;
   if (args.streams === false) payload.streams = false;
   if (args.state === "waiting" || args.state === "generating" || args.state === "backoff") {
     payload.state = args.state;
   }
   if (typeof args.source_id === "string") payload.source_id = args.source_id;
+  copyActivityCounters(payload, args);
+  return payload;
+}
+
+function copyActivityCounters(payload: ModelActivityPayload, args: Record<string, unknown>): void {
   for (const key of ["chunk", "chunks", "attempt", "retry_after_s", "http_status"] as const) {
     const value = num(args[key]);
     if (value !== null && value >= 0) payload[key] = value;
   }
-  return payload;
 }
 
 function parsePhase(phase: string, args: Record<string, unknown>): DeepPhaseActivity {

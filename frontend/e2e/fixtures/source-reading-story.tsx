@@ -5,13 +5,15 @@ import { deriveActivity, deriveLiveTrace, deriveStats } from "@/lib/deepResearch
 import type { ActionEvent } from "@/types/agent";
 import captured from "@/lib/__fixtures__/source-reading-activity.json";
 
-function Panel({ mode }: { mode: "waiting" | "generating" }) {
-  const row = captured[mode];
+function Panel({ mode }: { mode: "waiting" | "generating" | "fallback" }) {
+  const row = captured[mode === "fallback" ? "waiting" : mode];
+  // Simulated rejection state over the captured waiting event.
+  const payload = mode === "fallback" ? { ...row.payload, reasoning_control_fallback: true } : row.payload;
   const events: ActionEvent[] = [{ id: mode, kind: "action", seq: 1,
     timestamp: new Date().toISOString(), thought: "",
-    tool_call: { tool_name: row.kind, arguments: row.payload } }];
+    tool_call: { tool_name: row.kind, arguments: payload } }];
   return <section data-reading={mode} style={{ margin: "32px 0" }}>
-    <h2>{mode === "waiting" ? "Request started" : "Source output arriving"}</h2>
+    <h2>{mode === "fallback" ? "Optional settings rejected · simulated" : mode === "waiting" ? "Request started" : "Source output arriving"}</h2>
     <DeepProgressStrip brief={null} trace={deriveLiveTrace(events, "RUNNING")}
       stats={deriveStats(events)} status="RUNNING" activity={deriveActivity(events)}
       followUpStatus={null} />
@@ -21,6 +23,6 @@ function Panel({ mode }: { mode: "waiting" | "generating" }) {
 createRoot(document.getElementById("root")!).render(
   <main style={{ maxWidth: 1000, margin: "40px auto", padding: 24 }}>
     <h1>Source reading · captured provider activity</h1>
-    <Panel mode="waiting" /><Panel mode="generating" />
+    <Panel mode="waiting" /><Panel mode="generating" /><Panel mode="fallback" />
   </main>,
 );

@@ -39,6 +39,7 @@ from uuid import uuid4
 import httpx
 
 from ..events import WORKSPACE_SNAPSHOT_SENTINEL
+from ._openai_buffered import buffered_complete
 from ._openai_response import (
     cached_tokens as _cached_tokens_impl,
 )
@@ -65,6 +66,7 @@ from ._openai_response import (
 )
 from ._openai_stream import stream_complete as _stream_complete_impl
 from ._openai_timeouts import ProviderTimeouts, resolve_timeouts
+from ._reasoning_fallback import rejection_handler, with_reasoning_fallback
 from ._request_assembly import (
     _F5_THINK_BLOCK_RE,
     _F5_THINK_BUDGET_CHARS,
@@ -120,7 +122,7 @@ from .provider_ledger import (
     emit_provider_attempt,
     provider_ledger_enabled,
 )
-from .request_budget import RequestBudgetEstimate
+from .request_budget import RequestBudgetEstimate, preview_request_budget
 from .request_policy import RequestPolicy
 from .stream_progress import reporter_for
 from .toolcall_recovery import recover_tool_calls
@@ -228,8 +230,14 @@ class OpenAIProvider:
     def _message(m: LLMMessage) -> dict:
         return _message_to_wire_impl(m, sanitize_fn=_sanitize_tool_name)
 
-    def _payload(self, req: CompletionRequest, model: str, *, stream: bool) -> dict:
+    def _payload(
+        self, req: CompletionRequest, model: str, *, stream: bool, omit_reasoning: bool = False
+    ) -> dict:
         policy = self._model_policies.get(model, self._request_policy)
+        if omit_reasoning:
+            policy = policy.model_copy(
+                update={"reasoning_enabled": None, "reasoning_disabled": None}
+            )
         if _is_responses_endpoint(self._base):
             body = _build_responses_payload(
                 provider_name=self.name,
@@ -378,28 +386,9 @@ class OpenAIProvider:
 
         Shapes the payload exactly as ``complete`` will send it — both ride the
         streamed transport — so the estimate describes the real request."""
-        try:
-            payload = self._payload(req, model, stream=True)
-        except Exception:
-            return None
-        try:
-            shape = _provider_request_shape(req, payload)
-        except Exception:
-            return None
-        if shape.driver_context_window is None:
-            return None
-        try:
-            return RequestBudgetEstimate(
-                driver_context_window=shape.driver_context_window,
-                max_output_tokens=shape.max_output_tokens,
-                canonical_payload_bytes=shape.canonical_payload_bytes,
-                messages_json_bytes=shape.messages_json_bytes,
-                tools_json_bytes=shape.tools_json_bytes,
-                message_count=shape.message_count,
-                tool_count=shape.tool_count,
-            )
-        except ValueError:
-            return None
+        return preview_request_budget(
+            lambda: _provider_request_shape(req, self._payload(req, model, stream=True))
+        )
 
     def _raise_typed_streamed(self, status: int, body_text: str) -> None:
         """Classify a non-2xx on the STREAMED request.
@@ -408,9 +397,14 @@ class OpenAIProvider:
         ``complete`` can retry the call once buffered. Every other status is
         classified and raised exactly as on the buffered path.
         """
-        if _is_stream_rejection(status, body_text):
-            raise _StreamRejected(status)
-        self._raise_typed(status, body_text)
+        try:
+            self._raise_typed(status, body_text)
+        except LLMError as exc:
+            if _is_stream_rejection(status, body_text) and (
+                type(exc) is LLMError or (status == 501 and type(exc) is LLMTransientError)
+            ):
+                raise _StreamRejected(status) from exc
+            raise
 
     def _streamed(
         self,
@@ -438,7 +432,9 @@ class OpenAIProvider:
             timeouts=self._timeouts,
         )
 
-    async def _complete_buffered(self, req: CompletionRequest, *, model: str) -> CompletionResponse:
+    async def _complete_buffered(
+        self, req: CompletionRequest, *, model: str, omit_reasoning: bool = False
+    ) -> CompletionResponse:
         """One buffered POST — the only path left with a wall-clock ceiling.
 
         Used by the Responses API (which this adapter does not stream) and by
@@ -449,42 +445,32 @@ class OpenAIProvider:
         call with nothing observed, and a UI reading that silence calls a
         working driver stalled.
         """
-        reporter = reporter_for(req.metadata)
-        if reporter is not None:
-            await reporter.buffered_start()
-        payload = self._payload(req, model, stream=False)
-        self._ledger_emit(req, model, payload)
-        endpoint = (
-            self._base if _is_responses_endpoint(self._base) else (f"{self._base}/chat/completions")
+        payload = (
+            self._payload(req, model, stream=False, omit_reasoning=True)
+            if omit_reasoning
+            else self._payload(req, model, stream=False)
         )
-        try:
-            async with self._client() as client:
-                resp = await client.post(
-                    endpoint,
-                    json=payload,
-                    headers=self._headers(req),
-                )
-        except httpx.TimeoutException as exc:
-            raise LLMTransientError(
-                f"request timed out ({type(exc).__name__})", provider=self.name
-            ) from exc
-        except httpx.HTTPError as exc:
-            raise LLMTransientError(
-                f"connection error ({type(exc).__name__})", provider=self.name
-            ) from exc
-        if resp.status_code >= 400:
-            try:
-                self._raise_typed(resp.status_code, resp.text)
-            except LLMTransientError as exc:
-                from ._provider_retry import attach_retry_after
+        self._ledger_emit(req, model, payload)
+        return await buffered_complete(
+            req=req,
+            model=model,
+            base_url=self._base,
+            provider_name=self.name,
+            payload=payload,
+            headers=self._headers(req),
+            client_factory=self._client,
+            raise_typed_fn=rejection_handler(
+                self._raise_typed,
+                payload,
+                baseline=lambda: self._payload(req, model, stream=False, omit_reasoning=True),
+                allow_fallback=not omit_reasoning,
+            ),
+            to_response=self._to_response,
+        )
 
-                attach_retry_after(exc, resp.headers)
-                raise
-        if _is_responses_endpoint(self._base):
-            return _decode_responses_response(req=req, model=model, data=resp.json())
-        return self._to_response(req, model, resp.json())
-
-    async def complete(self, req: CompletionRequest, *, model: str) -> CompletionResponse:
+    async def _complete_once(
+        self, req: CompletionRequest, *, model: str, omit_reasoning: bool = False
+    ) -> CompletionResponse:
         """Buffered result, streamed transport.
 
         The delivered contract is unchanged — one ``CompletionResponse`` with
@@ -494,13 +480,25 @@ class OpenAIProvider:
         the idle budget is a stall the router may correctly retry.
         """
         if _is_responses_endpoint(self._base):
-            return await self._complete_buffered(req, model=model)
-        payload = self._payload(req, model, stream=True)
+            return await self._complete_buffered(req, model=model, omit_reasoning=omit_reasoning)
+        payload = (
+            self._payload(req, model, stream=True, omit_reasoning=True)
+            if omit_reasoning
+            else self._payload(req, model, stream=True)
+        )
         self._ledger_emit(req, model, payload, stream_delivery=False)
         final: CompletionResponse | None = None
         try:
             async for chunk in self._streamed(
-                req, model, payload, raise_typed_fn=self._raise_typed_streamed
+                req,
+                model,
+                payload,
+                raise_typed_fn=rejection_handler(
+                    self._raise_typed_streamed,
+                    payload,
+                    baseline=lambda: self._payload(req, model, stream=True, omit_reasoning=True),
+                    allow_fallback=not omit_reasoning,
+                ),
             ):
                 if chunk.done and chunk.final is not None:
                     final = chunk.final
@@ -511,12 +509,22 @@ class OpenAIProvider:
                 self.name,
                 rejected.status,
             )
-            return await self._complete_buffered(req, model=model)
+            return await self._complete_buffered(req, model=model, omit_reasoning=omit_reasoning)
         if final is None:
             raise LLMTransientError(
                 "provider stream ended without a final result", provider=self.name
             )
         return final
+
+    async def complete(self, req: CompletionRequest, *, model: str) -> CompletionResponse:
+        async def attempt(request: CompletionRequest, omit: bool) -> AsyncIterator[StreamChunk]:
+            response = await self._complete_once(request, model=model, omit_reasoning=omit)
+            yield StreamChunk(done=True, final=response)
+
+        async for chunk in with_reasoning_fallback(req, attempt):
+            if chunk.final is not None:
+                return chunk.final
+        raise LLMTransientError("provider returned no final result", provider=self.name)
 
     async def stream_complete(
         self, req: CompletionRequest, *, model: str
@@ -527,9 +535,30 @@ class OpenAIProvider:
                 yield StreamChunk(delta_text=response.text)
             yield StreamChunk(done=True, final=response)
             return
-        payload = self._payload(req, model, stream=True)
-        self._ledger_emit(req, model, payload)
-        async for chunk in self._streamed(req, model, payload, raise_typed_fn=self._raise_typed):
+
+        async def attempt(request: CompletionRequest, omit: bool) -> AsyncIterator[StreamChunk]:
+            payload = (
+                self._payload(request, model, stream=True, omit_reasoning=True)
+                if omit
+                else self._payload(request, model, stream=True)
+            )
+            self._ledger_emit(request, model, payload)
+            async for chunk in self._streamed(
+                request,
+                model,
+                payload,
+                raise_typed_fn=rejection_handler(
+                    self._raise_typed,
+                    payload,
+                    baseline=lambda: self._payload(
+                        request, model, stream=True, omit_reasoning=True
+                    ),
+                    allow_fallback=not omit,
+                ),
+            ):
+                yield chunk
+
+        async for chunk in with_reasoning_fallback(req, attempt):
             yield chunk
 
     def supports(self, requirement: Requirement, *, model: str) -> bool:

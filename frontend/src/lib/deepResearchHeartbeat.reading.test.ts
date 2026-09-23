@@ -37,3 +37,20 @@ it("does not call a scheduled provider backoff a stall", () => {
   expect(modelRetryRemaining(activity, now + 121000)).toBe(0);
   expect(signalReading(now, now + 121000, now, false, 0).level).toBe("silent");
 });
+
+
+it("retains the reasoning fallback after reconnect without claiming reasoning is disabled", () => {
+  const event = reading({ state: "waiting", reasoning_control_fallback: true });
+  const activity = deriveActivity(JSON.parse(JSON.stringify([event])));
+  expect(heartbeatReading(activity, now).now).toBe(
+    "Waiting for first model output · part 2 of 3 · retrying without optional reasoning settings",
+  );
+  const generating = deriveActivity([reading({
+    state: "generating", reasoning_control_fallback: true,
+    tokens_streamed: 12, reasoning_tokens: 12,
+  })]);
+  expect(heartbeatReading(generating, now).now).toContain("thinking");
+  expect(heartbeatReading(generating, now).now).toContain("without optional reasoning settings");
+  const invalid = deriveActivity([reading({ reasoning_control_fallback: "true" })]);
+  expect(invalid.modelActivity?.payload.reasoning_control_fallback).toBeUndefined();
+});

@@ -4,7 +4,10 @@ a call on its own; the typed provider context error remains authority."""
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
+
+from .provider_ledger import ProviderRequestShape
 
 
 @dataclass(frozen=True)
@@ -80,3 +83,24 @@ class RequestBudgetEstimate:
         if self.max_output_tokens is not None:
             return base + self.max_output_tokens
         return base
+
+
+def preview_request_budget(
+    shape: Callable[[], ProviderRequestShape | None],
+) -> RequestBudgetEstimate | None:
+    """Evaluate a side-effect-free wire shape; preview failure never blocks a call."""
+    try:
+        value = shape()
+        if value is None or value.driver_context_window is None:
+            return None
+        return RequestBudgetEstimate(
+            driver_context_window=value.driver_context_window,
+            max_output_tokens=value.max_output_tokens,
+            canonical_payload_bytes=value.canonical_payload_bytes,
+            messages_json_bytes=value.messages_json_bytes,
+            tools_json_bytes=value.tools_json_bytes,
+            message_count=value.message_count,
+            tool_count=value.tool_count,
+        )
+    except Exception:
+        return None

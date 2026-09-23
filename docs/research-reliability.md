@@ -82,3 +82,23 @@ Old automatically selected vendor behavior is removed, without a name-based
 migration table. Existing installations relying on it must explicitly configure
 the options their endpoint accepts. The prior live probes establish the captured
 wire fields worked on those services, not that names should select those fields.
+
+
+If a request with optional reasoning settings receives a generic HTTP 400/422,
+the adapter retries once without the `reasoning_enabled`/`reasoning_disabled`
+overlay. It restores the underlying `body` values, retaining configured routing
+constraints, prompt, tools, and token budget. No changed wire options means no
+extra attempt. Authentication, context-window, filtering, and transient errors
+retain their existing typed handling. A second rejection is surfaced normally.
+This applies to both completion entry points and the Responses endpoint; the
+existing buffered fallback for streaming rejection remains bounded as well.
+Cancellation is honored, and delivered output is never replayed by this fallback.
+
+Research activity and final response metadata record
+`reasoning_control_fallback: true`; the progress strip says “retrying without
+optional reasoning settings,” including after reconnect. This does not mean
+reasoning is disabled, nor prove the rejected field caused the first error.
+Successful acceptance alone cannot prove an endpoint honored a setting. The
+fallback is local to the call, with no model-name rules or permanent capability
+cache. Fixed `body` options are preserved because dropping arbitrary routing or
+privacy constraints would change the operator's request.

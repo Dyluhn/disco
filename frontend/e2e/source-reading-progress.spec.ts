@@ -5,6 +5,7 @@ test("captured source-reading events reach the real progress strip", async ({ pa
   await page.goto("/e2e/fixtures/source-reading-story.html");
   await expect(page.locator('[data-reading="waiting"]')).toContainText("Waiting for first model output · part 1 of 1");
   await expect(page.locator('[data-reading="generating"]')).toContainText("receiving notes");
+  await expect(page.locator('[data-reading="fallback"]')).toContainText("retrying without optional reasoning settings");
   await page.screenshot({
     path: path.join(process.env.DISCO_TEST_ARTIFACTS_DIR ?? "test-results", "source-reading.png"),
     fullPage: true,

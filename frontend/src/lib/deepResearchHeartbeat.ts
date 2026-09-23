@@ -315,6 +315,12 @@ export function modelRetryRemaining(activity: DeepActivity, nowMs: number): numb
 }
 
 function modelStatusText(activity: DeepActivity, nowMs: number): string | null {
+  const status = modelProgressText(activity, nowMs);
+  if (!activity.modelActivity?.payload.reasoning_control_fallback) return status;
+  return `${status ?? "Model request"} · retrying without optional reasoning settings`;
+}
+
+function modelProgressText(activity: DeepActivity, nowMs: number): string | null {
   const model = activity.modelActivity;
   if (!model) return null;
   const p = model.payload;

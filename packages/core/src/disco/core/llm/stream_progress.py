@@ -139,7 +139,7 @@ def reporter_for(metadata: Mapping[str, Any] | None) -> StreamProgressReporter |
         inspect_stage=_inspect_stage(metadata),
         details={
             key: (metadata or {})[key]
-            for key in ("source_id", "chunk", "chunks")
+            for key in ("source_id", "chunk", "chunks", "reasoning_control_fallback")
             if key in (metadata or {})
         },
     )

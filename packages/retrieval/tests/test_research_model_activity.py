@@ -368,3 +368,46 @@ async def test_a_streaming_driver_never_carries_the_buffered_marker() -> None:
 
     assert seen
     assert all("streams" not in payload for _, payload in seen)
+
+
+async def test_optional_control_fallback_reaches_durable_research_events() -> None:
+    from disco.core.llm.request_policy import RequestPolicy
+    from disco.core.llm.types import CapabilityProfile, CompletionRequest, ModelRole
+
+    calls = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        calls.append(req)
+        if len(calls) == 1:
+            return httpx.Response(422, text="unsupported field")
+        return httpx.Response(
+            200,
+            content=_sse(
+                {"choices": [{"delta": {"content": "notes"}}]},
+                {"choices": [{"delta": {}, "finish_reason": "stop"}]},
+            ),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    provider = OpenAIProvider(
+        "https://arbitrary.test/v1",
+        request_policy=RequestPolicy(reasoning_disabled={"custom_option": False}),
+        transport=httpx.MockTransport(handler),
+    )
+    seen, emit = _emitter()
+    req = CompletionRequest(
+        profile=CapabilityProfile(role=ModelRole.RAG_ANSWERER),
+        messages=[LLMMessage(role="user", content="Read this source")],
+        enable_thinking=False,
+        metadata={"inspect_stage": "source_reading", "source_id": "p1", "chunk": 1, "chunks": 2},
+    )
+    with model_activity_events(emit):
+        result = await provider.complete(req, model="future")
+    assert result.text == "notes"
+    assert len(calls) == 2
+    assert "reasoning_control_fallback" not in seen[0][1]
+    rows = [payload for kind, payload in seen if payload.get("reasoning_control_fallback")]
+    assert rows[0]["state"] == "waiting"
+    assert rows[-1].get("state", "generating") == "generating"
+    assert rows[-1]["tokens_streamed"] > 0
+    assert all(row["source_id"] == "p1" and row["chunk"] == 1 for row in rows)
