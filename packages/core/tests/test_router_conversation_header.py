@@ -91,9 +91,9 @@ async def test_opencode_headers_use_stable_conversation_identity_across_requests
 
     assert len(seen) == 2
     for wire, request_id in zip(seen, ["req_first", "req_second"], strict=True):
-        assert wire.headers["x-opencode-session"] == "conv_stable"
-        assert wire.headers["x-opencode-request"] == request_id
-        assert wire.headers["x-opencode-client"] == "disco"
+        assert wire.headers["x-disco-session"] == "conv_stable"
+        assert wire.headers["x-disco-request"] == request_id
+        assert "x-opencode-client" not in wire.headers
         assert wire.headers["x-disco-conversation"] == "conv_stable"
 
 
@@ -114,9 +114,9 @@ async def test_opencode_headers_fall_back_to_request_id_without_context() -> Non
     await router.complete(_req("req_standalone"))
 
     assert seen
-    assert seen[0].headers["x-opencode-session"] == "req_standalone"
-    assert seen[0].headers["x-opencode-request"] == "req_standalone"
-    assert seen[0].headers["x-opencode-client"] == "disco"
+    assert seen[0].headers["x-disco-session"] == "req_standalone"
+    assert seen[0].headers["x-disco-request"] == "req_standalone"
+    assert "x-opencode-client" not in seen[0].headers
     assert "x-disco-conversation" not in seen[0].headers
     assert seen[0].headers["authorization"] == "Bearer secret"
 
@@ -129,7 +129,7 @@ async def test_opencode_headers_fall_back_to_request_id_without_context() -> Non
         "https://other.test/opencode.ai/v1",
     ],
 )
-async def test_opencode_headers_require_exact_host_and_request_context(base_url: str) -> None:
+async def test_identity_headers_are_independent_of_host_and_provider_label(base_url: str) -> None:
     seen: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -146,9 +146,9 @@ async def test_opencode_headers_require_exact_host_and_request_context(base_url:
     await router.complete(_req("req_other_host"), context=CallContext(conversation_id="conv"))
 
     assert seen
-    assert "x-opencode-session" not in seen[0].headers
-    assert "x-opencode-request" not in seen[0].headers
-    assert "x-opencode-client" not in seen[0].headers
+    assert seen[0].headers["x-disco-session"] == "conv"
+    assert seen[0].headers["x-disco-request"] == "req_other_host"
+    assert "x-disco-client" not in seen[0].headers
     assert seen[0].headers["x-disco-conversation"] == "conv"
 
 
@@ -186,14 +186,14 @@ async def test_opencode_session_survives_transient_router_retry(
 
     assert result.text == "ok"
     assert len(seen) == 2
-    session = seen[0].headers["x-opencode-session"]
+    session = seen[0].headers["x-disco-session"]
     assert session
-    assert seen[1].headers["x-opencode-session"] == session
+    assert seen[1].headers["x-disco-session"] == session
     if conversation_id:
         assert session == conversation_id
     for wire in seen:
-        assert wire.headers["x-opencode-client"] == "disco"
-        assert wire.headers.get("x-opencode-request") == request_id
+        assert "x-opencode-client" not in wire.headers
+        assert wire.headers.get("x-disco-request") == request_id
 
 
 async def test_opencode_unscoped_session_is_stable_and_instance_local() -> None:
@@ -210,10 +210,10 @@ async def test_opencode_unscoped_session_is_stable_and_instance_local() -> None:
     for provider in [providers[0], providers[0], providers[1]]:
         await provider.complete(_req(), model="m")
 
-    sessions = [wire.headers["x-opencode-session"] for wire in seen]
+    sessions = [wire.headers["x-disco-session"] for wire in seen]
     assert sessions[0] == sessions[1]
     assert sessions[0] != sessions[2]
-    assert all("x-opencode-request" not in wire.headers for wire in seen)
+    assert all("x-disco-request" not in wire.headers for wire in seen)
 
 
 async def test_opencode_stream_rejection_keeps_same_unscoped_session() -> None:
@@ -235,6 +235,6 @@ async def test_opencode_stream_rejection_keeps_same_unscoped_session() -> None:
 
     assert result.text == "ok"
     assert [json.loads(wire.content)["stream"] for wire in seen] == [True, False]
-    assert seen[0].headers["x-opencode-session"]
-    assert seen[0].headers["x-opencode-session"] == seen[1].headers["x-opencode-session"]
-    assert all("x-opencode-request" not in wire.headers for wire in seen)
+    assert seen[0].headers["x-disco-session"]
+    assert seen[0].headers["x-disco-session"] == seen[1].headers["x-disco-session"]
+    assert all("x-disco-request" not in wire.headers for wire in seen)

@@ -143,6 +143,7 @@ def _models_from(config: RouterConfig) -> list[ModelDTO]:
                 pricing_mode=_pricing_mode(entry),
                 capabilities=sorted(r.value for r in entry.capabilities),
                 vision=entry.vision,
+                request_policy=entry.request_policy,
                 vision_status=_vision_status(entry),
                 note=_note(entry),
                 model_id=entry.model_id,
@@ -247,6 +248,11 @@ def _entry_from(
             upsert.requires_api_key if existing is None else existing.requires_api_key
         ),
         vision=vision,
+        request_policy=(
+            upsert.request_policy
+            if "request_policy" in upsert.model_fields_set or existing is None
+            else existing.request_policy
+        ),
         # These are not editable on this surface; retain their architectural
         # meaning instead of erasing them on an unrelated catalogue edit.
         family=existing.family if existing is not None else None,
@@ -336,6 +342,7 @@ def _role_fallback_from(config: RouterConfig) -> RoleFallbackConfigDTO:
         base_url=fallback.base_url,
         model=fallback.model,
         api_key_env=fallback.api_key_env,
+        request_policy=fallback.request_policy,
     )
 
 

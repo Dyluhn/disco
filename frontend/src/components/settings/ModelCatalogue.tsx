@@ -19,6 +19,8 @@ import {
   type ModelInfo,
   type ModelUpsert,
 } from "@/types/models";
+import { RequestPolicyEditor } from "./RequestPolicyEditor";
+import { modelUpsertPayload, useRequestPolicyForm } from "./requestPolicyForm";
 import { StoredCredentialField } from "./StoredCredentialField";
 
 /**
@@ -50,6 +52,7 @@ const BLANK: ModelUpsert = {
 function toUpsert(m: ModelInfo): ModelUpsert {
   return {
     id: m.id,
+    request_policy: m.request_policy,
     model_id: m.model_id,
     base_url: m.base_url ?? "",
     api_key_env: m.api_key_env ?? "",
@@ -93,6 +96,7 @@ function ModelForm({
   onDone: () => void;
 }) {
   const [form, setForm] = useState<ModelUpsert>(initial);
+  const policyEditor = useRequestPolicyForm(initial.request_policy);
   const create = useCreateModel();
   const update = useUpdateModel();
   const busy = create.isPending || update.isPending;
@@ -102,13 +106,9 @@ function ModelForm({
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
-    const payload: ModelUpsert = {
-      ...form,
-      base_url: form.base_url?.trim() || null,
-      api_key_env: form.api_key_env?.trim() || null,
-      max_output_tokens: form.max_output_tokens || null,
-      quantization: form.quantization?.trim() || null,
-    };
+    const policy = policyEditor.parse();
+    if (!policy) return;
+    const payload = modelUpsertPayload(form, policy);
     try {
       if (mode === "add") await create.mutateAsync(payload);
       else await update.mutateAsync({ id: form.id, upsert: payload });
@@ -166,6 +166,7 @@ function ModelForm({
           Advanced model metadata
         </summary>
         <div className="mt-body flex flex-col gap-body">
+          <RequestPolicyEditor editor={policyEditor} />
           <div className="grid grid-cols-2 gap-body">
             <label className="flex flex-col gap-hair">
               <span className={labelCls}>Context window</span>

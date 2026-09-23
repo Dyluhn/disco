@@ -163,9 +163,7 @@ def prepare_drive_context(
     recovered = escape_seq is not None and trusted_receipt_since(events, escape_seq)
     in_escape = escape_seq is not None and not recovered
     escape_temp = _STUCK_ESCAPE_TEMP if in_escape else None
-    blocked_tools = (
-        stuck_escape_blocked_tools_for_step(events) | debug_probe_blocked_tools(events)
-    )
+    blocked_tools = stuck_escape_blocked_tools_for_step(events) | debug_probe_blocked_tools(events)
     _record_progress(driver, events, in_escape)
     mode = _effective_mode(driver, view, events)
     fresh_session = (
@@ -482,7 +480,7 @@ async def _provider_unavailable(
     if state.provider_retry_count < 2:
         state.provider_retry_count += 1
         _LOG.warning(
-            "Provider unavailable: %s. Escalating provider_prefs (retry %d/2)...",
+            "Provider unavailable: %s. Retrying configured endpoint (retry %d/2)...",
             error,
             state.provider_retry_count,
         )

@@ -58,9 +58,9 @@ from disco.core.llm.openai_provider import (
     _F5_THINK_BUDGET_HEAD,
     _F5_THINK_BUDGET_TAIL,
     OpenAIProvider,
-    _host_speaks_chat_template_kwargs,
     _truncate_think_block,
 )
+from disco.core.llm.request_policy import RequestPolicy
 from disco.core.llm.types import (
     CapabilityProfile,
     CompletionRequest,
@@ -109,7 +109,15 @@ def _provider(captured: list[dict], handler=None) -> OpenAIProvider:
             },
         )
 
-    return OpenAIProvider("http://fake/v1", name="fake", transport=httpx.MockTransport(_h))
+    return OpenAIProvider(
+        request_policy=RequestPolicy(
+            reasoning_enabled={"chat_template_kwargs": {"enable_thinking": True}},
+            reasoning_disabled={"chat_template_kwargs": {"enable_thinking": False}},
+        ),
+        base_url="http://fake/v1",
+        name="fake",
+        transport=httpx.MockTransport(_h),
+    )
 
 
 def _long_think(inner_chars: int) -> str:
@@ -379,7 +387,11 @@ async def test_assist_on_attempt1_keeps_thinking_per_provider_default():
     )
     captured: list[dict] = []
     p = OpenAIProvider(
-        "http://fake/v1",
+        request_policy=RequestPolicy(
+            reasoning_enabled={"chat_template_kwargs": {"enable_thinking": True}},
+            reasoning_disabled={"chat_template_kwargs": {"enable_thinking": False}},
+        ),
+        base_url="http://fake/v1",
         name="fake",
         enable_thinking=True,
         transport=httpx.MockTransport(
@@ -410,7 +422,11 @@ async def test_assist_on_attempt2_disables_thinking_overriding_provider_default(
     req = _req(messages=[LLMMessage(role="user", content="hi")], assist=True, attempt=2)
     captured: list[dict] = []
     p = OpenAIProvider(
-        "http://fake/v1",
+        request_policy=RequestPolicy(
+            reasoning_enabled={"chat_template_kwargs": {"enable_thinking": True}},
+            reasoning_disabled={"chat_template_kwargs": {"enable_thinking": False}},
+        ),
+        base_url="http://fake/v1",
         name="fake",
         enable_thinking=True,  # provider default = ON
         transport=httpx.MockTransport(
@@ -461,7 +477,11 @@ async def test_assist_on_attempt3_keeps_thinking_disabled():
     req = _req(messages=[LLMMessage(role="user", content="hi")], assist=True, attempt=3)
     captured: list[dict] = []
     p = OpenAIProvider(
-        "http://fake/v1",
+        request_policy=RequestPolicy(
+            reasoning_enabled={"chat_template_kwargs": {"enable_thinking": True}},
+            reasoning_disabled={"chat_template_kwargs": {"enable_thinking": False}},
+        ),
+        base_url="http://fake/v1",
         name="fake",
         enable_thinking=True,
         transport=httpx.MockTransport(
@@ -492,7 +512,11 @@ async def test_assist_off_attempt2_does_NOT_disable_thinking():
     req = _req(messages=[LLMMessage(role="user", content="hi")], assist=False, attempt=2)
     captured: list[dict] = []
     p = OpenAIProvider(
-        "http://fake/v1",
+        request_policy=RequestPolicy(
+            reasoning_enabled={"chat_template_kwargs": {"enable_thinking": True}},
+            reasoning_disabled={"chat_template_kwargs": {"enable_thinking": False}},
+        ),
+        base_url="http://fake/v1",
         name="fake",
         enable_thinking=True,
         transport=httpx.MockTransport(
@@ -543,7 +567,15 @@ async def test_streaming_assist_on_overlong_assistant_think_is_stripped():
         captured.append(json.loads(request.content) if request.content else {})
         return httpx.Response(200, content=chunks, headers={"content-type": "text/event-stream"})
 
-    p = OpenAIProvider("http://fake/v1", name="fake", transport=httpx.MockTransport(_handler))
+    p = OpenAIProvider(
+        request_policy=RequestPolicy(
+            reasoning_enabled={"chat_template_kwargs": {"enable_thinking": True}},
+            reasoning_disabled={"chat_template_kwargs": {"enable_thinking": False}},
+        ),
+        base_url="http://fake/v1",
+        name="fake",
+        transport=httpx.MockTransport(_handler),
+    )
     async for ch in p.stream_complete(req, model="m"):
         if ch.done:
             break
@@ -574,7 +606,15 @@ async def test_streaming_assist_on_attempt2_disables_thinking():
         captured.append(json.loads(request.content) if request.content else {})
         return httpx.Response(200, content=chunks, headers={"content-type": "text/event-stream"})
 
-    p = OpenAIProvider("http://fake/v1", name="fake", transport=httpx.MockTransport(_handler))
+    p = OpenAIProvider(
+        request_policy=RequestPolicy(
+            reasoning_enabled={"chat_template_kwargs": {"enable_thinking": True}},
+            reasoning_disabled={"chat_template_kwargs": {"enable_thinking": False}},
+        ),
+        base_url="http://fake/v1",
+        name="fake",
+        transport=httpx.MockTransport(_handler),
+    )
     async for ch in p.stream_complete(req, model="m"):
         if ch.done:
             break
@@ -610,7 +650,11 @@ async def test_streaming_assist_off_attempt2_strips_history_but_keeps_thinking()
         return httpx.Response(200, content=chunks, headers={"content-type": "text/event-stream"})
 
     p = OpenAIProvider(
-        "http://fake/v1",
+        request_policy=RequestPolicy(
+            reasoning_enabled={"chat_template_kwargs": {"enable_thinking": True}},
+            reasoning_disabled={"chat_template_kwargs": {"enable_thinking": False}},
+        ),
+        base_url="http://fake/v1",
         name="fake",
         enable_thinking=True,
         transport=httpx.MockTransport(_handler),
@@ -650,7 +694,11 @@ async def test_assist_on_overlong_assistant_think_AND_attempt2_both_gates_fire()
     )
     captured: list[dict] = []
     p = OpenAIProvider(
-        "http://fake/v1",
+        request_policy=RequestPolicy(
+            reasoning_enabled={"chat_template_kwargs": {"enable_thinking": True}},
+            reasoning_disabled={"chat_template_kwargs": {"enable_thinking": False}},
+        ),
+        base_url="http://fake/v1",
         name="fake",
         enable_thinking=True,
         transport=httpx.MockTransport(
@@ -700,7 +748,11 @@ async def test_default_attempt_is_one_thinking_unchanged():
     )
     captured: list[dict] = []
     p = OpenAIProvider(
-        "http://fake/v1",
+        request_policy=RequestPolicy(
+            reasoning_enabled={"chat_template_kwargs": {"enable_thinking": True}},
+            reasoning_disabled={"chat_template_kwargs": {"enable_thinking": False}},
+        ),
+        base_url="http://fake/v1",
         name="fake",
         enable_thinking=True,
         transport=httpx.MockTransport(
@@ -721,65 +773,3 @@ async def test_default_attempt_is_one_thinking_unchanged():
     body = captured[0]
     # attempt=1 (default) → F5 disable-repair gate does NOT fire.
     assert body["chat_template_kwargs"]["enable_thinking"] is True
-
-
-# --- chat_template_kwargs host gate (glm-5.2-on-Go regression, 2026-07-08) -----
-# `chat_template_kwargs` is a llama.cpp/vLLM extension; strict clouds (Fireworks
-# behind OpenCode Go) 400 the whole request over it. The provider must send it
-# only to self-hosted-looking hosts.
-
-
-def test_ctk_gate_public_hosts_refused():
-    for url in (
-        "https://opencode.ai/zen/go/v1",
-        "https://openrouter.ai/api/v1",
-        "https://api.openai.com/v1",
-        "https://api.fireworks.ai/inference/v1",
-    ):
-        assert _host_speaks_chat_template_kwargs(url) is False, url
-
-
-def test_ctk_gate_self_hosted_allowed():
-    for url in (
-        "http://127.0.0.1:8080/v1",
-        "http://localhost:8085/v1",  # dot-less hostname
-        "http://192.168.1.50:8085/v1",
-        "http://100.81.82.115:8000/v1",  # tailscale CGNAT
-        "http://blackbox:8085/v1",
-        "https://blackbox.taile518f9.ts.net/v1",
-    ):
-        assert _host_speaks_chat_template_kwargs(url) is True, url
-
-
-def test_deepseek_public_api_explicitly_disables_thinking_on_both_paths():
-    """DeepSeek tool turns must not create reasoning history Disco cannot replay."""
-    provider = OpenAIProvider(
-        "https://api.deepseek.com/v1",
-        name="deepseek-direct",
-        enable_thinking=True,
-    )
-    req = _req()
-
-    for stream in (False, True):
-        body = provider._payload(req, "deepseek-v4-flash", stream=stream)
-        assert body["thinking"] == {"type": "disabled"}
-        assert "chat_template_kwargs" not in body
-
-
-def test_deepseek_nonthinking_policy_is_exactly_host_scoped():
-    """No similarly named or unrelated OpenAI-compatible host inherits the policy."""
-    req = _req()
-    public_hosts = (
-        "https://api.openai.com/v1",
-        "https://deepseek.example/v1",
-        "https://api.deepseek.com.example/v1",
-    )
-    for base_url in public_hosts:
-        body = OpenAIProvider(base_url, enable_thinking=True)._payload(req, "m1", stream=False)
-        assert "thinking" not in body
-        assert "chat_template_kwargs" not in body
-
-    self_hosted = OpenAIProvider("http://127.0.0.1:8080/v1", enable_thinking=True)
-    body = self_hosted._payload(req, "m1", stream=False)
-    assert "thinking" not in body
-    assert body["chat_template_kwargs"] == {"enable_thinking": True}

@@ -91,7 +91,7 @@ async def test_provider_unavailable_retries_with_escalated_prefs():
     # The second call had escalated prefs (routing retry)
     escalated = agent.seen_provider_prefs[1]
     assert escalated is not None
-    assert escalated.get("allow_fallbacks") is True  # escalation level 1
+    assert escalated == {}  # retries never inject vendor routing instructions
 
 
 async def test_provider_unavailable_no_json_hint_in_retry():

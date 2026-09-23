@@ -161,7 +161,10 @@ def test_openrouter_model_label_drops_the_or_prefix(client):
 
 
 def test_role_fallback_config_round_trips(client):
+    from disco.core.llm.request_policy import RequestPolicy
+
     assert client.get("/api/role-fallback/config").json() == {
+        "request_policy": RequestPolicy().model_dump(),
         "enabled": False,
         "base_url": "",
         "model": "",
@@ -169,6 +172,7 @@ def test_role_fallback_config_round_trips(client):
     }
 
     payload = {
+        "request_policy": RequestPolicy(reasoning_disabled={"effort": 0}).model_dump(),
         "enabled": True,
         "base_url": "http://localhost:8080/v1",
         "model": "llama-fallback",
@@ -179,6 +183,10 @@ def test_role_fallback_config_round_trips(client):
     assert put.status_code == 200
     assert put.json() == payload
     assert client.get("/api/role-fallback/config").json() == payload
+
+    # A client that does not edit request options preserves them.
+    legacy = {k: v for k, v in payload.items() if k != "request_policy"}
+    assert client.put("/api/role-fallback/config", json=legacy).json() == payload
 
 
 def test_sandbox_config_get_and_put_round_trip(client):

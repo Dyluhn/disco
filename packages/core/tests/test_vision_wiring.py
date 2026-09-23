@@ -95,7 +95,7 @@ def test_config_store_strips_vision_when_gate_off(tmp_path, monkeypatch):
 
 
 def test_anthropic_cache_stays_string():
-    """_mark_anthropic_cache keeps working: system content stays string-shaped
+    """_mark_cache keeps working: system content stays string-shaped
     (images never appear on system messages), so the cache-block conversion holds."""
     provider = OpenAIProvider(base_url="http://test", api_key="test")
 
@@ -104,7 +104,7 @@ def test_anthropic_cache_stays_string():
         "model": "claude-3-sonnet",
         "messages": [provider._message(m)],
     }
-    provider._mark_anthropic_cache(body)
+    provider._mark_cache(body)
 
     assert isinstance(body["messages"][0]["content"], list)
     assert body["messages"][0]["content"][0]["cache_control"] == {"type": "ephemeral"}

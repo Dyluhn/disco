@@ -21,7 +21,17 @@ export const CAPABILITY_LABEL: Record<Capability, string> = {
  * "Subscription" (never "Free", never a $ rate). undefined → derive from price. */
 export type PricingMode = "metered" | "subscription" | "free" | "unknown";
 
+export interface RequestPolicy {
+  body?: Record<string, unknown>;
+  reasoning_enabled?: Record<string, unknown> | null;
+  reasoning_disabled?: Record<string, unknown> | null;
+  default_reasoning?: boolean | null;
+  require_user_continuation?: boolean;
+  cache_control?: boolean;
+}
+
 export interface ModelInfo {
+  request_policy?: RequestPolicy;
   id: string; // catalogue key, e.g. "driver-local"
   label: string; // human name shown in the UI
   provider: ModelProvider; // local (free) vs openrouter (paid overflow)
@@ -147,6 +157,7 @@ export interface ProviderEnableBody {
 
 /** Create/edit payload for a catalogue model (mirrors the backend ModelUpsert). */
 export interface ModelUpsert {
+  request_policy?: RequestPolicy;
   id: string;
   model_id: string;
   base_url?: string | null;
@@ -292,6 +303,7 @@ export interface DataSourcesConfig {
 /** Auxiliary-role model fallback. Only summarizer, query-rewriter, and verifier
  * roles may use it after primary transient failures; driver roles never do. */
 export interface RoleFallbackConfig {
+  request_policy?: RequestPolicy;
   enabled: boolean;
   base_url: string;
   model: string;

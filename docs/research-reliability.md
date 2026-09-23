@@ -4,10 +4,12 @@ The September 2026 fresh-install investigation found provider-control omissions,
 missing reading activity, and a checkpoint gap before the first draft. The
 fixes share the existing router, progress stream, and research checkpoint owner.
 
-- Ollama DeepSeek v4.1 Flash forwards explicit non-thinking intent as
-  `reasoning_effort: none`. GLM 5.3/5.3 Flash requests `low`, reflecting their
-  lightweight reasoning policy. Other providers keep their existing mappings.
-  These are request controls, not a guarantee about a provider's internal work.
+- Reasoning and request extensions are configured explicitly per catalogue model
+  in Settings → Models → Advanced model metadata and request options. No URL,
+  provider label, or model-name match selects a thinking flag, token allowance,
+  tool-call policy, continuation turn, or cache marker. Both Chat Completions and
+  Responses apply the same declared reasoning options. Unconfigured options leave
+  the endpoint default intact; this is not a claim that reasoning was disabled.
 - Reading calls publish waiting and actual output activity, with source and
   part identity. Retry backoff is a separate state, visible with inspect off.
   The frontend retains those facts when replaying a conversation after reconnect.
@@ -50,3 +52,33 @@ selects Compose v2 or later and validates the file before startup. On Ubuntu
 24.04 install `docker-compose-v2`; the old `docker-compose` v1 package cannot
 parse the project's Compose file. The wrapper also rejects a stale explicit
 provider override before any container starts.
+
+## Request options
+
+A model's `request_policy` persists in the shared configuration and is wired to
+its actual HTTP requests, including models sharing an endpoint. For example, if
+an endpoint documents these fields:
+
+```json
+{
+  "reasoning_enabled": {"reasoning_effort": "high"},
+  "reasoning_disabled": {"reasoning_effort": "none"}
+}
+```
+
+These values are examples of an explicit configuration, not universal API
+capabilities. An endpoint may require a boolean, nested object, a minimum effort,
+or have no switch. Supply its documented JSON. `null` means unspecified; `{}`
+explicitly leaves that state's behavior unchanged. `default_reasoning` optionally
+sets the default intent; request intent overrides it, and assist-repair requests
+select the disabled-intent configuration. `body` contains optional extensions
+common to both states; reasoning options recursively override those fields.
+The policy cannot replace model identity, history, tools, stream mode or token
+budgets. Credentials belong in the existing secret store.
+
+`require_user_continuation` and `cache_control` are opt-in compatibility flags.
+Serial tool requests can be declared with `body: {"parallel_tool_calls": false}`.
+Old automatically selected vendor behavior is removed, without a name-based
+migration table. Existing installations relying on it must explicitly configure
+the options their endpoint accepts. The prior live probes establish the captured
+wire fields worked on those services, not that names should select those fields.

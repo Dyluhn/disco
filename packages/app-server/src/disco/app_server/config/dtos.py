@@ -12,11 +12,13 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
+from disco.core.llm.request_policy import RequestPolicy
 from disco.core.quota import MAX_REQUEST_LIMIT, MAX_TOKEN_LIMIT, MAX_WINDOW_SECONDS
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 
 
 class ModelDTO(BaseModel):
+    request_policy: RequestPolicy = Field(default_factory=RequestPolicy)
     id: str
     label: str
     provider: str  # derived view: "local" (free) | "openrouter" (paid)
@@ -46,6 +48,7 @@ class ModelUpsert(BaseModel):
     edit). The endpoint key is derived (= id for new models), so the user only
     thinks in terms of a model + its endpoint, never an internal provider key."""
 
+    request_policy: RequestPolicy = Field(default_factory=RequestPolicy)
     id: str
     model_id: str
     base_url: str | None = None
@@ -515,6 +518,7 @@ class RoleFallbackConfigDTO(BaseModel):
     base_url: str = ""
     model: str = ""
     api_key_env: str = ""
+    request_policy: RequestPolicy = Field(default_factory=RequestPolicy)
 
 
 class ProjectStorageConfigDTO(BaseModel):

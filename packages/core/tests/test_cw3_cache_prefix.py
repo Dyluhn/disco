@@ -27,6 +27,7 @@ import re
 from disco.core import ActionEvent, LLMMessage, ToolCall
 from disco.core.events import WORKSPACE_SNAPSHOT_SENTINEL, _snip_args
 from disco.core.llm.openai_provider import OpenAIProvider
+from disco.core.llm.request_policy import RequestPolicy
 from disco.core.llm.types import (
     CapabilityProfile,
     CompletionRequest,
@@ -206,8 +207,8 @@ def _prefix_messages() -> list[LLMMessage]:
     ]
 
 
-def test_anthropic_breakpoint_after_the_prefix_workspace_block():
-    adapter = OpenAIProvider("http://x/v1", api_key=None)
+def test_explicit_cache_breakpoint_after_the_prefix_workspace_block():
+    adapter = OpenAIProvider("http://x/v1", request_policy=RequestPolicy(cache_control=True))
     body = adapter._payload(
         _provider_req(_prefix_messages()), "anthropic/claude-3.5-sonnet", stream=False
     )

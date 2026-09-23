@@ -77,30 +77,21 @@ if TYPE_CHECKING:
     )
 
     class _LoopFacet(
-
         ContextGroundingPort,
-
         ConversationModePort,
-
         FinishVerificationPort,
-
         GateCounterPort,
-
         LoopEventPort,
-
         PlanLifecyclePort,
-
         ToolExecutionPort,
-
         TurnControlPort,
-
         Protocol,
-
     ):
         """The loop capability this module uses: context grounding, conversation mode, finish
         verification, gate counters, the event log, the plan lifecycle, tool execution, turn
         control.
         """
+
 
 _LOG = logging.getLogger("disco.loop")
 
@@ -117,15 +108,8 @@ _FORCE_SUBMIT_READ_GRACE = 3
 
 
 def _escalated_provider_prefs(n: int) -> dict:
-    """P2 — escalation ladder for provider routing retries.
-
-    n=1 (first occurrence): enable fallbacks (allow OpenRouter to try the next
-    upstream). n≥2: additionally hard-exclude Chutes (the observed free-pool
-    offender) so OpenRouter doesn't route there again. Cap: the caller enforces
-    ≤2 total provider retries (reusing the existing requery budget)."""
-    if n >= 2:
-        return {"allow_fallbacks": True, "ignore": ["Chutes"]}
-    return {"allow_fallbacks": True}
+    """Legacy callback seam; retries never inject vendor routing instructions."""
+    return {}
 
 
 def _empty_reasoning_repair_reminder(attempt: int = 1) -> str:

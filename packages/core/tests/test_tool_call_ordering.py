@@ -20,6 +20,7 @@ from disco.core.llm.openai_provider import (
     OpenAIProvider,
     _normalize_tool_call_ordering,
 )
+from disco.core.llm.request_policy import RequestPolicy
 from disco.core.llm.types import CapabilityProfile, CompletionRequest, ModelRole, ToolSpec
 
 
@@ -165,7 +166,13 @@ def test_opencode_go_adds_neutral_user_continuation_after_tool_result() -> None:
         ],
     )
 
-    go = OpenAIProvider("https://opencode.ai/zen/go/v1", name="opencode-go")
+    go = OpenAIProvider(
+        "https://arbitrary.example/v1",
+        name="endpoint",
+        request_policy=RequestPolicy(
+            require_user_continuation=True, body={"parallel_tool_calls": False}
+        ),
+    )
     go_wire = go._payload(req, "deepseek-v4-flash", stream=False)["messages"]
     assert [message["role"] for message in go_wire[-2:]] == ["tool", "user"]
     assert go_wire[-1]["content"] == "Continue from the tool result above."
@@ -188,7 +195,13 @@ def test_opencode_go_requests_serial_tool_calls_at_the_wire_boundary() -> None:
         ],
     )
 
-    go = OpenAIProvider("https://opencode.ai/zen/go/v1", name="opencode-go")
+    go = OpenAIProvider(
+        "https://arbitrary.example/v1",
+        name="endpoint",
+        request_policy=RequestPolicy(
+            require_user_continuation=True, body={"parallel_tool_calls": False}
+        ),
+    )
     assert go._payload(req, "gpt-5.6-luna", stream=True)["parallel_tool_calls"] is False
 
     conforming = OpenAIProvider("https://api.openai.com/v1", name="openai")
@@ -204,7 +217,13 @@ def test_opencode_go_adds_neutral_user_continuation_after_assistant_response() -
         ],
     )
 
-    go = OpenAIProvider("https://opencode.ai/zen/go/v1", name="opencode-go")
+    go = OpenAIProvider(
+        "https://arbitrary.example/v1",
+        name="endpoint",
+        request_policy=RequestPolicy(
+            require_user_continuation=True, body={"parallel_tool_calls": False}
+        ),
+    )
     go_wire = go._payload(req, "deepseek-v4-flash", stream=False)["messages"]
     assert [message["role"] for message in go_wire[-2:]] == ["assistant", "user"]
     assert go_wire[-1]["content"] == "Continue from the assistant response above."
@@ -224,7 +243,13 @@ def test_opencode_go_does_not_append_after_nonresponse_terminal_role(terminal_ro
         messages=[LLMMessage(role=terminal_role, content="terminal")],
     )
 
-    go = OpenAIProvider("https://opencode.ai/zen/go/v1", name="opencode-go")
+    go = OpenAIProvider(
+        "https://arbitrary.example/v1",
+        name="endpoint",
+        request_policy=RequestPolicy(
+            require_user_continuation=True, body={"parallel_tool_calls": False}
+        ),
+    )
     wire = go._payload(req, "deepseek-v4-flash", stream=False)["messages"]
     assert wire == [{"role": terminal_role, "content": "terminal"}]
 
@@ -258,7 +283,13 @@ def test_opencode_go_user_continuation_precedes_assistant_prefill() -> None:
         assistant_prefill="Next action:",
     )
 
-    go = OpenAIProvider("https://opencode.ai/zen/go/v1", name="opencode-go")
+    go = OpenAIProvider(
+        "https://arbitrary.example/v1",
+        name="endpoint",
+        request_policy=RequestPolicy(
+            require_user_continuation=True, body={"parallel_tool_calls": False}
+        ),
+    )
     wire = go._payload(req, "deepseek-v4-flash", stream=False)["messages"]
     assert [message["role"] for message in wire[-3:]] == ["assistant", "user", "assistant"]
     assert wire[-2]["content"] == "Continue from the assistant response above."

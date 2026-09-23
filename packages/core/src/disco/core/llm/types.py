@@ -131,27 +131,21 @@ class CompletionRequest(BaseModel):
     max_tokens: int | None = None
     response_format: Literal["text", "json"] = "text"
     assist: bool = False
-    # Per-call control of a reasoning model's "thinking" (Qwen3.6 et al). None →
-    # use the provider/model default; False → force thinking OFF for this call.
-    # Grounded extraction (RAG_ANSWERER) sets False: it does NOT need to reason, and
-    # leaving it on makes the model burn its whole token budget thinking → empty
-    # `content` (the "up but not grounding" failure the canary caught). The agent
-    # driver leaves it None so it keeps its reasoning.
+    # Per-call reasoning intent. The endpoint's explicit RequestPolicy translates
+    # it to documented wire options. Without a configured mapping it leaves the
+    # server default unchanged; False is not proof that reasoning was disabled.
     enable_thinking: bool | None = None
     # F5 — repair-attempt counter (1 = first try). Set by the engine/loop when
     # this call is a retry of a prior failure (LLMTransientError or requery).
-    # The OpenAI provider reads it to FORCE `enable_thinking=False` on a
-    # repair attempt ≥ 2 so a failed call doesn't burn its whole budget
-    # thinking again. Assist-OFF callers ignore it; the field defaults to 1
+    # The adapter selects disabled reasoning intent for assist repair ≥ 2,
+    # translated only through the explicit request policy. Assist-OFF callers
+    # ignore it; the field defaults to 1
     # (first try) so it is byte-identical to today for any caller that
     # does not set it. See openai_provider._payload / _truncate_think_block.
     attempt: int = 1
-    # P1 — OpenRouter provider routing preferences. VOLATILE: merged into the
-    # top-level `provider` body object ONLY when the target is an OpenRouter
-    # endpoint; every non-OpenRouter payload is byte-identical to today.
-    # Caller-supplied keys win on collision (e.g. escalation can add `ignore`).
-    # The OpenAI adapter always applies {require_parameters, allow_fallbacks}
-    # as a floor; this field extends/overrides that floor per-call.
+    # Legacy caller metadata, retained for saved requests and protocol clients.
+    # The common HTTP adapter does not turn this into implicit vendor options;
+    # endpoint extensions are declared in the model's RequestPolicy.
     provider_prefs: dict[str, Any] | None = None
     # Opaque per-request metadata threaded from the router context to provider
     # adapters. Not serialized into provider bodies; adapters may map known keys

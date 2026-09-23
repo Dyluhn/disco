@@ -5,13 +5,8 @@ ONE client for any OpenAI chat-completions backend, parameterized by `base_url` 
 future OpenRouter speak this, so the contract's notional `ollama`/`openrouter`
 providers collapse into this single client pointed at different base URLs.
 
-Reasoning models (e.g. Qwen3.6): the ANSWER is `message.content`;
-`reasoning_content` (the thinking) is parsed separately and not treated as answer
-text. `enable_thinking` toggles it where the server honors `chat_template_kwargs`
-(llama.cpp does) — leave it None to use the server default. DeepSeek's public API
-is explicitly placed in its documented non-thinking mode because it otherwise
-requires private reasoning traces to be replayed after tool calls, while Disco's
-provider-neutral history deliberately does not persist those traces.
+Reasoning controls and optional compatibility extensions come only from an
+operator-declared RequestPolicy. Endpoint and model names never select policy.
 
 Errors map to the typed hierarchy (errors.py §6), PRESERVING the provider's real
 message so it surfaces cleanly (the reactive-error rule). The context-window error
@@ -20,7 +15,7 @@ the loop's reactive surfacing depend on.
 
 Timeouts are PROGRESS-based, never total wall-clock: ``complete`` streams under
 the hood and buffers the result, so a local model that legitimately thinks for
-twenty minutes is distinguishable from a hung provider by whether bytes are
+twenty minutes is distinguishable from a hung provider by whether meaningful output is
 still arriving. See ``_openai_timeouts`` for the budget. A wall-clock ceiling
 survives only where streaming is impossible (the Responses API, and the one-shot
 fallback for a server that refuses the streamed request).
@@ -77,18 +72,15 @@ from ._request_assembly import (
     _F5_THINK_BUDGET_TAIL,
     _FINISH,
     FinishReason,
-    _is_anthropic,
     _map_finish,
     _prompt_cache_key,
+    _resolve_enable_thinking,
 )
 from ._request_assembly import (
     build_headers as _build_headers_impl,
 )
 from ._request_assembly import (
     build_payload as _build_payload_impl,
-)
-from ._request_assembly import (
-    host_speaks_chat_template_kwargs as _host_speaks_chat_template_kwargs,
 )
 from ._request_assembly import (
     is_context_overflow as _is_context_overflow,
@@ -101,9 +93,6 @@ from ._request_assembly import (
 )
 from ._request_assembly import (
     provider_request_shape as _provider_request_shape,
-)
-from ._request_assembly import (
-    requires_user_after_terminal_response as _requires_user_after_terminal_response,
 )
 from ._request_assembly import (
     sanitize_tool_name as _sanitize_tool_name,
@@ -132,6 +121,7 @@ from .provider_ledger import (
     provider_ledger_enabled,
 )
 from .request_budget import RequestBudgetEstimate
+from .request_policy import RequestPolicy
 from .stream_progress import reporter_for
 from .toolcall_recovery import recover_tool_calls
 from .types import (
@@ -192,6 +182,8 @@ class OpenAIProvider:
         enable_thinking: bool | None = None,
         capabilities: Iterable[Requirement] = (),
         transport: httpx.AsyncBaseTransport | None = None,
+        request_policy: RequestPolicy | None = None,
+        model_policies: dict[str, RequestPolicy] | None = None,
     ) -> None:
         self._base = base_url.rstrip("/")
         self.name = name
@@ -205,7 +197,8 @@ class OpenAIProvider:
         self._timeouts: ProviderTimeouts = resolve_timeouts(timeout_s)
         self._timeout = self._timeouts.buffered_total_s
         self._enable_thinking = enable_thinking
-        self._speaks_ctk = _host_speaks_chat_template_kwargs(base_url)
+        self._request_policy = request_policy or RequestPolicy()
+        self._model_policies = dict(model_policies or {})
         self._caps = frozenset(capabilities)
         self._transport = transport  # test seam (httpx.MockTransport); None = real
 
@@ -221,17 +214,11 @@ class OpenAIProvider:
         """Client factory for a streamed call: connect-bounded, read-unbounded."""
         return self._client(self._timeouts.stream_httpx_timeout())
 
-    def _is_openrouter(self) -> bool:
-        """True when this provider routes through OpenRouter."""
-        return "openrouter" in self._base.lower() or "openrouter" in self.name.lower()
-
     # -- request shaping ------------------------------------------------------
 
     def _headers(self, req: CompletionRequest | None = None) -> dict[str, str]:
         return _build_headers_impl(
-            base_url=self._base,
             api_key=self._key,
-            name=self.name,
             req=req,
             conversation_header=_DISCO_CONVERSATION_HEADER,
             fallback_session_id=self._session_id,
@@ -242,29 +229,28 @@ class OpenAIProvider:
         return _message_to_wire_impl(m, sanitize_fn=_sanitize_tool_name)
 
     def _payload(self, req: CompletionRequest, model: str, *, stream: bool) -> dict:
+        policy = self._model_policies.get(model, self._request_policy)
         if _is_responses_endpoint(self._base):
-            return _build_responses_payload(
-                base_url=self._base,
+            body = _build_responses_payload(
                 provider_name=self.name,
                 req=req,
                 model=model,
             )
+            intent = _resolve_enable_thinking(req=req, enable_thinking=self._enable_thinking)
+            body.update(policy.payload(intent))
+            return body
         return _build_payload_impl(
-            base_url=self._base,
-            name=self.name,
             req=req,
             model=model,
             stream=stream,
             enable_thinking=self._enable_thinking,
-            speaks_ctk=self._speaks_ctk,
+            request_policy=policy,
             message_fn=self._message,
             normalize_fn=_normalize_tool_call_ordering,
-            requires_user_fn=_requires_user_after_terminal_response,
             truncate_fn=_truncate_think_block,
             sanitize_fn=_sanitize_tool_name,
             prompt_cache_key_fn=self._prompt_cache_key,
-            is_anthropic_fn=_is_anthropic,
-            mark_anthropic_cache_fn=self._mark_anthropic_cache,
+            mark_cache_fn=self._mark_cache,
         )
 
     @staticmethod
@@ -272,10 +258,10 @@ class OpenAIProvider:
         return _prompt_cache_key(req)
 
     @staticmethod
-    def _mark_anthropic_cache(body: dict) -> None:
-        from ._request_assembly import _mark_anthropic_cache
+    def _mark_cache(body: dict) -> None:
+        from ._request_assembly import _mark_cache
 
-        _mark_anthropic_cache(body)
+        _mark_cache(body)
 
     # -- error mapping (classify on raw body, raise only a safe summary) -------
 
@@ -436,8 +422,8 @@ class OpenAIProvider:
     ) -> AsyncIterator[StreamChunk]:
         """The one streamed transport both public entry points ride."""
         return _stream_complete_impl(
-            provider_name=self.name,
             base_url=self._base,
+            provider_name=self.name,
             payload=payload,
             headers=self._headers(req),
             req=req,

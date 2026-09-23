@@ -13,10 +13,10 @@ import json
 import re
 from collections.abc import Callable
 from typing import Any, Literal
-from urllib.parse import urlsplit
 
 from ..events import WORKSPACE_SNAPSHOT_SENTINEL, LLMMessage, find_elided_arg_markers
 from .provider_ledger import ProviderRequestShape
+from .request_policy import RequestPolicy
 from .types import CompletionRequest, ToolSpec
 
 FinishReason = Literal["stop", "length", "tool_calls", "content_filter", "error"]
@@ -39,14 +39,6 @@ _ELIDED_HISTORY_NOTE = (
 
 def _map_finish(raw: str | None) -> FinishReason:
     return _FINISH.get(raw or "stop", "stop")
-
-
-def _is_anthropic(model: str) -> bool:
-    """Whether a model id routes to Anthropic (direct or via OpenRouter), so we
-    emit Claude-style `cache_control` breakpoints. Other providers get plain
-    string content + `prompt_cache_key` only."""
-    m = model.lower()
-    return "claude" in m or m.startswith("anthropic/")
 
 
 def _canonical_json_bytes(value: object) -> int:
@@ -173,88 +165,6 @@ def truncate_think_block(content: str) -> str:
     return _F5_THINK_BLOCK_RE.sub(_maybe, content)
 
 
-def host_speaks_chat_template_kwargs(base_url: str) -> bool:
-    """``chat_template_kwargs`` is a llama.cpp / vLLM SERVER extension, not part of
-    the OpenAI schema. Send it only to hosts that plausibly run a self-hosted
-    server."""
-    import ipaddress
-    from urllib.parse import urlsplit
-
-    host = (urlsplit(base_url).hostname or "").lower()
-    if not host:
-        return False
-    if host.endswith((".ts.net", ".local", ".lan", ".home.arpa", ".internal")):
-        return True
-    if "." not in host:  # bare intranet hostname (e.g. "blackbox")
-        return True
-    try:
-        ip = ipaddress.ip_address(host)
-    except ValueError:
-        return False
-    return ip.is_private or ip.is_loopback or ip in ipaddress.ip_network("100.64.0.0/10")
-
-
-def host_requires_explicit_nonthinking(base_url: str) -> bool:
-    """Whether the provider requires an explicit non-thinking request policy.
-
-    DeepSeek enables thinking by default and requires its private
-    ``reasoning_content`` field to be replayed after assistant tool calls. The
-    provider-neutral Disco message/event contract deliberately does not retain
-    private reasoning traces, so this adapter must select DeepSeek's documented
-    non-thinking mode before the first turn rather than emit history it cannot
-    round-trip on the next one.
-    """
-    from urllib.parse import urlsplit
-
-    return (urlsplit(base_url).hostname or "").lower() == "api.deepseek.com"
-
-
-def glm53_lightweight_reasoning(base_url: str, model: str, enabled: bool | None) -> bool:
-    """Translate non-thinking intent for the documented always-thinking GLM 5.3 API.
-
-    Z.ai's GLM 5.3 migration specifies enabled thinking with low effort instead
-    of disabled thinking. OpenCode Go forwards this native model policy.
-    """
-    from urllib.parse import urlsplit
-
-    host = (urlsplit(base_url).hostname or "").lower()
-    model_name = model.rsplit("/", 1)[-1].casefold()
-    return (
-        enabled is False
-        and host in {"api.z.ai", "opencode.ai"}
-        and model_name
-        in {
-            "glm-5.3",
-            "glm-5.3-flash",
-        }
-    )
-
-
-def requires_user_after_terminal_response(base_url: str) -> bool:
-    """Whether this compatibility endpoint rejects a trailing response turn."""
-    from urllib.parse import urlsplit
-
-    parsed = urlsplit(base_url)
-    return (parsed.hostname or "").lower() == "opencode.ai" and parsed.path.rstrip("/").endswith(
-        "/zen/go/v1"
-    )
-
-
-def host_requires_serial_tool_calls(base_url: str) -> bool:
-    """Whether a compatibility relay drops identity from parallel call deltas."""
-    return requires_user_after_terminal_response(base_url)
-
-
-def _tool_payload(tools: list[ToolSpec], sanitize_fn: Callable[[str], str], base_url: str) -> dict:
-    """Build tool fields, including compatibility routing policy."""
-    result: dict = {"tools": _tool_wire_list(tools, sanitize_fn)}
-    if host_requires_serial_tool_calls(base_url):
-        # OpenCode Go has emitted multiple streamed calls without either index
-        # or id. One call per turn removes that provider-side ambiguity.
-        result["parallel_tool_calls"] = False
-    return result
-
-
 def sanitize_tool_name(name: str) -> str:
     """Sanitize tool names for OpenAI boundary (dots are forbidden).
     Strip everything before the last dot and filter to [a-zA-Z0-9_-]."""
@@ -378,52 +288,6 @@ def _tool_arguments_to_wire(raw_arguments: object) -> tuple[str, bool]:
     return json.dumps(arguments, sort_keys=True), len(arguments) != len(raw_arguments)
 
 
-def _ollama_thinking_payload(base_url: str, model: str, enabled: bool | None) -> dict[str, Any]:
-    from urllib.parse import urlsplit
-
-    if (
-        enabled is False
-        and (urlsplit(base_url).hostname or "").lower() == "ollama.com"
-        and model.rsplit("/", 1)[-1].casefold().split(":", 1)[0]
-        in {"deepseek-v4-flash", "deepseek-v4.1-flash"}
-    ):
-        # Ollama exposes thinking control through its compatible API field.
-        # Preserve the caller's explicit nonthinking request on this tested model.
-        return {"reasoning_effort": "none"}
-    if (
-        enabled is False
-        and (urlsplit(base_url).hostname or "").lower() == "ollama.com"
-        and model.rsplit("/", 1)[-1].casefold().split(":", 1)[0] in {"glm-5.3", "glm-5.3-flash"}
-    ):
-        # Always-thinking models: request the lowest supported effort.
-        return {"reasoning_effort": "low"}
-    return {}
-
-
-def thinking_payload(
-    base_url: str, model: str, enabled: bool | None, speaks_ctk: bool
-) -> dict[str, Any]:
-    from urllib.parse import urlsplit
-
-    if host_requires_explicit_nonthinking(base_url):
-        return {"thinking": {"type": "disabled"}}
-    if ollama_policy := _ollama_thinking_payload(base_url, model, enabled):
-        return ollama_policy
-    if glm53_lightweight_reasoning(base_url, model, enabled):
-        return {"thinking": {"type": "enabled"}, "reasoning_effort": "low"}
-    if (
-        enabled is False
-        and (urlsplit(base_url).hostname or "").lower() == "opencode.ai"
-        and model.rsplit("/", 1)[-1].casefold() == "qwen3.8-flash"
-    ):
-        # Qwen's native flag is forwarded by OpenCode's compatible endpoint.
-        # chat_template_kwargs is a self-hosted server option, not this API.
-        return {"enable_thinking": False}
-    if enabled is not None and speaks_ctk:
-        return {"chat_template_kwargs": {"enable_thinking": enabled}}
-    return {}
-
-
 def _elided_history_call_ids(messages: list[LLMMessage]) -> set[str]:
     """Return exact historical calls whose provider-visible arguments were reduced."""
     call_ids: set[str] = set()
@@ -485,13 +349,12 @@ def _shape_message_for_payload(
 def _finalize_messages(
     msgs: list[dict],
     *,
-    base_url: str,
     assistant_prefill: str | None,
-    requires_user_fn: Callable[[str], bool],
+    require_user_continuation: bool,
 ) -> list[dict]:
     """Apply terminal-response continuation and assistant prefill."""
     terminal_role = msgs[-1].get("role") if msgs else None
-    if requires_user_fn(base_url) and terminal_role in {
+    if require_user_continuation and terminal_role in {
         "assistant",
         "tool",
     }:
@@ -542,26 +405,22 @@ def _resolve_enable_thinking(
 
 def build_payload(
     *,
-    base_url: str,
-    name: str,
     req: CompletionRequest,
     model: str,
     stream: bool,
     enable_thinking: bool | None,
-    speaks_ctk: bool,
+    request_policy: RequestPolicy,
     message_fn: Callable[[LLMMessage], dict],
     normalize_fn: Callable[[list[dict]], list[dict]],
-    requires_user_fn: Callable[[str], bool],
     truncate_fn: Callable[[str], str],
     sanitize_fn: Callable[[str], str],
     prompt_cache_key_fn: Callable[[CompletionRequest], str | None],
-    is_anthropic_fn: Callable[[str], bool],
-    mark_anthropic_cache_fn: Callable[[dict], None],
+    mark_cache_fn: Callable[[dict], None],
 ) -> dict:
     """Build the OpenAI chat-completions request payload.
 
-    This is the exact request-assembly logic extracted from
-    ``OpenAIProvider._payload`` so the serialized request bytes stay identical.
+    Optional protocol extensions come from explicit request policy. Neither
+    endpoint identity nor model-name classification participates in assembly.
     """
     source_messages = [_shape_message_for_payload(m, req.assist, truncate_fn) for m in req.messages]
     elided_call_ids = _elided_history_call_ids(source_messages)
@@ -570,9 +429,8 @@ def build_payload(
     msgs = normalize_fn(msgs)
     msgs = _finalize_messages(
         msgs,
-        base_url=base_url,
         assistant_prefill=req.assistant_prefill,
-        requires_user_fn=requires_user_fn,
+        require_user_continuation=request_policy.require_user_continuation,
     )
 
     body: dict = {
@@ -586,23 +444,16 @@ def build_payload(
     if req.response_format == "json":
         body["response_format"] = {"type": "json_object"}
     if req.tools:
-        body.update(_tool_payload(req.tools, sanitize_fn, base_url))
-    is_openrouter = "openrouter" in base_url.lower() or "openrouter" in name.lower()
-    if is_openrouter:
-        body["provider"] = {
-            "require_parameters": True,
-            "allow_fallbacks": True,
-            **(req.provider_prefs or {}),
-        }
+        body["tools"] = _tool_wire_list(req.tools, sanitize_fn)
     et = _resolve_enable_thinking(req=req, enable_thinking=enable_thinking)
-    body.update(thinking_payload(base_url, model, et, speaks_ctk))
+    body.update(request_policy.payload(et))
     if stream:
         body["stream_options"] = {"include_usage": True}
     ckey = prompt_cache_key_fn(req)
     if ckey:
         body["prompt_cache_key"] = ckey
-    if is_anthropic_fn(model):
-        mark_anthropic_cache_fn(body)
+    if request_policy.cache_control:
+        mark_cache_fn(body)
     return body
 
 
@@ -615,9 +466,9 @@ def _prompt_cache_key(req: CompletionRequest) -> str | None:
     return "pmx-" + hashlib.sha256("\x00".join(parts).encode("utf-8")).hexdigest()[:24]
 
 
-def _mark_anthropic_cache(body: dict) -> None:
-    """Add Anthropic ``cache_control: ephemeral`` breakpoints on the big stable
-    prefix blocks so Claude caches them."""
+def _mark_cache(body: dict) -> None:
+    """Add explicitly configured ``cache_control: ephemeral`` breakpoints on the big stable
+    prefix blocks for compatible caches."""
     msgs = body.get("messages", [])
     sys_idx: int | None = None
     for i, m in enumerate(msgs):
@@ -653,9 +504,7 @@ def _mark_anthropic_cache(body: dict) -> None:
 
 def build_headers(
     *,
-    base_url: str,
     api_key: str | None,
-    name: str,
     req: CompletionRequest | None,
     conversation_header: str,
     fallback_session_id: str = "",
@@ -669,13 +518,10 @@ def build_headers(
     if cid:
         h[conversation_header] = cid
     if req is not None:
-        host = (urlsplit(base_url).hostname or "").lower()
-        if host == "opencode.ai":
-            request_id = req.request_id.strip() if isinstance(req.request_id, str) else ""
-            session_id = cid or request_id or fallback_session_id
-            if session_id:
-                h["x-opencode-session"] = session_id
-            if request_id:
-                h["x-opencode-request"] = request_id
-            h["x-opencode-client"] = "disco"
+        request_id = req.request_id or ""
+        session = cid or request_id or fallback_session_id
+        if session:
+            h["X-Disco-Session"] = session
+        if request_id:
+            h["X-Disco-Request"] = request_id
     return h

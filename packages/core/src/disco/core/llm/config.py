@@ -26,6 +26,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ..env import disco_env
+from .request_policy import RequestPolicy
 from .types import ModelRole, Requirement
 from .vision_table import table_vision
 
@@ -60,6 +61,7 @@ class ProviderSettings(BaseModel):
 
 
 class ModelEntry(BaseModel):
+    request_policy: RequestPolicy = Field(default_factory=RequestPolicy)
     model_id: str  # provider's id string [VERIFY]
     provider: str  # the endpoint key (one OpenAIProvider per distinct backend) [VERIFY]
     context_window: int  # [VERIFY]
@@ -403,6 +405,7 @@ class SearchSettings(BaseModel):
 
 
 class RoleFallbackSettings(BaseModel):
+    request_policy: RequestPolicy = Field(default_factory=RequestPolicy)
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = False

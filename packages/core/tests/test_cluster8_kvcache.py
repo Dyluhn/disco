@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 
 from disco.core.llm.openai_provider import OpenAIProvider
+from disco.core.llm.request_policy import RequestPolicy
 
 
 def _adapter():
@@ -117,8 +118,10 @@ def test_local_model_keeps_plain_string_content_no_cache_control():
     assert "cache_control" not in body["tools"][0]
 
 
-def test_anthropic_model_gets_cache_control_breakpoints():
-    adapter = _adapter()
+def test_explicit_cache_policy_gets_cache_control_breakpoints():
+    adapter = OpenAIProvider(
+        "https://arbitrary.test/v1", request_policy=RequestPolicy(cache_control=True)
+    )
     req = _req(tools=["shell", "file_write"])
     body = adapter._payload(req, "anthropic/claude-3.5-sonnet", stream=False)
     sys_msg = next(m for m in body["messages"] if m["role"] == "system")

@@ -27,6 +27,7 @@ import httpx
 from .config import ROLE_FALLBACK_PROVIDER_KEY, RouterConfig
 from .openai_provider import OpenAIProvider
 from .provider import ModelProvider
+from .request_policy import RequestPolicy
 from .secret_refs import resolve_provider_secret, secret_ref_allowed_for_origin
 from .secrets import SecretStore
 from .types import Requirement
@@ -239,11 +240,24 @@ def _build_role_fallback_provider(
     provider = OpenAIProvider(
         base_url,
         name="role_fallback",
+        request_policy=fallback.request_policy,
         api_key=api_key,
         capabilities=frozenset({Requirement.JSON_MODE}),
         enable_thinking=enable_thinking,
     )
     return (ROLE_FALLBACK_PROVIDER_KEY, provider)
+
+
+def _request_policies(config: RouterConfig, provider: str) -> dict[str, RequestPolicy]:
+    policies: dict[str, RequestPolicy] = {}
+    for entry in config.models.values():
+        if entry.provider != provider:
+            continue
+        prior = policies.get(entry.model_id)
+        if prior is not None and prior != entry.request_policy:
+            raise ValueError("Conflicting request policies for the same endpoint/model")
+        policies[entry.model_id] = entry.request_policy
+    return policies
 
 
 def build_providers(
@@ -285,6 +299,7 @@ def build_providers(
             entry.base_url,
             name=entry.provider,
             api_key=api_key,
+            model_policies=_request_policies(config, entry.provider),
             capabilities=caps,
             enable_thinking=enable_thinking,
         )

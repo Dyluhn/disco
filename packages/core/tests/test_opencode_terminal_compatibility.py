@@ -8,6 +8,7 @@ import httpx
 from disco.core import LLMMessage, View
 from disco.core.llm import DefaultLLMRouter, ModelEntry, Requirement, RouterConfig
 from disco.core.llm.openai_provider import OpenAIProvider
+from disco.core.llm.request_policy import RequestPolicy
 from disco.core.loop.agent import BuildAgent
 from disco.core.loop.control import Disp
 from loop_fakes import build_loop
@@ -68,6 +69,7 @@ async def test_assistant_terminal_history_completes_in_one_call_without_provider
     provider = OpenAIProvider(
         "https://opencode.ai/zen/go/v1",
         name="opencode-go",
+        request_policy=RequestPolicy(require_user_continuation=True),
         transport=httpx.MockTransport(handler),
     )
     config = RouterConfig(

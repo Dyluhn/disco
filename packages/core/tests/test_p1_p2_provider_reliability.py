@@ -1,6 +1,6 @@
 """P1 + P2 driver-reliability tests.
 
-P1: _payload emits `provider` block for OpenRouter, byte-identical for local.
+P1: only explicitly configured routing options reach the wire.
 P2: LLMProviderUnavailable classification + driver routing-retry arm.
 """
 
@@ -11,6 +11,7 @@ import pytest
 from disco.core.events import LLMMessage
 from disco.core.llm.errors import LLMError, LLMProviderUnavailable, LLMTransientError
 from disco.core.llm.openai_provider import OpenAIProvider
+from disco.core.llm.request_policy import RequestPolicy
 from disco.core.llm.types import CapabilityProfile, CompletionRequest, ModelRole
 
 # ---- helpers ----------------------------------------------------------------
@@ -45,81 +46,28 @@ def _local_provider(handler=None) -> OpenAIProvider:
     )
 
 
-# ---- P1: _is_openrouter gate ------------------------------------------------
+# Explicit routing extensions, never selected by endpoint names.
 
 
-def test_is_openrouter_true_for_openrouter_base_url():
-    p = OpenAIProvider("https://openrouter.ai/api/v1", name="my-provider")
-    assert p._is_openrouter() is True
+@pytest.mark.parametrize(
+    "url,name",
+    [
+        ("https://openrouter.ai/api/v1", "my-provider"),
+        ("https://some-other-host.com/v1", "openrouter-custom"),
+        ("http://localhost:8080/v1", "local"),
+        ("https://api.openai.com/v1", "openai"),
+    ],
+)
+def test_no_implicit_routing_extensions(url, name):
+    p = OpenAIProvider(url, name=name)
+    assert "provider" not in p._payload(_req({"allow_fallbacks": True}), "m", stream=False)
 
 
-def test_is_openrouter_true_for_openrouter_name():
-    p = OpenAIProvider("https://some-other-host.com/v1", name="openrouter-custom")
-    assert p._is_openrouter() is True
-
-
-def test_is_openrouter_false_for_local():
-    p = OpenAIProvider("http://localhost:8080/v1", name="llamacpp")
-    assert p._is_openrouter() is False
-
-
-def test_is_openrouter_false_for_openai_direct():
-    p = OpenAIProvider("https://api.openai.com/v1", name="openai")
-    assert p._is_openrouter() is False
-
-
-# ---- P1: _payload provider block injection ----------------------------------
-
-
-def test_payload_emits_provider_for_openrouter():
-    p = _openrouter_provider()
-    body = p._payload(_req(), model="gpt-4o", stream=False)
-    assert "provider" in body
-    assert body["provider"]["require_parameters"] is True
-    assert body["provider"]["allow_fallbacks"] is True
-
-
-def test_payload_provider_block_default_no_prefs():
-    p = _openrouter_provider()
-    body = p._payload(_req(), model="gpt-4o", stream=False)
-    assert body["provider"] == {"require_parameters": True, "allow_fallbacks": True}
-
-
-def test_payload_provider_prefs_merged_correctly():
-    """Caller-supplied prefs extend the floor; all three keys present."""
-    prefs = {"ignore": ["Chutes"]}
-    p = _openrouter_provider()
-    body = p._payload(_req(provider_prefs=prefs), model="gpt-4o", stream=False)
-    assert body["provider"]["require_parameters"] is True
-    assert body["provider"]["allow_fallbacks"] is True
-    assert body["provider"]["ignore"] == ["Chutes"]
-
-
-def test_payload_caller_prefs_win_on_collision():
-    """Caller override of allow_fallbacks to False wins (merge order: floor then prefs)."""
-    prefs = {"allow_fallbacks": False}
-    p = _openrouter_provider()
-    body = p._payload(_req(provider_prefs=prefs), model="gpt-4o", stream=False)
-    assert body["provider"]["allow_fallbacks"] is False
-    assert body["provider"]["require_parameters"] is True
-
-
-def test_payload_no_provider_block_for_local():
-    """Local/llamacpp payloads must be byte-identical — no provider key."""
-    p = _local_provider()
-    body = p._payload(_req(), model="qwen-local", stream=False)
-    assert "provider" not in body
-
-
-def test_payload_byte_identical_local_with_and_without_prefs():
-    """Setting provider_prefs does NOT leak into local payload."""
-    p = _local_provider()
-    body_none = p._payload(_req(), model="qwen-local", stream=False)
-    body_prefs = p._payload(
-        _req(provider_prefs={"ignore": ["SomeProvider"]}), model="qwen-local", stream=False
-    )
-    # The two dicts must be equal — prefs do not appear in the local payload.
-    assert body_none == body_prefs
+def test_explicit_routing_options_apply_to_any_endpoint():
+    options = {"provider": {"require_parameters": True, "allow_fallbacks": False}}
+    p = OpenAIProvider("https://unknown.example/v1", request_policy=RequestPolicy(body=options))
+    body = p._payload(_req({"allow_fallbacks": True}), "m", stream=False)
+    assert body["provider"] == options["provider"]
 
 
 # ---- P2: LLMProviderUnavailable classification ------------------------------

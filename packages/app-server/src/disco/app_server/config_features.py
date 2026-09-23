@@ -207,6 +207,11 @@ class ConfigFeatures:
             )
         self._store.sections.save_role_fallback(
             RoleFallbackSettings(
+                request_policy=(
+                    dto.request_policy
+                    if "request_policy" in dto.model_fields_set
+                    else self._store.load().role_fallback.request_policy
+                ),
                 enabled=dto.enabled,
                 base_url=base_url,
                 model=model,

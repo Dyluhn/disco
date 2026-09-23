@@ -84,10 +84,7 @@ async def test_non_streaming_parses_content_and_usage():
             "model": "muse-spark-1.2-contributor",
             "input": [{"role": "user", "content": "hi"}],
             "temperature": 0.0,
-            # Muse reasoning and visible output share this allowance, so the
-            # adapter preserves Disco's 50-token answer budget with headroom.
-            "max_output_tokens": 1074,
-            "reasoning": {"effort": "low"},
+            "max_output_tokens": 50,
         }
         return httpx.Response(
             200,

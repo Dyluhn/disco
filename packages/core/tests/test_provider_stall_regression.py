@@ -13,6 +13,7 @@ from disco.core.llm._openai_timeouts import iter_with_progress_timeout
 from disco.core.llm._provider_retry import attach_retry_after, meaningful_sse_line
 from disco.core.llm._router_backoff import sleep_before_retry
 from disco.core.llm.openai_provider import OpenAIProvider
+from disco.core.llm.request_policy import RequestPolicy
 from disco.core.llm.stream_progress import observe_stream_progress
 from test_stream_progress import _req
 
@@ -30,7 +31,11 @@ async def test_captured_ollama_responses_through_actual_provider(model, effort):
             200, content=captured.read_bytes(), headers={"content-type": "text/event-stream"}
         )
 
-    provider = OpenAIProvider("https://ollama.com/v1", transport=httpx.MockTransport(handler))
+    provider = OpenAIProvider(
+        "https://arbitrary.test/v1",
+        transport=httpx.MockTransport(handler),
+        request_policy=RequestPolicy(reasoning_disabled={"reasoning_effort": effort}),
+    )
     request = _req().model_copy(update={"enable_thinking": False})
     response = await provider.complete(request, model=model)
     assert json.loads(response.text) == {"ok": True}

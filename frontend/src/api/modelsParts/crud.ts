@@ -48,6 +48,7 @@ export function toModelInfo(u: ModelUpsert): ModelInfo {
   const note = [ctx, u.quantization, host].filter(Boolean).join(" · ");
   return {
     id: u.id,
+    request_policy: u.request_policy,
     label: `${humanized} — ${name}`,
     provider: paid ? "openrouter" : "local",
     price_in_per_m: u.price_in_per_m,

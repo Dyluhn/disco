@@ -39,17 +39,20 @@ def meaningful_sse_line(line: str) -> bool:
         return False
     if not isinstance(frame, dict):
         return False
-    for choice in frame.get("choices") or []:
-        if not isinstance(choice, dict):
-            continue
-        if choice.get("finish_reason"):
+    return any(_choice_progress(choice) for choice in frame.get("choices") or [])
+
+
+def _choice_progress(choice: object) -> bool:
+    if not isinstance(choice, dict):
+        return False
+    if choice.get("finish_reason"):
+        return True
+    delta = choice.get("delta") or {}
+    if not isinstance(delta, dict):
+        return False
+    if delta.get("content") or delta.get("reasoning_content"):
+        return True
+    for call in delta.get("tool_calls") or []:
+        if isinstance(call, dict) and (call.get("function") or {}).get("arguments"):
             return True
-        delta = choice.get("delta") or {}
-        if not isinstance(delta, dict):
-            continue
-        if delta.get("content") or delta.get("reasoning_content"):
-            return True
-        for call in delta.get("tool_calls") or []:
-            if isinstance(call, dict) and (call.get("function") or {}).get("arguments"):
-                return True
     return False

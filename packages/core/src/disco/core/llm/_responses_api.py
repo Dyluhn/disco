@@ -42,34 +42,21 @@ def _message_input(req: CompletionRequest, provider_name: str) -> list[dict[str,
 
 def build_responses_payload(
     *,
-    base_url: str,
     provider_name: str,
     req: CompletionRequest,
     model: str,
 ) -> dict:
     """Translate one neutral text request into a Responses API payload."""
 
-    is_meta = "api.meta.ai" in urlsplit(base_url).netloc.lower()
     body: dict = {
         "model": model,
         "input": _message_input(req, provider_name),
         "temperature": req.temperature,
     }
     if req.max_tokens is not None:
-        output_tokens = req.max_tokens + max(1024, req.max_tokens) if is_meta else req.max_tokens
-        # Responses counts private reasoning against the same allowance as
-        # visible text.  Disco's neutral max_tokens contract budgets the answer,
-        # so Muse needs bounded headroom for its reasoning channel.  Without it a
-        # normal report-planning call returns HTTP 200 with 100% reasoning tokens
-        # and an empty answer.  The fixed floor also makes tiny one-word verifier
-        # calls useful instead of predictably spending their whole budget thinking.
-        body["max_output_tokens"] = max(16, output_tokens)
+        body["max_output_tokens"] = req.max_tokens
     if req.response_format == "json":
         body["text"] = {"format": {"type": "json_object"}}
-    if is_meta:
-        # Muse spends part of the output allowance on private reasoning.  Low
-        # preserves reasoning while reserving useful capacity for visible text.
-        body["reasoning"] = {"effort": "low"}
     return body
 
 
