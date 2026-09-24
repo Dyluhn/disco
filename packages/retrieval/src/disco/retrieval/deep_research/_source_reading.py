@@ -462,6 +462,29 @@ def _retained_notes(
     return notes
 
 
+def _exhaustion_error(note: SourceNotes, reason: str) -> str:
+    """Preserve safe completed-reply diagnostics without exposing recovery text."""
+    pending = note.reader_pending
+    if note.calls == 0:
+        detail = "source was not attempted"
+    elif pending is None:
+        detail = "source has unread chunks"
+    elif pending.mode == "initial":
+        detail = "reader attempt was reserved; no completed reply was retained"
+    elif pending.error in {
+        "reader returned no visible notes (finish_reason=length)",
+        "reader output allowance exhausted before notes completed",
+    }:
+        detail = pending.error
+    elif pending.mode == "compact":
+        detail = "last completed reader reply contained no visible notes"
+    else:
+        detail = "last completed reader reply was not usable JSON notes"
+    # Pending feedback can contain parse errors and arbitrary provider finish
+    # reasons. Only the fixed host diagnostics above belong in the public trail.
+    return f"{reason}; {detail}; remaining text uses source windows"
+
+
 def _close_exhausted_sources(
     sources: Sequence[Passage],
     notes: Mapping[str, SourceNotes],
@@ -484,7 +507,7 @@ def _close_exhausted_sources(
             reason = "reader output budget exhausted"
         if reason:
             note.ok, note.complete = False, True
-            note.error = reason + "; remaining text uses source windows"
+            note.error = _exhaustion_error(note, reason)
 
 
 async def read_sources(
