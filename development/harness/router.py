@@ -4,16 +4,27 @@ Keyed on the complete provider-neutral semantic request, excluding only the
 per-call correlation fields (`request_id` and opaque transport metadata), so the
 same logical call replays the same response while different budgets, tool schemas,
 prefills, response formats, or reasoning controls cannot collide. Recording wraps
-the real `DefaultLLMRouter`; replay needs no real router (no network/LLM) — it only
-exposes `complete`/`stream_complete` from the cassette, which is the entire surface
-the agent + research pipeline call.
+the real `DefaultLLMRouter`; replay needs no real router (no network/LLM). It
+also exposes the declared output capacity read that can shape a semantic request.
+Legacy recordings without that optional seam retain unspecified capacity.
 """
 
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
 
-from disco.core.llm.types import CompletionResponse, StreamChunk
+from disco.core.llm.types import CompletionResponse, ModelRole, StreamChunk
+
+_OUTPUT_CAPACITY_SEAM = "llm.output_token_limit"
+
+
+def _output_capacity(row: object) -> int | None:
+    if not isinstance(row, dict) or set(row) != {"tokens"}:
+        raise ValueError("invalid recorded output capacity shape")
+    value = row["tokens"]
+    if value is not None and (type(value) is not int or value <= 0):
+        raise ValueError("output capacity must be a positive integer or null")
+    return value
 
 
 def _req_payload(req) -> dict:
@@ -37,6 +48,14 @@ class RecordingRouter:
     def __getattr__(self, name):  # delegate model_for / sinks / etc.
         return getattr(self._inner, name)
 
+    def output_token_limit(self, role: ModelRole) -> int | None:
+        read = getattr(self._inner, "output_token_limit", None)
+        value = read(role) if callable(read) else None
+        row = {"tokens": value}
+        capacity = _output_capacity(row)
+        self._cas.record_next(_OUTPUT_CAPACITY_SEAM, {"role": role.value}, row)
+        return capacity
+
     async def complete(self, req, *, context=None) -> CompletionResponse:
         resp = await self._inner.complete(req, context=context)
         self._cas.record_next("llm.complete", _req_payload(req), resp.model_dump(mode="json"))
@@ -53,9 +72,11 @@ class RecordingRouter:
 
 
 class ReplayRouter:
-    """Serves completions/streams from the cassette — no network, no LLM. Only the
-    call surface the agent + pipeline use; other attrs raise (a replay run that
-    needs them is a signal the cassette is incomplete)."""
+    """Serves completions, streams and declared output capacity from the cassette.
+
+    No network or LLM. Other attrs raise: a replay run needing another capability
+    is a signal that the recording contract needs an explicit extension.
+    """
 
     def __init__(self, cassette, config=None):
         self._cas = cassette
@@ -73,6 +94,14 @@ class ReplayRouter:
 
             config = ConfigStore(":memory:").load()
         self._config = config
+
+    def output_token_limit(self, role: ModelRole) -> int | None:
+        # Old captures predate this seam and behaved as an unspecified limit.
+        # Once any capacity was recorded, a missing role/read is a strict miss.
+        if _OUTPUT_CAPACITY_SEAM not in self._cas.seams():
+            return None
+        row = self._cas.lookup_next(_OUTPUT_CAPACITY_SEAM, {"role": role.value})
+        return _output_capacity(row)
 
     async def complete(self, req, *, context=None) -> CompletionResponse:
         row = self._cas.lookup_next("llm.complete", _req_payload(req))
