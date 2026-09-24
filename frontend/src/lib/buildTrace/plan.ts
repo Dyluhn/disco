@@ -60,7 +60,12 @@ export function derivePlanProgress(
       latestPlanIdx = i;
     }
   });
+  const rejected = new Set(events.flatMap((e) =>
+    (e.kind === "agent_error" || (e.kind === "observation" && e.tool_result?.success === false))
+      && e.action_id ? [e.action_id] : [],
+  ));
   events.forEach((e, i) => {
+    if (rejected.has(e.id)) return;
     if (i < latestPlanIdx) return; // belongs to a superseded plan
     if (e.kind !== "action" || !e.tool_call || e.tool_call.tool_name !== "plan_step") return;
     const idx = Number(e.tool_call.arguments.index);

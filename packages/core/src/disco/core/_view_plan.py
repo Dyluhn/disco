@@ -7,10 +7,13 @@ logical-LOC limit. These functions are pure over event lists.
 from __future__ import annotations
 
 import re
+from typing import TypeGuard
 
 from .events import (
     ActionEvent,
+    AgentErrorEvent,
     Event,
+    ObservationEvent,
     PlanEvent,
     StatusEvent,
 )
@@ -64,6 +67,16 @@ def _carry_completed_steps(
     return states
 
 
+def _valid_progress_snapshot(rows: object) -> TypeGuard[list[dict[str, object]]]:
+    # The tool rejects the whole malformed snapshot, not just its bad rows.
+    return isinstance(rows, list) and all(
+        isinstance(row, dict)
+        and "index" in row
+        and row.get("state") in ("pending", "active", "done")
+        for row in rows
+    )
+
+
 def _apply_one_progress_event(
     e: ActionEvent,
     plan_seq: int,
@@ -93,7 +106,10 @@ def _apply_one_progress_event(
         except (TypeError, ValueError):
             pass
     elif name == "update_plan_progress":
-        for s in args.get("steps") or []:
+        rows = args.get("steps")
+        if not _valid_progress_snapshot(rows):
+            return
+        for s in rows:
             try:
                 _set(s.get("index"), s.get("state"))
             except (TypeError, ValueError, AttributeError):
@@ -109,8 +125,14 @@ def _apply_progress_events(
 ) -> None:
     """Apply plan_step and update_plan_progress marks to ``states``."""
     plan_seq = plan.seq or 0
+    rejected = {
+        event.action_id
+        for event in events
+        if isinstance(event, AgentErrorEvent)
+        or (isinstance(event, ObservationEvent) and not event.tool_result.success)
+    }
     for i, e in enumerate(events):
-        if not isinstance(e, ActionEvent) or e.tool_call is None:
+        if not isinstance(e, ActionEvent) or e.tool_call is None or e.id in rejected:
             continue
         _apply_one_progress_event(e, plan_seq, plan_pos, i, total, states)
 

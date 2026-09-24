@@ -54,10 +54,20 @@ export function deriveBuildProgress(
   // Declarative: the LAST update_plan_progress action wins — it's the full picture.
   // ActionEvent-typed (the forEach guard only assigns action events); the cast at the
   // use site defeats TS's callback-assignment blindness (it narrows `latest` to null).
+  const rejected = new Set(events.flatMap((e) =>
+    (e.kind === "agent_error" || (e.kind === "observation" && e.tool_result?.success === false))
+      && e.action_id ? [e.action_id] : [],
+  ));
   let latest: ActionEvent | null = null;
   events.forEach((e, i) => {
-    if (i < latestPlanIdx) return;
-    if (e.kind === "action" && e.tool_call?.tool_name === "update_plan_progress") latest = e;
+    if (i < latestPlanIdx || rejected.has(e.id)) return;
+    if (e.kind !== "action" || e.tool_call?.tool_name !== "update_plan_progress") return;
+    const rows = e.tool_call.arguments?.steps;
+    // Failed validation rejects the entire snapshot, including plausible rows.
+    if (Array.isArray(rows) && rows.every((row) =>
+      row && typeof row === "object" && "index" in row
+      && ["pending", "active", "done"].includes(String(row.state)),
+    )) latest = e;
   });
   // Apply the declarative snapshot IF one exists — but do NOT early-return when it's
   // absent. A SMALL model (the NL-done-at-finish tier, e.g. local Qwen) never calls
