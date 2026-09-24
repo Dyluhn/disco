@@ -52,6 +52,11 @@ class _PreviewManagerLifecycleFacade:
     async def resolve_sealed_contract(self, contract: Any) -> PreviewSession | None:
         return await self._resource.resolve_sealed_contract(contract)
 
+    async def fetch_finished_inside(
+        self, contract: Any, port: int, path: str
+    ) -> tuple[int, bytes, str] | None:
+        return await self._resource.fetch_finished_inside(contract, port, path)
+
     async def resolve_active_projection(self, projection: Any) -> PreviewSession | None:
         return await self._resource.resolve_active_projection(projection)
 

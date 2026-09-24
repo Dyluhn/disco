@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from disco.agent_server import preview_sealed_restore
+from disco.agent_server.preview_content import PreviewContentService
 from disco.agent_server.preview_manager import (
     NoPreviewPortAvailableError,
     PreviewManager,
@@ -228,9 +229,7 @@ async def test_finished_runtime_accepts_the_exact_still_live_generation() -> Non
     try:
         assert await manager.resolve_sealed_contract(contract) is None
         assert (
-            await projection.resolve_finished_preview_runtime(
-                contract.conversation_id, contract
-            )
+            await projection.resolve_finished_preview_runtime(contract.conversation_id, contract)
             == current
         )
     finally:
@@ -526,3 +525,34 @@ async def test_sealed_rebind_closes_old_resource_before_materializing_isolated_b
         "restore-new",
     ]
     assert isinstance(host_session._preview_manager, _Manager)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure",
+    ["wrong_conversation", "wrong_port", "stale_generation", "missing_manager", "unbound_contract"],
+)
+async def test_finished_inside_never_falls_back_to_unbound_host(failure: str) -> None:
+    sandbox = _FakeSandbox()
+    manager = _manager(sandbox, port_pool=[3000])
+    contract = _sealed_contract(1, "a")
+    host_fetch = AsyncMock(return_value=(200, b"UNRELATED HOST", "text/plain"))
+    host = SimpleNamespace(_preview_manager=manager, fetch_inside=host_fetch)
+    service = PreviewContentService(SimpleNamespace(live_session=lambda _cid: host))
+    try:
+        assert await manager.restore_sealed(contract) is not None
+        cid, port = contract.conversation_id, 3000
+        if failure == "wrong_conversation":
+            cid = "conv_someone_else"
+        elif failure == "wrong_port":
+            port = 5173
+        elif failure == "stale_generation":
+            sandbox.generation += 1
+        elif failure == "missing_manager":
+            host._preview_manager = None
+        elif failure == "unbound_contract":
+            contract = _sealed_contract(2, "b")
+        assert await service.fetch_finished_inside(cid, contract, port, "asset.js") is None
+        host_fetch.assert_not_awaited()
+    finally:
+        await manager.aclose()

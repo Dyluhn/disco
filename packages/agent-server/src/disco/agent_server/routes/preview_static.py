@@ -476,6 +476,7 @@ async def _serve_active_finished_projection(
             port,
             rel_path,
             inject_selection=inject_selection,
+            finished_contract=contract,
         )
     return await _upstream_http_response(
         runtime,
@@ -484,6 +485,7 @@ async def _serve_active_finished_projection(
         upstream,
         rel_path,
         inject_selection=inject_selection,
+        finished_contract=contract,
     )
 
 
