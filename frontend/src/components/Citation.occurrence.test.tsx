@@ -31,8 +31,8 @@ describe("citation verdict belongs to the claim occurrence", () => {
     const user = userEvent.setup();
     render(<Markdown answer={mixed}>{prose}</Markdown>);
     expect(labels()).toEqual([
-      "Source 1: shared (Not supported by the cited source)",
-      "Source 2: other (Not supported by the cited source)",
+      "Source 1: shared (Support not established)",
+      "Source 2: other (Support not established)",
       "Source 1: shared (Supported by this source)",
       "Source 2: other (Supported by this source)",
     ]);
@@ -46,37 +46,37 @@ describe("citation verdict belongs to the claim occurrence", () => {
   it("does not mark a later unsupported occurrence green when the first is supported", () => {
     render(<Markdown answer={answer([claim(first, "supported"), claim(second, "unsupported")])}>{prose}</Markdown>);
     expect(labels().slice(0, 2).every((label) => label?.includes("(Supported by this source)"))).toBe(true);
-    expect(labels().slice(2).every((label) => label?.includes("(Not supported by the cited source)"))).toBe(true);
+    expect(labels().slice(2).every((label) => label?.includes("(Support not established)"))).toBe(true);
   });
 
   it("claim array order does not change occurrence attribution", () => {
     render(<Markdown answer={{ ...mixed, claims: [...mixed.claims].reverse() }}>{prose}</Markdown>);
-    expect(labels().slice(0, 2).every((label) => label?.includes("(Not supported by the cited source)"))).toBe(true);
+    expect(labels().slice(0, 2).every((label) => label?.includes("(Support not established)"))).toBe(true);
     expect(labels().slice(2).every((label) => label?.includes("(Supported by this source)"))).toBe(true);
   });
 
   it("carries prose context across inline code, bold, italic and links in separate list items", () => {
     const a = answer([claim("- Domain example.com is **reserved**", "unsupported", ["shared"]), claim("- It cannot be *registered* with [IANA](https://iana.org)", "supported", ["shared"])]);
     render(<Markdown answer={a}>{"- Domain `example.com` is **reserved** [[shared]].\n- It cannot be *registered* with [IANA](https://iana.org) [[shared]]."}</Markdown>);
-    expect(labels()).toEqual(["Source 1: shared (Not supported by the cited source)", "Source 1: shared (Supported by this source)"]);
+    expect(labels()).toEqual(["Source 1: shared (Support not established)", "Source 1: shared (Supported by this source)"]);
   });
 
   it("keeps table cell occurrence context isolated", () => {
     const a = answer([claim("Allowed", "unsupported", ["shared"]), claim("Reserved", "supported", ["shared"])]);
     render(<Markdown answer={a}>{"| A | B |\n|---|---|\n| Allowed [[shared]] | Reserved [[shared]] |"}</Markdown>);
-    expect(labels()).toEqual(["Source 1: shared (Not supported by the cited source)", "Source 1: shared (Supported by this source)"]);
+    expect(labels()).toEqual(["Source 1: shared (Support not established)", "Source 1: shared (Supported by this source)"]);
   });
 
   it("applies the same claim binding to plain CitedText and adjacent citation groups", () => {
     render(<CitedText text={prose} answer={mixed} />);
-    expect(labels().slice(0, 2).every((label) => label?.includes("(Not supported by the cited source)"))).toBe(true);
+    expect(labels().slice(0, 2).every((label) => label?.includes("(Support not established)"))).toBe(true);
     expect(labels().slice(2).every((label) => label?.includes("(Supported by this source)"))).toBe(true);
   });
 
   it("retains the verdict of a complete sentence with an inline qualification", () => {
     const a = answer([claim("The domain is reserved, but unavailable for registration", "unsupported", ["shared"])]);
     render(<Markdown answer={a}>{"The domain is reserved [[shared]], but unavailable for registration [[shared]]."}</Markdown>);
-    expect(labels()).toEqual(["Source 1: shared (Not supported by the cited source)", "Source 1: shared (Not supported by the cited source)"]);
+    expect(labels()).toEqual(["Source 1: shared (Support not established)", "Source 1: shared (Support not established)"]);
   });
 
   it("does not borrow a supported verdict for unmatched prose or a partial-word suffix", () => {

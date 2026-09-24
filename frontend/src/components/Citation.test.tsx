@@ -30,7 +30,7 @@ describe("Citation", () => {
   it("carries the verdict in its accessible label (chroma = meaning)", () => {
     render(<Citation n={3} passage={passage} verdict="unsupported" />);
     expect(
-      screen.getByRole("button", { name: /Source 3.*Not supported by the cited source/i }),
+      screen.getByRole("button", { name: /Source 3.*Support not established/i }),
     ).toBeInTheDocument();
   });
 

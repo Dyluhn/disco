@@ -16,7 +16,7 @@ const VERDICT_CHIP: Record<Verdict, string> = {
 const VERDICT_NOTE: Record<Verdict, string> = {
   supported: "Supported by this source",
   weak: "Weakly supported — verify",
-  unsupported: "Not supported by the cited source",
+  unsupported: "Support not established",
 };
 
 const VERDICT_DOT: Record<Verdict, string> = {
