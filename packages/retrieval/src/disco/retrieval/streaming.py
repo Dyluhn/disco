@@ -28,6 +28,7 @@ from disco.core.think import strip_think_spans
 
 from ._answer_budget import answer_request, followup_request
 from ._direct_source import _direct_discovery, _source_url
+from ._transport_retry import degradation_markers
 from .engine import annotate_passage_dates, extract_discovered_hits
 from .grounding import (
     _CITE,
@@ -41,6 +42,7 @@ from .local_encoders import EncoderUnavailable
 from .models import ExtractedDoc, Passage, RetrievalRequest, SearchHit
 from .providers import ExtractionProvider, SearchProvider
 from .ranking import Embedder, QueryRewriter, Reranker
+from .source_adapters import _SearchSourceUnavailable
 from .url_policy import query_scoped_domains, source_url_key, url_allowed
 from .vectorstore import VectorStore
 
@@ -461,11 +463,23 @@ async def _discover_round(
         if not hits:
             raise _ResearchAborted("The requested URL is excluded by the source domain filters.")
         return hits
-    hits = await search.search(
-        current_query, limit=discover_limit, domains_allow=allow, domains_deny=deny or None
-    )
+    detailed = getattr(search, "search_detailed", None)
+    diagnostic: object = {}
+    if callable(detailed):
+        hits, diagnostic = await detailed(
+            current_query, limit=discover_limit, domains_allow=allow, domains_deny=deny or None
+        )
+    else:
+        hits = await search.search(
+            current_query, limit=discover_limit, domains_allow=allow, domains_deny=deny or None
+        )
     hits = [hit for hit in hits if url_allowed(hit.url, allow, deny)]
     if not hits:
+        if degradation_markers(diagnostic) != ((), ()):
+            raise _ResearchAborted(
+                "Search could not complete because one or more selected sources failed. "
+                "Try again later or choose different sources."
+            )
         raise _ResearchAborted("No search results were found for this query.")
     return hits
 
@@ -729,6 +743,8 @@ async def stream_research_answer(
             current_query = await rewriter.rewrite(current_query)
             # Buffered token_frames from the doomed round are discarded here.
 
+    except _SearchSourceUnavailable as exc:
+        yield {"type": "error", "message": str(exc)}
     except EncoderUnavailable as exc:
         # RAM guard: the encoder pre-check stopped a model load that would OOM the
         # process.  Emit an honest, actionable error frame so the UI shows the real

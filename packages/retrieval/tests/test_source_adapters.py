@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime
 
 import httpx
+import pytest
 from disco.retrieval.models import SearchHit
 from disco.retrieval.providers import SearchProvider
 from disco.retrieval.source_adapters import (
@@ -11,6 +12,7 @@ from disco.retrieval.source_adapters import (
     NewsSearchProvider,
     SemanticScholarSearchProvider,
     SiteScopedSearchProvider,
+    _SearchSourceUnavailable,
 )
 
 
@@ -230,12 +232,13 @@ async def test_semantic_scholar_maps_json_and_sends_api_key():
     assert hits[1].snippet == ""
 
 
-async def test_semantic_scholar_http_error_degrades_to_empty():
+async def test_semantic_scholar_http_error_is_not_an_empty_result():
     provider = SemanticScholarSearchProvider(
         transport=_transport(lambda req: httpx.Response(500, text="nope"))
     )
 
-    assert await provider.search("q") == []
+    with pytest.raises(_SearchSourceUnavailable, match="HTTP 500"):
+        await provider.search("q")
 
 
 async def test_semantic_scholar_threads_strict_recency_filter():
