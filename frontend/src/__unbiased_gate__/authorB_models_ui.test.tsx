@@ -210,8 +210,8 @@ describe("AuthorB unbiased gate — W-04/W-05 model display", () => {
 
     expect(hookState.showToast).toHaveBeenCalledWith({
       tone: "cost",
-      title: "Now working with Paid Driver",
-      body: "This paid model drives every step of the agent for this task.",
+      title: "Selected Paid Driver for your next request",
+      body: "Applied when you start or continue a task. This paid model will drive every step of the task.",
     });
   });
 
