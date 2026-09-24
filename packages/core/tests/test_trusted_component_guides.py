@@ -15,8 +15,7 @@ from disco.core.trusted_components.registry import TrustedComponentRegistry
 @pytest.mark.parametrize("name", ["auth-kit", "rbac-kit"])
 def test_shipped_guide_mounts_from_workspace_root(tmp_path: Path, name: str) -> None:
     node = shutil.which("node")
-    if node is None:
-        pytest.skip("Node 22+ required for the shipped node:sqlite components")
+    assert node is not None, "Node 22+ required for the shipped node:sqlite components"
     registry = TrustedComponentRegistry.default()
     for component_name in ("database-kit", "auth-kit", "rbac-kit"):
         component = registry.get(component_name)

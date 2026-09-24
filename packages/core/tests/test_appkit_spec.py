@@ -993,3 +993,45 @@ def test_worst_case_max_length_ids_yield_bounded_component_paths() -> None:
 # collision-disambiguation suffix without building the full 50x30 max tree.
 _MAX_PAGES_FOR_TEST = 3
 _MAX_SECTIONS_FOR_TEST = 5
+
+
+def test_owner_design_fields_remain_direct_public_members_with_exact_schema():
+    assert {"content_width", "reduced_motion"} <= DesignSpec.__annotations__.keys()
+    properties = DesignSpec.model_json_schema()["properties"]
+    assert properties["content_width"] == {
+        "anyOf": [
+            {"maximum": 1440, "minimum": 640, "multipleOf": 40, "type": "integer"},
+            {"type": "null"},
+        ],
+        "default": None,
+        "title": "Content Width",
+    }
+    assert properties["reduced_motion"] == {
+        "anyOf": [{"type": "boolean"}, {"type": "null"}],
+        "default": None,
+        "title": "Reduced Motion",
+    }
+    original = _valid_design_spec()
+    raw = original.model_dump(mode="json")
+    assert "content_width" not in raw and "reduced_motion" not in raw
+    for width in (640, 1440):
+        updated = DesignSpec.model_validate({**raw, "content_width": width, "reduced_motion": True})
+        assert updated.content_width == width and updated.reduced_motion is True
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"content_width": 639},
+        {"content_width": 1441},
+        {"content_width": 1281},
+        {"content_width": "1280"},
+        {"content_width": 1280.0},
+        {"content_width": True},
+        {"reduced_motion": "true"},
+        {"reduced_motion": 1},
+    ],
+)
+def test_owner_design_fields_reject_out_of_range_and_coerced_values(changes):
+    with pytest.raises(ValidationError):
+        DesignSpec.model_validate({**_valid_design_spec().model_dump(mode="json"), **changes})

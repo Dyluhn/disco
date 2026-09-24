@@ -1,25 +1,20 @@
 """Immutable creation-time owner-control vocabulary for canonical AppKit apps."""
 
+from typing import Annotated
+
 from disco.core.tweaks import canonical_hex
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-
-class OwnerDesignOptions(BaseModel):
-    """Optional bounded display settings; absent keeps existing output byte stable."""
-
-    content_width: int | None = Field(
-        default=None,
-        ge=640,
-        le=1440,
-        multiple_of=40,
-        strict=True,
-        exclude_if=lambda value: value is None,
-    )
-    reduced_motion: bool | None = Field(
-        default=None,
-        strict=True,
-        exclude_if=lambda value: value is None,
-    )
+# Keep the fields directly declared on the public DesignSpec while sharing the
+# constraints here. This preserves public-surface inspection and old JSON bytes.
+OwnerContentWidth = Annotated[
+    int | None,
+    Field(ge=640, le=1440, multiple_of=40, strict=True, exclude_if=lambda value: value is None),
+]
+OwnerReducedMotion = Annotated[
+    bool | None,
+    Field(strict=True, exclude_if=lambda value: value is None),
+]
 
 
 class OwnerControlSpec(BaseModel):

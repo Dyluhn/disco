@@ -41,7 +41,7 @@ from pydantic import (
     model_validator,
 )
 
-from .owner_control_spec import OwnerControlSpec, OwnerDesignOptions
+from .owner_control_spec import OwnerContentWidth, OwnerControlSpec, OwnerReducedMotion
 from .spec_parts.io import _APPSPEC_NAME as _APPSPEC_NAME
 from .spec_parts.io import _DESIGNSPEC_NAME as _DESIGNSPEC_NAME
 from .spec_parts.io import _DISCO_DIR as _DISCO_DIR
@@ -787,7 +787,8 @@ class AppSpec(BaseModel):
     app_kind: _ShortStr
     name: _NameStr
     owner_controls: OwnerControlSpec | None = Field(
-        default=None, exclude_if=lambda value: value is None,
+        default=None,
+        exclude_if=lambda value: value is None,
     )
     roles: tuple[_IdStr, ...] = Field(default=(), exclude_if=lambda value: not value)
     role_admin_roles: tuple[_IdStr, ...] = Field(
@@ -975,13 +976,15 @@ class Justification(BaseModel):
         return value
 
 
-class DesignSpec(OwnerDesignOptions):
+class DesignSpec(BaseModel):
     """The DESIGN DECISIONS — descriptive, not a CSS AST. Feeds Epic D's
     design_lint, which uses `justifications` to tell intentional non-default
     choices from slop."""
 
     model_config = _STRICT
 
+    content_width: OwnerContentWidth = None
+    reduced_motion: OwnerReducedMotion = None
     schema_version: int = Field(ge=1)
     typography: Typography
     palette: Palette
