@@ -102,6 +102,8 @@ ARG DISCO_ENCODER_TIER=full
 # image instead of a sibling sandbox container, so `soffice` must be present here
 # too (the sandbox image already ships it). Out-of-the-box deck→PDF, mirroring the
 # bundled-TTS bake-in. Absent soffice → render_deck() returns a clear error.
+# openssh-client supplies the shared SSH transport for remote gVisor probes and
+# sandboxes; both server processes need it in the installed runtime image.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libpango-1.0-0 \
         libpangoft2-1.0-0 \
@@ -114,6 +116,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libreoffice-impress \
         fonts-liberation \
         podman \
+        openssh-client \
         tmux \
     && rm -rf /var/lib/apt/lists/*
 
