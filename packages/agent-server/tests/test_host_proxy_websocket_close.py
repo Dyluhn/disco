@@ -28,9 +28,17 @@ async def _next(outgoing):
     return message
 
 
-@pytest.mark.parametrize("code,expected", [(1000, 1000), (1001, 1001), (1005, 1000),
-                                           (1006, 1011), (1015, 1011), (4001, 4001)])
-async def test_asgi_disconnect_closes_real_upstream_with_wire_valid_code(code, expected):
+@pytest.mark.parametrize("code,expected,reason,expected_reason", [
+    (1000, 1000, "viewer disconnected", "viewer disconnected"),
+    (1001, 1001, "é" * 100, "é" * 61),
+    (1005, 1000, "", ""),
+    (1006, 1011, None, ""),
+    (1015, 1011, "bad surrogate \ud800", "bad surrogate ?"),
+    (4001, 4001, "x" * 123, "x" * 123),
+])
+async def test_asgi_disconnect_closes_real_upstream_with_wire_valid_code(
+    code, expected, reason, expected_reason,
+):
     observed = asyncio.Queue()
 
     async def echo(connection):
@@ -40,7 +48,7 @@ async def test_asgi_disconnect_closes_real_upstream_with_wire_valid_code(code, e
         except websockets.ConnectionClosed:
             pass
         finally:
-            await observed.put(connection.close_code)
+            await observed.put((connection.close_code, connection.close_reason))
 
     async with websockets.serve(echo, "127.0.0.1", 0) as server:
         port = server.sockets[0].getsockname()[1]
@@ -48,9 +56,9 @@ async def test_asgi_disconnect_closes_real_upstream_with_wire_valid_code(code, e
         assert (await _next(outgoing))["type"] == "websocket.accept"
         await incoming.put({"type": "websocket.receive", "bytes": b"RFB acceptance"})
         assert await _next(outgoing) == {"type": "websocket.send", "bytes": b"RFB acceptance"}
-        await incoming.put({"type": "websocket.disconnect", "code": code})
+        await incoming.put({"type": "websocket.disconnect", "code": code, "reason": reason})
         await asyncio.wait_for(task, 2)
-        assert await asyncio.wait_for(observed.get(), 2) == expected
+        assert await asyncio.wait_for(observed.get(), 2) == (expected, expected_reason)
         assert outgoing.empty(), "Disconnected ASGI clients must not receive a second close"
 
 

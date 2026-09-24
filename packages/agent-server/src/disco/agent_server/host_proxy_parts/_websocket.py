@@ -94,6 +94,13 @@ def _wire_close_code(code: object) -> int:
     return code
 
 
+def _wire_close_reason(reason: object) -> str:
+    """A close control frame permits 123 UTF-8 bytes after its two-byte code."""
+    if not isinstance(reason, str):
+        return ""
+    return reason.encode("utf-8", errors="replace")[:123].decode("utf-8", errors="ignore")
+
+
 async def _relay_websocket(ws_client: ClientConnection, receive: Receive, send: Send) -> None:
     client_disconnected = False
     close_sent = False
@@ -116,7 +123,10 @@ async def _relay_websocket(ws_client: ClientConnection, receive: Receive, send: 
                     await ws_client.send(message["bytes"])
             elif message["type"] == "websocket.disconnect":
                 client_disconnected = True
-                await ws_client.close(_wire_close_code(message.get("code", 1000)))
+                await ws_client.close(
+                    _wire_close_code(message.get("code", 1000)),
+                    _wire_close_reason(message.get("reason", "")),
+                )
                 return
 
     async def upstream_to_client():
