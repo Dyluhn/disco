@@ -248,8 +248,8 @@ Type=oneshot
 RemainAfterExit=yes
 WorkingDirectory=%h/disco
 Environment=DISCO_SANDBOX_SOCKET=%t/podman/podman.sock
-ExecStart=/usr/bin/./deploy/compose/disco-compose up -d
-ExecStop=/usr/bin/podman compose down
+ExecStart=%h/disco/deploy/compose/disco-compose up -d
+ExecStop=%h/disco/deploy/compose/disco-compose down
 TimeoutStartSec=0
 
 [Install]
