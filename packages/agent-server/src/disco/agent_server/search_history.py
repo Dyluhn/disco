@@ -10,10 +10,11 @@ import contextlib
 from collections.abc import AsyncIterator, Callable
 from typing import Any
 
-from disco.core import ConversationStatus, EventSource, LLMMessage, MessageEvent, StatusEvent
+from disco.core import ConversationStatus, EventSource, LLMMessage, MessageEvent
 from disco.core.store.sqlite import SqliteEventStore
 from pydantic import BaseModel, Field
 
+from .lifecycle_command_service import LifecycleCommandService
 from .redaction import redact_frame
 from .title_service import fallback_title
 
@@ -107,7 +108,9 @@ class SearchHistory:
                     message=LLMMessage(role="user", content=scope.query),
                     meta={_KEY: {"scope": payload}},
                 ),
-                StatusEvent(status=ConversationStatus.RUNNING, detail="standard_search"),
+                LifecycleCommandService.build_status(
+                    ConversationStatus.RUNNING, detail="standard_search"
+                ),
             ],
             require_existing=True,
         )
@@ -147,8 +150,8 @@ class SearchHistory:
             await self.store.append_many(
                 cid,
                 [
-                    StatusEvent(
-                        status=ConversationStatus.ERROR,
+                    LifecycleCommandService.build_status(
+                        ConversationStatus.ERROR,
                         detail="standard_search_interrupted",
                     )
                 ],
@@ -167,7 +170,9 @@ class SearchHistory:
                     message=LLMMessage(role="assistant", content=content),
                     meta={_KEY: {"scope": scope.model_dump(mode="json"), "answer": answer}},
                 ),
-                StatusEvent(status=ConversationStatus.FINISHED, detail="standard_search_complete"),
+                LifecycleCommandService.build_status(
+                    ConversationStatus.FINISHED, detail="standard_search_complete"
+                ),
             ],
             require_existing=True,
         )
