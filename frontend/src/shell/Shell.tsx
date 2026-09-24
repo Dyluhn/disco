@@ -1,5 +1,6 @@
-import { Menu } from "lucide-react";
-import { Suspense, useState } from "react";
+import * as Dialog from "@radix-ui/react-dialog";
+import { Menu, X } from "lucide-react";
+import { Suspense, useEffect, useState } from "react";
 import { Outlet } from "react-router-dom";
 import { DemoDataBadge } from "@/components/DemoDataBadge";
 import { SandboxHealthBanner } from "@/components/SandboxHealthBanner";
@@ -23,7 +24,15 @@ export function Shell() {
   const [collapsed, setCollapsed] = useState(false); // desktop rail width
   const [drawerOpen, setDrawerOpen] = useState(false); // mobile overlay
 
+  useEffect(() => {
+    const desktop = window.matchMedia("(min-width: 1024px)");
+    const closeOnDesktop = () => { if (desktop.matches) setDrawerOpen(false); };
+    desktop.addEventListener("change", closeOnDesktop);
+    return () => desktop.removeEventListener("change", closeOnDesktop);
+  }, []);
+
   return (
+    <Dialog.Root open={drawerOpen} onOpenChange={setDrawerOpen}>
     <div className="flex h-dvh overflow-hidden bg-bg text-text">
       <CommandPalette />
       {/* desktop rail — in-flow, width-collapsing */}
@@ -37,38 +46,38 @@ export function Shell() {
       </aside>
 
       {/* mobile drawer + backdrop — overlays, never squeezes */}
-      {drawerOpen && (
-        <div className="lg:hidden">
-          <button
-            type="button"
-            data-disco-control="shell.drawer-close"
-            aria-label="Close navigation"
-            onClick={() => setDrawerOpen(false)}
-            className="fixed inset-0 z-30 bg-black/45"
-          />
-          <div className="fixed inset-y-0 left-0 z-40 w-64 pmx-rise">
+      <Dialog.Portal>
+          <Dialog.Overlay className="fixed inset-0 z-30 bg-black/45 lg:hidden" />
+          <Dialog.Content className="fixed inset-y-0 left-0 z-40 w-64 pmx-rise lg:hidden">
+            <Dialog.Title className="sr-only">Navigation</Dialog.Title>
+            <Dialog.Description className="sr-only">Choose a Disco view.</Dialog.Description>
+            <Dialog.Close
+              data-disco-control="shell.drawer-close"
+              aria-label="Close navigation"
+              className="absolute right-3 top-3 z-50 grid size-11 place-items-center rounded-control text-text-muted hover:text-text"
+            >
+              <X className="size-4" aria-hidden />
+            </Dialog.Close>
             <NavRail
               collapsed={false}
               onToggleCollapse={() => setDrawerOpen(false)}
               onNavigate={() => setDrawerOpen(false)}
             />
-          </div>
-        </div>
-      )}
+          </Dialog.Content>
+      </Dialog.Portal>
 
       {/* main column */}
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex shrink-0 items-center justify-between gap-inline border-b border-hairline px-body py-inline">
           <div className="flex items-center gap-inline">
-            <button
+            <Dialog.Trigger
               type="button"
               data-disco-control="shell.drawer-open"
               aria-label="Open navigation"
-              onClick={() => setDrawerOpen(true)}
               className="grid size-11 shrink-0 place-items-center rounded-control border border-hairline text-text-muted transition-colors hover:text-text lg:hidden"
             >
               <Menu className="size-4" aria-hidden />
-            </button>
+            </Dialog.Trigger>
             <ModeSlider />
           </div>
           <ThemeToggle />
@@ -90,5 +99,6 @@ export function Shell() {
         </main>
       </div>
     </div>
+    </Dialog.Root>
   );
 }
