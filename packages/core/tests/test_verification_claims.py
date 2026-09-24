@@ -15,6 +15,7 @@ from disco.core.verification import (
     AdmittedVerificationContract,
     HostVerificationClaim,
     HostVerificationResult,
+    PreviewSelectionIdentity,
     VerificationCheckContract,
     VerificationClaimKind,
     VerificationClaimStatus,
@@ -858,3 +859,109 @@ def test_same_claim_id_cannot_substitute_a_different_expected_contract() -> None
     receipt = structured_web_verification_result(deliverable=original, verdict=_verdict())
 
     assert not receipt.is_current_for(changed, observed_url=changed.deployment_url)
+
+
+@pytest.mark.parametrize(
+    ("failure", "failed_kind"),
+    [
+        (
+            {"meaningful_content": False, "rendered_text": ""},
+            VerificationClaimKind.RENDERED_CONTENT,
+        ),
+        ({"console_errors": ["uncaught error"]}, VerificationClaimKind.CONSOLE_CLEAN),
+        ({"network_failures": ["asset failed"]}, VerificationClaimKind.NETWORK_CLEAN),
+    ],
+)
+def test_exact_managed_preview_binding_survives_unrelated_probe_failure(
+    failure: dict[str, object], failed_kind: VerificationClaimKind
+) -> None:
+    selected = PreviewSelectionIdentity(
+        projection_id="pv_" + "a" * 32,
+        session_name="preview",
+        port=8123,
+        url="http://127.0.0.1:32881",
+        launch_kind="static",
+        intent_digest="b" * 64,
+        sandbox_instance_id="sandbox-a",
+        sandbox_generation=1,
+        static_serve_dir=".",
+        source_action_id="action-preview",
+        source_action_seq=2,
+        source_observation_id="observation-preview",
+        source_observation_seq=3,
+    )
+    deliverable = _deliverable().model_copy(
+        update={"preview_selection": selected, "preview_binding_required": True}
+    )
+    verdict = _verdict(passed=False, verdict="fail", **failure)
+    identity = verdict["artifact_identity"]
+    assert isinstance(identity, dict)
+    identity["preview_selection"] = selected.model_dump(mode="json")
+
+    receipt = structured_web_verification_result(deliverable=deliverable, verdict=verdict)
+
+    claims = {result.kind: result for result in receipt.claim_results}
+    assert claims[VerificationClaimKind.ARTIFACT_IDENTITY].status is VerificationClaimStatus.PASS
+    assert claims[failed_kind].status is VerificationClaimStatus.FAIL
+    assert receipt.status is VerificationClaimStatus.FAIL
+    assert receipt.reason == claims[failed_kind].reason
+    assert receipt.observed_url == "http://127.0.0.1:8123/"
+    assert receipt.preview_selection == selected
+
+
+@pytest.mark.parametrize(
+    "identity_updates",
+    [
+        {"conversation_id": "foreign"},
+        {"artifact_path": "other.html"},
+        {"artifact_kind": "report"},
+        {"requested_url": "http://127.0.0.1:9999/"},
+        {"observed_url": "http://127.0.0.1:9999/"},
+        {"preview_selection": {}},
+        {"preview_live_match": False},
+    ],
+)
+def test_failed_probe_does_not_relax_exact_artifact_identity(
+    identity_updates: dict[str, object],
+) -> None:
+    verdict = _verdict(passed=False, verdict="fail", meaningful_content=False)
+    identity = verdict["artifact_identity"]
+    assert isinstance(identity, dict)
+    identity.update(identity_updates)
+    receipt = structured_web_verification_result(deliverable=_deliverable(), verdict=verdict)
+    claim = next(
+        result
+        for result in receipt.claim_results
+        if result.kind is VerificationClaimKind.ARTIFACT_IDENTITY
+    )
+    assert claim.status is VerificationClaimStatus.FAIL
+    assert receipt.status is VerificationClaimStatus.FAIL
+
+
+@pytest.mark.parametrize("updates", [{"passed": False, "verdict": "fail"}, {"passed": "true"}])
+def test_semantic_judge_cannot_clear_independent_host_probe_veto(
+    updates: dict[str, object],
+) -> None:
+    semantic = _claim(
+        "web.contract:test", VerificationClaimKind.CONTRACT_SEMANTIC, "requested page"
+    )
+    receipt = structured_web_verification_result(
+        deliverable=_deliverable(semantic), verdict=_verdict(**updates)
+    )
+    judged = apply_semantic_verifier_result(
+        receipt,
+        verified=True,
+        verdict="pass",
+        detail="semantic requirement met",
+        claim_id=semantic.claim_id,
+    )
+    assert receipt.status is VerificationClaimStatus.FAIL
+    assert judged.status is VerificationClaimStatus.FAIL
+    assert judged.reason == receipt.reason
+    identity = next(
+        result
+        for result in judged.claim_results
+        if result.kind is VerificationClaimKind.ARTIFACT_IDENTITY
+    )
+    assert identity.status is VerificationClaimStatus.FAIL
+    assert "inconsistent" in identity.reason
