@@ -524,7 +524,12 @@ async def _run_research_round(
     by_id = {p.id: p for p in top}
     # An invented id has no provenance card and cannot be meaningfully graded.
     # Remove its complete statement before both rendering and verification.
-    answer_text = _remove_unknown_citation_claims(answer_text, set(by_id))
+    sanitized_answer = _remove_unknown_citation_claims(answer_text, set(by_id))
+    if sanitized_answer != answer_text:
+        # Tokens are buffered until grounding succeeds. Reconcile that buffer
+        # too, so rejected claims cannot flash before the authoritative final.
+        token_frames = [{"type": "token", "token": sanitized_answer, "block_id": "answer"}]
+    answer_text = sanitized_answer
     if not answer_text:
         raise _ResearchAborted(
             "The answer model cited only unknown sources. Try another model or retry the search."

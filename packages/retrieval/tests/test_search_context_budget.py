@@ -230,3 +230,65 @@ async def test_round_verifies_and_returns_only_evidence_sent_to_answerer():
     assert "Invented" not in result.answer_text
     assert "second_p0" not in result.answer_text
     assert len(result.all_hits) == 2
+
+
+@pytest.mark.parametrize("reject_unsent_claim", [False, True])
+async def test_public_stream_never_exposes_claims_rejected_from_final_provenance(
+    reject_unsent_claim,
+):
+    from disco.core.llm import CompletionResponse, TokenUsage
+    from disco.retrieval.streaming import stream_research_answer
+    from research_fakes import FakeExtractionProvider, FakeNLI, FakeSearchProvider, hit
+
+    class Router(RecordingRouter):
+        async def stream_complete(self, request):
+            self.requests.append(request)
+            for text in ["Paris is the", " capital. [[first_p0]]"]:
+                yield StreamChunk(delta_text=text)
+            if reject_unsent_claim:
+                yield StreamChunk(delta_text=" Invented claim. [[second_p0]]")
+            yield StreamChunk(done=True)
+
+        async def complete(self, request):
+            return CompletionResponse(
+                text="Which sources establish this?\nWhat evidence supports the answer?",
+                usage=TokenUsage(input_tokens=1, output_tokens=1),
+                finish_reason="stop",
+                model_used="arbitrary-model",
+            )
+
+    class Ranked:
+        async def rerank(self, query, passages, *, top_k):
+            return sorted(passages, key=lambda p: p.id)[:top_k]
+
+    first, second = "https://example.test/first", "https://example.test/second"
+    original = "Paris is the capital of France. " * 1000
+    router = Router()
+    frames = [
+        frame
+        async for frame in stream_research_answer(
+            "Which city?",
+            router=router,
+            search=FakeSearchProvider([hit(first), hit(second)]),
+            extraction=FakeExtractionProvider({first: original, second: "Never sent evidence."}),
+            reranker=Ranked(),
+            nli=FakeNLI({"Paris is the capital": "entail"}),
+        )
+    ]
+    assert not [frame for frame in frames if frame["type"] == "error"]
+    tokens = [frame for frame in frames if frame["type"] == "token"]
+    assert tokens
+    visible = "".join(frame["token"] for frame in tokens)
+    assert visible == "Paris is the capital. [[first_p0]]"
+    assert "Invented" not in visible and "second_p0" not in visible
+    if not reject_unsent_claim:
+        # A clean answer retains its existing incremental frame boundaries.
+        assert len(tokens) > 1
+    final = next(frame["answer"] for frame in frames if frame["type"] == "final")
+    assert [passage["id"] for passage in final["passages"]] == ["first_p0"]
+    excerpt = final["passages"][0]["text"]
+    assert original.startswith(excerpt) and excerpt != original
+    assert excerpt in router.requests[0].messages[1].content
+    assert final["claims"] and all(c["verdict"] == "supported" for c in final["claims"])
+    assert "Invented" not in str(final["blocks"])
+    assert frames[-1] == {"type": "state", "status": "finished"}
