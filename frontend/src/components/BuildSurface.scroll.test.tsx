@@ -245,7 +245,7 @@ describe("saved source availability", () => {
     expect(screen.queryByRole("button", { name: "Download source" })).not.toBeInTheDocument();
     buildState = { ...buildState, events: completed };
     await act(async () => rerenderSurface(<BuildSurface resumeCid="delayed" />));
-    expect(screen.getByRole("button", { name: "Download source" })).toBeEnabled();
+    for (const button of screen.getAllByRole("button", { name: "Download source" })) expect(button).toBeEnabled();
     expect(screen.queryByText("Source not ready")).not.toBeInTheDocument();
     expect(releaseQuery).toHaveBeenLastCalledWith("delayed", "sealed-1");
     expect(screen.getByRole("link", { name: "Download source" })).toBeVisible();
@@ -258,7 +258,7 @@ describe("saved source availability", () => {
     expect(screen.queryByRole("link", { name: "Download source" })).not.toBeInTheDocument();
     buildState = { ...buildState, events: [...completed, ...next] };
     await act(async () => rerenderSurface(<BuildSurface resumeCid="delayed" />));
-    expect(screen.getByRole("button", { name: "Download source" })).toBeEnabled();
+    for (const button of screen.getAllByRole("button", { name: "Download source" })) expect(button).toBeEnabled();
     expect(releaseQuery).toHaveBeenLastCalledWith("delayed", "sealed-2");
   });
 
