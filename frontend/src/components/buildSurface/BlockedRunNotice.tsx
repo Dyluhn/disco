@@ -1,5 +1,4 @@
 import type { AgentEvent, ConversationStatus } from "@/types/agent";
-import { Markdown } from "@/components/Markdown";
 
 export function BlockedRunNotice({ events, status }: { events: AgentEvent[]; status: ConversationStatus }) {
   if (status !== "PAUSED" && status !== "AWAITING_USER_DECISION") return null;
@@ -13,6 +12,6 @@ export function BlockedRunNotice({ events, status }: { events: AgentEvent[]; sta
   return <div role="status" data-testid="blocked-run-notice"
     className="mb-inline rounded-card border border-warn/40 bg-warn/5 p-body text-text">
     <p className="mb-hair font-ui font-medium">Input needed to continue</p>
-    <Markdown>{reason}</Markdown>
+    <p className="whitespace-pre-wrap break-words">{reason}</p>
   </div>;
 }

@@ -9,6 +9,7 @@ loopback-bound and retaining the gateway's token authentication.
 from __future__ import annotations
 
 import contextlib
+import os
 import socket
 import struct
 import subprocess
@@ -83,7 +84,7 @@ class PodmanExecStream:
 
     def read(self) -> bytes:
         assert self._process.stdout is not None
-        return self._process.stdout.read1(_CHUNK)
+        return os.read(self._process.stdout.fileno(), _CHUNK)
 
     def write(self, data: bytes) -> None:
         assert self._process.stdin is not None

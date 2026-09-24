@@ -42,7 +42,12 @@ def _resolve_gateway_url(gk: GatewayKernel, port: int) -> str:
     elif hasattr(gk._sandbox, "internal_port_mapping"):
         mapping = gk._sandbox.internal_port_mapping(port)
 
-    if not mapping:
+    if (
+        not isinstance(mapping, tuple)
+        or len(mapping) != 2
+        or not isinstance(mapping[0], str)
+        or not isinstance(mapping[1], int)
+    ):
         raise kernel.SandboxError(
             "kernel gateway internal transport is unavailable; "
             "code_exec cannot start for this sandbox session"
