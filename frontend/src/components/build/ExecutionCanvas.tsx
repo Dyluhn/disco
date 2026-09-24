@@ -13,14 +13,13 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as Tabs from "@radix-ui/react-tabs";
-import { useQuery } from "@tanstack/react-query";
-import { listProjects } from "@/api/projects";
 import { FileCode2, Gauge, MonitorPlay, SquareTerminal } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { deriveFiles, deriveSrcDoc, deriveTerminal } from "@/lib/buildTrace";
 import { useSnapToAction } from "@/lib/useSnapToAction";
 import { useBuildPreview } from "@/hooks/useBuildPreview";
 import { useProjectManifest } from "@/hooks/useProjects";
+import { useSavedWorkspaceAvailability } from "@/hooks/useSavedWorkspaceAvailability";
 import { useSessions } from "@/hooks/useSessions";
 import type { StreamingFile } from "@/hooks/useBuildStream";
 import type { ElementMentionPayload } from "@/lib/elementMention";
@@ -41,38 +40,12 @@ const TABS: { id: TabId; label: string; icon: typeof FileCode2 }[] = [
   { id: "cockpit", label: "Cockpit", icon: Gauge },
 ];
 
-function importedWorkspaceEvent(events: AgentEvent[], untrusted: boolean) {
-  if (untrusted) return undefined;
-  return events.find((event) => event.kind === "message" && event.source === "environment" &&
-    (event.meta?.project_import as { workspace_ready?: unknown } | undefined)?.workspace_ready === true);
-}
-
-// Older project imports predate the ready event. A successful owner-scoped
-// listing distinguishes their persisted workspace from an empty new run without
-// probing a missing manifest. This is a read-only presentation check.
-function usePersistedProject(cid: string | null, status: ConversationStatus, untrusted: boolean, known: boolean) {
-  const inactive = status === "IDLE" || status === "PAUSED" || status === "ERROR";
-  const query = useQuery({
-    queryKey: ["workspace-existence", cid],
-    queryFn: listProjects,
-    enabled: Boolean(cid) && inactive && !untrusted && !known,
-    retry: false,
-    staleTime: 30_000,
-    refetchOnWindowFocus: false,
-  });
-  return !untrusted
-    ? query.data?.projects.find((project) => project.id === cid && !project.files_missing)
-    : undefined;
-}
-
 function useWorkspaceInspection(events: AgentEvent[], status: ConversationStatus, cid: string | null, untrusted: boolean) {
   // Imports materialize a host workspace before any agent run/seal. Only the
   // server's environment-event hint enables that read, never message prose or
   // untrusted shared events. Manifest/file endpoints still enforce ownership.
-  const importedWorkspace = importedWorkspaceEvent(events, untrusted);
-  const sealedWorkspace = status === "FINISHED" || events.some((event) => event.kind === "workspace_version");
-  const persistedProject = usePersistedProject(cid, status, untrusted, Boolean(importedWorkspace) || sealedWorkspace);
-  const hasAvailableWorkspace = Boolean(importedWorkspace || persistedProject) || sealedWorkspace;
+  const { importedWorkspace, persistedProject, hasAvailableWorkspace } =
+    useSavedWorkspaceAvailability(events, status, cid, untrusted);
   const workspaceRevision = useMemo(() => {
     const latest = [...events].reverse().find(
       (event) => event.kind === "workspace_restored" || event.kind === "workspace_version",

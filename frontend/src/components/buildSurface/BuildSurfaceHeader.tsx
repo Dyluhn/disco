@@ -12,6 +12,7 @@ import type { isolationForBackend } from "@/lib/isolation";
 import type { useDownloadProject } from "@/hooks/useProjects";
 import type { BuildController } from "./types";
 import type { BuildFraming } from "@/components/BuildSurface";
+import { useSavedWorkspaceAvailability } from "@/hooks/useSavedWorkspaceAvailability";
 
 export function BuildSurfaceHeader({
   b,
@@ -28,6 +29,7 @@ export function BuildSurfaceHeader({
   onDownloadClick: () => void;
   framing: BuildFraming;
 }) {
+  const { hasAvailableWorkspace } = useSavedWorkspaceAvailability(b.events, b.status, b.cid);
   return (
     <div className="flex flex-col gap-inline px-body pt-section">
       <AgentStatusBar
@@ -56,9 +58,8 @@ export function BuildSurfaceHeader({
         <h1 className="font-display text-[1.3rem] font-medium leading-tight tracking-tight text-text">
           {taskLabel}
         </h1>
-        {/* Export the saved project as a zip — only available for resumed
-            projects and finished builds (a snapshot must exist on disk). */}
-        {b.cid && (b.resumed || b.status === "FINISHED") && (
+        {/* A resumed route can still be a new run with no saved workspace. */}
+        {b.cid && hasAvailableWorkspace && (
           <div className="flex shrink-0 flex-col items-end gap-hair">
             <button
               type="button"

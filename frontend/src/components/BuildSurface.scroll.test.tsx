@@ -230,6 +230,33 @@ describe("WO-9: the workspace-zip action is labelled 'Download source'", () => {
   });
 });
 
+describe("saved source availability", () => {
+  it.each(["RUNNING", "AWAITING_USER_DECISION"] as const)("does not offer a missing source archive on a resumed %s route", (status) => {
+    buildState = baseBuild({ cid: "new-unsaved-run", resumed: true, status });
+    renderSurface(<BuildSurface resumeCid="new-unsaved-run" />);
+    expect(screen.queryByRole("button", { name: "Download source" })).not.toBeInTheDocument();
+  });
+
+  it("retains source download during a continuation with a saved workspace version", () => {
+    buildState = baseBuild({ cid: "saved-continuation", resumed: true, status: "RUNNING", events: [{
+      kind: "workspace_version", id: "saved-version", source: "system", version_seq: 1,
+      tree_digest: "saved-digest", trigger: "checkpoint",
+    }] });
+    renderSurface(<BuildSurface resumeCid="saved-continuation" />);
+    expect(screen.getByRole("button", { name: "Download source" })).toBeEnabled();
+  });
+
+  it("offers imported source before the first agent run", () => {
+    buildState = baseBuild({ cid: "imported-source", resumed: true, status: "IDLE", events: [{
+      kind: "message", id: "import-ready", source: "environment",
+      message: { role: "user", content: "Imported workspace" },
+      meta: { project_import: { workspace_ready: true } },
+    }] });
+    renderSurface(<BuildSurface resumeCid="imported-source" />);
+    expect(screen.getByRole("button", { name: "Download source" })).toBeEnabled();
+  });
+});
+
 describe("W-41: scroll-to-latest chevron", () => {
   it("is hidden at the bottom and appears once scrolled up past the threshold", async () => {
     const user = userEvent.setup();
