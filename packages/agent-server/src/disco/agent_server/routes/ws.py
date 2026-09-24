@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 from typing import Any
 
 from disco.core import (
@@ -37,6 +38,8 @@ from ._common import (
     require_owned_conversation,
     validate_canonical_conversation_id,
 )
+
+_LOG = logging.getLogger(__name__)
 
 
 def _file_stream_payload(frame: dict[str, Any]) -> FileStreamFrame:
@@ -420,29 +423,38 @@ async def _pump_conversation_events(
         # instead of retaining an unbounded in-memory queue on the server.
         with contextlib.suppress(Exception):
             await websocket.close(code=1013, reason="event stream fell behind; reconnect")
+    finally:
+        close = getattr(stream, "aclose", None)
+        if close is not None:
+            await close()
 
 
 async def _pump_ephemeral_frames(websocket: WebSocket, eph_stream: Any) -> None:
     # Watch-it-write: drain the EPHEMERAL bus (transient file-stream deltas,
     # never persisted) onto the same socket. A second pump so a flood of
     # stream frames never blocks the primary event pump (and vice versa).
-    async for frame in eph_stream:
-        # D3: route mcp_approval_required frames via the typed WS event
-        if isinstance(frame, dict) and frame.get("type") == "mcp_approval_required":
-            await _send_json_redacted(
-                websocket,
-                WSServerFrame(
-                    type="mcp_approval_required",
-                    mcp_approval=frame,
-                ).model_dump(mode="json"),
-            )
-        else:
-            await _send_json_redacted(
-                websocket,
-                WSServerFrame(
-                    type="file_stream", file_stream=_file_stream_payload(frame)
-                ).model_dump(mode="json"),
-            )
+    try:
+        async for frame in eph_stream:
+            # D3: route mcp_approval_required frames via the typed WS event
+            if isinstance(frame, dict) and frame.get("type") == "mcp_approval_required":
+                await _send_json_redacted(
+                    websocket,
+                    WSServerFrame(
+                        type="mcp_approval_required",
+                        mcp_approval=frame,
+                    ).model_dump(mode="json"),
+                )
+            else:
+                await _send_json_redacted(
+                    websocket,
+                    WSServerFrame(
+                        type="file_stream", file_stream=_file_stream_payload(frame)
+                    ).model_dump(mode="json"),
+                )
+    finally:
+        close = getattr(eph_stream, "aclose", None)
+        if close is not None:
+            await close()
 
 
 async def _run_conversation_ws(
@@ -453,30 +465,60 @@ async def _run_conversation_ws(
     last_seq: int,
 ) -> None:
     """Drive the conversation WebSocket: state frame, event/ephemeral pumps, frame loop."""
-    await _send_conversation_state_frame(store, websocket, conversation_id, runtime)
-    projection = AgentViewProjection()
-    if last_seq > 0:
-        for event in await store.get_events(conversation_id):
-            if type(event.seq) is int and event.seq <= last_seq:
-                projection.accept(event)
-    stream = await store.subscribe(conversation_id, after_seq=last_seq)
-    eph_stream = await store.subscribe_ephemeral(conversation_id)
-
-    sender = asyncio.create_task(_pump_conversation_events(websocket, stream, projection))
-    eph_sender = asyncio.create_task(_pump_ephemeral_frames(websocket, eph_stream))
     try:
-        await _ws_frame_loop(store, websocket, conversation_id, runtime)
+        await _send_conversation_state_frame(store, websocket, conversation_id, runtime)
+        projection = AgentViewProjection()
+        if last_seq > 0:
+            for event in await store.get_events(conversation_id):
+                if type(event.seq) is int and event.seq <= last_seq:
+                    projection.accept(event)
+        stream = await store.subscribe(conversation_id, after_seq=last_seq)
+        eph_stream = await store.subscribe_ephemeral(conversation_id)
+        tasks = (
+            asyncio.create_task(_pump_conversation_events(websocket, stream, projection)),
+            asyncio.create_task(_pump_ephemeral_frames(websocket, eph_stream)),
+        )
+        primary_failed = False
+        try:
+            await _ws_frame_loop(store, websocket, conversation_id, runtime)
+        except WebSocketDisconnect:
+            raise
+        except BaseException:
+            primary_failed = True
+            raise
+        finally:
+            await _drain_conversation_pumps(tasks, primary_failed=primary_failed)
+    except WebSocketDisconnect:
+        # Starlette raises this for an ASGI send after the client closes too.
+        pass
     finally:
-        sender.cancel()
-        eph_sender.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await sender
-        with contextlib.suppress(asyncio.CancelledError):
-            await eph_sender
-        # Last viewer left → after a grace window, free an idle sandbox
-        # (an in-flight RUNNING loop is left alone; see runtime._suspend).
+        # Notification must survive failed sends, including the initial state.
+        # This releases viewer bookkeeping; it never cancels a live agent run.
         if runtime is not None:
             runtime.connections.on_disconnect(conversation_id)
+
+
+async def _drain_conversation_pumps(
+    tasks: tuple[asyncio.Task[None], ...],
+    *,
+    primary_failed: bool,
+) -> None:
+    for task in tasks:
+        task.cancel()
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    for result in results:
+        if not isinstance(result, BaseException) or isinstance(
+            result, (asyncio.CancelledError, WebSocketDisconnect)
+        ):
+            continue
+        if not primary_failed:
+            raise result
+        # Preserve the receiver's real failure/cancellation, while still
+        # recording an independent producer error after consuming both tasks.
+        _LOG.error(
+            "Conversation event sender failed during teardown",
+            exc_info=(type(result), result, result.__traceback__),
+        )
 
 
 async def _ws_frame_loop(
