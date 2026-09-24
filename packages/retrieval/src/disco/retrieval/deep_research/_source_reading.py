@@ -434,7 +434,15 @@ def _retained_notes(
     retained: Mapping[str, SourceNotes] | None,
     call_limit: int,
 ) -> dict[str, SourceNotes]:
-    notes = {}
+    # Keep spending for sources removed from the current pool, or now short
+    # enough to render whole. Empty hashes cannot carry reusable source proof.
+    notes = {
+        source_id: SourceNotes(
+            reader_output_tokens_charged=charged_output(note, call_limit),
+            complete=True,
+        )
+        for source_id, note in (retained or {}).items()
+    }
     for passage in long_sources:
         prior = (retained or {}).get(passage.id)
         if prior is None:
@@ -548,6 +556,7 @@ def source_reading_trail(notes: Mapping[str, SourceNotes]) -> list[dict[str, Any
             "error": note.error,
         }
         for source_id, note in notes.items()
+        if note.source_sha256
     ]
 
 

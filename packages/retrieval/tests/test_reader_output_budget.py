@@ -163,3 +163,25 @@ def test_output_limit_is_declared_config_not_model_identity(identity):
     assert router.output_token_limit(ModelRole.RAG_ANSWERER) == 321
     config.models["m"] = entry.model_copy(update={"max_output_tokens": None})
     assert router.output_token_limit(ModelRole.RAG_ANSWERER) is None
+
+
+@pytest.mark.parametrize("replacement", [[], [_source("Now a short source.")]])
+async def test_removed_or_shortened_source_spend_survives_another_checkpoint(replacement):
+    old = SourceNotes(source_sha256="old", calls=1, complete=True, reader_output_tokens_charged=100)
+    saved = {}
+
+    async def save(notes):
+        saved.update(
+            {k: SourceNotes.model_validate_json(v.model_dump_json()) for k, v in notes.items()}
+        )
+
+    router = UsageRouter()
+    notes = await read(router, replacement, retained={"p1": old}, checkpoint=save)
+    assert router.calls == 0
+    assert saved["p1"].reader_output_tokens_charged == 100
+    assert not saved["p1"].source_sha256 and not notes_blocks(notes)
+    assert reader.source_reading_trail(notes) == []
+    later = UsageRouter([_reply([])], usage="capacity")
+    note = (await read(later, [_source("Source evidence. " * 800)], retained=saved))["p1"]
+    assert later.requests[0].max_tokens == 50
+    assert note.reader_output_tokens_charged == 150
