@@ -36,6 +36,7 @@ from ..anatomy import Tool, ToolDef, ToolExecutionError, ToolOutcome
 from ..registry import ToolRegistry, ToolScope
 from ..sandbox.base import SandboxError
 from ..secrets import CapabilityDenied
+from ._validation_errors import _validation_errors
 from .arguments import normalize_list_item_wrappers
 from .validation_message import describe_validation_failure
 
@@ -236,12 +237,9 @@ def admit_call(
     try:
         args = tool.definition.args_model.model_validate(arguments)
     except ValidationError as e:
-        # ErrorDetails -> plain dict, MINUS the raw `input` value. `hide_input_in_errors`
-        # only affects `str(e)`; `.errors()` still carries the rejected input, which a
-        # value-guard (e.g. a release argv/URL/path token) could make a secret. The
-        # surfaced `validation_errors`/`content` must never echo a rejected value
-        # (WO-C5 crit 3), and no consumer reads the input back, so it is dropped here.
-        errors = [{k: v for k, v in err.items() if k != "input"} for err in e.errors()]
+        # Pydantic context may contain exceptions, and custom messages may echo
+        # secrets. Preserve only structural diagnostics plus the expected schema.
+        errors = _validation_errors(e)
         return fail_result(
             call,
             "invalid_arguments",
