@@ -499,7 +499,7 @@ async def _browser_live_url_response(
     return JSONResponse(
         {
             "ready": True,
-            "novnc_path": "/vnc.html?autoconnect=1&view_only=1",
+            "novnc_path": "/vnc.html?autoconnect=1&view_only=1&resize=scale",
             "port": NOVNC_PORT,
         }
     )
