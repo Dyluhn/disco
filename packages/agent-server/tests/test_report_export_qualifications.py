@@ -23,7 +23,9 @@ def test_qualified_exports_keep_findings_and_escape_metadata():
     for rendered in (md, html):
         assert "Evidence and review qualifications" in rendered
         assert "2 supported, 1 possible contradictions, 3 unresolved, 4 not checked" in rendered
-        assert "it is not a contradiction" in rendered
+        assert (
+            "did not establish support or contradiction; it does not mean the claim is false"
+        ) in rendered
         assert "The causal direction needs qualification" in rendered
         assert "Unverified: The other participant must fail" in rendered
         assert "Not researched: Long-term behavior" in rendered
