@@ -348,17 +348,29 @@ function FormDialog({
   onOpenChange,
   mode,
   initial,
+  opener,
 }: {
   open: boolean;
   onOpenChange: (o: boolean) => void;
   mode: "add" | "edit";
   initial: ModelUpsert;
+  opener: HTMLButtonElement;
 }) {
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-40 bg-black/45" />
-        <Dialog.Content className="fixed left-1/2 top-1/2 z-50 flex max-h-[88vh] w-[min(40rem,94vw)] -translate-x-1/2 -translate-y-1/2 flex-col gap-body overflow-y-auto rounded-card border border-hairline bg-bg p-body pmx-rise">
+        <Dialog.Content
+          onCloseAutoFocus={(event) => {
+            // This controlled dialog has multiple external openers, not a
+            // Dialog.Trigger. Return to the exact initiating button after
+            // Escape, Cancel, or successful save; never focus a detached row.
+            if (opener.isConnected) {
+              event.preventDefault();
+              opener.focus();
+            }
+          }}
+          className="fixed left-1/2 top-1/2 z-50 flex max-h-[88vh] w-[min(40rem,94vw)] -translate-x-1/2 -translate-y-1/2 flex-col gap-body overflow-y-auto rounded-card border border-hairline bg-bg p-body pmx-rise">
           <Dialog.Title className="font-display text-[1.3rem] text-text">
             {mode === "add" ? "Add a model" : `Edit ${initial.id}`}
           </Dialog.Title>
@@ -385,6 +397,7 @@ export function ModelCatalogue() {
   const [dialog, setDialog] = useState<{
     mode: "add" | "edit";
     initial: ModelUpsert;
+    opener: HTMLButtonElement;
   } | null>(null);
 
   return (
@@ -410,7 +423,7 @@ export function ModelCatalogue() {
           <button
             type="button"
             data-disco-control="settings.model-add"
-            onClick={() => setDialog({ mode: "add", initial: BLANK })}
+            onClick={(event) => setDialog({ mode: "add", initial: BLANK, opener: event.currentTarget })}
             className="flex min-h-11 items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.8rem] text-text-muted transition-colors hover:border-hairline-strong hover:text-text lg:min-h-0"
           >
             <Plus className="size-3.5" aria-hidden /> Add model
@@ -453,8 +466,8 @@ export function ModelCatalogue() {
                   data-disco-control="settings.model-edit"
                   data-model-id={m.id}
                   aria-label={`Edit ${m.id}`}
-                  onClick={() =>
-                    setDialog({ mode: "edit", initial: toUpsert(m) })
+                  onClick={(event) =>
+                    setDialog({ mode: "edit", initial: toUpsert(m), opener: event.currentTarget })
                   }
                   className={cn(
                     "rounded-control p-hair text-text-faint transition-colors hover:text-text",
@@ -501,6 +514,7 @@ export function ModelCatalogue() {
             onOpenChange={(o) => !o && setDialog(null)}
             mode={dialog.mode}
             initial={dialog.initial}
+            opener={dialog.opener}
           />
         )}
       </div>
