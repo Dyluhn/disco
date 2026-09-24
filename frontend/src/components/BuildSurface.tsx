@@ -20,6 +20,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { BuildRouteSync } from "./buildSurface/BuildRouteSync";
+import { AppKitOwnerPanel } from "./buildSurface/ownerControls/AppKitOwnerPanel";
 import { useBuild } from "@/hooks/useBuild";
 import { useBuildNotifications } from "@/hooks/useBuildNotifications";
 import {
@@ -231,6 +232,7 @@ export function BuildSurface({
           downloadTitle={taskLabel}
         />
         <BuildDecisionGates b={b} />
+        {b.persistentConversation && b.cid && <AppKitOwnerPanel key={b.cid} cid={b.cid} status={b.status} />}
         <BuildAskGate b={b} finalMessage={finalMessage} />
         <BuildComposerSection
           b={b}

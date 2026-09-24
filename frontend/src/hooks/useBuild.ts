@@ -128,13 +128,13 @@ function useModelAwareContinuations(
  * REAL signal: an actual upload (ensurePreCid, called by the paperclip) or
  * submit (which falls through to create.mutate when no preCid exists). The
  * same cid is reused so uploads in the pending session survive the kick. */
-function usePrecreatedUploadCid(surface: "build" | "agent", quietChoice: boolean) {
+function usePrecreatedUploadCid(surface: "build" | "agent", quietChoice: boolean, appkitMode: boolean) {
   const [preCid, setPreCid] = useState<string | null>(null);
   const preCidRef = useRef<string | null>(null);
   const preCreateFlightRef = useRef<Promise<string> | null>(null);
   const preCreate = useMutation({
     mutationFn: (opts: { modelOverride: string | null; autonomous: boolean; quiet: boolean }) =>
-      createBuildConversation(opts.modelOverride, surface, opts.autonomous, null, opts.quiet),
+      createBuildConversation(opts.modelOverride, surface, opts.autonomous, null, opts.quiet, [], appkitMode),
   });
 
   // W-07: lazily obtain the upload cid. Concurrent callers share one in-flight
@@ -164,7 +164,7 @@ function usePrecreatedUploadCid(surface: "build" | "agent", quietChoice: boolean
     setPreCid(null);
   }, []);
 
-  return { preCid, preCidRef, preCreateFlightRef, ensurePreCid, clearPreCid };
+  return { preCid, preCidRef, preCreateFlightRef, ensurePreCid, clearPreCid, creating: preCreate.isPending };
 }
 
 /** Opens a build-like conversation. `surface` is "build" (software framing) or
@@ -172,6 +172,15 @@ function usePrecreatedUploadCid(surface: "build" | "agent", quietChoice: boolean
  * (the /build/:cid or /agent/:cid route), skip the create call and connect to the
  * existing conversation — the WebSocket replays history-then-live, so prior events
  * restore (the stored surface is authoritative; resume never re-sets it). */
+type BuildCreateSettings = {
+  modelOverride: string | null;
+  autonomous: boolean;
+  assist: boolean;
+  quiet: boolean;
+  referencePackIds: string[];
+  appkitMode: boolean;
+};
+
 export function useBuild(
   resumeCid?: string | null,
   surface: "build" | "agent" = "build",
@@ -195,13 +204,14 @@ export function useBuild(
   // auto-enabled by hosting (a capable local model like Qwen 27B is not sandbagged).
   // Off by default; the user flips it for a genuinely weak model. Locked once work begins.
   const [assistChoice, setAssistChoice] = useState(false);
+  const [appkitChoice, setAppkitChoice] = useState(false);
   // PKG-47: Reference Packs the user picked for this build. Bound (snapshotted)
   // server-side before the first model call; never selected automatically.
   const [referencePackIds, setReferencePackIds] = useState<string[]>([]);
   const { verbose: verboseChat } = useVerboseAgentChat();
   const quietChoice = !verboseChat;
 
-  const precreated = usePrecreatedUploadCid(surface, quietChoice);
+  const precreated = usePrecreatedUploadCid(surface, quietChoice, appkitChoice);
   const stream = useBuildStream(session, { surface });
   const { resume, requestPlan, steer } = useModelAwareContinuations(
     session,
@@ -227,13 +237,7 @@ export function useBuild(
   }, [resumeCid, session, seedTask, seedContext]);
 
   const create = useMutation({
-    mutationFn: (opts: {
-      modelOverride: string | null;
-      autonomous: boolean;
-      assist: boolean;
-      quiet: boolean;
-      referencePackIds: string[];
-    }) =>
+    mutationFn: (opts: BuildCreateSettings) =>
       createBuildConversation(
         opts.modelOverride,
         surface,
@@ -241,6 +245,7 @@ export function useBuild(
         opts.assist,
         opts.quiet,
         opts.referencePackIds,
+        opts.appkitMode,
       ),
   });
 
@@ -302,6 +307,7 @@ export function useBuild(
           assist: assistChoice,
           quiet: quietChoice,
           referencePackIds,
+          appkitMode: appkitChoice,
         },
         { onSuccess: (cid) => setSession({ cid, task: trimmed, kick: true }) },
       );
@@ -314,6 +320,7 @@ export function useBuild(
       assistChoice,
       quietChoice,
       referencePackIds,
+      appkitChoice,
       precreated.preCid,
       precreated.preCidRef,
       precreated.preCreateFlightRef,
@@ -344,6 +351,9 @@ export function useBuild(
     setAutonomousChoice,
     assistChoice,
     setAssistChoice,
+    appkitChoice,
+    setAppkitChoice,
+    appkitChoiceLocked: Boolean(precreated.preCid) || precreated.creating || create.isPending,
     referencePackIds,
     setReferencePackIds,
     submit,

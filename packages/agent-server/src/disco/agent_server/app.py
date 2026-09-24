@@ -70,6 +70,7 @@ from .routes import (
     make_ws_router,
 )
 from .routes._common import _sanitize_name, make_preview_upstream_resolver
+from .routes.appkit_owner import make_appkit_owner_router
 from .runtime import ConversationRuntime
 
 # `_sanitize_name` is re-exported here for tests that import it from this module
@@ -333,6 +334,7 @@ def _include_routers(
     app.include_router(make_models_router(store, runtime))
     app.include_router(make_files_router(store, runtime))
     app.include_router(make_deck_editor_router(store, runtime))
+    app.include_router(make_appkit_owner_router(store, runtime))
     app.include_router(make_preview_router(store, runtime))
     app.include_router(make_preview_edit_router(store, runtime))
     app.include_router(make_sessions_router(store, runtime))

@@ -150,6 +150,7 @@ export async function createBuildConversation(
   quiet = false,
   /** PKG-47: Reference Packs to bind before the first model call (ids from the library). */
   referencePackIds: string[] = [],
+  appkitMode = false,
 ): Promise<string> {
   if (!agentLive()) return FIXTURE_CID;
   const res = await agentSend<{ conversation_id: string }>("POST", "/conversations", {
@@ -158,6 +159,7 @@ export async function createBuildConversation(
     autonomous,
     quiet,
     assist,
+    ...(appkitMode ? { appkit_mode: true } : {}),
     ...(referencePackIds.length > 0 ? { reference_pack_ids: referencePackIds } : {}),
   });
   return res.conversation_id;

@@ -829,6 +829,7 @@ async def test_app_set_design_touches_only_design_files():
     touched = set(out.artifacts)
     assert touched == {
         DESIGNSPEC_RELPATH,
+        ".disco/tweaks.json",  # owner defaults track the authoritative design
         "src/styles.css",
         "index.html",
         "src/generated/manifest.ts",

@@ -95,6 +95,19 @@ export function BuildEmptyState({
                     className="flex flex-wrap items-center gap-inline border-t border-hairline pt-inline"
                   >
                     <BuildModelPicker value={b.modelId} onChange={b.setModelId} surface={framing} />
+                    {framing === "build" && (
+                      <label className="flex items-center gap-hair font-ui text-[0.78rem] text-text-muted">
+                        <input
+                          type="checkbox"
+                          checked={b.appkitChoice ?? false}
+                          disabled={b.appkitChoiceLocked}
+                          onChange={(event) => b.setAppkitChoice(event.target.checked)}
+                          data-disco-control="build.appkit-toggle"
+                        />
+                        AppKit components
+                        <span className="sr-only"> — structured sites with owner controls; select before attaching files</span>
+                      </label>
+                    )}
                     {/* Assist tier toggle deliberately hidden at launch (deprecated
                         control) — b.assistChoice/setAssistChoice still exist and
                         still drive the create/patch payload at its default (off);

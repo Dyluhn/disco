@@ -26,6 +26,7 @@ from disco.core.appkit import (
     resolve_primitive,
     section_component_names,
 )
+from disco.core.appkit.owner_controls import seed_owner_controls
 from disco.core.appkit.recipes import RECIPES
 from disco.core.appkit.spec import AppSpec, DesignSpec
 from disco.core.design import DesignDirection
@@ -46,6 +47,12 @@ _FS = frozenset({Capability.FILESYSTEM})
 
 
 class AppCreateArgs(BaseModel):
+    owner_controls: bool = Field(
+        default=True,
+        description="For lead_gen apps, expose six persisted owner controls: brand name, accent "
+        "palette, text color, spacing, content width, and reduced motion. Other primitives "
+        "keep their own semantic editing contract. Values remain in the canonical specs.",
+    )
     recipe_id: str = Field(
         # Catalog-in-schema (same doctrine as scaffold_starter, proven live 2026-07-10):
         # the model must see the FULL valid vocabulary before its first call — the
@@ -279,6 +286,14 @@ class AppCreateTool:
         try:
             recipe, design, direction = await _resolve_create_design(ctx, args)
             app, primitive = _resolve_create_app_and_primitive(args, recipe)
+            if args.owner_controls and app.app_kind == "lead_gen" and app.owner_controls is None:
+                app = seed_owner_controls(
+                    app,
+                    design,
+                    palette=tuple(accent.hex for accent in direction.accents)
+                    if direction is not None
+                    else None,
+                )
             prior_tree = await _resolve_create_overwrite(ctx, args)
             tree = _generate_create_tree(app, design, primitive)
             await _lint_gate(tree, design, ctx, direction=direction)

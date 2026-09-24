@@ -1,8 +1,8 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import { AppCard } from "@/components/build/AppCard";
-import { TweakPanel, type TweakFieldView } from "@/components/build/TweakPanel";
+import { AppCard } from "@/components/buildSurface/ownerControls/AppCard";
+import { TweakPanel, type TweakFieldView } from "@/components/buildSurface/ownerControls/TweakPanel";
 
 const FIELDS: TweakFieldView[] = [
   { key: "lead.phone", label: "Include phone", editor: "boolean" },

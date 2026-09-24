@@ -8,27 +8,14 @@
  * any unknown editor fail closed to a disabled "unsupported" note with NO input.
  *
  * Decoupled: changes flow up via `onTweak(key, value)`; the parent adapts to the real
- * app_set_tweak wire call (the live mount is P1B-LIVE). TweakFieldView is a props mirror of
+ * fenced owner-controls API. TweakFieldView is a props mirror of
  * the Python core TweakField (TS can't import core/tweaks.py).
  */
 
 import { cn } from "@/lib/cn";
 
-export type TweakEditor = "boolean" | "enum" | "int" | "float" | "color" | "palette" | "text";
-export type TweakValue = string | number | boolean;
-
-export interface TweakFieldView {
-  key: string;
-  label: string;
-  /** A documented editor; an unrecognized value renders the unsupported note (API boundary). */
-  editor: TweakEditor;
-  options?: string[]; // enum
-  colors?: string[]; // palette swatches
-  min?: number; // int/float
-  max?: number;
-  step?: number;
-  maxLength?: number; // text bound (default 120)
-}
+import type { TweakFieldView, TweakValue } from "@/types/appkitOwner";
+export type { TweakEditor, TweakFieldView, TweakValue } from "@/types/appkitOwner";
 
 interface Props {
   fields: TweakFieldView[];
