@@ -5,7 +5,6 @@ from __future__ import annotations
 from ...events import (
     ConversationStatus,
     Event,
-    EventSource,
     MessageEvent,
     StatusEvent,
     WorkspaceMutationEvent,
@@ -26,16 +25,6 @@ def _run_events(events: list[Event]) -> list[Event]:
     return [event for event in events if (event.seq or 0) > floor]
 
 
-def _sandbox_restarted_after(events: list[Event], seq: int) -> bool:
-    return any(
-        isinstance(event, MessageEvent)
-        and event.source is EventSource.ENVIRONMENT
-        and (event.seq or 0) > seq
-        and "sandbox_restart" in event.meta
-        for event in events
-    )
-
-
 def _record_state(record: check_ledger.CheckRecord, statuses: dict, events: list[Event]) -> str:
     status = statuses.get(record.fingerprint)
     state = status.state if status is not None else "inconclusive; source snapshot unavailable"
@@ -50,8 +39,6 @@ def _record_state(record: check_ledger.CheckRecord, statuses: dict, events: list
         for e in events
     ):
         return "stale after workspace/runtime change"
-    if _sandbox_restarted_after(events, record.seq):
-        return "stale after sandbox restart"
     return state
 
 

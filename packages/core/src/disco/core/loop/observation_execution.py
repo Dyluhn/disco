@@ -18,6 +18,7 @@ from ..events import (
     ObservationEvent,
     RuntimeConstraintEvent,
     ToolResult,
+    WorkspaceMutationEvent,
     find_elided_arg_markers,
     value_is_only_elision_marker,
 )
@@ -570,6 +571,9 @@ async def maybe_emit_sandbox_restart(
         return
     if getattr(sandbox, "generation", generation_before) <= generation_before:
         return
+    # Runtime loss is a semantic effect boundary, not diagnostic metadata.
+    # Publish it before the explanatory prose so interrupted emission stays safe.
+    await loop._emit(WorkspaceMutationEvent(operation="sandbox.restarted"))
     await loop._emit(
         MessageEvent(
             source=EventSource.ENVIRONMENT,
@@ -588,12 +592,6 @@ async def maybe_emit_sandbox_restart(
                     "</system-reminder>"
                 ),
             ),
-            meta={
-                "sandbox_restart": {
-                    "generation_before": generation_before,
-                    "generation_after": getattr(sandbox, "generation", generation_before),
-                }
-            },
         )
     )
 

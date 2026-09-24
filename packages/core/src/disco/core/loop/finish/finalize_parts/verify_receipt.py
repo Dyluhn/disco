@@ -124,9 +124,7 @@ def _receipt_invalidated(events: list[Event], observation: ObservationEvent) -> 
     intent = latest_workspace_run_intent(events[: observation_index + 1])
     for event in events[observation_index + 1 :]:
         if isinstance(event, MessageEvent):
-            if event.source is EventSource.USER or (
-                event.source is EventSource.ENVIRONMENT and "sandbox_restart" in event.meta
-            ):
+            if event.source is EventSource.USER:
                 return True
             continue
         if isinstance(event, WorkspaceMutationEvent) and event.operation == "agent.view-admitted":
