@@ -26,6 +26,7 @@ from disco.agent_server.lifecycle_ports import (
     LifecycleSandboxAccess,
     LifecycleStoreAccess,
 )
+from disco.agent_server.lifecycle_rehydration import Rehydration
 from disco.agent_server.run_registry import RunResourceRegistry
 
 
@@ -97,6 +98,8 @@ def _manager(
     persistence = _Persistence(run_resources)
 
     manager = LifecycleManager.__new__(LifecycleManager)
+    manager._rehydration = Rehydration.__new__(Rehydration)
+    manager._rehydration._failed = set()
     manager._store = LifecycleStoreAccess(store)  # type: ignore[arg-type]
     manager._sandbox = LifecycleSandboxAccess.__new__(LifecycleSandboxAccess)
     manager._sandbox._projects = type(
@@ -224,6 +227,8 @@ def _manager_with_store(executor: object | None, sealed: bool):
     persistence = _Persistence(run_resources)
 
     manager = LifecycleManager.__new__(LifecycleManager)
+    manager._rehydration = Rehydration.__new__(Rehydration)
+    manager._rehydration._failed = set()
     manager._store = LifecycleStoreAccess(store)  # type: ignore[arg-type]
     manager._sandbox = LifecycleSandboxAccess.__new__(LifecycleSandboxAccess)
     manager._sandbox._projects = type(
