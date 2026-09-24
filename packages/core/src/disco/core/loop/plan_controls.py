@@ -138,11 +138,16 @@ class PlanApprovalController:
             except PlanRevisionWeakeningError as exc:
                 await reject_plan_weakening(self._loop, plan, exc.diff)
                 return await self._loop.get_state()
+            # Sandbox context I/O can be slow or cancelled. Keep the plan
+            # pending until preparation completes: the caller has not registered
+            # a run yet, so publishing RUNNING first resembles an orphan to the
+            # runtime's recovery sweep. Both operations remain under the same
+            # loop lock and ownership fence.
+            await self._loop._seed_context_from_plan()
             await self._loop._emit(
                 approval.model_copy(update={"agent_view_id": plan.agent_view_id})
             )
             self._loop.mode = self._loop._execution_mode
-            await self._loop._seed_context_from_plan()
         return await self._loop.get_state()
 
     async def _seed_context_from_plan(self) -> None:
