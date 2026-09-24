@@ -7,7 +7,7 @@ afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 describe("Export run", () => {
   it("downloads the server bundle without issuing a public link", async () => {
     load.mockResolvedValue({ version: 1, events: [{ kind: "message" }] });
-    const create = vi.fn((_blob: Blob) => "blob:test");
+    const create = vi.fn<(blob: Blob) => string>(() => "blob:test");
     vi.stubGlobal("URL", { createObjectURL: create, revokeObjectURL: vi.fn() });
     const clicked = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
     render(<ExportRunButton cid="conv_test" title="Example" />);
