@@ -45,7 +45,14 @@ _SYSTEM_PROMPT = (
     "later images are the ordered references described in the JSON. Do not "
     "invent facts from missing builder history. Return only JSON with keys: "
     "verified, verdict, detail, failures, next_action, failure_fingerprint. "
-    "Allowed verdict values: pass, fail, degraded, unavailable, unverifiable."
+    "Schema: verified is a JSON boolean (true or false, never a string); "
+    "verdict is one of pass, fail, degraded, unavailable, unverifiable; "
+    "detail, next_action, and failure_fingerprint are strings; failures is an array "
+    'of objects, each with string kind and message, for example '
+    '[{"kind":"missing_content","message":"The requested footer is absent."}]. '
+    "Use an empty failures array when there are no failures. Return verified=true "
+    "only with verdict=pass and no failures; every other verdict requires "
+    "verified=false. Missing or insufficient evidence cannot support pass."
 )
 
 
@@ -90,7 +97,15 @@ def _extract_json_object(text: str) -> dict[str, Any]:
         end = raw.rfind("}")
         if start >= 0 and end > start:
             raw = raw[start : end + 1]
-    obj = json.loads(raw)
+    def unique_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("verifier response contains duplicate JSON keys")
+            result[key] = value
+        return result
+
+    obj = json.loads(raw, object_pairs_hook=unique_keys)
     if not isinstance(obj, dict):
         raise ValueError("verifier response was not a JSON object")
     return obj
@@ -98,7 +113,7 @@ def _extract_json_object(text: str) -> dict[str, Any]:
 
 def _normalise_verdict_payload(obj: dict[str, Any]) -> dict[str, Any]:
     out = dict(obj)
-    label = str(out.get("verdict") or "").strip().lower()
+    label = out.get("verdict")
     aliases = {
         "passed": "pass",
         "pass": "pass",
@@ -111,15 +126,36 @@ def _normalise_verdict_payload(obj: dict[str, Any]) -> dict[str, Any]:
         "unavailable": "unavailable",
         "unverifiable": "unverifiable",
     }
-    out["verdict"] = aliases.get(label, "fail")
-    if "verified" not in out:
-        out["verified"] = out["verdict"] == "pass"
-    out["verified"] = bool(out["verified"])
-    out["detail"] = str(out.get("detail") or out.get("summary") or "")
-    failures = out.get("failures")
-    out["failures"] = failures if isinstance(failures, list) else []
-    out["next_action"] = str(out.get("next_action") or "")
-    out["failure_fingerprint"] = str(out.get("failure_fingerprint") or "")
+    if not isinstance(label, str) or label.strip().lower() not in aliases:
+        raise ValueError("verifier verdict must be a recognized label")
+    out["verdict"] = aliases[label.strip().lower()]
+    # Never infer success from a label or Python truthiness: bool("false") is
+    # True, and pydantic's ordinary bool parser also accepts strings/numbers.
+    if type(out.get("verified")) is not bool:
+        raise ValueError("verifier verified must be an explicit JSON boolean")
+    if out["verified"] != (out["verdict"] == "pass"):
+        raise ValueError("verifier boolean and verdict disagree")
+    failures = out.get("failures", [])
+    if not isinstance(failures, list):
+        raise ValueError("verifier failures must be an array")
+    normalised_failures: list[dict[str, Any]] = []
+    for failure in failures:
+        if isinstance(failure, dict):
+            normalised_failures.append(failure)
+        elif isinstance(failure, str) and failure.strip():
+            # Preserve an intelligible negative finding without changing its
+            # judgment. Never discard it to make a purported pass acceptable.
+            normalised_failures.append({"kind": "semantic_failure", "message": failure})
+        else:
+            raise ValueError("verifier failure must be an object or nonempty message")
+    if out["verified"] and normalised_failures:
+        raise ValueError("verifier pass contains failure evidence")
+    out["failures"] = normalised_failures
+    for key in ("detail", "next_action", "failure_fingerprint"):
+        value = out.get(key, out.get("summary", "") if key == "detail" else "")
+        if not isinstance(value, str):
+            raise ValueError("verifier descriptive fields must be strings")
+        out[key] = value
     return out
 
 
@@ -215,6 +251,14 @@ class ModelVerifier:
                     verdict="unavailable",
                     detail="model verifier output budget exhausted before completion",
                     failures=[{"kind": "verifier_unavailable", "message": "truncated response"}],
+                    failure_fingerprint="model_verifier_unavailable",
+                )
+            if resp.finish_reason != "stop":
+                return TypedVerifierVerdict(
+                    verified=False,
+                    verdict="unavailable",
+                    detail="model verifier response did not finish normally",
+                    failures=[{"kind": "verifier_unavailable", "message": "incomplete response"}],
                     failure_fingerprint="model_verifier_unavailable",
                 )
             obj = _normalise_verdict_payload(_extract_json_object(resp.text))
