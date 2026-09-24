@@ -46,8 +46,14 @@ describe("Rejected plan progress stays out of the checklist", () => {
     },
   );
 
-  it.each([null, {}, [null], [{ index: 2 }], [{ index: 2, state: "invented" }]])(
-    "does not let malformed snapshot %j erase prior valid progress", (bad) => {
+  it.each([
+    { label: "null", bad: null },
+    { label: "object", bad: {} },
+    { label: "array containing null", bad: [null] },
+    { label: "array with missing state", bad: [{ index: 2 }] },
+    { label: "array with unknown state", bad: [{ index: 2, state: "invented" }] },
+  ])(
+    "does not let malformed snapshot $label erase prior valid progress", ({ bad }) => {
       const events = [plan(1), snapshot("accepted", [{ index: 1, state: "active" }]),
         snapshot("malformed", bad)];
       expect([...deriveBuildProgress(events, "RUNNING")]).toEqual([[1, "active"]]);
@@ -66,8 +72,20 @@ describe("Rejected plan progress stays out of the checklist", () => {
 });
 
 describe("Progress argument validation is atomic", () => {
-  it.each([null, "", "bad", "1e0", "0x10", "1__0", "1.0_0", 1.5, [], {}, Infinity])(
-    "rejects every row in a snapshot containing invalid index %j before a rejection arrives", (index) => {
+  it.each([
+    { label: "null", index: null },
+    { label: "empty string", index: "" },
+    { label: "non-numeric string", index: "bad" },
+    { label: "exponent string", index: "1e0" },
+    { label: "hex string", index: "0x10" },
+    { label: "double separator", index: "1__0" },
+    { label: "fraction separator", index: "1.0_0" },
+    { label: "fractional number", index: 1.5 },
+    { label: "array", index: [] },
+    { label: "object", index: {} },
+    { label: "infinite number", index: Infinity },
+  ])(
+    "rejects every row in a snapshot containing invalid index $label before a rejection arrives", ({ index }) => {
       const events = [plan(2), snapshot("valid", [{ index: 1, state: "active" }]),
         snapshot("invalid", [{ index: 1, state: "done" }, { index, state: "done" }])];
       expect([...deriveBuildProgress(events, "RUNNING")]).toEqual([[1, "active"]]);
