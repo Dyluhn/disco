@@ -45,6 +45,7 @@ from ..common import (
     current_workspace_agent_view_id,
     manifest_path_divergence,
 )
+from ._preview_successor import _freeform_preview_successor
 from .host_authority import bind_host_verification_authority
 from .host_claims import (
     governed_verification_contract,
@@ -285,7 +286,7 @@ async def _rebind_current_preview_handoff(
     """Move host-owned Preview bookkeeping without asking the model to re-serve.
 
     A current `finish` is already the agent's completion intent. When the exact
-    governed app handoff still names the target but Preview restarted afterward,
+    app handoff still names the target but Preview restarted afterward,
     mint a system-owned handoff at the active generation and let the verifier
     decide health. Missing/stopped previews and mismatched target contracts remain
     fail-closed; this only removes redundant model work from host bookkeeping.
@@ -294,8 +295,11 @@ async def _rebind_current_preview_handoff(
     if (
         handoff is None
         or handoff.artifact_kind != "app"
-        or not governed_verification_required(events)
         or not _preview_generation_changed(events, handoff)
+    ):
+        return handoff, events
+    if not governed_verification_required(events) and not _freeform_preview_successor(
+        events, handoff
     ):
         return handoff, events
     contract = governed_verification_contract(events)
