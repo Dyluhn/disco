@@ -111,13 +111,13 @@ export function DeepResearchSurface({
   // while a run is live) and a reload then re-enters through
   // `ResumeDeepResearch`, which subscribes and replays history-then-live.
   //
-  // WAITING FOR THE FIRST EVENT is essential, not caution. Moving on the
+  // Wait for the persisted user instruction. Moving on the
   // conversation id alone re-routes the surface while the opening
   // `send_message` is still QUEUED against a socket that has not finished
   // connecting; the unmount closes that socket, the queued frame dies with it,
   // and the run never starts — proven on the isolated stack, where the
-  // conversation was created and its log stayed empty. One persisted event is
-  // the server's own evidence that the question landed.
+  // conversation was created and its log stayed empty. Attachment events can
+  // precede the instruction, so they do not establish that the question landed.
   //
   // A run opened FROM `/deep/:cid` is already at its own URL. Recording that
   // too keeps this once per run: a surface the user has deliberately left
@@ -130,17 +130,20 @@ export function DeepResearchSurface({
   }, [query]);
 
   const runCid = r.cid;
-  const runHasEvents = r.activity.lastEventAt !== null;
+  const runHasEvents = r.events.some((event) =>
+    event.kind === "message" && event.source === "user" &&
+    typeof event.seq === "number" && event.message.content === r.query,
+  );
   const urlCarriesRun = useRef<string | null>(null);
   useEffect(() => {
-    if (resumeCid) {
+    if (resumeCid && (resumeCid === runCid || r.resumed)) {
       urlCarriesRun.current = resumeCid;
       return;
     }
     if (!runCid || !runHasEvents || urlCarriesRun.current === runCid) return;
     urlCarriesRun.current = runCid;
     navigate(`/deep/${runCid}`, { replace: true });
-  }, [resumeCid, runCid, runHasEvents, navigate]);
+  }, [resumeCid, runCid, runHasEvents, r.resumed, navigate]);
 
   // Gap #39 — a stable, assertable DR lifecycle phase. The run itself is
   // model+live-search+streaming (non-deterministic), but the PHASE TRANSITIONS

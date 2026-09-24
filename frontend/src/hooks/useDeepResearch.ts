@@ -73,7 +73,7 @@ export function useDeepResearch(
     queryResolved:
       derived.recoveredQuery !== null ||
       (sessionApi.session !== null && sessionApi.session.query !== "(resumed)"),
-    resumed: Boolean(resumeCid),
+    resumed: Boolean(resumeCid) && sessionApi.session?.kick !== true,
     submitting: lifecycle.create.isPending || lifecycle.startPrecreated.isPending,
     leaderId: sessionApi.leaderId,
     setLeaderId: sessionApi.setLeaderId,

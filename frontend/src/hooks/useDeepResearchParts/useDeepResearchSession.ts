@@ -69,11 +69,18 @@ export function useDeepResearchSession(
 
   // Resume path: a /deep/:cid route hands us a cid → open it READ-ONLY (kick is
   // absent, so the stream subscribes + replays but never sends the query).
+  const appliedResumeCid = useRef<string | null>(null);
   useEffect(() => {
-    if (resumeCid && (session === null || session.cid !== resumeCid)) {
-      setSession({ cid: resumeCid, query: "(resumed)", depthTier });
+    // A route change is an ingress action, not a permanent override. Retry may
+    // create a new session while the old URL remains until its first event.
+    if (resumeCid && appliedResumeCid.current !== resumeCid) {
+      appliedResumeCid.current = resumeCid;
+      setSession((current) => current?.cid === resumeCid
+        ? current
+        : { cid: resumeCid, query: "(resumed)", depthTier });
     }
-  }, [resumeCid, session, depthTier]);
+    if (!resumeCid) appliedResumeCid.current = null;
+  }, [resumeCid, depthTier]);
 
   const ensurePreCid = useCallback(async () => {
     if (!agentLive()) return null;

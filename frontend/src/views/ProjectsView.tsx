@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import { useMode } from "@/shell/mode";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { formatDate } from "@/lib/date";
 import {
@@ -77,6 +78,7 @@ function ConfigureStorage({ reason, path }: { reason: ProjectStorageStatus; path
 
 function EmptyProjects() {
   const navigate = useNavigate();
+  const { setMode } = useMode();
   return (
     <div className="flex flex-col items-center gap-inline rounded-card border border-hairline bg-surface-1 p-major text-center">
       <FolderGit2 className="size-6 text-text-faint" aria-hidden />
@@ -87,7 +89,7 @@ function EmptyProjects() {
       </p>
       <button
         type="button"
-        onClick={() => navigate("/")}
+        onClick={() => { setMode("build"); navigate("/"); }}
         className="mt-inline min-h-11 rounded-control border border-hairline px-body py-hair font-ui text-[0.84rem] text-text-muted transition-colors hover:text-text lg:min-h-0"
       >
         Start a build

@@ -1,5 +1,5 @@
 import * as Dialog from "@radix-ui/react-dialog";
-import { type ReactNode, useId, useRef, useState } from "react";
+import { type ReactNode, useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { cn } from "@/lib/cn";
 import { useCoarsePointer } from "@/lib/usePointer";
@@ -100,6 +100,7 @@ export function Citation({ n, passage, verdict }: CitationProps) {
             <Dialog.Title className="sr-only">{passage.source_title}</Dialog.Title>
             <div className="mx-auto mb-section h-1 w-10 rounded-full bg-hairline-strong" />
             <SourceCardContent n={n} passage={passage} verdict={verdict} />
+            <Dialog.Close className="mt-inline font-ui text-sm text-text-muted">Close source</Dialog.Close>
           </Dialog.Content>
         </Dialog.Portal>
       </Dialog.Root>
@@ -130,6 +131,22 @@ function GutterCitation({
   const anchorRef = useRef<HTMLElement>(null);
   const closeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const cardId = useId();
+
+  useEffect(() => {
+    if (!open) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      clearTimeout(closeTimer.current);
+      // Focus first: the trigger's focus handler may open the card. The final
+      // state update must dismiss it even when focus returns from its link.
+      anchorRef.current?.querySelector("button")?.focus();
+      setOpen(false);
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [open]);
+  useEffect(() => () => clearTimeout(closeTimer.current), []);
 
   const openCard = () => {
     clearTimeout(closeTimer.current);
@@ -166,6 +183,11 @@ function GutterCitation({
             className="z-50 max-h-[min(20rem,70vh)] w-[min(19rem,calc(100vw-3rem))] overflow-y-auto rounded-card border border-hairline-strong bg-surface-1 p-body pmx-rise"
           >
             <SourceCardContent n={n} passage={passage} verdict={verdict} />
+            <button type="button" className="mt-inline font-ui text-sm text-text-muted" onClick={() => {
+              clearTimeout(closeTimer.current);
+              anchorRef.current?.querySelector("button")?.focus();
+              setOpen(false);
+            }}>Close source</button>
           </div>,
           document.body,
         )}

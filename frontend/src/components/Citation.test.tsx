@@ -41,3 +41,22 @@ describe("Citation", () => {
     expect(screen.getByText("example.com")).toBeInTheDocument(); // clean domain
   });
 });
+
+it("dismisses a fine-pointer source with Escape and restores focus from its link", async () => {
+  window.matchMedia = ((query: string) => ({ matches: false, media: query, addEventListener() {}, removeEventListener() {} })) as typeof window.matchMedia;
+  render(<Citation n={2} passage={passage} verdict="supported" />);
+  const user = userEvent.setup();
+  const trigger = screen.getByRole("button", { name: /Source 2/ });
+  await user.click(trigger);
+  expect(screen.getByRole("dialog")).toBeInTheDocument();
+  await user.tab();
+  expect(screen.getByRole("link", { name: passage.source_title })).toHaveFocus();
+  await user.keyboard("{Escape}");
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(trigger).toHaveFocus();
+  await user.tab();
+  await user.click(trigger);
+  await user.click(screen.getByRole("button", { name: "Close source" }));
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(trigger).toHaveFocus();
+});

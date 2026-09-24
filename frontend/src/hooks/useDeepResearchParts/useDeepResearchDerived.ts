@@ -19,7 +19,7 @@ function computeRecoveredQuery(stream: DeepResearchStream): string | null {
     stream.report?.query ??
     stream.events
       .filter((e): e is MessageEvent => e.kind === "message")
-      .find((e) => e.message.role === "user")?.message.content ??
+      .find((e) => e.source === "user" && e.message.role === "user")?.message.content ??
     null
   );
 }

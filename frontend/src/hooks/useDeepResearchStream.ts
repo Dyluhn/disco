@@ -247,9 +247,18 @@ export interface DeepResearchStream {
 export function useDeepResearchStream(
   session: DeepResearchSession | null,
 ): DeepResearchStream {
-  const [state, dispatch] = useReducer(reducer, initial);
+  const [snapshot, dispatch] = useReducer(
+    (prior: { cid: string | null; state: RawState }, action: { cid: string | null; action: Action }) => ({
+      cid: action.cid,
+      state: reducer(prior.cid === action.cid ? prior.state : initial, action.action),
+    }),
+    { cid: null, state: initial },
+  );
   const handle = useRef<AgentHandle | null>(null);
   const sessionCid = session?.cid ?? null;
+  // Never render old-run events under a newly created cid, even in the render
+  // before the subscription effect resets. URL synchronization depends on this.
+  const state = snapshot.cid === sessionCid ? snapshot.state : initial;
   const sessionRef = useRef(session);
   sessionRef.current = session;
 
@@ -258,15 +267,16 @@ export function useDeepResearchStream(
       // Dispatch reset so derived state (followUps, plan, report …) clears
       // immediately when the session goes away (e.g. navigate away → back).
       // Without this the reducer held stale events from the previous run.
-      dispatch({ type: "reset" });
+      dispatch({ cid: sessionCid, action: { type: "reset" } });
       return;
     }
     const current = sessionRef.current;
     if (current === null) return;
-    dispatch({ type: "reset" });
-    const h = subscribeConversation(sessionCid, (frame) =>
-      dispatch({ type: "frame", frame }),
-    );
+    dispatch({ cid: sessionCid, action: { type: "reset" } });
+    let active = true;
+    const h = subscribeConversation(sessionCid, (frame) => {
+      if (active) dispatch({ cid: sessionCid, action: { type: "frame", frame } });
+    });
     handle.current = h;
     // Command–Query Separation: only a FRESH submit kicks the loop. Opening an
     // existing run (resume / History) is a safe read — subscribe + replay only.
@@ -277,6 +287,7 @@ export function useDeepResearchStream(
       h.send({ type: "send_message", content: current.query });
     }
     return () => {
+      active = false;
       h.cancel();
       if (handle.current === h) handle.current = null;
     };

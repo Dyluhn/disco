@@ -78,6 +78,7 @@ export function useElementSelect(
     }
     nonceRef.current = "";
     setArmed(false);
+    setSelection(null);
   }, [iframeRef]);
 
   const walkUp = useCallback(() => {

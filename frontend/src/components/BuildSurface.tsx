@@ -19,6 +19,7 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
+import { BuildRouteSync } from "./buildSurface/BuildRouteSync";
 import { useBuild } from "@/hooks/useBuild";
 import { useBuildNotifications } from "@/hooks/useBuildNotifications";
 import {
@@ -169,6 +170,17 @@ export function BuildSurface({
   // ── Control pane (chat) — the Project-Manager view ─────────────────────
   const chatPane = (
     <>
+      {b.persistentConversation && (
+        <BuildRouteSync
+          cid={b.cid}
+          resumeCid={resumeCid}
+          framing={framing}
+          hasPersistedEvents={b.events.some((event) =>
+            event.kind === "message" && event.source === "user" &&
+            typeof event.seq === "number" && event.message.content === b.task,
+          )}
+        />
+      )}
       <BuildSurfaceHeader
         b={b}
         isolation={isolation}

@@ -332,6 +332,8 @@ export function useBuild(
 
   return {
     started: session !== null,
+    // Offline demonstrations have no server resource to reopen after routing.
+    persistentConversation: agentLive(),
     cid: session?.cid ?? null,
     task: session?.task ?? null,
     resumed: Boolean(resumeCid),
