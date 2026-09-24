@@ -64,3 +64,8 @@ export async function fetchConversationRun(
   );
   return { events: ev.events ?? [], status: state.execution_status ?? "FINISHED" };
 }
+
+/** Download payload without creating a public share link. */
+export async function exportConversationBundle(cid: string): Promise<ShareBundle> {
+  return agentGet<ShareBundle>(`/api/conversations/${encodeURIComponent(cid)}/share/bundle`);
+}

@@ -1,3 +1,4 @@
+import { readableRequestError } from "@/api/errors";
 import * as Dialog from "@radix-ui/react-dialog";
 import { useQueryClient } from "@tanstack/react-query";
 import { FileArchive, FolderOpen, GitBranch, Loader2, X } from "lucide-react";
@@ -52,7 +53,7 @@ export function ImportProjectDialog() {
       setOpen(false);
       navigate(`/build/${result.conversation_id}`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(readableRequestError(err, "Couldn't import this project."));
     } finally {
       setBusy(false);
     }

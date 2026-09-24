@@ -1,3 +1,4 @@
+import { readableRequestError } from "@/api/errors";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import {
   AlertTriangle,
@@ -11,6 +12,7 @@ import {
 import { useState, useEffect, useMemo, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { importShareBundle } from "@/api/agent";
+import { ExportRunButton } from "./historyViewParts/ExportRunButton";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { formatDate } from "@/lib/date";
 import {
@@ -220,7 +222,7 @@ export function HistoryView() {
       await refetch();
       navigate(`/imported/${conversation_id}`);
     } catch (err) {
-      setImportErr(err instanceof Error ? err.message : "Couldn't import that file.");
+      setImportErr(readableRequestError(err, "Couldn't import that file."));
     }
   }
 
@@ -393,6 +395,7 @@ export function HistoryView() {
                         {c.space_id ? spaceNameById.get(c.space_id) ?? "Unfiled" : "Unfiled"}
                       </div>
                     </button>
+                    <ExportRunButton cid={c.id} title={c.title} />
                     <MoveToSpaceMenu conversation={c} spaces={spaces} />
                     <ConfirmDialog
                       title="Delete this conversation?"
