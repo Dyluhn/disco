@@ -215,10 +215,16 @@ async def _follow_ups(router: LLMRouter, query: str, answer: str) -> list[str]:
         for attempt in (1, 2):
             req = followup_request(router, query, answer, attempt)
             resp = await router.complete(req)
+            if resp.finish_reason == "length":
+                _LOG.warning("Follow-up completion hit its output limit on attempt %d", attempt)
+                continue
+            if resp.finish_reason != "stop":
+                _LOG.warning("Follow-up completion ended with %s", resp.finish_reason)
+                break
             lines: list[str] = []
             for raw in resp.text.splitlines():
                 item = re.sub(r"^\s*(?:[-•*]|\d+[.)])\s*", "", raw).strip()
-                if len(item) < 8 or item in lines:
+                if len(item) < 8 or item in lines or not item.endswith(("?", "？", "؟")):
                     continue
                 lines.append(item)
             if len(lines) >= 2:
@@ -230,7 +236,7 @@ async def _follow_ups(router: LLMRouter, query: str, answer: str) -> list[str]:
     except Exception as exc:  # noqa: BLE001 — retain useful deterministic fallbacks
         _LOG.warning("Follow-up generation failed; using deterministic fallbacks: %s", exc)
 
-    _LOG.warning("Follow-up model remained empty; using deterministic fallbacks")
+    _LOG.warning("Follow-up model returned no complete question set; using deterministic fallbacks")
     subject = " ".join(query.strip().rstrip("?").split())[:140] or "this topic"
     return [
         f"What evidence would most strengthen the answer about {subject}?",
@@ -337,27 +343,31 @@ async def _generate_visible_answer(
     *,
     think: bool,
 ) -> tuple[str, list[dict[str, Any]], list[Passage]]:
-    """Generate one visible answer, with one bounded empty-content repair."""
+    """Generate a complete answer, with one bounded empty/truncated repair."""
     selected = list(passages)
+    repair_message = (
+        "The previous completion returned no visible answer. "
+        "Return the final grounded answer now, with the required "
+        "source ids; do not return only reasoning."
+    )
     for generation_attempt in (1, 2):
         token_frames: list[dict[str, Any]] = []
         raw_answer = ""
         in_think = False
         carry = ""
+        finish_reason = None
 
         def render(
-            evidence: Sequence[Passage], attempt: int = generation_attempt
+            evidence: Sequence[Passage],
+            attempt: int = generation_attempt,
+            reminder: str = repair_message,
         ) -> list[LLMMessage]:
             messages = _answer_prompt(query, evidence)
             if attempt == 2:
                 messages.append(
                     LLMMessage(
                         role="user",
-                        content=(
-                            "The previous completion returned no visible answer. "
-                            "Return the final grounded answer now, with the required "
-                            "source ids; do not return only reasoning."
-                        ),
+                        content=reminder,
                     )
                 )
             return messages
@@ -366,6 +376,10 @@ async def _generate_visible_answer(
             router, passages, render, think=think, attempt=generation_attempt
         )
         async for chunk in router.stream_complete(request):
+            # The terminal chunk often has no delta. Inspect its status before
+            # skipping empty chunks, while all visible text is still buffered.
+            if chunk.final is not None:
+                finish_reason = chunk.final.finish_reason
             if not chunk.delta_text:
                 continue
             raw_answer += chunk.delta_text
@@ -374,6 +388,23 @@ async def _generate_visible_answer(
             if emit:
                 token_frames.append({"type": "token", "token": emit, "block_id": "answer"})
 
+        if finish_reason == "length":
+            if generation_attempt == 2:
+                raise _ResearchAborted(
+                    "The answer model reached its output limit after one bounded repair. "
+                    "Try a shorter question or a larger output budget."
+                )
+            repair_message = (
+                "The previous completion was cut off at its output limit. "
+                "Return a shorter, complete grounded answer within the available output budget, "
+                "with the required source ids. Do not continue the truncated draft."
+            )
+            _LOG.warning("Research answerer hit its output limit; running one bounded repair")
+            continue
+        if finish_reason not in (None, "stop"):
+            raise _ResearchAborted(
+                f"The answer model did not complete its response (finish reason: {finish_reason})."
+            )
         answer_text = _strip_think_spans(raw_answer).strip()
         if answer_text:
             streamed = "".join(frame["token"] for frame in token_frames)
