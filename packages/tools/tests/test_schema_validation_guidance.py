@@ -143,3 +143,54 @@ async def test_field_guidance_is_bounded_and_never_uses_rejected_value():
     assert "AUTHOR_GUIDANCE" in hint and "…" in hint
     assert "UNRELATED_DESCRIPTION" not in result.content
     assert _SECRET not in result.model_dump_json()
+
+
+class _PositiveChoice(BaseModel):
+    amount: int = Field(
+        gt=0, description="POSITIVE_BRANCH_GUIDANCE: amount must be greater than zero."
+    )
+
+
+class _NegativeChoice(BaseModel):
+    amount: int = Field(
+        lt=0, description="NEGATIVE_BRANCH_GUIDANCE: amount must be less than zero."
+    )
+
+
+class _AmbiguousArgs(BaseModel):
+    choice: _PositiveChoice | _NegativeChoice
+
+
+async def test_ambiguous_union_error_branch_labels_do_not_select_constraint_guidance():
+    class AmbiguousTool:
+        definition = ToolDef(
+            name="ambiguous_choice",
+            description="fixture",
+            args_model=_AmbiguousArgs,
+            runs_in="in_process",
+            behavior=declares(planner_safe=False),
+        )
+
+        async def run(self, args, ctx):
+            raise AssertionError("ambiguous invalid arguments must not execute")
+
+    result = await _executor(AmbiguousTool()).execute(
+        call("ambiguous_choice", choice={"amount": 0})
+    )
+    assert not result.success and result.structured["kind"] == "invalid_arguments"
+    errors = result.structured["validation_errors"]
+    assert {tuple(error["loc"]) for error in errors} == {
+        ("choice", "_PositiveChoice", "amount"),
+        ("choice", "_NegativeChoice", "amount"),
+    }
+    assert {error["type"] for error in errors} == {"greater_than", "less_than"}
+    assert "POSITIVE_BRANCH_GUIDANCE" not in result.content
+    assert "NEGATIVE_BRANCH_GUIDANCE" not in result.content
+    assert "Schema guidance:" not in result.content
+    assert "Expected arguments" in result.content
+    # Both opposite constraints remain available in the truthful full schema;
+    # the model-visible hint does not choose a branch from a diagnostic label.
+    schema = result.structured["expected_schema"]
+    assert len(schema["properties"]["choice"]["anyOf"]) == 2
+    assert schema["$defs"]["_PositiveChoice"]["properties"]["amount"]["exclusiveMinimum"] == 0
+    assert schema["$defs"]["_NegativeChoice"]["properties"]["amount"]["exclusiveMaximum"] == 0
