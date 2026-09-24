@@ -104,6 +104,7 @@ ARG DISCO_ENCODER_TIER=full
 # bundled-TTS bake-in. Absent soffice → render_deck() returns a clear error.
 # openssh-client supplies the shared SSH transport for remote gVisor probes and
 # sandboxes; both server processes need it in the installed runtime image.
+# git is used by the agent-server's restricted public-repository import path.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libpango-1.0-0 \
         libpangoft2-1.0-0 \
@@ -117,6 +118,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         fonts-liberation \
         podman \
         openssh-client \
+        git \
         tmux \
     && rm -rf /var/lib/apt/lists/*
 
