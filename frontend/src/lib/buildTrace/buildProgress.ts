@@ -14,6 +14,7 @@ import { progressStepIndex } from "./plan";
  * volatile message metadata. A later host pass supersedes an earlier failure. */
 interface OutcomeState {
   pending: Set<string>;
+  /** An unbound release limitation cannot be discharged by an unrelated pass. */
   releaseUnverified: boolean;
   ended: boolean;
   intent: string | null;
@@ -44,7 +45,9 @@ function updateOutcomeBoundary(event: AgentEvent, state: OutcomeState): void {
   if (state.ended && !terminal) resetOutcome(state);
   state.ended = terminal;
   if (event.status === "RUNNING" && event.detail === "unverified_release") {
-    state.releaseUnverified = true;
+    // Known pending checks already preserve this limitation until matching passes.
+    // Without them, the marker has no target identity: retain it until a new run.
+    if (state.pending.size === 0) state.releaseUnverified = true;
   }
 }
 
@@ -58,7 +61,6 @@ function updateHostOutcome(event: AgentEvent, state: OutcomeState): void {
     event.check_id || ""]);
   if (event.kind === "verifier_verdict" && event.verified === true && event.verdict === "pass") {
     state.pending.delete(key);
-    if (state.pending.size === 0) state.releaseUnverified = false;
   } else {
     state.pending.add(key);
   }

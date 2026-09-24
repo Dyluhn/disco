@@ -50,6 +50,16 @@ describe("Finished progress preserves current host verification limits", () => {
     expect([...deriveBuildProgress(events, "FINISHED").values()]).toEqual(Array(6).fill("done"));
   });
 
+  it.each([false, true])("an unbound release marker survives a later pass, started=%s", (started) => {
+    const events = [intent("current"), plan, progress(), status("RUNNING", "unverified_release")];
+    if (started) events.push({ kind: "verifier_started", id: "later-start", source: "system",
+      artifact_path: "/other", artifact_kind: "app", verifier: "browser" } as AgentEvent);
+    events.push({ ...verdict(true), artifact_path: "/other" } as AgentEvent, status("FINISHED"));
+    expect([...deriveBuildProgress(events, "FINISHED")]).toEqual([[1, "done"], [2, "stalled"]]);
+    events.push(intent("new"), status("RUNNING"), verdict(true), status("FINISHED"));
+    expect([...deriveBuildProgress(events, "FINISHED").values()]).toEqual(Array(6).fill("done"));
+  });
+
   it.each(["new-intent", "legacy-resume"])(
     "does not carry an old run's failure across %s", (boundary) => {
       const events = [intent("old"), verdict(false), status("FINISHED"),
