@@ -357,6 +357,12 @@ class DefaultLLMRouter:
         entry = self._config.models.get(key)
         return entry.max_output_tokens if entry is not None else None
 
+    def context_token_limit(self, role: ModelRole) -> int | None:
+        """Read the assigned model's declared context without dispatching inference."""
+        key = self._config.model_for(role)
+        entry = self._config.models.get(key)
+        return entry.context_window if entry is not None else None
+
     # -- request budget preview -------------------------------------------------
 
     def request_budget_preview(

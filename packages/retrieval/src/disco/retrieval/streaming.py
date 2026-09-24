@@ -22,13 +22,11 @@ from typing import Any, NamedTuple
 
 from disco.core.events import LLMMessage
 from disco.core.llm import (
-    CapabilityProfile,
-    CompletionRequest,
     LLMRouter,
-    ModelRole,
 )
 from disco.core.think import strip_think_spans
 
+from ._answer_budget import answer_request, followup_request
 from .engine import annotate_passage_dates, extract_discovered_hits
 from .grounding import (
     _CITE,
@@ -212,20 +210,9 @@ def _to_blocks(text: str) -> list[dict]:
 
 
 async def _follow_ups(router: LLMRouter, query: str, answer: str) -> list[str]:
-    prompt = (
-        f"Given this question and answer, suggest 3 short follow-up questions, "
-        f"one per line, no numbering.\n\nQ: {query}\n\nA: {answer[:1500]}"
-    )
     try:
-        for attempt, max_tokens in ((1, 160), (2, 2048)):
-            req = CompletionRequest(
-                profile=CapabilityProfile(role=ModelRole.SUMMARIZER),
-                messages=[LLMMessage(role="user", content=prompt)],
-                temperature=0.3,
-                max_tokens=max_tokens,
-                enable_thinking=False,
-                attempt=attempt,
-            )
+        for attempt in (1, 2):
+            req = followup_request(router, query, answer, attempt)
             resp = await router.complete(req)
             lines: list[str] = []
             for raw in resp.text.splitlines():
@@ -348,39 +335,36 @@ async def _generate_visible_answer(
     passages: Sequence[Passage],
     *,
     think: bool,
-) -> tuple[str, list[dict[str, Any]]]:
+) -> tuple[str, list[dict[str, Any]], list[Passage]]:
     """Generate one visible answer, with one bounded empty-content repair."""
-    base_tokens = 4096 if think else 1200
-    base_messages = _answer_prompt(query, passages)
+    selected = list(passages)
     for generation_attempt in (1, 2):
         token_frames: list[dict[str, Any]] = []
         raw_answer = ""
         in_think = False
         carry = ""
-        messages = base_messages
-        if generation_attempt == 2:
-            messages = [
-                *base_messages,
-                LLMMessage(
-                    role="user",
-                    content=(
-                        "The previous completion returned no visible answer. "
-                        "Return the final grounded answer now, with the required "
-                        "source ids; do not return only reasoning."
-                    ),
-                ),
-            ]
-        async for chunk in router.stream_complete(
-            CompletionRequest(
-                profile=CapabilityProfile(role=ModelRole.RAG_ANSWERER),
-                messages=messages,
-                temperature=0.0,
-                enable_thinking=think if generation_attempt == 1 else False,
-                max_tokens=(base_tokens if generation_attempt == 1 else max(4096, base_tokens * 2)),
-                attempt=generation_attempt,
-                stream=True,
-            )
-        ):
+
+        def render(
+            evidence: Sequence[Passage], attempt: int = generation_attempt
+        ) -> list[LLMMessage]:
+            messages = _answer_prompt(query, evidence)
+            if attempt == 2:
+                messages.append(
+                    LLMMessage(
+                        role="user",
+                        content=(
+                            "The previous completion returned no visible answer. "
+                            "Return the final grounded answer now, with the required "
+                            "source ids; do not return only reasoning."
+                        ),
+                    )
+                )
+            return messages
+
+        request, selected = answer_request(
+            router, passages, render, think=think, attempt=generation_attempt
+        )
+        async for chunk in router.stream_complete(request):
             if not chunk.delta_text:
                 continue
             raw_answer += chunk.delta_text
@@ -396,10 +380,10 @@ async def _generate_visible_answer(
                 tail = answer_text[len(streamed) :]
                 if tail:
                     token_frames.append({"type": "token", "token": tail, "block_id": "answer"})
-            return answer_text, token_frames
+            return answer_text, token_frames, selected
         if generation_attempt == 1:
             _LOG.warning("Research answerer returned no visible text; running one bounded repair")
-    return "", []
+    return "", [], selected
 
 
 class _ResearchAborted(Exception):
@@ -526,10 +510,8 @@ async def _run_research_round(
     # rerank to the working set (web passages + any seeds that survived the
     # dedup above).
     top = await reranker.rerank(current_query, passages, top_k=top_k)
-    by_id = {p.id: p for p in top}
-
     # constrained generation.
-    answer_text, token_frames = await _generate_visible_answer(
+    answer_text, token_frames, top = await _generate_visible_answer(
         router, current_query, top, think=think
     )
     if not answer_text:
@@ -539,6 +521,7 @@ async def _run_research_round(
             "repair. Try another model or retry the search."
         )
 
+    by_id = {p.id: p for p in top}
     # An invented id has no provenance card and cannot be meaningfully graded.
     # Remove its complete statement before both rendering and verification.
     answer_text = _remove_unknown_citation_claims(answer_text, set(by_id))
