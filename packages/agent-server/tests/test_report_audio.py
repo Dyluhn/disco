@@ -219,7 +219,9 @@ def test_cached_mode_selection_survives_reload(tmp_path, tts_enabled):
 
 def test_slow_older_generation_cannot_replace_newer_cached_selection(tmp_path, tts_enabled):
     report = _make_report()
-    single, transcript = report_audio_mod._report_audio_cache_paths(report, None, "single", tmp_path)
+    single, transcript = report_audio_mod._report_audio_cache_paths(
+        report, None, "single", tmp_path
+    )
     report_audio_mod._write_audio_artifacts(single, transcript, b"single", "single", {
         "mode": "single", "report_key": report_audio_mod.report_content_key(report),
     })
@@ -235,7 +237,9 @@ def test_slow_older_generation_cannot_replace_newer_cached_selection(tmp_path, t
             mode="podcast", force=True, on_progress=choose_single,
         )
     asyncio.run(exercise())
-    restored = report_audio_mod.existing_report_audio(tmp_path, report_audio_mod.report_content_key(report))
+    restored = report_audio_mod.existing_report_audio(
+        tmp_path, report_audio_mod.report_content_key(report)
+    )
     assert [item["mode"] for item in restored] == ["single", "podcast"]
 
 def test_audio_download_supports_ranges(client, store, monkeypatch, tmp_path):
