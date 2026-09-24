@@ -435,6 +435,7 @@ class PlanningGateController:
                         "</system-reminder>"
                     ),
                     action_id=action.id,
+                    agent_view_id=action.agent_view_id,
                     tool_call_id=action.tool_call.call_id if action.tool_call else None,
                 )
             )
@@ -513,6 +514,7 @@ class PlanningGateController:
                 StatusEvent(
                     status=ConversationStatus.WAITING_FOR_CONFIRMATION,
                     detail=action.id,
+                    agent_view_id=action.agent_view_id,
                 )
             )
             return Disp.HALT, action

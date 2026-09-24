@@ -239,7 +239,9 @@ class PlanLifecyclePort(Protocol):
     async def enter_planning(self, text: str='') -> ConversationState:
         ...
 
-    async def pick_alternative(self, option_id: str) -> ConversationState:
+    async def pick_alternative(
+        self, option_id: str, *, resume: bool = True
+    ) -> ConversationState:
         ...
 
 

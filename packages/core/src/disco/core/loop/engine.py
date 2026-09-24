@@ -289,8 +289,10 @@ class AgentLoop:
     async def approve_plan(self) -> ConversationState:
         return await self._plan_controls.approve_plan()
 
-    async def pick_alternative(self, option_id: str) -> ConversationState:
-        return await self._plan_controls.pick_alternative(option_id)
+    async def pick_alternative(
+        self, option_id: str, *, resume: bool = True
+    ) -> ConversationState:
+        return await self._plan_controls.pick_alternative(option_id, resume=resume)
 
     async def enter_planning(self, text: str = "") -> ConversationState:
         return await self._replanning.enter_planning(text)
