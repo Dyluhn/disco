@@ -153,14 +153,15 @@ export function ExecutionCanvas({
   // tab content, and the tab-label busy dot must keep updating while the user
   // is on Files/Preview (that's the dot's entire job — pane-local polling
   // would freeze it at its last-seen value on switch-away). The cheap
-  // /sessions list polls whenever the build is active; the heavier /view
+  // /sessions list polls whenever the build is active or a session pane is
+  // visible (finished/paused runs may retain live sessions); the heavier /view
   // capture-pane polls only while the Terminal tab is actually shown. The
   // Cockpit tab also needs /view (to render the selected session's live
   // capture-pane tail) — same cheap reuse, just one more "is view visible"
   // caller.
   const cockpitWantsView = tab === "cockpit";
   const { sessions, selectedName, setSelectedName, view } = useSessions(
-    cid,
+    untrusted ? null : cid,
     active,
     tab === "terminal" || cockpitWantsView,
   );
