@@ -90,3 +90,66 @@ describe("DeepResearchRunView — the start-up state does not pretend", () => {
     expect(screen.getByText(/You can send a follow-up when the report is ready/)).toBeInTheDocument();
   });
 });
+
+
+function activityEvent(name: string, args: Record<string, unknown>, seq = 1) {
+  return {
+    id: `activity-${seq}`, kind: "action" as const, seq,
+    timestamp: "2026-09-02T10:00:00.000Z", thought: "",
+    tool_call: { tool_name: name, arguments: args },
+  };
+}
+
+describe("DeepResearchRunView — activity before the first brief", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.parse("2026-09-02T10:00:00.000Z"));
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it("renders the actual first research-turn heartbeat before a brief or trace exists", () => {
+    const run = runWithNoSignal();
+    const turn = activityEvent("turn", { n: 1, of: 8, phase: "thinking" });
+    run.activity = deriveActivity([turn, activityEvent("model_activity", {
+      stage: "research_turn", tokens_streamed: 689, reasoning_tokens: 689,
+      seconds: 47.6, call_ordinal: 1,
+    }, 2)]);
+    const { container, rerender } = render(<DeepResearchRunView r={run} />);
+    expect(screen.getByText("Turn 1 of 8 · thinking 48 s")).toBeInTheDocument();
+    expect(container.querySelector("[data-dr-starting]")).toBeNull();
+    expect(run.brief).toBeNull();
+    expect(run.trace).toEqual([]);
+
+    run.activity = deriveActivity([turn, activityEvent("model_activity", {
+      stage: "research_turn", tokens_streamed: 856, reasoning_tokens: 856,
+      seconds: 79.9, call_ordinal: 1,
+    }, 3)]);
+    rerender(<DeepResearchRunView r={{ ...run }} />);
+    expect(screen.getByText("Turn 1 of 8 · thinking 1:20")).toBeInTheDocument();
+    expect(screen.queryByText(/waiting for the engine's first update/)).not.toBeInTheDocument();
+    act(() => vi.advanceTimersByTime(90_000));
+    expect(screen.getByText("no signal for 1:30")).toBeInTheDocument();
+  });
+
+  it("shows a reported waiting model call even without a turn event", () => {
+    const run = runWithNoSignal();
+    run.activity = deriveActivity([activityEvent("model_activity", {
+      stage: "research_turn", tokens_streamed: 0, seconds: 0,
+      call_ordinal: 1, state: "waiting",
+    })]);
+    const { container } = render(<DeepResearchRunView r={run} />);
+    expect(screen.getByText(/Waiting for first model output/)).toBeInTheDocument();
+    expect(container.querySelector("[data-dr-starting]")).toBeNull();
+  });
+
+  it("does not mistake a status timestamp for reported research activity", () => {
+    const run = runWithNoSignal();
+    run.activity = deriveActivity([{
+      id: "status", kind: "status", seq: 1, status: "RUNNING",
+      timestamp: "2026-09-02T10:00:00.000Z",
+    }]);
+    const { container } = render(<DeepResearchRunView r={run} />);
+    expect(container.querySelector("[data-dr-starting]")).not.toBeNull();
+    expect(screen.queryByText(/Turn 1 of/)).not.toBeInTheDocument();
+  });
+});
