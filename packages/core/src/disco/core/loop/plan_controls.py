@@ -210,24 +210,28 @@ class PlanApprovalController:
             )
 
     async def _continue_anyway(self, alternative: AlternativesEvent) -> ConversationState:
-        # Constraint 1: the user's bypass reaches the agent as a USER turn, so it
-        # must name what is being waived. `count_recent_failures` is the same
-        # streak the circuit breaker opened on, and the streak is reset below.
+        # A generic ask_user choice also offers Continue. Name a circuit-breaker
+        # waiver only when its current recovery marker and failure streak exist.
+        # Emitting a USER turn still resets the streak for either kind of gate.
         continue_events = await self._loop._events()
         failures = signals.count_recent_failures(continue_events)
+        recovery = (
+            failures >= self._loop._circuit_breaker_threshold
+            and signals.recovery_requested_since_reset(continue_events)
+        )
+        content = (
+            "Continue — keep working. I've reviewed the "
+            f"{failures} recent failure(s) that opened the circuit "
+            "breaker and want you to proceed with your own best next "
+            "step. Don't just repeat the exact action that was "
+            "failing; adjust your approach."
+            if recovery
+            else "Continue — keep working. Use your own judgment to choose the best next step."
+        )
         await self._loop._emit(
             MessageEvent(
                 source=EventSource.USER,
-                message=LLMMessage(
-                    role="user",
-                    content=(
-                        "Continue — keep working. I've reviewed the "
-                        f"{failures} recent failure(s) that opened the circuit "
-                        "breaker and want you to proceed with your own best next "
-                        "step. Don't just repeat the exact action that was "
-                        "failing; adjust your approach."
-                    ),
-                ),
+                message=LLMMessage(role="user", content=content),
             )
         )
         await self._loop._emit(

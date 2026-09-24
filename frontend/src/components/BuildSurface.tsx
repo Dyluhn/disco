@@ -18,7 +18,7 @@
  * header comment for the rationale on *why* it was split out that way.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { BuildRouteSync } from "./buildSurface/BuildRouteSync";
 import { AppKitOwnerPanel } from "./buildSurface/ownerControls/AppKitOwnerPanel";
 import { useBuild } from "@/hooks/useBuild";
@@ -89,6 +89,7 @@ export function BuildSurface({
   seedContext?: string | null;
 } = {}) {
   const b = useBuild(resumeCid, framing, seedTask, seedContext);
+  const steerInputRef = useRef<HTMLInputElement>(null);
   const copy = FRAMING[framing];
   const [draft, setDraft] = useState("");
 
@@ -233,7 +234,7 @@ export function BuildSurface({
           release={release}
           downloadTitle={taskLabel}
         />
-        <BuildDecisionGates b={b} />
+        <BuildDecisionGates b={b} onSteer={steerable ? () => steerInputRef.current?.focus() : undefined} />
         {b.persistentConversation && b.cid && <AppKitOwnerPanel key={b.cid} cid={b.cid} status={b.status} />}
         <BuildAskGate b={b} finalMessage={finalMessage} />
         <BuildComposerSection
@@ -242,6 +243,7 @@ export function BuildSurface({
           steerable={steerable}
           settled={settled}
           terminalIncomplete={terminalIncomplete}
+          steerInputRef={steerInputRef}
           steerWithMention={steerWithMention}
           requestPlanWithMention={requestPlanWithMention}
           elementMentionChip={elementMentionChip}

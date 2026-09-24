@@ -8,8 +8,8 @@
  * - quiet chrome: warn-color heading (this is a recovery state, not an error)
  * - cards are full-width on narrow viewports, three columns on wide; each shows
  *   title + description + the concrete tool it'll run
- * - one explicit "Skip — let me steer manually" affordance maps to nothing
- *   (closes the gate by letting the user use the SteerInput beneath it)
+ * - the manual steering shortcut only focuses the composer; the gate remains
+ *   pending until the user sends an instruction or selects an option.
  */
 
 import { AlertTriangle, ArrowRight, PlayCircle, Terminal } from "lucide-react";
@@ -26,7 +26,7 @@ export function AlternativesGate({
 }: {
   alternatives: AlternativesEvent;
   onPick: (optionId: string) => void;
-  /** Optional: render a "Skip" link that drops focus into the steer input. */
+  /** Focus the existing steer input without resolving or submitting the gate. */
   onSteer?: () => void;
 }) {
   // The "Continue anyway" bypass is rendered as a distinct action, NOT a
@@ -129,6 +129,7 @@ export function AlternativesGate({
           <button
             type="button"
             onClick={onSteer}
+            data-disco-control="build.alternatives-steer"
             className={cn(TAP_TARGET, "flex items-center font-ui text-[0.78rem] text-text-faint underline-offset-2 hover:underline")}
           >
             or steer manually

@@ -347,3 +347,25 @@ describe("W-41: scroll-to-latest chevron", () => {
     expect(scrollTo).toHaveBeenCalledWith({ top: 1000, behavior: "auto" });
   });
 });
+
+it("focuses the actual steering composer without resolving the pending choice or sending a draft", async () => {
+  const steer = vi.fn(), pickAlternative = vi.fn(), cancel = vi.fn(), answer = vi.fn();
+  const alternatives: AgentEvent = { kind: "alternatives", id: "choice", source: "agent", failed_action_id: "", summary: "Choose a direction", options: [{ id: "one", title: "First option", description: "", tool_name: "", arguments: {} }] };
+  buildState = baseBuild({ cid: "manual-steer", status: "AWAITING_USER_DECISION", awaitingDecision: true, pendingAlternatives: alternatives, events: [alternatives], steer, pickAlternative, cancel, answer });
+  renderSurface(<BuildSurface resumeCid="manual-steer" />);
+  const user = userEvent.setup();
+  const input = screen.getByRole("textbox", { name: "Steer the agent" });
+  await user.type(input, "Keep the existing files");
+  await user.click(screen.getByRole("button", { name: "or steer manually" }));
+  expect(input).toHaveFocus();
+  expect(input).toHaveValue("Keep the existing files");
+  expect(screen.getByRole("alertdialog", { name: /needs a decision/i })).toBeVisible();
+  expect(steer).not.toHaveBeenCalled();
+  expect(pickAlternative).not.toHaveBeenCalled();
+  expect(cancel).not.toHaveBeenCalled();
+  expect(answer).not.toHaveBeenCalled();
+  await user.keyboard(" and add a footer{Enter}");
+  expect(steer).toHaveBeenCalledExactlyOnceWith("Keep the existing files and add a footer");
+  expect(input).toHaveValue("");
+  expect(pickAlternative).not.toHaveBeenCalled();
+});

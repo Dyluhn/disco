@@ -4,7 +4,7 @@
  * BuildSurface.tsx (PKG-12-FE-BUILD).
  */
 
-import type { ReactNode } from "react";
+import type { ReactNode, Ref } from "react";
 import { useEffect, useState } from "react";
 import { Check } from "lucide-react";
 // NOTE: this is `components/build/BuildSurface.tsx` (the OTHER file) — not the
@@ -26,6 +26,7 @@ export function BuildComposerSection({
   steerable,
   settled,
   terminalIncomplete,
+  steerInputRef,
   steerWithMention,
   requestPlanWithMention,
   elementMentionChip,
@@ -36,6 +37,7 @@ export function BuildComposerSection({
   steerable: boolean;
   settled: boolean;
   terminalIncomplete: boolean;
+  steerInputRef?: Ref<HTMLInputElement>;
   steerWithMention: (text: string) => void;
   requestPlanWithMention: (text: string) => void;
   elementMentionChip: ReactNode;
@@ -65,6 +67,7 @@ export function BuildComposerSection({
             </p>
           )}
           <SteerInput
+            inputRef={steerInputRef}
             onSteer={steerWithMention}
             disabled={b.status === "WAITING_FOR_CONFIRMATION"}
             attachment={elementMentionChip}
