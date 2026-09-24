@@ -37,7 +37,8 @@ vi.mock("@/api/research", () => ({
 // useResearchStream subscribes off the scope; with scope=null it's inert, but
 // stub it so the test never reaches for a live WebSocket.
 vi.mock("./useResearchStream", () => ({
-  useResearchStream: () => ({ events: [], blocks: [] }),
+  initialResearchStreamState: { phase: "idle", blocks: [], answer: null },
+  useResearchStream: () => ({ phase: "idle", events: [], blocks: [] }),
 }));
 
 import { useResearch } from "./useResearch";
@@ -62,7 +63,7 @@ describe("useResearch — BW-08 twin lazy pre-create", () => {
     expect(createBuildConversation).not.toHaveBeenCalled();
   });
 
-  it("creates the conversation only on submit, tagged surface=agent", async () => {
+  it("creates the conversation only on submit, tagged surface=research", async () => {
     const { result } = renderHook(() => useResearch(), { wrapper: wrapper() });
     expect(createBuildConversation).not.toHaveBeenCalled();
 
@@ -74,7 +75,7 @@ describe("useResearch — BW-08 twin lazy pre-create", () => {
 
     await waitFor(() => expect(createBuildConversation).toHaveBeenCalledTimes(1));
     // surface="agent" (the row tag) is the 2nd positional arg.
-    expect(createBuildConversation).toHaveBeenCalledWith(null, "agent");
+    expect(createBuildConversation).toHaveBeenCalledWith(null, "research");
     // The minted cid is threaded onto the research request (and retained as runCid).
     await waitFor(() => expect(result.current.runCid).toBe("conv_created"));
     expect(requestResearch).toHaveBeenCalledWith(

@@ -142,7 +142,7 @@ export interface AgentHandle {
  * machinery, so the same create path serves both. */
 export async function createBuildConversation(
   modelOverride?: string | null,
-  surface: "build" | "agent" = "build",
+  surface: "build" | "agent" | "research" = "build",
   autonomous = false,
   /** Weak-model assist tier — EXPLICIT user toggle only (null/false = standard).
    *  Assist is never auto-enabled by hosting; the user opts in via the UI toggle. */

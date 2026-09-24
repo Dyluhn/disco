@@ -389,3 +389,45 @@ def test_verify_claims_reports_a_zero_total_when_there_is_nothing_to_verify() ->
 
     assert _verify_claims("- \n1.\n", {}, _Entails(), note) == []
     assert seen == [(0, 0)]
+
+
+async def test_drop_weak_stream_never_emits_withheld_text_before_final(monkeypatch):
+    from disco.retrieval import streaming
+
+    answer = _answer()
+    result = _RoundResult(
+        blocks=answer["blocks"],
+        claims=answer["claims"],
+        top=[],
+        all_hits=[],
+        supported=1,
+        this_round_urls=frozenset(),
+        answer_text=answer["blocks"][0]["text"],
+        token_frames=[{"type": "token", "block_id": "b0", "token": "Shaky fact [[p1]]."}],
+    )
+
+    async def round_result(*args, **kwargs):
+        return result
+
+    async def followups(*args, **kwargs):
+        return ["Next question"]
+
+    monkeypatch.setattr(streaming, "_run_research_round", round_result)
+    monkeypatch.setattr(streaming, "_follow_ups", followups)
+    frames = [
+        frame
+        async for frame in streaming.stream_research_answer(
+            "q",
+            search=None,
+            extraction=None,
+            reranker=None,
+            router=None,
+            nli=None,
+            drop_weak=True,
+        )
+    ]
+    assert "Shaky fact" not in json.dumps(frames)
+    assert "Strong fact" in json.dumps(frames)
+    final = next(frame["answer"] for frame in frames if frame["type"] == "final")
+    assert final["unsupported_count"] == 0
+    assert [frame["block"] for frame in frames if frame["type"] == "block"] == final["blocks"]

@@ -1,8 +1,8 @@
 import { ChevronDown, SlidersHorizontal, Square } from "lucide-react";
-import { useCallback, useState } from "react";
-import { useLocation } from "react-router-dom";
+import { useCallback, useEffect, useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import { cn } from "@/lib/cn";
-import { useResearch } from "@/hooks/useResearch";
+import { useResearch, type ResearchController } from "@/hooks/useResearch";
 import { useLastSelectedModel } from "@/hooks/useDriverModels";
 import { findModel, useAssignments, useModels } from "@/hooks/useModels";
 import type { ScopeId } from "@/shell/mode";
@@ -15,6 +15,7 @@ import { QueryInput } from "./QueryInput";
 import { ModelLeaderPill } from "./ModelLeaderPill";
 import { SearchTypeSlider } from "./SearchTypeSlider";
 import { SourcePanel } from "./SourcePanel";
+import { SavedSearchControls } from "./researchSurfaceParts/SavedSearchControls";
 import { SourcePicker } from "./SourcePicker";
 import { SuggestionChips } from "./SuggestionChips";
 import { ThinkToggle } from "./ThinkToggle";
@@ -43,9 +44,30 @@ function deriveNoticeModel(
   return { label: model?.label ?? null, id: model?.id ?? null };
 }
 
-export function ResearchSurface() {
-  const r = useResearch();
+export function ResearchSurface({ resumeCid = null }: { resumeCid?: string | null }) {
+  const r = useResearch(resumeCid);
+  const navigate = useNavigate();
+  useEffect(() => {
+    if (!resumeCid && r.runCid && r.answer && r.phase === "finished") {
+      navigate(`/research/${r.runCid}`, { replace: true });
+    }
+  }, [resumeCid, r.runCid, r.answer, r.phase, navigate]);
+  if (r.restoring) return <p role="status" className="p-body">Loading saved search…</p>;
+  if (r.restoreError) return <ErrorState message="Could not load this saved search." onRetry={r.retryRestore} />;
+  return <ResearchContent key={r.scope?.request_id ?? "draft"} r={r} />;
+}
+
+function initialControls(scope: ResearchController["scope"]) {
+  return {
+    leader: scope ? scope.model_override ?? null : undefined,
+    think: scope?.think ?? false,
+    sources: scope?.sources ?? [],
+  };
+}
+
+function ResearchContent({ r }: { r: ResearchController }) {
   const started = r.scope !== null;
+  const initial = initialControls(r.scope);
   const noBlocksYet = deriveNoBlocksYet(r.blocks.length, r.streamingBlockId);
 
   // Per-conversation controls (Prompt 3C): the lead-model override (null = use
@@ -55,15 +77,15 @@ export function ResearchSurface() {
   // explicit model. The undefined sentinel is what lets a pick control every
   // surface (untouched shows last-selected) WITHOUT trapping the user — clearing
   // back to the default still works (null is respected, not re-hydrated).
-  const [leaderId, setLeaderId] = useState<string | null | undefined>(undefined);
+  const [leaderId, setLeaderId] = useState<string | null | undefined>(initial.leader);
   const [scope, setScope] = useState<ScopeId>("standard");
-  const [think, setThink] = useState(false);
+  const [think, setThink] = useState(initial.think);
   // Empty = "use the web provider configured in Settings". A non-empty list
   // composes a per-query search override on the backend (build_multi_search),
   // which is exactly what USED to force ddgs over the user's chosen provider.
   // Default to none so a plain search always runs "the one they set"; the
   // SourcePicker only ADDS keyless federation sources on top when chosen.
-  const [sources, setSources] = useState<string[]>([]);
+  const [sources, setSources] = useState<string[]>(initial.sources);
   // W-06: the typed draft lives in the SHARED parent so it survives the
   // standard ↔ deep-research mount swap below (the standard input unmounts when
   // we render DeepResearchSurface, and DR has its OWN QueryInput). Both inputs
@@ -236,6 +258,7 @@ export function ResearchSurface() {
             </div>
           </div>
 
+          <SavedSearchControls controller={r} />
           {/* the question, rendered as a document title (display serif) */}
           <h1 className="mx-auto w-full max-w-doc px-body">
             <span className="mx-auto block max-w-measure font-display text-[1.9rem] font-medium leading-tight tracking-tight text-text">
@@ -265,7 +288,7 @@ export function ResearchSurface() {
               the answer when sources resolve (CLS guard) */}
           <div className="mx-auto w-full max-w-doc px-body">
             <div className="mx-auto max-w-measure">
-              <SourcePanel answer={r.answer} onReScope={r.reScope} />
+              <SourcePanel answer={r.answer} onReScope={r.reScope} domainsDeny={r.scope?.domains_deny} busy={r.phase === "running"} />
             </div>
           </div>
 

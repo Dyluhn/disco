@@ -69,6 +69,7 @@ export function researchStreamReducer(state: StreamState, action: Action): Strea
           }
           return {
             ...state,
+            phase: "finished",
             answer: f.answer,
             blocks: f.answer.blocks,
             partial: {},

@@ -133,6 +133,9 @@ export interface GroundedAnswer {
 
 /** A user-adjusted retrieval scope (re-scope controls → a re-issue mutation). */
 export interface ReScope {
+  request_id?: string;
+  parent_request_id?: string | null;
+  space_ids?: string[];
   query: string;
   domains_deny?: string[];
   drop_weak?: boolean;

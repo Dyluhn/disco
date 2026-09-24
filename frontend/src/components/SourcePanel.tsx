@@ -1,6 +1,6 @@
 import * as Tabs from "@radix-ui/react-tabs";
 import { Ban, CheckCircle2, FileX2, Filter, Lock, MinusCircle, RefreshCw, XCircle } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { cn } from "@/lib/cn";
 import { STATUS_LABEL, citationNumbers, cleanDomain, isFailedStatus, monogram } from "@/lib/sources";
 import type { ExtractStatus, GroundedAnswer, SearchHit, Verdict } from "@/types/grounded";
@@ -53,14 +53,16 @@ function HitRow({ hit }: { hit: SearchHit }) {
 
 interface Props {
   answer: GroundedAnswer | null;
+  domainsDeny?: string[];
+  busy?: boolean;
   onReScope: (partial: { domains_deny?: string[]; drop_weak?: boolean }) => void;
 }
 
 /** Fixed-height dual-tab source panel: "All Searched" (full discovery set,
  * incl. failures) vs "Cited" (passages used). Re-scope controls re-issue
  * retrieval. The fixed height is a CLS guard — it never shoves the answer. */
-export function SourcePanel({ answer, onReScope }: Props) {
-  const [denied, setDenied] = useState<string[]>([]);
+export function SourcePanel({ answer, onReScope, domainsDeny = [], busy = false }: Props) {
+  const denied = domainsDeny;
   const allHits = answer?.all_hits ?? [];
   const cited = answer?.passages ?? [];
   const hasWeak = (answer?.unsupported_count ?? 0) > 0 || (answer?.claims.some((c) => c.verdict !== "supported") ?? false);
@@ -110,7 +112,6 @@ export function SourcePanel({ answer, onReScope }: Props) {
 
   const toggleDeny = (domain: string) => {
     const next = denied.includes(domain) ? denied.filter((d) => d !== domain) : [...denied, domain];
-    setDenied(next);
     onReScope({ domains_deny: next });
   };
 
@@ -137,7 +138,7 @@ export function SourcePanel({ answer, onReScope }: Props) {
             <button
               type="button"
               onClick={() => onReScope({ drop_weak: true })}
-              disabled={!hasWeak}
+              disabled={busy || !hasWeak}
               data-disco-control="search.drop-weak"
               className="flex min-h-11 items-center gap-hair rounded-control px-inline py-hair font-ui text-[0.74rem] text-text-muted transition-colors hover:text-text disabled:opacity-40 lg:min-h-0"
             >
@@ -148,6 +149,7 @@ export function SourcePanel({ answer, onReScope }: Props) {
               type="button"
               onClick={() => onReScope({})}
               data-disco-control="search.rescope"
+              disabled={busy}
               className="flex min-h-11 items-center gap-hair rounded-control px-inline py-hair font-ui text-[0.74rem] text-text-muted transition-colors hover:text-text lg:min-h-0"
             >
               <RefreshCw className="size-3" aria-hidden />
@@ -166,6 +168,7 @@ export function SourcePanel({ answer, onReScope }: Props) {
                 <button
                   type="button"
                   aria-label={`Filter out ${cleanDomain(hit.url)}`}
+                  disabled={busy}
                   onClick={() => toggleDeny(cleanDomain(hit.url))}
                   data-disco-control="search.rescope-domain"
                   data-domain-index={i}

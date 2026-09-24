@@ -252,6 +252,13 @@ function ResumeAgent() {
  * Research surface pinned to a specific conversation id. The WS subscription
  * replays history-then-live, so all derived state (plan, progress, report)
  * recovers naturally. */
+function ResumeResearch() {
+  const { cid } = useParams<{ cid: string }>();
+  const { setMode } = useMode();
+  useEffect(() => setMode("search"), [setMode]);
+  return <ResearchSurface key={cid} resumeCid={cid ?? null} />;
+}
+
 function ResumeDeepResearch() {
   const { cid } = useParams<{ cid: string }>();
   // W-24: Deep Research is a child scope of Search → sync the slider to Search so
@@ -291,6 +298,7 @@ export default function App() {
               <Route path="build/:cid" element={<ResumeProject />} />
               <Route path="agent/:cid" element={<ResumeAgent />} />
               <Route path="imported/:cid" element={<ImportedRunView />} />
+              <Route path="research/:cid" element={<ResumeResearch />} />
               <Route path="deep/:cid" element={<ResumeDeepResearch />} />
               <Route path="share/:token" element={<ShareView />} />
               <Route path="settings" element={<SettingsView />} />

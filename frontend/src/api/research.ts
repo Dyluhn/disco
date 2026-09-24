@@ -9,7 +9,7 @@
  * Unset → it replays the in-repo fixture (offline / tests), so the UI and its
  * tests run with no backend.
  */
-import { ensureAgentSession, researchWsUrl } from "@/api/client";
+import { agentGet, ensureAgentSession, researchWsUrl } from "@/api/client";
 import { rrfAnswer, sheetDemoAnswer } from "@/fixtures/answers";
 import type { AnswerBlock, GroundedAnswer, ReScope, StreamFrame } from "@/types/grounded";
 
@@ -30,19 +30,19 @@ export const streamTiming = {
 function applyScope(base: GroundedAnswer, scope: ReScope): GroundedAnswer {
   let answer = { ...base, query: scope.query || base.query };
   if (scope.drop_weak) {
-    const drop = new Set(
-      answer.claims
-        .filter((c) => c.verdict !== "supported")
-        .flatMap((c) => c.claim.cited_passage_ids),
-    );
+    const weak = answer.claims.filter((claim) => claim.verdict !== "supported");
     answer = {
       ...answer,
-      claims: answer.claims.filter((c) => c.verdict === "supported"),
-      blocks: answer.blocks.map((b) =>
-        b.kind === "prose"
-          ? { ...b, text: b.text.replace(/\[\[(\w+)\]\]/g, (m, id) => (drop.has(id) ? "" : m)) }
-          : b,
-      ),
+      claims: answer.claims.filter((claim) => claim.verdict === "supported"),
+      unsupported_count: 0,
+      blocks: answer.blocks.flatMap<AnswerBlock>((block) => {
+        if (block.kind !== "prose") return [block];
+        // Fixture parity: withhold the statement, not merely its citation.
+        const text = block.text.split(/(?<=[.!?])\s+/).filter((sentence) =>
+          !weak.some(({ claim }) => sentence.toLowerCase().includes(claim.text.toLowerCase())),
+        ).join(" ");
+        return text ? [{ ...block, text, cited_passage_ids: [...text.matchAll(/\[\[(\w+)\]\]/g)].map((m) => m[1]) }] : [];
+      }),
     };
   }
   if (scope.domains_deny?.length) {
@@ -108,6 +108,7 @@ function subscribeLive(
   onFrame: (f: StreamFrame) => void,
 ): StreamHandle {
   let closed = false;
+  let terminal = false;
   let ws: WebSocket | null = null;
   function openSocket() {
     if (closed) return;
@@ -116,6 +117,8 @@ function subscribeLive(
       ws?.send(
         JSON.stringify({
           query: scope.query,
+          request_id: scope.request_id,
+          parent_request_id: scope.parent_request_id ?? null,
           drop_weak: scope.drop_weak ?? false,
           domains_deny: scope.domains_deny ?? [],
           model_override: scope.model_override ?? null, // the leader pill → answerer
@@ -124,13 +127,17 @@ function subscribeLive(
           // null → OFF path (server-side byte-identical to pre-DR-4 code).
           conversation_id: scope.conversation_id ?? null,
           sources: scope.sources ?? [],
+          space_ids: scope.space_ids ?? [],
         }),
       );
     };
     ws.onmessage = (ev) => {
       if (closed) return;
       try {
-        onFrame(JSON.parse(ev.data) as StreamFrame);
+        const frame = JSON.parse(ev.data) as StreamFrame;
+        terminal ||= frame.type === "final" || frame.type === "error" ||
+          (frame.type === "state" && frame.status !== "running");
+        onFrame(frame);
       } catch {
         onFrame({ type: "error", message: "malformed frame from server" });
       }
@@ -139,7 +146,9 @@ function subscribeLive(
       if (!closed) onFrame({ type: "error", message: "research stream connection failed" });
     };
     ws.onclose = () => {
-      /* terminal */
+      if (!closed && !terminal) onFrame({
+        type: "error", message: "Search connection closed before the answer finished. Retry to start a new request.",
+      });
     };
   }
   void ensureAgentSession().then(openSocket).catch(() => {
@@ -196,5 +205,19 @@ export function subscribeResearch(scope: ReScope, onFrame: (f: StreamFrame) => v
  * to stream. Kept here so the mutation hook never touches transport directly. */
 export async function requestResearch(scope: ReScope): Promise<ReScope> {
   await new Promise((r) => setTimeout(r, 20));
-  return scope;
+  // getRandomValues also works on self-hosted HTTP/LAN origins, where
+  // randomUUID is unavailable because the page is not a secure context.
+  const requestId = Array.from(crypto.getRandomValues(new Uint8Array(16)),
+    (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return { ...scope, request_id: requestId };
+}
+
+export interface SavedSearchTurn { scope: ReScope; answer: GroundedAnswer }
+export interface SearchHistory {
+  conversation_id: string;
+  turns: SavedSearchTurn[];
+  latest_request: { scope: ReScope } | null;
+}
+export function getResearchHistory(cid: string): Promise<SearchHistory> {
+  return agentGet(`/conversations/${encodeURIComponent(cid)}/research`);
 }

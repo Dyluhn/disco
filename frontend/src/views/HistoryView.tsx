@@ -114,7 +114,7 @@ function surfaceRoute(c: ConversationSummary): string {
   if (c.surface === "deep_research") return `/deep/${c.id}`;
   if (c.surface === "agent") return `/agent/${c.id}`;
   if (c.surface === "build") return `/build/${c.id}`;
-  return "/";
+  return `/research/${c.id}`;
 }
 
 function MoveToSpaceMenu({

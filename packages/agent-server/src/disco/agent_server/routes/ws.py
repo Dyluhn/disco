@@ -22,17 +22,19 @@ from disco.core.selection_edit import (
 )
 from disco.core.store.sqlite import SqliteEventStore, SubscriberOverflow
 from disco.retrieval.local_encoders import EncoderUnavailable
-from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from pydantic import ValidationError
 
 from ..auth import websocket_session
 from ..redaction import redact_frame
 from ..runtime import ConversationRuntime
+from ..search_history import SearchHistory, SearchScope, close_search_stream, read_search_history
 from ..space_access import owned_space_ids_or_403
 from ._common import (
     _build_brief_message,
     _context_message,
     _user_message,
+    require_owned_conversation,
     validate_canonical_conversation_id,
 )
 
@@ -547,6 +549,7 @@ async def _run_research_ws(
     runtime: ConversationRuntime | None,
     websocket: WebSocket,
     session: Any,
+    history: SearchHistory,
 ) -> None:
     """Drive the research WebSocket: parse request, validate, stream frames, close."""
     try:
@@ -555,7 +558,7 @@ async def _run_research_ws(
         with contextlib.suppress(Exception):
             await websocket.close()
         return
-    body = raw or {}
+    body = raw if isinstance(raw, dict) else {}
     query = str(body.get("query", "")).strip()
     if not query:
         await _send_json_redacted(websocket, {"type": "error", "message": "empty query"})
@@ -594,7 +597,31 @@ async def _run_research_ws(
         )
         await websocket.close()
         return
-    await _stream_research_frames(runtime, websocket, query, params, space_ids, session)
+    scope = None
+    if body.get("request_id") is not None:
+        try:
+            scope = SearchScope.model_validate(
+                {
+                    **params,
+                    "query": query,
+                    "request_id": body["request_id"],
+                    "parent_request_id": body.get("parent_request_id"),
+                    "domains_deny": sorted(params["domains_deny"]),
+                    "space_ids": sorted(space_ids),
+                    # Identity follows the submitted setting, not a mutable
+                    # last-selected default looked up again during replay.
+                    "model_override": body.get("model_override") or None,
+                }
+            )
+        except ValidationError:
+            await _send_json_redacted(
+                websocket, {"type": "error", "message": "Invalid search request identity"}
+            )
+            await websocket.close()
+            return
+    await _stream_research_frames(
+        runtime, websocket, query, params, space_ids, session, history, scope
+    )
 
 
 async def _stream_research_frames(
@@ -604,22 +631,30 @@ async def _stream_research_frames(
     params: dict[str, Any],
     space_ids: frozenset[str],
     session: Any,
+    history: SearchHistory,
+    scope: SearchScope | None,
 ) -> None:
     """Stream research frames to the WebSocket, handling errors and closing."""
     try:
-        async for frame in runtime.deep_research.research_stream(
-            query,
-            model_override=params["model_override"],
-            drop_weak=params["drop_weak"],
-            domains_deny=params["domains_deny"],
-            think=params["think"],
-            conversation_id=params["conversation_id"],
-            space_ids=space_ids,
-            owner_id=session.owner_id,
-            include_unclaimed_legacy=session.is_admin,
-            sources=params["sources"],
-        ):
-            await _send_json_redacted(websocket, frame)
+
+        def run():
+            return runtime.deep_research.research_stream(
+                query,
+                model_override=params["model_override"],
+                drop_weak=params["drop_weak"],
+                domains_deny=params["domains_deny"],
+                think=params["think"],
+                conversation_id=params["conversation_id"],
+                space_ids=space_ids,
+                owner_id=session.owner_id,
+                include_unclaimed_legacy=session.is_admin,
+                sources=params["sources"],
+            )
+
+        frames = history.stream(scope, run) if scope else run()
+        async with close_search_stream(frames):
+            async for frame in frames:
+                await _send_json_redacted(websocket, frame)
     except WebSocketDisconnect:
         return  # client cancelled mid-stream
     except EncoderUnavailable as exc:
@@ -640,6 +675,15 @@ async def _stream_research_frames(
 
 def make_ws_router(store: SqliteEventStore, runtime: ConversationRuntime | None) -> APIRouter:
     router = APIRouter()
+    history = SearchHistory(store)
+
+    @router.get("/conversations/{conversation_id}/research")
+    async def research_history(conversation_id: str, request: Request, response: Response) -> dict:
+        cid = await require_owned_conversation(request, store, conversation_id)
+        if store.conversation_surface_sync(cid) != "research":
+            raise HTTPException(status_code=404, detail="search_not_found")
+        response.headers["Cache-Control"] = "private, no-store"
+        return redact_frame(await read_search_history(store, cid))
 
     @router.websocket("/ws/conversations/{conversation_id}")
     async def conversation_ws(
@@ -680,6 +724,6 @@ def make_ws_router(store: SqliteEventStore, runtime: ConversationRuntime | None)
             )
             await websocket.close()
             return
-        await _run_research_ws(store, runtime, websocket, session)
+        await _run_research_ws(store, runtime, websocket, session, history)
 
     return router

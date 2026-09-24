@@ -258,6 +258,12 @@ class _ConversationListingMixin:
             """Host-provided: reconstruct conversation state from the event log."""
             ...
 
+    def conversation_surface_sync(self, conversation_id: str) -> str | None:
+        row = self._conn.execute(
+            "SELECT surface FROM conversations WHERE conversation_id = ?", (conversation_id,)
+        ).fetchone()
+        return (row["surface"] or "research") if row is not None else None
+
     async def list_conversations(
         self, *, owner_id: str, limit: int = 50, cursor: str | None = None
     ) -> list[str]:

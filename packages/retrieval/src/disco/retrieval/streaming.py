@@ -654,12 +654,17 @@ async def stream_research_answer(
 
             if result.supported > 0:
                 # Accepted round — emit the buffered tokens, then the final frames.
-                for frame in result.token_frames:
-                    yield frame
+                if not drop_weak:
+                    for frame in result.token_frames:
+                        yield frame
                 follow_ups = await _follow_ups(router, query, result.answer_text)
                 answer = _build_final_answer(query, result, follow_ups)
                 if drop_weak:
                     answer = _drop_weak(answer)
+                    # A filter request must not flash withheld claims from the
+                    # original token buffer before reconciling the final answer.
+                    for block in answer["blocks"]:
+                        yield {"type": "block", "block": block}
                 yield {"type": "final", "answer": answer}
                 yield {"type": "state", "status": "finished"}
                 return

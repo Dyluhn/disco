@@ -514,12 +514,22 @@ class SqliteEventStore(_ClosableSqliteStore):
                 self._publish(conversation_id, stored)
         return stored
 
-    async def append_many(self, conversation_id: str, events: list[Event]) -> list[Event]:
+    async def append_many(
+        self, conversation_id: str, events: list[Event], *, require_existing: bool = False
+    ) -> list[Event]:
         events = [_require_concrete_event(event) for event in events]
         stored_new: list[Event] = []
         results: list[Event] = []
         async with self._write_lock:
             with self._conn:
+                if (
+                    require_existing
+                    and self._conn.execute(
+                        "SELECT 1 FROM conversations WHERE conversation_id = ?", (conversation_id,)
+                    ).fetchone()
+                    is None
+                ):
+                    raise KeyError("conversation was deleted")
                 for event in events:
                     stored, is_new = self._store_one(conversation_id, event)
                     results.append(stored)

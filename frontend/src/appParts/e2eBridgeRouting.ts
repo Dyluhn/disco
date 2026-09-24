@@ -7,13 +7,14 @@
 import type { Surface } from "@/lib/e2eBridge";
 import type { Mode } from "@/shell/mode";
 
-const CID_ROUTE_PATTERN = /^\/(build|agent|deep|imported|share)\/([^/]+)/;
-const CID_ROUTE_PREFIXES = new Set(["build", "agent", "deep", "imported"]);
+const CID_ROUTE_PATTERN = /^\/(build|agent|deep|research|imported|share)\/([^/]+)/;
+const CID_ROUTE_PREFIXES = new Set(["build", "agent", "deep", "research", "imported"]);
 
 const PREFIX_SURFACE: Partial<Record<string, Surface>> = {
   build: "build",
   agent: "agent",
   deep: "deep_research",
+  research: "search",
   imported: "imported",
   share: "share",
 };
@@ -27,7 +28,7 @@ const PATH_SURFACE: Partial<Record<string, Surface>> = {
   "/settings": "settings",
 };
 
-/** Parse `/build|agent|deep|imported|share/<cid>` from the pathname. */
+/** Parse `/build|agent|deep|research|imported|share/<cid>` from the pathname. */
 export function deriveRouteMatch(pathname: string): {
   routePrefix: string | null;
   conversationId: string | null;

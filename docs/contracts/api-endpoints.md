@@ -243,3 +243,28 @@ unset → fixtures. Ownership is **not** frontend config: in live mode the backe
 the owner from the session cookie (S-W1). `VITE_OWNER_ID` is legacy and unused by
 `current/frontend/src` (fixture mode filters by a fixture-internal owner constant); the stale
 entry in `current/frontend/.env.example` has no effect.
+
+### Saved Standard Search answers
+
+A Standard Search conversation uses `surface: "research"`. Its browser URL is
+`/research/{conversation_id}` after the first completed answer. Opening this URL
+or its History row reads saved data; it does not submit another query.
+
+`GET /conversations/{conversation_id}/research` (agent server) is owner-scoped and
+returns `{conversation_id, turns, latest_request}` with `Cache-Control: private,
+no-store`. Each completed turn contains its original structured `answer` and
+`scope`, including `request_id`, `parent_request_id`, sources, denied domains,
+and model/thinking settings. Citation, block and artifact filenames are retained.
+`latest_request` also records an interrupted request without claiming it finished.
+
+The current UI includes a fresh `request_id` in every explicit `/ws/research`
+submission, follow-up, retry or re-scope. The server atomically saves the complete
+answer and FINISHED status before sending the final frame. Repeating an already
+completed identity and identical scope replays that result without model or
+retrieval work. A changed scope under an existing identity, an interrupted
+identity, or concurrent work in that conversation is rejected with an error
+frame. Explicit retries use fresh identities and reference the last completed
+parent, never an unfinished request. Imported conversations remain read-only;
+workspace/agent conversations cannot be run through this persistence path.
+Older websocket clients without a request identity retain their stateless
+streaming contract; previously unsaved answers cannot be recovered retroactively.
