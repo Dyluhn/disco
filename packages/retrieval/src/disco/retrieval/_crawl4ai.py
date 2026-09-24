@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from copy import deepcopy
 from typing import Literal
 
 import httpx
@@ -15,6 +16,15 @@ from ._transport_retry import extract_with_isolation
 from .models import ExtractedDoc, Passage
 
 ExtractStatus = Literal["ok", "paywalled", "blocked", "not_found", "error"]
+_EMPTY_PASSAGES_ERROR = "source returned no usable text passages"
+
+
+def _has_markdown(value: object) -> bool:
+    return isinstance(value, str) or (
+        isinstance(value, dict)
+        and any(isinstance(value.get(key), str) for key in ("fit_markdown", "raw_markdown"))
+    )
+
 
 # Crawl4AI's default ``fit_markdown`` is empty on many large pages. Asking for
 # a pruning filter makes the server populate it with article content instead of
@@ -87,10 +97,16 @@ class Crawl4aiExtractionProvider:
         if crawl:
             from .bundled_providers import LocalExtractionProvider
 
-            crawled = await extract_with_isolation(crawl, fetch=self._fetch, failed=self._failed)
+            empty_successes: set[str] = set()
+
+            async def fetch(urls: list[str]) -> dict[str, ExtractedDoc]:
+                return await self._fetch(urls, empty_successes=empty_successes)
+
+            crawled = await extract_with_isolation(crawl, fetch=fetch, failed=self._failed)
             crawled |= await recover_pdf_sources(
                 crawled, timeout_s=self._timeout, max_chars=self._max_chars, chunk=self._chunk
             )
+            crawled |= await self._retry_empty(crawled, empty_successes)
             recovered = await recover_blocked_pages(
                 crawled, fetch_archive=LocalExtractionProvider().extract, chunk=self._chunk
             )
@@ -104,7 +120,40 @@ class Crawl4aiExtractionProvider:
         )
         return out
 
-    async def _fetch(self, urls: list[str]) -> dict[str, ExtractedDoc]:
+    async def _retry_empty(
+        self, docs: dict[str, ExtractedDoc], empty_successes: set[str]
+    ) -> dict[str, ExtractedDoc]:
+        pending = [
+            url
+            for url, doc in docs.items()
+            if url in empty_successes
+            and doc.status == "error"
+            and doc.error == _EMPTY_PASSAGES_ERROR
+        ]
+        if not pending:
+            return {}
+        try:
+            # Only successful shells qualify; failures never re-enter this path.
+            # Keep errors here so initial useful siblings are not batch-retried.
+            return await self._fetch(pending, wait_for_content=True)
+        except (httpx.HTTPError, OSError, ValueError) as exc:
+            return {
+                url: self._failed(url, f"empty source retry failed: {type(exc).__name__}: {exc}")
+                for url in pending
+            }
+
+    async def _fetch(
+        self,
+        urls: list[str],
+        *,
+        wait_for_content: bool = False,
+        empty_successes: set[str] | None = None,
+    ) -> dict[str, ExtractedDoc]:
+        config = deepcopy(_CRAWL_CONFIG)
+        if wait_for_content:
+            # Crawl4AI waits before its final HTML snapshot, allowing a delayed
+            # render or JavaScript redirect to complete. One extra request only.
+            config["params"]["delay_before_return_html"] = 3.0
         async with httpx.AsyncClient(
             timeout=self._timeout,
             transport=self._transport,
@@ -113,7 +162,7 @@ class Crawl4aiExtractionProvider:
         ) as client:
             resp = await client.post(
                 f"{self._base}/crawl",
-                json={"urls": urls, "crawler_config": _CRAWL_CONFIG},
+                json={"urls": urls, "crawler_config": config},
             )
             resp.raise_for_status()
             payload = resp.json().get("results", [])
@@ -125,6 +174,21 @@ class Crawl4aiExtractionProvider:
             )
             for idx, url in enumerate(urls)
         }
+        if empty_successes is not None:
+            for idx, url in enumerate(urls):
+                row = by_url.get(url) or (results[idx] if idx < len(results) else None)
+                if (
+                    row
+                    and row.get("success") is True
+                    and _has_markdown(row.get("markdown"))
+                    and self._status(
+                        bool(row.get("success")),
+                        row.get("redirected_status_code") or row.get("status_code"),
+                    )
+                    == "ok"
+                    and docs[url].error == _EMPTY_PASSAGES_ERROR
+                ):
+                    empty_successes.add(url)
         from .bundled_providers import LocalExtractionProvider
 
         for url, doc in docs.items():
@@ -180,10 +244,14 @@ class Crawl4aiExtractionProvider:
                 title=title,
                 content=content,
                 fetched_ok=False,
-                error=res.get("error_message") or (f"http {code}" if code else "empty content"),
+                error=(
+                    _EMPTY_PASSAGES_ERROR
+                    if status == "ok" and _has_markdown(md)
+                    else res.get("error_message") or (f"http {code}" if code else "empty content")
+                ),
                 status="error" if status == "ok" else status,
             )
-        return reject_challenge_page(
+        doc = reject_challenge_page(
             ExtractedDoc(
                 url=url,
                 title=title,
@@ -193,6 +261,11 @@ class Crawl4aiExtractionProvider:
                 status="ok",
             )
         )
+        if doc.fetched_ok and not any(passage.text.strip() for passage in doc.passages):
+            return doc.model_copy(
+                update={"fetched_ok": False, "status": "error", "error": _EMPTY_PASSAGES_ERROR}
+            )
+        return doc
 
     def _chunk(self, url: str, title: str, content: str) -> list[Passage]:
         sid = hashlib.md5(url.encode()).hexdigest()[:6]  # noqa: S324 — non-security id

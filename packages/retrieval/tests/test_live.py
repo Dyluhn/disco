@@ -335,7 +335,7 @@ async def test_crawl4ai_falls_back_to_raw_markdown_when_fit_is_empty():
                 "status_code": 200,
                 "markdown": {
                     "fit_markdown": "",
-                    "raw_markdown": "Real content here, long enough to keep.",
+                    "raw_markdown": "Real content here, long enough to keep as a citable passage.",
                 },
                 "metadata": {"title": "Post"},
             }

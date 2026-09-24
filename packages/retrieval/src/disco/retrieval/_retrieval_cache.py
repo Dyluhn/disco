@@ -164,7 +164,13 @@ def cached_docs(
         fields = cache.get_page(namespace + url)
         if fields is not None:
             doc = ExtractedDoc(**fields)
-            if corrupted_text(doc.content) or challenge_page(doc.title, doc.content):
+            if (
+                not doc.fetched_ok
+                or doc.status != "ok"
+                or not any(passage.text.strip() for passage in doc.passages)
+                or corrupted_text(doc.content)
+                or challenge_page(doc.title, doc.content)
+            ):
                 _LOG.warning("extraction cache contains unreadable content for %s; refetching", url)
                 continue
             _LOG.info("extraction cache hit for %s", url)
@@ -184,6 +190,7 @@ def store_docs(
             doc.fetched_ok
             and doc.status == "ok"
             and doc.content
+            and any(passage.text.strip() for passage in doc.passages)
             and not corrupted_text(doc.content)
             and not challenge_page(doc.title, doc.content)
         ):
