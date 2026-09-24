@@ -141,19 +141,22 @@ export function ExecutionCanvas({
   // The Cockpit also surfaces bound-port data from the same useBuildPreview
   // the Preview pane uses — shared query cache, no extra fetch.
   const previewQuery = useBuildPreview(cid, active);
-  // UI-7: the committed-workspace manifest does not exist until the run has
-  // sealed one. Asking for it mid-run answered 404 on every visit and put a
-  // console error on the page for an entirely expected state, so we only ask
-  // once a workspace version has actually landed (or the run has finished).
-  const hasCommittedWorkspace =
+  // Imports materialize a host workspace before any agent run/seal. Only the
+  // server's environment-event hint enables that read, never message prose or
+  // untrusted shared events. Manifest/file endpoints still enforce ownership.
+  const importedWorkspace = !untrusted && events.find((event) =>
+    event.kind === "message" && event.source === "environment" &&
+    (event.meta?.project_import as { workspace_ready?: unknown } | undefined)?.workspace_ready === true,
+  );
+  const hasAvailableWorkspace = Boolean(importedWorkspace) ||
     status === "FINISHED" || events.some((event) => event.kind === "workspace_version");
   const workspaceRevision = useMemo(() => {
     const latest = [...events].reverse().find(
       (event) => event.kind === "workspace_restored" || event.kind === "workspace_version",
     );
-    return `${status}:${latest?.id ?? ""}`;
-  }, [events, status]);
-  const manifestQuery = useProjectManifest(cid, hasCommittedWorkspace, workspaceRevision);
+    return `${status}:${latest?.id ?? (importedWorkspace ? importedWorkspace.id : "")}`;
+  }, [events, status, importedWorkspace]);
+  const manifestQuery = useProjectManifest(cid, hasAvailableWorkspace, workspaceRevision);
   const manifestFiles = manifestQuery.data?.files ?? [];
   const anySessionBusy = sessions.some((s) => s.busy);
 
@@ -227,7 +230,7 @@ export function ExecutionCanvas({
             events={events}
             streamingFile={streamingFile}
             manifestFiles={manifestFiles}
-            snapshot={cid && status === "FINISHED" && !untrusted ? {
+            snapshot={cid && !untrusted && (status === "FINISHED" || (status === "IDLE" && importedWorkspace)) ? {
               cid, revision: workspaceRevision,
               loading: manifestQuery.isPending,
               error: manifestQuery.isError,

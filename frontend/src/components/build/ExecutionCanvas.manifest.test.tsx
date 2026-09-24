@@ -8,16 +8,18 @@
  */
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentEvent } from "@/types/agent";
 
-const { useProjectManifestMock } = vi.hoisted(() => ({
-  useProjectManifestMock: vi.fn(() => ({ data: undefined })),
+const { useProjectManifestMock, useProjectFileMock } = vi.hoisted(() => ({
+  useProjectManifestMock: vi.fn<(...args: unknown[]) => { data?: { files: { path: string; bytes: number }[] } }>(() => ({ data: undefined })),
+  useProjectFileMock: vi.fn(() => ({ data: { content: "Imported source text", binary: false }, isPending: false, isError: false })),
 }));
 
 vi.mock("@/hooks/useProjects", () => ({
-  useProjectManifest: (...args: unknown[]) => useProjectManifestMock(...(args as [])),
+  useProjectManifest: (...args: unknown[]) => useProjectManifestMock(...args),
+  useProjectFile: (...args: unknown[]) => useProjectFileMock(...(args as [])),
 }));
 
 vi.mock("@/hooks/useSessions", () => ({
@@ -50,6 +52,7 @@ const sealed = {
 
 afterEach(() => {
   vi.clearAllMocks();
+  useProjectManifestMock.mockReturnValue({ data: undefined });
 });
 
 describe("ExecutionCanvas — the project manifest is only requested once one can exist", () => {
@@ -67,4 +70,34 @@ describe("ExecutionCanvas — the project manifest is only requested once one ca
     render(withQc(<ExecutionCanvas events={[]} status="FINISHED" cid="conv_done" />));
     expect(useProjectManifestMock).toHaveBeenCalledWith("conv_done", true, "FINISHED:");
   });
+});
+
+
+const importReady: AgentEvent = {
+  id: "import-ready", kind: "message", source: "environment",
+  message: { role: "user", content: "Imported files" },
+  meta: { project_import: { workspace_ready: true } },
+};
+
+it("shows imported files and actual bytes before continuation and after reload", () => {
+  useProjectManifestMock.mockReturnValue({ data: { files: [{ path: "src/original.txt", bytes: 20 }] } });
+  const mount = () => render(withQc(<ExecutionCanvas events={[importReady]} status="IDLE" cid="conv_import" />));
+  const view = mount();
+  expect(useProjectManifestMock).toHaveBeenCalledWith("conv_import", true, "IDLE:import-ready");
+  expect(screen.getByRole("button", { name: "src/original.txt" })).toBeVisible();
+  expect(screen.getByText("Imported source text")).toBeVisible();
+  expect(useProjectFileMock).toHaveBeenCalledWith("conv_import", "src/original.txt", "IDLE:import-ready");
+  view.unmount(); mount();
+  expect(screen.getByText("Imported source text")).toBeVisible();
+});
+
+it.each([
+  { event: { ...importReady, source: "user" }, untrusted: false },
+  { event: { ...importReady, meta: {} }, untrusted: false },
+  { event: { ...importReady, meta: { project_import: { workspace_ready: "true" } } }, untrusted: false },
+  { event: importReady, untrusted: true },
+])("ignores user text, malformed hints, and imported-share events: %j", ({ event, untrusted }) => {
+  render(withQc(<ExecutionCanvas events={[event as AgentEvent]} untrusted={untrusted} status="IDLE" cid="conv_unready" />));
+  expect(useProjectManifestMock).toHaveBeenCalledWith("conv_unready", false, "IDLE:");
+  expect(useProjectFileMock).not.toHaveBeenCalled();
 });
