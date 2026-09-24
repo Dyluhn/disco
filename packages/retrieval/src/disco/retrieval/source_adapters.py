@@ -16,6 +16,7 @@ from urllib.parse import urlencode, urlparse
 import httpx
 from disco.core.host_egress import EgressDenied, GuardedResponse, guarded_get
 
+from ._arxiv_query import _arxiv_query
 from ._transport_retry import degradation_markers, engines_cooling, note_rate_limited_engines
 from .models import SearchHit
 from .providers import SearchProvider
@@ -120,9 +121,18 @@ class ArxivSearchProvider:
         domains_deny: frozenset[str] | None = None,
         time_filter: str | None = None,
     ) -> list[SearchHit]:
+        expression = _arxiv_query(query)
+        if not expression or limit <= 0:
+            return []
         recency_start = _recency_start(time_filter)
         request_limit = min(limit * 4, 100) if recency_start else limit
-        params = {"search_query": f"all:{query}", "start": 0, "max_results": request_limit}
+        params = {
+            "search_query": expression,
+            "start": 0,
+            "max_results": request_limit,
+            "sortBy": "relevance",
+            "sortOrder": "descending",
+        }
         try:
             resp = await _fetch_get(
                 _with_params(self._base_url, params),

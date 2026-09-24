@@ -36,7 +36,7 @@ async def test_arxiv_maps_atom_hits_and_satisfies_protocol():
     </feed>"""
 
     def handler(req: httpx.Request) -> httpx.Response:
-        assert req.url.params["search_query"] == "all:agent memory"
+        assert req.url.params["search_query"] == 'all:"agent" AND all:"memory"'
         assert req.url.params["max_results"] == "2"
         return httpx.Response(200, content=xml)
 
@@ -75,7 +75,7 @@ async def test_arxiv_follows_redirects_before_parsing_atom_hits():
                 headers={"Location": str(req.url.copy_with(scheme="https"))},
             )
         assert req.url.scheme == "https"
-        assert req.url.params["search_query"] == "all:redirect test"
+        assert req.url.params["search_query"] == 'all:"redirect" AND all:"test"'
         return httpx.Response(200, content=xml)
 
     provider = ArxivSearchProvider(
