@@ -569,7 +569,8 @@ async def test_sealed_dynamic_preview_restarts_from_immutable_bytes_and_rotates_
         host_fetch.assert_not_awaited()
         if published_transport != "reachable":
             assert any(
-                call.args == (restored_session.port, "asset.js")
+                call.args[:4]
+                == (restored_manager._sandbox, restored_session.port, "GET", "/asset.js")
                 for call in isolated_fetch.await_args_list
             )
 

@@ -35,6 +35,7 @@ from .preview_browser import (
     _upstream_http_response,
     _wake_for_preview,
 )
+from .preview_http import finished_http_response
 
 
 def _snapshot_request_path(
@@ -451,6 +452,7 @@ async def _serve_active_finished_projection(
     contract: SealedPreviewRuntimeContract,
     *,
     capability_port: int | None,
+    request: Request,
     inject_selection: bool = False,
 ) -> Response | None:
     resolved = await runtime.preview.resolve_finished_preview_runtime(
@@ -468,24 +470,18 @@ async def _serve_active_finished_projection(
         return None
     if capability_port is not None and capability_port != port:
         return None
-    upstream = runtime.preview.port_upstream(conversation_id, port)
-    if upstream is None:
-        return await _fetch_inside_response(
-            runtime,
-            conversation_id,
-            port,
-            rel_path,
-            inject_selection=inject_selection,
-            finished_contract=contract,
-        )
-    return await _upstream_http_response(
+    projection_id = resolved.get("projection_id")
+    if not isinstance(projection_id, str):
+        return None
+    return await finished_http_response(
         runtime,
+        request,
         conversation_id,
+        contract,
         port,
-        upstream,
-        rel_path,
+        projection_id,
+        "/" + rel_path.lstrip("/"),
         inject_selection=inject_selection,
-        finished_contract=contract,
     )
 
 
@@ -567,13 +563,20 @@ async def _finished_runtime_response(
     contract: SealedPreviewRuntimeContract,
     preview_cap: PreviewCapability | None,
 ) -> Response:
-    query = _forwarded_preview_query(request)
-    active_path = f"{safe_path}?{query}" if query else safe_path
+    query = request.scope.get("query_string", b"").decode("ascii")
+    raw_path = getattr(request.state, "canonical_preview_original_raw_path", None)
+    request_path = (
+        raw_path.decode("ascii")
+        if isinstance(raw_path, bytes)
+        else urllib.parse.quote(safe_path, safe="/-._~")
+    )
+    active_path = f"{request_path}?{query}" if query else request_path
     active = await _serve_active_finished_projection(
         runtime,
         conversation_id,
         active_path,
         contract,
+        request=request,
         capability_port=(preview_cap.port if preview_cap is not None else None),
         inject_selection=preview_cap is not None,
     )

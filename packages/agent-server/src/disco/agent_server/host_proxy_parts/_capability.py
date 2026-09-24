@@ -194,14 +194,17 @@ async def _apply_canonical_routing(
                 }
             )
         return True
-    # Canonical Preview browser GETs and HMR sockets enter the existing
-    # lifecycle dispatcher while retaining the browser's root-relative
+    # Sealed application HTTP, immutable GETs, and HMR sockets enter the
+    # existing lifecycle dispatcher while retaining the browser's root-relative
     # URL. This is an internal ASGI rewrite only; generated code never
     # sees Disco's authenticated origin or session cookie.
     if scope["type"] == "websocket" or (
         scope["type"] == "http"
-        and str(scope.get("method") or "GET").upper() == "GET"
         and not cap.authority_id.startswith("live:")
+        and (
+            str(scope.get("method") or "GET").upper() == "GET"
+            or cap.authority_id.startswith("sealed-runtime:")
+        )
     ):
         internal_path = f"{ISOLATED_PATH_PREVIEW_PREFIX}/{cap.conversation_id}/{path.lstrip('/')}"
         internal_scope = dict(scope)
@@ -210,6 +213,7 @@ async def _apply_canonical_routing(
         state = dict(scope.get("state") or {})
         state["canonical_preview_capability"] = cap
         state["canonical_preview_original_path"] = path
+        state["canonical_preview_original_raw_path"] = scope.get("raw_path")
         internal_scope["state"] = state
         await self.app(internal_scope, receive, send)
         return True

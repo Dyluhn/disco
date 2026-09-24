@@ -926,8 +926,10 @@ def _published_preview_transport(
     """Model daemon-host port reachability without replacing the real runtime read."""
     host_fetch = AsyncMock(side_effect=AssertionError("sealed reads must not use host sandbox"))
     monkeypatch.setattr(restored_sandbox, "fetch_inside", host_fetch)
-    isolated_fetch = AsyncMock(wraps=restored_manager._sandbox.fetch_inside)
-    monkeypatch.setattr(restored_manager._sandbox, "fetch_inside", isolated_fetch)
+    from disco.agent_server import preview_request
+
+    isolated_fetch = AsyncMock(wraps=preview_request.request_inside)
+    monkeypatch.setattr(preview_request, "request_inside", isolated_fetch)
     if published_transport == "unpublished":
         monkeypatch.setattr(restarted.preview, "port_upstream", lambda *_args: None)
     elif published_transport == "refused":
