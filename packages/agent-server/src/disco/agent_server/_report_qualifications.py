@@ -26,8 +26,8 @@ def report_qualifications(report: ReportEvent) -> list[str]:
             f"{counts['unresolved']} unresolved, {counts['unavailable']} not checked."
         )
         notes.append(
-            "Unresolved means the checker found no source excerpt to match the sentence "
-            "against — it is not a contradiction."
+            "Unresolved means the check did not establish support or contradiction; "
+            "it does not mean the claim is false."
         )
     unverified = meta.get("unverified_sentences")
     if unverified is None:

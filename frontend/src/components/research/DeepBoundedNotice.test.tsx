@@ -315,12 +315,12 @@ describe("DeepBoundedNotice", () => {
       supported: 25, contradicted: 7, unresolved: 72, unavailable: 0,
     } } })} />);
     expect(
-      screen.getByText(/found no source excerpt to match the sentence against — it is not a contradiction/),
+      screen.getByText(/did not establish support or contradiction; it does not mean the claim is false/),
     ).toBeInTheDocument();
   });
 
   it("does not explain unresolved when the run recorded no counts", () => {
     render(<DeepBoundedNotice report={makeReport({ bounded_by: "turns" })} />);
-    expect(screen.queryByText(/it is not a contradiction/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/it does not mean the claim is false/)).not.toBeInTheDocument();
   });
 });
