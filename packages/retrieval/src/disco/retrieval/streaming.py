@@ -18,7 +18,7 @@ import json
 import logging
 import re
 from collections.abc import AsyncIterator, Sequence
-from typing import Any, NamedTuple
+from typing import Any, NamedTuple, cast
 
 from disco.core.events import LLMMessage
 from disco.core.llm import (
@@ -466,7 +466,7 @@ async def _discover_round(
     detailed = getattr(search, "search_detailed", None)
     diagnostic: object = {}
     if callable(detailed):
-        hits, diagnostic = await detailed(
+        hits, diagnostic = await cast(Any, detailed)(
             current_query, limit=discover_limit, domains_allow=allow, domains_deny=deny or None
         )
     else:
