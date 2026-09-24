@@ -629,6 +629,23 @@ def _build_final_answer(query: str, result: _RoundResult, follow_ups: list[str])
     }
 
 
+async def _accepted_round_frames(
+    router: LLMRouter, query: str, result: _RoundResult, *, drop_weak: bool
+) -> AsyncIterator[dict[str, Any]]:
+    if not drop_weak:
+        for frame in result.token_frames:
+            yield frame
+    follow_ups = await _follow_ups(router, query, result.answer_text)
+    answer = _build_final_answer(query, result, follow_ups)
+    if drop_weak:
+        # Filtering must not flash claims withheld from the final answer.
+        answer = _drop_weak(answer)
+        for block in answer["blocks"]:
+            yield {"type": "block", "block": block}
+    yield {"type": "final", "answer": answer}
+    yield {"type": "state", "status": "finished"}
+
+
 async def stream_research_answer(
     query: str,
     *,
@@ -712,19 +729,10 @@ async def stream_research_answer(
 
             if result.supported > 0:
                 # Accepted round — emit the buffered tokens, then the final frames.
-                if not drop_weak:
-                    for frame in result.token_frames:
-                        yield frame
-                follow_ups = await _follow_ups(router, query, result.answer_text)
-                answer = _build_final_answer(query, result, follow_ups)
-                if drop_weak:
-                    answer = _drop_weak(answer)
-                    # A filter request must not flash withheld claims from the
-                    # original token buffer before reconciling the final answer.
-                    for block in answer["blocks"]:
-                        yield {"type": "block", "block": block}
-                yield {"type": "final", "answer": answer}
-                yield {"type": "state", "status": "finished"}
+                async for frame in _accepted_round_frames(
+                    router, query, result, drop_weak=drop_weak
+                ):
+                    yield frame
                 return
 
             if rewriter is None or is_last_round:

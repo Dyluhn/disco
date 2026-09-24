@@ -39,6 +39,20 @@ def _launch_at(events: list[Event], selection: PreviewSelectionIdentity) -> tupl
     return None
 
 
+def _same_launch_scope(
+    before: PreviewSelectionIdentity, after: PreviewSelectionIdentity, path: str
+) -> bool:
+    return (
+        before.session_name == after.session_name
+        and before.port == after.port
+        and before.sandbox_instance_id == after.sandbox_instance_id
+        and before.sandbox_generation == after.sandbox_generation
+        and before.static_serve_dir == after.static_serve_dir
+        and before.contains_artifact(path)
+        and after.contains_artifact(path)
+    )
+
+
 def _freeform_preview_successor(events: list[Event], handoff: DeliverableEvent) -> bool:
     """Whether a current completion can rebind the same freeform app launch.
 
@@ -56,18 +70,9 @@ def _freeform_preview_successor(events: list[Event], handoff: DeliverableEvent) 
     after = preview_selection_at(events, through_seq=max((e.seq or 0 for e in events), default=0))
     if before is None or after is None:
         return False
-    same_owner = (
-        before.session_name == after.session_name
-        and before.port == after.port
-        and before.sandbox_instance_id == after.sandbox_instance_id
-        and before.sandbox_generation == after.sandbox_generation
-    )
-    same_scope = (
-        before.static_serve_dir == after.static_serve_dir
-        and before.contains_artifact(handoff.path)
-        and after.contains_artifact(handoff.path)
-    )
     launch = _launch_at(events, before)
     return bool(
-        same_owner and same_scope and launch is not None and launch == _launch_at(events, after)
+        _same_launch_scope(before, after, handoff.path)
+        and launch is not None
+        and launch == _launch_at(events, after)
     )

@@ -26,6 +26,20 @@ def _has_markdown(value: object) -> bool:
     )
 
 
+def _markdown_content(md: object) -> str:
+    if isinstance(md, dict):
+        return md.get("fit_markdown") or md.get("raw_markdown") or ""
+    return md if isinstance(md, str) else ""
+
+
+def _reject_empty_passages(doc: ExtractedDoc) -> ExtractedDoc:
+    if doc.fetched_ok and not any(passage.text.strip() for passage in doc.passages):
+        return doc.model_copy(
+            update={"fetched_ok": False, "status": "error", "error": _EMPTY_PASSAGES_ERROR}
+        )
+    return doc
+
+
 # Crawl4AI's default ``fit_markdown`` is empty on many large pages. Asking for
 # a pruning filter makes the server populate it with article content instead of
 # navigation chrome.
@@ -177,17 +191,7 @@ class Crawl4aiExtractionProvider:
         if empty_successes is not None:
             for idx, url in enumerate(urls):
                 row = by_url.get(url) or (results[idx] if idx < len(results) else None)
-                if (
-                    row
-                    and row.get("success") is True
-                    and _has_markdown(row.get("markdown"))
-                    and self._status(
-                        bool(row.get("success")),
-                        row.get("redirected_status_code") or row.get("status_code"),
-                    )
-                    == "ok"
-                    and docs[url].error == _EMPTY_PASSAGES_ERROR
-                ):
+                if self._retryable_empty_success(row, docs[url]):
                     empty_successes.add(url)
         from .bundled_providers import LocalExtractionProvider
 
@@ -206,6 +210,19 @@ class Crawl4aiExtractionProvider:
                     )
                 docs[url] = recovered
         return docs
+
+    def _retryable_empty_success(self, row: dict | None, doc: ExtractedDoc) -> bool:
+        return bool(
+            row
+            and row.get("success") is True
+            and _has_markdown(row.get("markdown"))
+            and self._status(
+                bool(row.get("success")),
+                row.get("redirected_status_code") or row.get("status_code"),
+            )
+            == "ok"
+            and doc.error == _EMPTY_PASSAGES_ERROR
+        )
 
     def _failed(self, url: str, error: str) -> ExtractedDoc:
         return ExtractedDoc(
@@ -229,12 +246,7 @@ class Crawl4aiExtractionProvider:
         code = res.get("redirected_status_code") or res.get("status_code")
         status = self._status(bool(res.get("success")), code)
         md = res.get("markdown")
-        content = ""
-        if isinstance(md, dict):
-            content = md.get("fit_markdown") or md.get("raw_markdown") or ""
-        elif isinstance(md, str):
-            content = md
-        content = content.strip()[: self._max_chars]
+        content = _markdown_content(md).strip()[: self._max_chars]
         title = (res.get("metadata") or {}).get("title") or url
         if corrupted_text(content):
             return self._failed(url, CORRUPTED_TEXT_ERROR)
@@ -261,11 +273,7 @@ class Crawl4aiExtractionProvider:
                 status="ok",
             )
         )
-        if doc.fetched_ok and not any(passage.text.strip() for passage in doc.passages):
-            return doc.model_copy(
-                update={"fetched_ok": False, "status": "error", "error": _EMPTY_PASSAGES_ERROR}
-            )
-        return doc
+        return _reject_empty_passages(doc)
 
     def _chunk(self, url: str, title: str, content: str) -> list[Passage]:
         sid = hashlib.md5(url.encode()).hexdigest()[:6]  # noqa: S324 — non-security id
