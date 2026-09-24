@@ -148,6 +148,19 @@ describe("ImageGenSection — A3 image-gen provider settings", () => {
     expect(body.workflow_json).toBe(graph);
   });
 
+  it("blocks probing an invalid workflow already saved by an older release", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      if (url !== "/api/image-gen/config") throw new Error(`unexpected fetch: ${url}`);
+      return jsonResponse({ provider: "comfyui", base_url: "http://host:8188", model: "checkpoint", workflow_json: "{invalid" });
+    }));
+    render(createElement(ImageGenSection), { wrapper: makeWrapper() });
+    await openImageConfiguration();
+    expect(await screen.findByRole("button", { name: /Test image/ })).toBeDisabled();
+    expect(screen.getByText(/saved image workflow needs valid JSON/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Paid API/ })).toBeDisabled();
+    expect(lastPut).toBeNull();
+  });
+
   it("says an unconfigured tier is optional and not set up, in a neutral tone (W-50, UI-2)", async () => {
     // openai persisted but no api_key_env → image-gen is NOT configured (no procedural
     // fallback); the UI must say so rather than imply a backend is active. It is

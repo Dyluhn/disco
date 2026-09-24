@@ -5,10 +5,12 @@ import { OPTIONS, type Provider } from "./providerOptions";
 export function ProviderOptionList({
   active,
   pending,
+  disabled = false,
   onSelect,
 }: {
   active: Provider | undefined;
   pending: boolean;
+  disabled?: boolean;
   onSelect: (provider: Provider) => void;
 }) {
   return (
@@ -22,7 +24,7 @@ export function ProviderOptionList({
             data-disco-control="settings.imagegen-provider"
             data-provider={opt.provider}
             onClick={() => onSelect(opt.provider)}
-            disabled={pending}
+            disabled={pending || disabled}
             aria-pressed={isActive}
             className={cn(
               "flex items-start gap-inline rounded-card border px-body py-inline text-left transition-colors",

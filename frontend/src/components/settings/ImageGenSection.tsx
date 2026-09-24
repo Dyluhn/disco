@@ -95,7 +95,9 @@ export function ImageGenSection() {
   };
 
   const workflowJsonError = getWorkflowJsonError(workflowJson);
-  const setupNote = getSetupNote(data, orKey.data);
+  const setupNote = workflowJsonError
+    ? "The saved image workflow needs valid JSON before it can be used. Correct or clear the workflow below."
+    : getSetupNote(data, orKey.data);
 
   return (
     <section className="flex flex-col gap-inline">
@@ -152,7 +154,8 @@ export function ImageGenSection() {
             <div className="mt-inline flex flex-col gap-inline">
               <ProviderOptionList
                 active={active}
-                pending={save.isPending || !!workflowJsonError}
+                pending={save.isPending}
+                disabled={!!workflowJsonError}
                 onSelect={selectProvider}
               />
 
@@ -160,9 +163,11 @@ export function ImageGenSection() {
                 control="settings.imagegen-test"
                 idleLabel="Test image"
                 run={testImageGen}
-                disabled={!agentIsLive() || fieldsDirty}
+                disabled={!agentIsLive() || fieldsDirty || !!workflowJsonError}
                 disabledHint={
-                  fieldsDirty
+                  workflowJsonError
+                    ? "invalid workflow — correct or clear it, then Save"
+                    : fieldsDirty
                     ? "unsaved changes — click Save first, then Test"
                     : "agent server offline — start it to test"
                 }
