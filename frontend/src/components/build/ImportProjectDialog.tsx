@@ -44,6 +44,12 @@ export function ImportProjectDialog() {
 
   const canSubmit = live && input !== null && !busy;
 
+  function changeOpen(next: boolean) {
+    setOpen(next);
+    // Closing unmounts the native picker; discard its matching React file too.
+    if (!next) setZipFile(null);
+  }
+
   async function submit() {
     if (!input || !live) return;
     setBusy(true);
@@ -51,7 +57,7 @@ export function ImportProjectDialog() {
     try {
       const result = await importProject(input);
       await queryClient.invalidateQueries({ queryKey: PROJECTS_KEY });
-      setOpen(false);
+      changeOpen(false);
       navigate(`/build/${result.conversation_id}`);
     } catch (err) {
       setError(readableRequestError(err, "Couldn't import this project."));
@@ -66,7 +72,7 @@ export function ImportProjectDialog() {
   }
 
   return (
-    <Dialog.Root open={open} onOpenChange={setOpen}>
+    <Dialog.Root open={open} onOpenChange={changeOpen}>
       <Dialog.Trigger asChild>
         <button
           type="button"

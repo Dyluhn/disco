@@ -43,6 +43,60 @@ beforeEach(() => {
 });
 
 describe("ImportProjectDialog keyboard tabs", () => {
+  it.each(["Escape", "Cancel", "Close import project"])("%s discards the ZIP on reopen and submits only a fresh selection", async (method) => {
+    const user = await openDialog();
+    const oldZip = new File(["old bytes"], "old.zip", { type: "application/zip" });
+    await user.upload(screen.getByLabelText("Project zip file"), oldZip);
+    expect(screen.getByRole("button", { name: "Import" })).toBeEnabled();
+    if (method === "Escape") await user.keyboard("{Escape}");
+    else await user.click(screen.getByRole("button", { name: method }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await user.click(screen.getByRole("button", { name: "Import project" }));
+    const picker = screen.getByLabelText("Project zip file") as HTMLInputElement;
+    expect(picker.files).toHaveLength(0);
+    expect(screen.getByRole("button", { name: "Import" })).toBeDisabled();
+    expect(importMock).not.toHaveBeenCalled();
+    const freshZip = new File(["fresh bytes"], "fresh.zip", { type: "application/zip" });
+    await user.upload(picker, freshZip);
+    await user.click(screen.getByRole("button", { name: "Import" }));
+    await waitFor(() => expect(importMock).toHaveBeenCalledExactlyOnceWith({ kind: "zip", file: freshZip }));
+    expect(importMock.mock.calls[0][0].file).toBe(freshZip);
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    // Success follows the same close boundary even if navigation keeps this component mounted.
+    await user.click(screen.getByRole("button", { name: "Import project" }));
+    expect((screen.getByLabelText("Project zip file") as HTMLInputElement).files).toHaveLength(0);
+    expect(screen.getByRole("button", { name: "Import" })).toBeDisabled();
+  });
+
+  it("keeps the selected ZIP after a failed import so retry uses the same file", async () => {
+    importMock.mockRejectedValueOnce(new Error("Archive validation failed"));
+    const user = await openDialog();
+    const zip = new File(["retry bytes"], "retry.zip", { type: "application/zip" });
+    await user.upload(screen.getByLabelText("Project zip file"), zip);
+    await user.click(screen.getByRole("button", { name: "Import" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Archive validation failed");
+    expect((screen.getByLabelText("Project zip file") as HTMLInputElement).files?.[0]).toBe(zip);
+    expect(screen.getByRole("button", { name: "Import" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "Import" }));
+    await waitFor(() => expect(importMock).toHaveBeenCalledTimes(2));
+    expect(importMock.mock.calls[0][0].file).toBe(zip);
+    expect(importMock.mock.calls[1][0].file).toBe(zip);
+  });
+
+  it("preserves path and Git drafts when the dialog closes", async () => {
+    const user = await openDialog();
+    await user.click(screen.getByRole("tab", { name: "Local folder path" }));
+    await user.type(screen.getByRole("textbox", { name: "Local folder path" }), "/tmp/project-draft");
+    await user.click(screen.getByRole("tab", { name: "Git URL" }));
+    await user.type(screen.getByRole("textbox", { name: "Git URL" }), "https://example.test/draft.git");
+    await user.keyboard("{Escape}");
+    await user.click(screen.getByRole("button", { name: "Import project" }));
+    expect(screen.getByRole("textbox", { name: "Git URL" })).toHaveValue("https://example.test/draft.git");
+    await user.click(screen.getByRole("tab", { name: "Local folder path" }));
+    expect(screen.getByRole("textbox", { name: "Local folder path" })).toHaveValue("/tmp/project-draft");
+    expect(importMock).not.toHaveBeenCalled();
+  });
+
   it("moves selection and focus together with arrows, wraparound, Home and End", async () => {
     const user = await openDialog();
     expect(screen.getByRole("tab", { name: "Upload zip" })).toHaveAttribute("tabindex", "0");
