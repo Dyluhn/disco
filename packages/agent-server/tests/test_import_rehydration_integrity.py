@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -94,3 +95,32 @@ async def test_no_session_does_not_mark_hydrated(tmp_path):
     )
     await hydration._maybe_rehydrate("conv_not_ready")
     assert "conv_not_ready" not in hydration._rehydrated
+
+
+@pytest.mark.asyncio
+async def test_cancelled_restore_is_incomplete_until_a_successful_retry(tmp_path):
+    ps = ProjectStore(str(tmp_path))
+    cid = "conv_cancelled_restore"
+    source = ps.path_for(cid)
+    source.mkdir(parents=True)
+    (source / "index.html").write_bytes(b"original bytes")
+    ps.write_manifest(
+        cid, title=None, owner_id="local", created_at=None, file_count=1, total_bytes=14
+    )
+    write = AsyncMock(side_effect=asyncio.CancelledError())
+    session = SimpleNamespace(write_file=write)
+    hydration = Rehydration(
+        SimpleNamespace(current_project_store=lambda: ps),
+        SimpleNamespace(executor=lambda _: SimpleNamespace(_sandbox=session)),
+        SimpleNamespace(emit=AsyncMock()),
+        None,
+    )
+    with pytest.raises(asyncio.CancelledError):
+        await hydration._maybe_rehydrate(cid)
+    assert not hydration.snapshot_allowed(cid)
+    assert cid not in hydration._rehydrated
+    assert (source / "index.html").read_bytes() == b"original bytes"
+    write.side_effect = None
+    await hydration._maybe_rehydrate(cid)
+    write.assert_awaited_with("index.html", b"original bytes")
+    assert hydration.snapshot_allowed(cid)

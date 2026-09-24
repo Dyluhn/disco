@@ -58,10 +58,12 @@ class Rehydration:
         session = getattr(executor, "_sandbox", None) if executor is not None else None
         if session is None:
             return
+        # Mark incomplete before I/O: cancellation can interrupt after partial writes
+        # without reaching an Exception handler. Only successful completion clears it.
+        self._failed.add(conversation_id)
         try:
             await rehydrate_workspace(session, store.path_for(conversation_id))
         except Exception as exc:  # noqa: BLE001 — keep partial bytes out of runs/snapshots
-            self._failed.add(conversation_id)
             await self._notifier.emit(
                 conversation_id,
                 f"Could not restore project files: {exc}. "
