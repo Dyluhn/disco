@@ -47,7 +47,8 @@ async def _grade(state: WriterCheckpoint, ctx: _ArcContext, *, final_check: bool
     async def save_decision() -> None:
         await ctx.save(state)
 
-    await emit_review(ctx.emit, 1, 1)
+    # A final check can also resolve an initial verdict before any prose repair.
+    await emit_review(ctx.emit, 1, 1, after_rework=final_check and state.repair_started)
     review = await _review(
         ctx.router,
         state.final,

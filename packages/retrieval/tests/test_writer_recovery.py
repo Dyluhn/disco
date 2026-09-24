@@ -54,11 +54,17 @@ def reload_budget(budget):
     return adapter.validate_json(adapter.dump_json(budget))
 
 
-async def arc(router, saved, *, resume=None, stop=None, review_decisions=4):
+async def arc(router, saved, *, resume=None, stop=None, review_decisions=4, events=None):
     async def save(state):
         saved.append(WriterCheckpoint.model_validate_json(state.model_dump_json()))
 
-    _, emit = collect_emits()
+    captured, capture = collect_emits()
+
+    async def emit(kind, payload):
+        await capture(kind, payload)
+        if events is not None:
+            events.append(captured[-1])
+
     return await _review_arc(
         router,
         [],
@@ -191,7 +197,11 @@ async def test_resume_after_repair_reviews_saved_changed_draft_once():
     boundary = saved[-1]
     assert boundary.stage == "final_check" and boundary.final.markdown != FINAL.markdown
     second = RecordingRouter([CLEAN])
-    final, _, trail = await arc(second, saved, resume=boundary)
+    events = []
+    final, _, trail = await arc(second, saved, resume=boundary, events=events)
+    assert [p for kind, p in events if kind == "review"] == [
+        {"k": 1, "of": 1, "after_rework": True}
+    ]
     assert second.stages == ["report_final_check"]
     context = second.prompt(0)
     assert "PRIOR REVIEW OBSERVATIONS" in context
@@ -435,3 +445,29 @@ async def test_repaired_claim_does_not_inherit_its_prior_semantic_judgment():
     assert CHECKS[0]["reason"] in context
     assert "Clarify the comparison." in context
     assert second.stages == ["report_final_check"]
+
+
+async def test_review_progress_marks_only_checking_changed_prose():
+    router = RecordingRouter([FAILURE, REPAIR, CLEAN])
+    saved, events = [], []
+    await arc(router, saved, events=events)
+    assert [payload for kind, payload in events if kind == "review"] == [
+        {"k": 1, "of": 1},
+        {"k": 1, "of": 1, "after_rework": True},
+    ]
+    assert [payload for kind, payload in events if kind == "rework"] == [{"k": 1, "of": 1}]
+    assert router.stages == ["report_review", "report_rework", "report_final_check"]
+    assert saved[-1].budget.used == 2
+
+
+async def test_unresolved_initial_verdict_is_not_labelled_as_checking_revisions():
+    router = RecordingRouter(["{}", "{}", CLEAN])
+    saved, events = [], []
+    await arc(router, saved, events=events)
+    assert "report_final_check" in router.stages
+    assert not saved[-1].repair_started
+    assert [payload for kind, payload in events if kind == "review"] == [
+        {"k": 1, "of": 1},
+        {"k": 1, "of": 1},
+    ]
+    assert not any(kind == "rework" for kind, _ in events)

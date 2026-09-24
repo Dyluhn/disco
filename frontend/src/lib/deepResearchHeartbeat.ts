@@ -371,7 +371,9 @@ function pickNow(
 ): { key: string; at: number | null; text: string } | null {
   const candidates: Array<{ key: string; at: number | null; text: string | null }> = [
     { key: "round", at: activity.round?.at ?? null, text: activity.round
-        ? `${ROUND_WORD[activity.round.payload.kind]} ${activity.round.payload.k} of ${activity.round.payload.of}`
+        ? activity.round.payload.kind === "review" && activity.round.payload.afterRework
+          ? "Checking revisions"
+          : `${ROUND_WORD[activity.round.payload.kind]} ${activity.round.payload.k} of ${activity.round.payload.of}`
         : null },
     { key: "search", at: activity.search?.at ?? null, text: activity.search
         ? `Searching: “${ellipsis(activity.search.payload.query)}”`

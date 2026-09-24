@@ -182,3 +182,36 @@ describe("reasoning-only streams", () => {
     expect(r.now).toBe("Writing the report · 15 s");
   });
 });
+
+
+describe("review stage clarification", () => {
+  it("labels the actual post-rework review without restarting its visible round count", () => {
+    const events = researchThenWriter(
+      action("initial", "review", { k: 1, of: 1 }, 30),
+      action("repair", "rework", { k: 1, of: 1 }, 50),
+      action("revised", "review", { k: 1, of: 1, after_rework: true }, 60),
+    );
+    expect(reading(events, 61).now).toBe("Checking revisions · 1 s");
+    expect(reading(events, 61).turn).toBe("Research done · 16 turns");
+  });
+
+  it("preserves the old label for legacy events even after a rework event", () => {
+    const events = researchThenWriter(
+      action("repair", "rework", { k: 1, of: 1 }, 50),
+      action("legacy", "review", { k: 1, of: 1 }, 60),
+    );
+    expect(reading(events, 61).now).toBe("Review 1 of 1 · 1 s");
+  });
+
+  it("does not treat malformed or false revision markers as a revised review", () => {
+    for (const after_rework of [false, "true", 1, null]) {
+      const events = [action("review", "review", { k: 1, of: 1, after_rework }, 60)];
+      expect(reading(events, 61).now).toBe("Review 1 of 1 · 1 s");
+    }
+  });
+
+  it("does not relabel a rework event carrying an unrelated marker", () => {
+    const events = [action("repair", "rework", { k: 1, of: 1, after_rework: true }, 60)];
+    expect(reading(events, 61).now).toBe("Rework 1 of 1 · 1 s");
+  });
+});

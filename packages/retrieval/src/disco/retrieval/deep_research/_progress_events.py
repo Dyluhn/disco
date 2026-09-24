@@ -429,11 +429,16 @@ async def emit_hold_resumed(emit: EmitFn, *, waited_s: float, engines_live: Sequ
     )
 
 
-async def emit_review(emit: EmitFn, k: int, of: int) -> None:
-    """Writer review round ``k`` of ``of`` — plus the ``phase`` the UI has
-    always seen for it, byte-identical, so nothing existing changes shape."""
+async def emit_review(emit: EmitFn, k: int, of: int, *, after_rework: bool = False) -> None:
+    """Review round, optionally identifying a check of revised prose.
+
+    Initial reviews and legacy callers retain their exact event payloads.
+    """
     await emit("phase", {"phase": "reviewing", "attempt": k})
-    await emit("review", {"k": k, "of": of})
+    payload: dict[str, Any] = {"k": k, "of": of}
+    if after_rework:
+        payload["after_rework"] = True
+    await emit("review", payload)
 
 
 async def emit_rework(emit: EmitFn, k: int, of: int) -> None:
