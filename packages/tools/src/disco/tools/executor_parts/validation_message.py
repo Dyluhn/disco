@@ -13,6 +13,7 @@ from typing import Any
 
 from pydantic import BaseModel, ValidationError
 
+from ._schema_guidance import _authored_schema_hints
 from .arguments import (
     _NO_EXAMPLE,
     _allows_none,
@@ -297,6 +298,7 @@ def describe_validation_failure(
     if unknown:
         msg += _unknown_key_fix(tool_name, args_model, unknown)
     msg += _nested_hints(args_model, errors)
+    msg += _authored_schema_hints(args_model, errors)
     if tool_name == "submit_plan":
         msg += ' steps must be a JSON array: {"steps": [{"title": "..."}]}.'
     if arguments:
