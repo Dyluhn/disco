@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import tempfile
 from pathlib import Path
 
 from disco.core import ReportEvent
@@ -149,7 +150,35 @@ def existing_report_audio(out_dir: Path, report_key: str) -> list[dict[str, str]
         else:
             other.append((mtime, _audio_entry(mp3_path, transcript_path, meta, stale=True)))
     chosen = exact or other
-    return [entry for _mtime, entry in sorted(chosen, key=lambda row: row[0], reverse=True)]
+    try:
+        selection = json.loads((out_dir / "audio_selection.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        selection = {}
+    selected_name = (
+        selection.get("mp3_name")
+        if isinstance(selection, dict) and selection.get("report_key") == report_key
+        else None
+    )
+    # Selecting a cache hit need not rewrite its bytes or modification time.
+    # Restore that explicit choice before falling back to the newest artifact.
+    return [entry for _mtime, entry in sorted(
+        chosen, key=lambda row: (row[1]["mp3_name"] == selected_name, row[0]), reverse=True
+    )]
+
+
+def select_report_audio(mp3_path: Path, report_key: str) -> None:
+    """Persist the successfully completed choice, including cached generations."""
+    with tempfile.NamedTemporaryFile(
+        mode="w", encoding="utf-8", dir=mp3_path.parent,
+        prefix=".audio-selection-", suffix=".part", delete=False,
+    ) as stream:
+        temporary = Path(stream.name)
+        try:
+            json.dump({"mp3_name": mp3_path.name, "report_key": report_key}, stream)
+            stream.flush()
+            temporary.replace(mp3_path.parent / "audio_selection.json")
+        finally:
+            temporary.unlink(missing_ok=True)
 
 
 def _write_audio_artifacts(

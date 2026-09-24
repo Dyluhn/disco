@@ -60,6 +60,7 @@ from ._report_audio_store import (
     existing_report_audio,
     read_report_audio_meta,
     report_content_key,
+    select_report_audio,
 )
 from .audio_config import SILENCE_MS_DEFAULT
 
@@ -713,6 +714,7 @@ async def generate_report_audio(
     if not force and _audio_cache_hit(mp3_path, transcript_path):
         # Cache hit — instant, no synth, no download.  Tell the UI so it shows
         # "ready" rather than a false "downloading voice model…" note (W-08).
+        select_report_audio(mp3_path, report_content_key(report))
         await _emit(on_progress, {"stage": "cache_hit"})
         return mp3_path, transcript_path
 
@@ -768,6 +770,7 @@ async def generate_report_audio(
         },
     )
 
+    select_report_audio(mp3_path, report_content_key(report))
     logger.info(
         "report audio generated: cid-artifact dir=%s mp3=%d bytes turns=%d backend=%s "
         "source=%s total=%.1fs note=%r",
