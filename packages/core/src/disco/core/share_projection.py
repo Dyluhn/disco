@@ -174,6 +174,19 @@ def _observation_output(paired_obs: dict[str, Any]) -> Any:
     return output
 
 
+def _index_observations(scrubbed_events: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    # Index observations by their action_id so we can pair action→observation
+    # in a single pass.
+    observations_by_action: dict[str, list[dict[str, Any]]] = {}
+    for ev in scrubbed_events:
+        if ev.get("kind") == "observation":
+            action_id = ev.get("action_id")
+            if isinstance(action_id, str):
+                observations_by_action.setdefault(action_id, []).append(ev)
+
+    return observations_by_action
+
+
 def project_cassette_rows(scrubbed_events: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Project a list of SCRUBBED event payloads (already through
     `redact_event_payload`) into the cassette row format.
@@ -186,14 +199,7 @@ def project_cassette_rows(scrubbed_events: list[dict[str, Any]]) -> list[dict[st
     Skips events that don't pair cleanly (orphan action / orphan observation /
     unknown tool name) — those are UI / plan / status events that don't
     represent a service call, and dropping them keeps the projection pure."""
-    # Index observations by their action_id so we can pair action→observation
-    # in a single pass.
-    observations_by_action: dict[str, list[dict[str, Any]]] = {}
-    for ev in scrubbed_events:
-        if ev.get("kind") == "observation":
-            action_id = ev.get("action_id")
-            if isinstance(action_id, str):
-                observations_by_action.setdefault(action_id, []).append(ev)
+    observations_by_action = _index_observations(scrubbed_events)
 
     rows: list[dict[str, Any]] = []
     seen_keys: set[tuple[str, str]] = set()
