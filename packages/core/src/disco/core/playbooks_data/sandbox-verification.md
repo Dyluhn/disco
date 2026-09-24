@@ -31,7 +31,7 @@ Playwright script (`node`, `playwright` is installed): `const a = await browser.
 | Market data / news | yes | prices change, news arrives | 503 + "not configured"; the chart still renders from `history` fixtures under `MARKET_FIXTURES=1` — say so |
 | Uploads, realtime, chat, alerts, booking, game | no | full live check | — |
 
-Ask the operator for keys the brief requires (the brief says to); put the NAMES in `.env.example` and `release_declare`. If the operator wants a live third-party check inside the build, they set `DISCO_BUILD_EGRESS=public` on the agent-server; you cannot change it from inside.
+Ask the operator for keys the brief requires (the brief says to). For authored Compose, document the NAMES in `.env.example` and wire them into the consuming service. For a typed single-ingress Self-host export, declare the names with `release_declare` instead; it generates a `web` service, so resource consumers must reference `web`. Do not combine a typed release intent with an authored container manifest: current Self-host detection requires a choice between them (see `fullstack-stack`). `release_declare` is not required to verify a sandbox preview, and preview success does not verify an exported Compose deployment. If the operator wants a live third-party check inside the build, they set `DISCO_BUILD_EGRESS=public` on the agent-server; you cannot change it from inside.
 
 ## Delivery notes (always)
 A `VERIFICATION.md` in the project root: what was checked live (with the evidence file names), what was checked with a fake/fixture and why, what needs a key the operator did not provide. Graders read this; an honest gap costs one rubric line, a hidden one costs trust in the whole delivery.
