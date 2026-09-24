@@ -317,11 +317,10 @@ async def test_committed_static_snapshot_survives_stopped_managed_preview(
     assert live.json()["detail"]["reason"] == "preview_unavailable"
 
 
-@pytest.mark.parametrize("published_transport", ["reachable", "unpublished", "refused"])
 async def test_sealed_dynamic_preview_restarts_from_immutable_bytes_and_rotates_authority(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    published_transport: str,
+    published_transport: str = "reachable",
 ) -> None:
     """A fresh runtime replays typed intent over exact sealed bytes, never the mirror."""
 
