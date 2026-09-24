@@ -239,8 +239,7 @@ MUTATE_CAPABILITY = "workspace.mutate"
 CHECKS_SHOWN = 12
 COMMAND_CHARS = 90
 CHECKS_HEADER = (
-    "Checks (historical shell exits; current = no later recorded source change, "
-    "not runtime proof):"
+    "Checks (historical shell exits; current = no later recorded source change, not runtime proof):"
 )
 
 
@@ -508,10 +507,7 @@ def memo_enabled() -> bool:
 
 
 def check_fingerprint(tool_call: Any) -> str:
-    (
-        "The call's identity for the ledger: `force` asks for execution, "
-        "it is not a different check."
-    )
+    "The call's identity for the ledger: `force` asks for execution, it is not a different check."
     arguments = {k: v for k, v in (tool_call.arguments or {}).items() if k != FORCE_ARG}
     return tool_call_fingerprint(tool_call.tool_name, arguments)
 
@@ -665,7 +661,8 @@ def finish_fact(events: list[Event], statuses: list[CheckStatus]) -> str | None:
     return (
         f"No source change since step {since} ({count} verification actions since); all "
         f"{len(statuses)} recorded checks are current. "
-        "Nothing is stale for the finish gate to re-run."
+        "These are recorded shell exits, not independent acceptance proof; "
+        "no historical command is replayed."
     )
 
 

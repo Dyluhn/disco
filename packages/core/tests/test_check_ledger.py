@@ -568,11 +568,14 @@ def test_check_fingerprint_ignores_force() -> None:
 
 
 @pytest.mark.parametrize("memo_setting", [None, "on", "off"])
-@pytest.mark.parametrize("command", [
-    "bash smoke.sh",
-    "curl http://localhost:3000/api/tickets",
-    "node scripts/verify.mjs --persist-create",
-])
+@pytest.mark.parametrize(
+    "command",
+    [
+        "bash smoke.sh",
+        "curl http://localhost:3000/api/tickets",
+        "node scripts/verify.mjs --persist-create",
+    ],
+)
 async def test_identical_shell_requests_execute_and_return_fresh_results(
     monkeypatch, memo_setting, command
 ) -> None:
@@ -591,10 +594,14 @@ async def test_identical_shell_requests_execute_and_return_fresh_results(
     assert obs.tool_result.structured == {"exit_code": 0}
     assert "memo_of" not in obs.meta["check"]
     assert check_ledger.memo_enabled() is False
-    assert check_ledger.memo_source_for(
-        _action("shell", "next", command=command),
-        check_ledger.CheckSnapshot(DIGEST_A, ("server",)), events,
-    ) is None
+    assert (
+        check_ledger.memo_source_for(
+            _action("shell", "next", command=command),
+            check_ledger.CheckSnapshot(DIGEST_A, ("server",)),
+            events,
+        )
+        is None
+    )
     # Neither equal source digests nor a stable session name proves runtime state.
     events = await _drive(loop, _action("shell", "c4", command=command))
     assert len(ex.calls) == 4
@@ -651,7 +658,7 @@ async def test_changed_source_or_kill_switch_executes(monkeypatch) -> None:
     assert len(ex2.calls) == 3
 
 
-# --- phase 4: the finish gate re-runs stale checks ---------------------------------
+# --- phase 4: passive finish diagnostics never replay historical checks ------------
 
 
 class _GateExecutor(_ProfileExecutor):
@@ -693,66 +700,49 @@ def _gate_messages(events: list[Event]) -> list[str]:
     ]
 
 
-async def test_gate_reruns_the_stale_check_as_a_host_probe_and_passes(monkeypatch) -> None:
-    monkeypatch.setenv("DISCO_CHECK_MEMO", "off")
-    ex = _GateExecutor(
-        _Sandbox([DIGEST_A, DIGEST_A] + [DIGEST_B] * 8), codes=[0, 0]
-    )  # the edit changes the source
+async def test_gate_preserves_stale_diagnostics_without_replaying(monkeypatch) -> None:
+    ex = _GateExecutor(_Sandbox([DIGEST_A, DIGEST_A] + [DIGEST_B] * 8), codes=[0, 0])
     loop = _make_loop(ex)
     events = await _seed_stale_check(loop)
-    assert [s.state for s in check_ledger.check_statuses(events)] == ["stale"]
-
     assert await loop._finish.stale_checks_gate_passed(events) is True
     events = await loop.store.get_events(CID)
-    probe = [e for e in events if isinstance(e, ActionEvent) and e.meta.get("verify_probe")]
-    assert len(probe) == 1 and probe[0].tool_call.arguments == {
-        "command": "bash smoke.sh",
-        "force": True,
-    }
-    assert len(_shell_calls(ex)) == 2  # the original run and the gate's rerun
-    assert [s.state for s in check_ledger.check_statuses(events)] == ["current"]
-    assert _gate_messages(events) == []
+    assert len(_shell_calls(ex)) == 1
+    assert not any(isinstance(e, ActionEvent) and e.meta.get("verify_probe") for e in events)
+    assert [s.state for s in check_ledger.check_statuses(events)] == ["stale"]
+    [message] = _gate_messages(events)
+    assert "stale" in message and "Historical commands were not replayed" in message
 
 
-async def test_gate_refuses_when_the_rerun_fails_twice_and_names_the_check(monkeypatch) -> None:
-    monkeypatch.setenv("DISCO_CHECK_MEMO", "off")
+async def test_gate_reports_stale_history_without_guessing_current_failure(monkeypatch) -> None:
     ex = _GateExecutor(_Sandbox([DIGEST_A, DIGEST_A] + [DIGEST_B] * 10), codes=[0, 1, 1])
     loop = _make_loop(ex)
     events = await _seed_stale_check(loop)
-
-    assert await loop._finish.stale_checks_gate_passed(events) is False
-    events = await loop.store.get_events(CID)
-    assert len(_shell_calls(ex)) == 3  # original + run + one flake retry
-    [message] = _gate_messages(events)
-    assert "1 recorded check that passed earlier fail on the current source" in message
-    assert "`bash smoke.sh` passed at step 2; now exit 1." in message
-    assert "FAIL: search medications" in message
-    assert "Finish refused (1 of 3)" in message
+    assert await loop._finish.stale_checks_gate_passed(events) is True
+    [message] = _gate_messages(await loop.store.get_events(CID))
+    assert "shell exit 0 at step 2" in message and "bash smoke.sh" in message
+    assert "now exit 1" not in message and "Finish refused" not in message
+    assert len(_shell_calls(ex)) == 1
 
 
-async def test_gate_lets_finish_through_on_the_third_refusal(monkeypatch) -> None:
-    monkeypatch.setenv("DISCO_CHECK_MEMO", "off")
+async def test_repeated_finish_keeps_one_caveat_without_repeating_effects(monkeypatch) -> None:
     ex = _GateExecutor(_Sandbox([DIGEST_A, DIGEST_A] + [DIGEST_B] * 28), codes=[0] + [1] * 20)
     loop = _make_loop(ex)
-    events = await _seed_stale_check(loop)
-    assert await loop._finish.stale_checks_gate_passed(events) is False
-    # same source, same recorded probe failure: refused again without re-running
-    assert await loop._finish.stale_checks_gate_passed(await loop.store.get_events(CID)) is False
-    assert len(_shell_calls(ex)) == 3
-    assert await loop._finish.stale_checks_gate_passed(await loop.store.get_events(CID)) is True
-    messages = _gate_messages(await loop.store.get_events(CID))
-    assert len(messages) == 3 and "refusal 3 of 3" in messages[-1]
+    await _seed_stale_check(loop)
+    for _ in range(4):
+        assert await loop._finish.stale_checks_gate_passed(await loop.store.get_events(CID)) is True
+    assert len(_shell_calls(ex)) == 1
+    assert len(_gate_messages(await loop.store.get_events(CID))) == 1
 
 
 LONG_COMMAND = (
     'cd /workspace && export PATH="/workspace/bin:$PATH" && \\\n'
     'TS=$(date +%s) && echo "=== 1. register ===" && '
-    'curl -s -X POST http://127.0.0.1:8000/api/auth/register '
+    "curl -s -X POST http://127.0.0.1:8000/api/auth/register "
     '-H \'Content-Type: application/json\' -d "{\\"email\\":\\"p$TS@example.com\\"}" | head -c 300'
 )
 
 
-async def test_gate_reruns_the_command_as_written_not_its_display_label(monkeypatch) -> None:
+async def test_gate_retains_exact_mutating_command_without_replaying_it(monkeypatch) -> None:
     """Pharmacy run 3 (2026-09-12): the gate re-ran the 90-char label of four long setup commands
     (`… | hea…`, an unterminated quote), every probe failed on syntax and the run went STUCK."""
     monkeypatch.setenv("DISCO_CHECK_MEMO", "off")
@@ -767,8 +757,9 @@ async def test_gate_reruns_the_command_as_written_not_its_display_label(monkeypa
 
     assert await loop._finish.stale_checks_gate_passed(events) is True
     events = await loop.store.get_events(CID)
-    [probe] = [e for e in events if isinstance(e, ActionEvent) and e.meta.get("verify_probe")]
-    assert probe.tool_call.arguments["command"] == LONG_COMMAND
+    assert not any(isinstance(e, ActionEvent) and e.meta.get("verify_probe") for e in events)
+    assert len(_shell_calls(ex)) == 1
+    assert _shell_calls(ex)[0].arguments["command"] == LONG_COMMAND
 
 
 async def test_gate_message_shows_the_label_not_the_multiline_command(monkeypatch) -> None:
@@ -777,26 +768,26 @@ async def test_gate_message_shows_the_label_not_the_multiline_command(monkeypatc
     loop = _make_loop(ex)
     await _drive(loop, _action("shell", "c1", command=LONG_COMMAND))
     events = await _drive(loop, _action("file_edit", "e1", path="src/a.js", old="a", new="b"))
-    assert await loop._finish.stale_checks_gate_passed(events) is False
+    assert await loop._finish.stale_checks_gate_passed(events) is True
     [message] = _gate_messages(await loop.store.get_events(CID))
-    assert f"`{check_ledger.command_label(LONG_COMMAND)}` passed at step 2; now exit 1." in message
+    assert f"`{check_ledger.command_label(LONG_COMMAND)}`" in message
+    assert "shell exit 0 at step 2" in message
     assert LONG_COMMAND not in message
 
 
 async def test_probe_results_do_not_touch_the_circuit_breaker_streak(monkeypatch) -> None:
-    """The gate's probes are the host's runs, not the model's attempts: two failing probes (run +
-    retry) must not count as failures, and a passing probe must not reset a real streak."""
+    """The passive gate creates no failures; historical host probes do not alter streaks."""
     from disco.core.loop import signals
 
     monkeypatch.setenv("DISCO_CHECK_MEMO", "off")
     ex = _GateExecutor(_Sandbox([DIGEST_A, DIGEST_A] + [DIGEST_B] * 10), codes=[0, 1, 1])
     loop = _make_loop(ex)
     events = await _seed_stale_check(loop)
-    assert await loop._finish.stale_checks_gate_passed(events) is False
+    assert await loop._finish.stale_checks_gate_passed(events) is True
     events = await loop.store.get_events(CID)
     assert (
-        sum(1 for e in events if isinstance(e, AgentErrorEvent)) == 2
-    )  # the two probe failures exist
+        sum(1 for e in events if isinstance(e, AgentErrorEvent)) == 0
+    )  # no new probe failures were manufactured
     assert signals.count_recent_failures(events) == 0
 
     real = _action("shell", "r1", command="false")
@@ -881,26 +872,20 @@ async def test_gate_does_not_rerun_setup_commands_that_cannot_depend_on_source(m
     assert await loop._finish.stale_checks_gate_passed(events) is True
     events = await loop.store.get_events(CID)
     probes = [e for e in events if isinstance(e, ActionEvent) and e.meta.get("verify_probe")]
-    assert [p.tool_call.arguments["command"] for p in probes] == ["bash check.sh"]
-    assert len(_shell_calls(ex)) == 4  # three agent runs + one re-run
+    assert probes == []
+    assert len(_shell_calls(ex)) == 3  # only the three explicit agent runs
     # the setup commands stay visible as stale; nothing pretends they were verified
-    assert [s.state for s in check_ledger.check_statuses(events)] == ["stale", "stale", "current"]
+    assert [s.state for s in check_ledger.check_statuses(events)] == ["stale", "stale", "stale"]
 
 
-async def test_gate_reruns_with_the_agents_own_arguments(monkeypatch) -> None:
-    """Whatever the shell tool took besides the command (a future cwd or timeout) rides along."""
-    monkeypatch.setenv("DISCO_CHECK_MEMO", "off")
+async def test_gate_preserves_original_arguments_without_replay(monkeypatch) -> None:
     ex = _GateExecutor(_Sandbox([DIGEST_A, DIGEST_A] + [DIGEST_B] * 8), codes=[0, 0])
     loop = _make_loop(ex)
     await _drive(loop, _action("shell", "c1", command="bash check.sh", timeout_s=30))
     events = await _drive(loop, _action("file_edit", "e1", path="check.sh", old="a", new="b"))
     assert await loop._finish.stale_checks_gate_passed(events) is True
-    [probe] = [
-        e
-        for e in await loop.store.get_events(CID)
-        if isinstance(e, ActionEvent) and e.meta.get("verify_probe")
-    ]
-    assert probe.tool_call.arguments == {"command": "bash check.sh", "timeout_s": 30, "force": True}
+    assert len(_shell_calls(ex)) == 1
+    assert _shell_calls(ex)[0].arguments == {"command": "bash check.sh", "timeout_s": 30}
 
 
 def test_probe_pairs_are_not_identical_action_error_cycles_for_the_stuck_detector() -> None:
@@ -1006,8 +991,7 @@ async def test_browser_line_counts_steps_and_identical_repeats_since_the_last_ed
     assert summary is not None and (summary.since_seq, summary.steps, summary.repeated) == (2, 3, 1)
     assert (
         "Browser: 3 steps since the last source change (step 2); "
-        "1 repeated an identical earlier step."
-        == summary.render()
+        "1 repeated an identical earlier step." == summary.render()
     )
     block = check_ledger.render_checks_block(events)
     assert (
@@ -1034,7 +1018,7 @@ def test_finish_fact_needs_all_current_checks_and_a_quiet_stretch() -> None:
         "No source change since step 2 (13 verification actions since); "
         "all 13 recorded checks are current."
     )
-    assert "Nothing is stale for the finish gate to re-run." in fact
+    assert "no historical command is replayed" in fact
     assert fact in (check_ledger.render_checks_block(quiet) or "")
 
     short = _quiet_events(check_ledger.QUIET_ACTIONS - 2)

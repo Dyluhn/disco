@@ -341,19 +341,22 @@ class ActionlessValveMixin(_ValveHost):
             if not undone
             else f"plan step(s) {', '.join(str(i) for i in undone)} are not marked done"
         )
+        from .finish._shell_diagnostics import _terminal_shell_content
+
+        content, shell_caveat = _terminal_shell_content(
+            events,
+            f"The record shows {step_state}, and the agent signaled completion without "
+            "calling finish. The execution, render-verify, Definition-of-Done and seal "
+            "gates passed on this record, so the build is being marked finished.",
+            host_warning=False,
+        )
         await self._loop._emit(
             MessageEvent(
                 source=EventSource.ENVIRONMENT,
-                message=LLMMessage(
-                    role="user",
-                    content=(
-                        f"The record shows {step_state}, and the agent signaled"
-                        " completion without calling finish. The execution,"
-                        " render-verify, Definition-of-Done and seal gates all"
-                        " passed on this record, so the build is being marked"
-                        " finished."
-                    ),
-                ),
+                message=LLMMessage(role="user", content=content),
+                meta={"host_owned_terminal_warning": True, "shell_diagnostics_advisory": True}
+                if shell_caveat
+                else {},
             )
         )
         await self._loop._emit(

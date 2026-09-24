@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from ._shell_diagnostics import _terminal_shell_content
 from .common import (
     _APP_VERIFY_PREFIX,
     _STATIC_VERIFY_PREFIX,
@@ -251,6 +252,9 @@ class _FinalizeService(_FinishGateComponent):
             final_content = (
                 _unverified_release_final_message(events) if unverified_release else step.thought
             )
+            final_content, shell_caveat = _terminal_shell_content(
+                events, final_content, host_warning=unverified_release
+            )
             # Record the agent's final message (the answer) before
             # finishing — the deliverable text belongs on the log, not
             # discarded on the finish signal. (When the model just
@@ -269,6 +273,11 @@ class _FinalizeService(_FinishGateComponent):
                                 "unverified_release": True,
                             }
                             if unverified_release
+                            else {
+                                "host_owned_terminal_warning": True,
+                                "shell_diagnostics_advisory": True,
+                            }
+                            if shell_caveat
                             else {}
                         ),
                     )
