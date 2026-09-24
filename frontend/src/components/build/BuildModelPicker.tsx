@@ -246,7 +246,12 @@ export function BuildModelPicker({
   const updateAssignments = useUpdateAssignments();
   const [visionPromptOpen, setVisionPromptOpen] = useState(false);
   const toast = useToast();
-  const models = data?.models ?? [];
+  // The same API model can be configured at multiple endpoints. Preserve the
+  // catalogue label so choosing a driver does not present identical menu rows.
+  const models = (data?.models ?? []).map((model) => ({
+    ...model,
+    label: settingsModels?.find((entry) => entry.id === model.id)?.label ?? model.label,
+  }));
   const defaultId = data?.default ?? null;
   // P3: prefer last-selected over the static settings default when null (no
   // explicit pick for this conversation). Falls through to defaultId if no
