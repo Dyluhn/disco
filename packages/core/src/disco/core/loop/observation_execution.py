@@ -588,6 +588,12 @@ async def maybe_emit_sandbox_restart(
                     "</system-reminder>"
                 ),
             ),
+            meta={
+                "sandbox_restart": {
+                    "generation_before": generation_before,
+                    "generation_after": getattr(sandbox, "generation", generation_before),
+                }
+            },
         )
     )
 

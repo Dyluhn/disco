@@ -136,6 +136,12 @@ async def test_all_completion_paths_retain_stale_caveat_without_executing_histor
         assert await Valve(loop)._completed_via_notify_finish(events)
     events = await loop._events()
     final_message = [e for e in events if isinstance(e, MessageEvent)][-1]
+    assert final_message.source is EventSource.AGENT
+    assert final_message.message.role == "assistant"
+    assert (
+        final_message
+        == [e for e in events if isinstance(e, MessageEvent) and e.source is EventSource.AGENT][-1]
+    )
     assert final_message.meta["host_owned_terminal_warning"] is True
     assert final_message.meta["shell_diagnostics_advisory"] is True
     assert "Shell diagnostics remain unresolved" in final_message.message.content
@@ -305,3 +311,34 @@ async def test_wrapper_exit_zero_cannot_satisfy_missing_required_deliverable(tmp
     assert not any(
         isinstance(e, StatusEvent) and e.status is ConversationStatus.FINISHED for e in events
     )
+
+
+async def test_real_sandbox_restart_notice_invalidates_receipt_and_shell_diagnostics():
+    from types import SimpleNamespace
+
+    from disco.core.loop.observation_execution import maybe_emit_sandbox_restart
+
+    loop = _make_loop(_GateExecutor(None))
+    for event in _pure("check", "bash smoke.sh"):
+        await loop._emit(event)
+    await maybe_emit_sandbox_restart(loop, SimpleNamespace(generation=2), 1)
+    events = await loop._events()
+    assert events[-1].meta["sandbox_restart"] == {"generation_before": 1, "generation_after": 2}
+    assert not await reuse_finish_verify_receipt(loop, "bash smoke.sh", events)
+    caveat = _shell_caveat(events)
+    assert caveat is not None and "stale after sandbox restart" in caveat
+
+
+async def test_unchanged_sandbox_and_same_receipt_audit_do_not_invalidate_reuse():
+    from types import SimpleNamespace
+
+    from disco.core.loop.observation_execution import maybe_emit_sandbox_restart
+
+    loop = _make_loop(_GateExecutor(None))
+    for event in _pure("check", "bash smoke.sh"):
+        await loop._emit(event)
+    await maybe_emit_sandbox_restart(loop, SimpleNamespace(generation=1), 1)
+    assert await reuse_finish_verify_receipt(loop, "bash smoke.sh", await loop._events())
+    assert await reuse_finish_verify_receipt(loop, "bash smoke.sh", await loop._events())
+    assert (await loop._events())[-1].meta["receipt_reuses"] == 2
+    assert _shell_caveat(await loop._events()) is None
