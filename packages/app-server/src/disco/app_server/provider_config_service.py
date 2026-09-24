@@ -275,7 +275,7 @@ class ProviderConfigService:
         if provider is None:
             raise KeyError(provider_id)
         updated = provider.model_copy(
-            update={"key_verified": verified, "key_error": error if verified is False else None}
+            update={"key_verified": verified, "key_error": error if verified is not True else None}
         )
         self._store.save(
             cfg.model_copy(update={"providers": {**cfg.providers, provider_id: updated}})

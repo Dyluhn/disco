@@ -627,6 +627,41 @@ def test_wrong_key_is_not_reported_as_key_ready(client, monkeypatch):
     assert row["key_error"] == "ollama.com rejected this key (401)"
 
 
+@pytest.mark.parametrize("status", [404, 405, 429, 500])
+def test_catalogue_failure_does_not_claim_key_rejection(client, monkeypatch, status):
+    async def failing_fetch(provider, api_key):
+        request = httpx.Request("GET", f"{provider.base_url}/models")
+        response = httpx.Response(status, request=request)
+        raise httpx.HTTPStatusError("catalogue unavailable", request=request, response=response)
+
+    monkeypatch.setattr(providers_mod, "_fetch_provider_catalogue", failing_fetch)
+    response = client.post("/api/providers", json={
+        "label": "Arbitrary endpoint", "base_url": "https://arbitrary.example/v1",
+        "kind": "openai-compat", "api_key": "stored-private-value",
+    })
+    assert response.status_code == 201
+    row = client.get("/api/providers").json()[0]
+    assert row["has_key"] is True
+    assert row["key_verified"] is None
+    assert str(status) in row["key_error"]
+    assert "stored-private-value" not in str(row)
+
+
+def test_failed_anonymous_probe_cannot_prove_authenticated_key_validity(client, monkeypatch):
+    async def fetch(provider, api_key):
+        if api_key:
+            return []
+        raise httpx.ConnectError("transient outage")
+
+    monkeypatch.setattr(providers_mod, "_fetch_provider_catalogue", fetch)
+    response = client.post("/api/providers", json={
+        "label": "Other endpoint", "base_url": "https://other.example/v1",
+        "kind": "openai-compat", "api_key": "stored-private-value",
+    })
+    assert response.json()["catalogue_ok"] is True
+    assert client.get("/api/providers").json()[0]["key_verified"] is None
+
+
 def _needs_a_key(good_key: str):
     """A /models endpoint that answers only when the right key is presented."""
 

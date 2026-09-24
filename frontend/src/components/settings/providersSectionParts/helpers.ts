@@ -57,7 +57,10 @@ export function keyBadge(provider: ProviderInfo): KeyBadge {
       detail: provider.key_error ?? undefined,
     };
   }
-  return { text: "Key stored, not verified", tone: "neutral" };
+  return {
+    text: "Key stored, not verified", tone: "neutral",
+    detail: provider.key_error ?? undefined,
+  };
 }
 
 /** What to offer when a provider's catalogue doesn't report a context window.
