@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { CommandPalette } from "./CommandPalette";
 import { BrowserRouter } from "react-router-dom";
 import { isFreshMode, resetSessionResumeStateForTests } from "@/lib/sessionResume";
@@ -49,8 +49,11 @@ describe("CommandPalette", () => {
     expect(screen.queryByText("Projects")).toBeNull();
   });
 
-  it("should close on Escape", () => {
+  it("should close on Escape", async () => {
     renderPalette();
+    const initiator = document.createElement("textarea");
+    document.body.append(initiator);
+    initiator.focus();
     fireEvent.keyDown(document, { key: "k", ctrlKey: true });
     expect(screen.getByPlaceholderText("Search commands...")).toBeDefined();
     
@@ -59,6 +62,37 @@ describe("CommandPalette", () => {
     // depending on how Portal works in the test environment.
     // In many test setups, we might need to wait or check the open state.
     expect(screen.queryByPlaceholderText("Search commands...")).toBeNull();
+    await waitFor(() => expect(document.activeElement).toBe(initiator));
+    initiator.remove();
+  });
+
+  it("restores the current initiator when the shortcut toggles closed across openings", async () => {
+    renderPalette();
+    for (const tag of ["input", "button"]) {
+      const initiator = document.createElement(tag);
+      document.body.append(initiator);
+      initiator.focus();
+      fireEvent.keyDown(document, { key: "k", ctrlKey: true });
+      const search = screen.getByRole("textbox", { name: "Search commands" });
+      expect(document.activeElement).toBe(search);
+      fireEvent.keyDown(search, { key: "k", ctrlKey: true });
+      await waitFor(() => expect(document.activeElement).toBe(initiator));
+      initiator.remove();
+    }
+  });
+
+  it("does not restore a removed initiator after a command changes the page", async () => {
+    renderPalette();
+    const initiator = document.createElement("textarea");
+    document.body.append(initiator);
+    initiator.focus();
+    fireEvent.keyDown(document, { key: "k", ctrlKey: true });
+    initiator.remove();
+    const focus = vi.spyOn(initiator, "focus");
+    fireEvent.click(screen.getByText("History"));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(window.location.pathname).toBe("/history");
+    expect(focus).not.toHaveBeenCalled();
   });
 
   // Regression for gap #91: arrow-key handling used `% filteredCommands.length`,
