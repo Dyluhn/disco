@@ -16,6 +16,7 @@ from typing import Literal, NamedTuple, Protocol
 from disco.core import LLMMessage
 from disco.core.llm import CapabilityProfile, CompletionRequest, LLMRouter, ModelRole
 
+from ._table_citation_context import _table_caption_citations
 from .models import Claim, GroundedAnswer, Passage, RetrievalResult, VerifiedClaim
 from .source_excerpts import relevant_excerpt
 
@@ -537,6 +538,13 @@ def _verify_claims(
     out: list[dict] = []
     spans = _claim_spans(text)
     borrowed_by_paragraph = _paragraph_citations(text, spans) if borrow_paragraph_citations else {}
+    table_context = (
+        _table_caption_citations(
+            text, {row.start for row in _table_claim_spans(text)}, _CITE, _is_gfm_table_divider
+        )
+        if borrow_paragraph_citations
+        else {}
+    )
     if progress is not None:
         progress(0, len(spans))
     for span in spans:
@@ -544,9 +552,15 @@ def _verify_claims(
         borrowed: list[str] = []
         if not ids and borrow_paragraph_citations:
             paragraph = max(start for start in borrowed_by_paragraph if start <= span.start)
-            borrowed = [
-                passage_id for passage_id in borrowed_by_paragraph[paragraph] if passage_id in by_id
-            ]
+            borrowed = (
+                list(table_context[span.start])
+                if span.start in table_context
+                else [
+                    passage_id
+                    for passage_id in borrowed_by_paragraph[paragraph]
+                    if passage_id in by_id
+                ]
+            )
         checked = ids or borrowed
         record = _verify_claim_span(span, checked, by_id, nli, borrowed)
         if borrow_paragraph_citations and not ids and not borrowed:
