@@ -121,7 +121,8 @@ function subscribeLive(
           parent_request_id: scope.parent_request_id ?? null,
           drop_weak: scope.drop_weak ?? false,
           domains_deny: scope.domains_deny ?? [],
-          model_override: scope.model_override ?? null, // the leader pill → answerer
+          // Omitted inherits the sticky pick; explicit null uses Settings roles.
+          model_override: scope.model_override,
           think: scope.think ?? false, // reasoning mode for the answerer (Think toggle)
           // G1/DR-4: thread the pre-created cid so the server loads upload seeds.
           // null → OFF path (server-side byte-identical to pre-DR-4 code).

@@ -30,7 +30,7 @@ import { useBuildStream, type BuildSession, type BuildStream } from "./useBuildS
  * unless the user has already picked. One-shot, guarded by modelTouched. Also owns
  * the touched flag so a later patch-before-continue knows whether to send anything. */
 function useModelSelection(resumeCid?: string | null) {
-  const [modelId, setModelIdRaw] = useState<string | null>(null); // null → server default
+  const [modelId, setModelIdRaw] = useState<string | null>(null); // null → inherited selection
   // Track an explicit user pick so the resume-seed (below) never clobbers it.
   const modelTouched = useRef(false);
   const setModelId = useCallback((id: string | null) => {
@@ -66,9 +66,9 @@ function useModelSelection(resumeCid?: string | null) {
  * TOUCHED-vs-UNTOUCHED: only PATCH when the user actually changed the picker
  * (modelTouched). An untouched picker — including one seeded from /state on resume —
  * means "leave the model as-is", so we send NOTHING (the backend leaves it). When
- * touched we ALWAYS send model_override, INCLUDING when the user explicitly chose
- * DEFAULT (modelId === null) — that is an intentional RESET, and the backend clears the
- * override so the next turn runs the server default (NOT a silent-ignore). */
+ * touched we ALWAYS send model_override. Picker rows carry explicit IDs, including
+ * the configured default; a caller can still deliberately reset with null, clearing
+ * the override so the next turn inherits Settings (NOT a silent-ignore). */
 function useModelAwareContinuations(
   session: BuildSession | null,
   stream: BuildStream,
@@ -83,7 +83,7 @@ function useModelAwareContinuations(
       s === "ERROR" || s === "STUCK" || s === "FINISHED" || s === "PAUSED" || s === "IDLE";
     if (!terminal) return;
     try {
-      // modelId may be null here — an EXPLICIT default pick → backend resets to default.
+      // Null is an explicit reset; concrete picker choices always retain their ID.
       await patchConversationSettings(session.cid, { modelOverride: modelId });
     } catch {
       /* gate rejected (a run is in flight) — keep the existing model */

@@ -516,9 +516,10 @@ def _parse_research_request(
     body: dict[str, Any], runtime: ConversationRuntime | None
 ) -> dict[str, Any]:
     """Parse the research request body into the research_stream kwargs."""
-    # P3: seed from last-selected when no explicit override is given.
+    # Only an omitted selection inherits the sticky pick. Explicit null means
+    # Use Settings default, preserving each role's configured assignment.
     model_override = body.get("model_override") or None
-    if not model_override and runtime is not None:
+    if "model_override" not in body and runtime is not None:
         model_override = runtime.settings.model_binding.get_last_selected_model()
     drop_weak = bool(body.get("drop_weak"))
     think = bool(body.get("think"))

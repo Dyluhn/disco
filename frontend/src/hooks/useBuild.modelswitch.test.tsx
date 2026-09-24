@@ -126,8 +126,8 @@ describe("useBuild — terminal-state model swap", () => {
     streamStatus = "FINISHED";
     const { result } = renderHook(() => useBuild("conv_reset"), { wrapper: wrapper() });
 
-    // The conversation was seeded to its current model; the user then explicitly chooses
-    // DEFAULT (the picker emits null). That is a deliberate reset, NOT a no-op.
+    // Explicit null remains a supported controller reset. Concrete picker rows,
+    // including the configured default, now carry their actual model ID.
     await act(async () => {
       result.current.setModelId(null);
     });

@@ -46,6 +46,15 @@ describe("Model leader pill (model-only)", () => {
     await user.click(screen.getByText(/Driver Overflow — claude/i));
     expect(onChange).toHaveBeenCalledWith("driver-overflow");
   });
+
+  it("Use Settings default clears an explicit pick without pinning all specialist roles", async () => {
+    const onChange = vi.fn();
+    const user = userEvent.setup();
+    withQuery(<ModelLeaderPill value="driver-overflow" onChange={onChange} />);
+    await user.click(screen.getByRole("button", { name: /choose the model that leads/i }));
+    await user.click(await screen.findByRole("button", { name: /Use Settings default/i }));
+    expect(onChange).toHaveBeenCalledWith(null);
+  });
 });
 
 describe("Mode slider (the sole mode control)", () => {

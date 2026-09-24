@@ -270,7 +270,9 @@ export function BuildModelPicker({
   };
 
   const select = (m: DriverModel) => {
-    onChange(m.id === defaultId ? null : m.id);
+    // Every row is an explicit choice, including the settings default. Null
+    // remains an untouched/inherited selection and can resolve to a sticky pick.
+    onChange(m.id);
     const action = surface === "agent" ? "working" : "building";
     // Cost honesty (A2): the build driver IS the whole agent — a paid/subscription
     // pick drives every step. Say it once; a genuinely free model stays silent.

@@ -44,3 +44,17 @@ it("fresh explicit requests get distinct identities without HTTPS-only randomUUI
   expect(second.request_id).not.toBe(first.request_id);
   expect(scope.request_id).toBe("prior");
 });
+
+it.each([undefined, null, "chosen-model"])(
+  "preserves omitted, inherited-default and explicit model selection on the wire (%s)",
+  async (selection) => {
+    vi.stubGlobal("WebSocket", Socket);
+    const handle = subscribeResearch({ query: "q", model_override: selection }, vi.fn());
+    await Promise.resolve();
+    Socket.latest.onopen?.();
+    const request = JSON.parse(Socket.latest.send.mock.calls[0][0]);
+    if (selection === undefined) expect(request).not.toHaveProperty("model_override");
+    else expect(request).toHaveProperty("model_override", selection);
+    handle.cancel();
+  },
+);
