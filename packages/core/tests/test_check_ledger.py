@@ -567,26 +567,41 @@ def test_check_fingerprint_ignores_force() -> None:
     assert check_ledger.forced(forced) and not check_ledger.forced(plain)
 
 
-async def test_third_identical_run_is_answered_from_the_record(monkeypatch) -> None:
-    monkeypatch.delenv("DISCO_CHECK_MEMO", raising=False)
-    sandbox = _Sandbox([DIGEST_A] * 8)
-    ex = _SeqExecutor(sandbox, [0, 0, 0, 0])
+@pytest.mark.parametrize("memo_setting", [None, "on", "off"])
+@pytest.mark.parametrize("command", [
+    "bash smoke.sh",
+    "curl http://localhost:3000/api/tickets",
+    "node scripts/verify.mjs --persist-create",
+])
+async def test_identical_shell_requests_execute_and_return_fresh_results(
+    monkeypatch, memo_setting, command
+) -> None:
+    if memo_setting is None:
+        monkeypatch.delenv("DISCO_CHECK_MEMO", raising=False)
+    else:
+        monkeypatch.setenv("DISCO_CHECK_MEMO", memo_setting)
+    sandbox = _Sandbox([DIGEST_A] * 8, busy=["server"])
+    ex = _SeqExecutor(sandbox, [0, 0, 0, 1])
     loop = _make_loop(ex)
-    await _drive(loop, _action("shell", "c1", command="bash smoke.sh"))
-    await _drive(loop, _action("shell", "c2", command="bash smoke.sh"))  # first repeat executes
-    assert len(ex.calls) == 2
-    events = await _drive(loop, _action("shell", "c3", command="bash smoke.sh"))
-    assert len(ex.calls) == 2, "the proven-repeatable third run must not execute"
-
+    for call_id in ("c1", "c2", "c3"):
+        events = await _drive(loop, _action("shell", call_id, command=command))
+    assert len(ex.calls) == 3
     obs = _last_obs(events)
-    assert obs.tool_result.content.startswith("Unchanged since step 4: same command")
-    assert "run #2 output" in obs.tool_result.content
-    assert obs.tool_result.structured == {"exit_code": 0, "memo_of_seq": 4}
-    assert obs.meta["check"]["memo_of"] == 4 and obs.meta["check"]["exit_code"] == 0
-    # the memo is the notice: no W-39 reminder follows it
-    assert not any(e.seq > obs.seq and getattr(e, "message", None) is not None for e in events)
-    # and the record keeps counting hits without executing
-    assert [(r.seq, s.seq) for r, s in check_ledger.memo_hits(events)] == [(4, 2), (obs.seq, 4)]
+    assert "run #3 output" in obs.tool_result.content
+    assert obs.tool_result.structured == {"exit_code": 0}
+    assert "memo_of" not in obs.meta["check"]
+    assert check_ledger.memo_enabled() is False
+    assert check_ledger.memo_source_for(
+        _action("shell", "next", command=command),
+        check_ledger.CheckSnapshot(DIGEST_A, ("server",)), events,
+    ) is None
+    # Neither equal source digests nor a stable session name proves runtime state.
+    events = await _drive(loop, _action("shell", "c4", command=command))
+    assert len(ex.calls) == 4
+    error = [e for e in events if isinstance(e, AgentErrorEvent)][-1]
+    assert error.meta["check"]["exit_code"] == 1
+    assert "memo_of" not in error.meta["check"]
+    assert check_ledger.memo_disagreements(events)
 
 
 async def test_force_executes_and_stays_the_same_check(monkeypatch) -> None:
