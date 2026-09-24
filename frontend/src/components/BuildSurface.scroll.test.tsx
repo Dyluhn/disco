@@ -14,7 +14,7 @@ import { finishedWorkspaceEvents } from "@/test/workspaceFixtures";
  *  - W-41: a jump-to-latest chevron appears only when scrolled up past the threshold.
  */
 
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement } from "react";
@@ -233,7 +233,7 @@ describe("WO-9: the workspace-zip action is labelled 'Download source'", () => {
 });
 
 describe("saved source availability", () => {
-  it("waits for the current final save before offering source and hides a prior seal on continuation", () => {
+  it("waits for the current final save before offering source and hides a prior seal on continuation", async () => {
     const output: AgentEvent = { kind: "deliverable", id: "result", source: "agent", title: "Site", path: "index.html", artifact_kind: "app" };
     const completed = [output, ...finishedWorkspaceEvents("delayed")];
     buildState = baseBuild({ cid: "delayed", resumed: true, status: "FINISHED", events: completed.slice(0, 2) });
@@ -244,7 +244,7 @@ describe("saved source availability", () => {
     expect(screen.queryByRole("button", { name: /open the deliverable/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Download source" })).not.toBeInTheDocument();
     buildState = { ...buildState, events: completed };
-    rerenderSurface(<BuildSurface resumeCid="delayed" />);
+    await act(async () => rerenderSurface(<BuildSurface resumeCid="delayed" />));
     expect(screen.getByRole("button", { name: "Download source" })).toBeEnabled();
     expect(screen.queryByText("Source not ready")).not.toBeInTheDocument();
     expect(releaseQuery).toHaveBeenLastCalledWith("delayed", "sealed-1");
@@ -252,12 +252,12 @@ describe("saved source availability", () => {
     expect(screen.getByRole("button", { name: /open the deliverable/i })).toBeEnabled();
     const next = finishedWorkspaceEvents("delayed", 30, 2);
     buildState = { ...buildState, events: [...completed, next[0]] };
-    rerenderSurface(<BuildSurface resumeCid="delayed" />);
+    await act(async () => rerenderSurface(<BuildSurface resumeCid="delayed" />));
     expect(screen.queryByRole("button", { name: "Download source" })).not.toBeInTheDocument();
     expect(releaseQuery).toHaveBeenLastCalledWith(null, "");
     expect(screen.queryByRole("link", { name: "Download source" })).not.toBeInTheDocument();
     buildState = { ...buildState, events: [...completed, ...next] };
-    rerenderSurface(<BuildSurface resumeCid="delayed" />);
+    await act(async () => rerenderSurface(<BuildSurface resumeCid="delayed" />));
     expect(screen.getByRole("button", { name: "Download source" })).toBeEnabled();
     expect(releaseQuery).toHaveBeenLastCalledWith("delayed", "sealed-2");
   });
