@@ -567,16 +567,7 @@ def test_check_fingerprint_ignores_force() -> None:
     assert check_ledger.forced(forced) and not check_ledger.forced(plain)
 
 
-@pytest.mark.parametrize("memo_setting", [None, "on", "off"])
-@pytest.mark.parametrize(
-    "command",
-    [
-        "bash smoke.sh",
-        "curl http://localhost:3000/api/tickets",
-        "node scripts/verify.mjs --persist-create",
-    ],
-)
-async def test_identical_shell_requests_execute_and_return_fresh_results(
+async def _assert_identical_shell_requests_execute_fresh(
     monkeypatch, memo_setting, command
 ) -> None:
     if memo_setting is None:
@@ -609,6 +600,29 @@ async def test_identical_shell_requests_execute_and_return_fresh_results(
     assert error.meta["check"]["exit_code"] == 1
     assert "memo_of" not in error.meta["check"]
     assert check_ledger.memo_disagreements(events)
+
+
+async def test_identical_shell_requests_execute_and_return_fresh_results(monkeypatch) -> None:
+    await _assert_identical_shell_requests_execute_fresh(monkeypatch, None, "bash smoke.sh")
+
+
+@pytest.mark.parametrize(
+    "memo_setting,command",
+    [
+        ("on", "bash smoke.sh"),
+        ("off", "bash smoke.sh"),
+        (None, "curl http://localhost:3000/api/tickets"),
+        ("on", "curl http://localhost:3000/api/tickets"),
+        ("off", "curl http://localhost:3000/api/tickets"),
+        (None, "node scripts/verify.mjs --persist-create"),
+        ("on", "node scripts/verify.mjs --persist-create"),
+        ("off", "node scripts/verify.mjs --persist-create"),
+    ],
+)
+async def test_identical_shell_request_variants_execute_fresh(
+    monkeypatch, memo_setting, command
+) -> None:
+    await _assert_identical_shell_requests_execute_fresh(monkeypatch, memo_setting, command)
 
 
 async def test_force_executes_and_stays_the_same_check(monkeypatch) -> None:
