@@ -2,6 +2,7 @@
  * project metadata, never by merely reopening a conversation route. */
 import { useQuery } from "@tanstack/react-query";
 import { listProjects } from "@/api/projects";
+import { currentFinalWorkspaceEvent } from "@/lib/savedWorkspace";
 import type { AgentEvent, ConversationStatus } from "@/types/agent";
 
 function importedWorkspaceEvent(events: AgentEvent[], untrusted: boolean) {
@@ -30,7 +31,11 @@ function usePersistedProject(cid: string | null, status: ConversationStatus, unt
 
 export function useSavedWorkspaceAvailability(events: AgentEvent[], status: ConversationStatus, cid: string | null, untrusted = false) {
   const importedWorkspace = importedWorkspaceEvent(events, untrusted);
-  const sealedWorkspace = status === "FINISHED" || events.some((event) => event.kind === "workspace_version");
-  const persistedProject = usePersistedProject(cid, status, untrusted, Boolean(importedWorkspace) || sealedWorkspace);
-  return { importedWorkspace, persistedProject, hasAvailableWorkspace: Boolean(importedWorkspace || persistedProject) || sealedWorkspace };
+  const savedVersion = !untrusted && events.some((event) => event.kind === "workspace_version");
+  const finalWorkspace = !untrusted && status === "FINISHED" ? currentFinalWorkspaceEvent(events, cid) : undefined;
+  const persistedProject = usePersistedProject(cid, status, untrusted, Boolean(importedWorkspace) || savedVersion);
+  const hasAvailableWorkspace = !untrusted && (status === "FINISHED"
+    ? Boolean(finalWorkspace)
+    : Boolean(importedWorkspace || persistedProject || savedVersion));
+  return { importedWorkspace, persistedProject, finalWorkspace, hasAvailableWorkspace };
 }

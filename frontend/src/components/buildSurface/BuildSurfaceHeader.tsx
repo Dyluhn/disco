@@ -58,6 +58,9 @@ export function BuildSurfaceHeader({
         <h1 className="font-display text-[1.3rem] font-medium leading-tight tracking-tight text-text">
           {taskLabel}
         </h1>
+        {b.cid && b.status === "FINISHED" && !hasAvailableWorkspace && (
+          <span role="status" className="font-ui text-[0.78rem] text-text-faint">Source not ready</span>
+        )}
         {/* A resumed route can still be a new run with no saved workspace. */}
         {b.cid && hasAvailableWorkspace && (
           <div className="flex shrink-0 flex-col items-end gap-hair">

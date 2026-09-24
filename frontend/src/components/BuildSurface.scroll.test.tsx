@@ -1,3 +1,4 @@
+import { finishedWorkspaceEvents } from "@/test/workspaceFixtures";
 /**
  * BuildSurface — resumed-task recovery (W-01) + feed scroll affordances (W-40/W-41).
  *
@@ -23,6 +24,7 @@ import type { AgentEvent, ConversationStatus } from "@/types/agent";
 // ── mocks ──────────────────────────────────────────────────────────────────
 // The build state the surface reads. Mutable so each test sets it before render.
 let buildState: Record<string, unknown>;
+const { releaseQuery } = vi.hoisted(() => ({ releaseQuery: vi.fn(() => ({ data: undefined })) }));
 
 vi.mock("@/hooks/useBuild", () => ({
   useBuild: () => buildState,
@@ -35,7 +37,7 @@ vi.mock("@/hooks/useProjects", () => ({
   }),
   useExportManifest: () => ({ mutate: vi.fn() }),
   useProjectManifest: () => ({ data: { files: [] } }),
-  useProjectRelease: () => ({ data: undefined }),
+  useProjectRelease: (...args: unknown[]) => releaseQuery(...(args as [])),
 }));
 vi.mock("@/api/client", async (orig) => ({
   ...(await orig<typeof import("@/api/client")>()),
@@ -219,7 +221,7 @@ describe("W-40: gate scroll target — plan gate pulls to TOP, others to BOTTOM"
 
 describe("WO-9: the workspace-zip action is labelled 'Download source'", () => {
   it("renders a 'Download source' button (not 'Export') in the resumed header", () => {
-    buildState = baseBuild({ cid: "cid-9", resumed: true, status: "FINISHED" });
+    buildState = baseBuild({ cid: "cid-9", resumed: true, status: "FINISHED", events: finishedWorkspaceEvents("cid-9") });
     renderSurface(<BuildSurface resumeCid="cid-9" />);
     expect(
       screen.getByRole("button", { name: "Download source" }),
@@ -231,6 +233,35 @@ describe("WO-9: the workspace-zip action is labelled 'Download source'", () => {
 });
 
 describe("saved source availability", () => {
+  it("waits for the current final save before offering source and hides a prior seal on continuation", () => {
+    const output: AgentEvent = { kind: "deliverable", id: "result", source: "agent", title: "Site", path: "index.html", artifact_kind: "app" };
+    const completed = [output, ...finishedWorkspaceEvents("delayed")];
+    buildState = baseBuild({ cid: "delayed", resumed: true, status: "FINISHED", events: completed.slice(0, 2) });
+    const { rerenderSurface } = renderSurface(<BuildSurface resumeCid="delayed" />);
+    expect(screen.getByText("Source not ready")).toBeVisible();
+    expect(releaseQuery).toHaveBeenLastCalledWith(null, "");
+    expect(screen.queryByRole("link", { name: "Download source" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /open the deliverable/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Download source" })).not.toBeInTheDocument();
+    buildState = { ...buildState, events: completed };
+    rerenderSurface(<BuildSurface resumeCid="delayed" />);
+    expect(screen.getByRole("button", { name: "Download source" })).toBeEnabled();
+    expect(screen.queryByText("Source not ready")).not.toBeInTheDocument();
+    expect(releaseQuery).toHaveBeenLastCalledWith("delayed", "sealed-1");
+    expect(screen.getByRole("link", { name: "Download source" })).toBeVisible();
+    expect(screen.getByRole("button", { name: /open the deliverable/i })).toBeEnabled();
+    const next = finishedWorkspaceEvents("delayed", 30, 2);
+    buildState = { ...buildState, events: [...completed, next[0]] };
+    rerenderSurface(<BuildSurface resumeCid="delayed" />);
+    expect(screen.queryByRole("button", { name: "Download source" })).not.toBeInTheDocument();
+    expect(releaseQuery).toHaveBeenLastCalledWith(null, "");
+    expect(screen.queryByRole("link", { name: "Download source" })).not.toBeInTheDocument();
+    buildState = { ...buildState, events: [...completed, ...next] };
+    rerenderSurface(<BuildSurface resumeCid="delayed" />);
+    expect(screen.getByRole("button", { name: "Download source" })).toBeEnabled();
+    expect(releaseQuery).toHaveBeenLastCalledWith("delayed", "sealed-2");
+  });
+
   it.each(["RUNNING", "AWAITING_USER_DECISION"] as const)("does not offer a missing source archive on a resumed %s route", (status) => {
     buildState = baseBuild({ cid: "new-unsaved-run", resumed: true, status });
     renderSurface(<BuildSurface resumeCid="new-unsaved-run" />);

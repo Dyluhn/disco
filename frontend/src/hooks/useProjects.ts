@@ -82,9 +82,9 @@ export function useProjectFile(conversationId: string, path: string, revision: s
  * it needs, its ingress). Gated on a non-null id like `useProjectManifest`; offline
  * it resolves the in-repo fixture verdict so the capabilities UI works with no
  * backend. */
-export function useProjectRelease(conversationId: string | null) {
+export function useProjectRelease(conversationId: string | null, revision = "") {
   return useQuery<ReleaseResponse>({
-    queryKey: ["project-release", conversationId],
+    queryKey: revision ? ["project-release", conversationId, revision] : ["project-release", conversationId],
     queryFn: () => getProjectRelease(conversationId!),
     enabled: !!conversationId,
   });

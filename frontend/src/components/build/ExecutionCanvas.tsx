@@ -54,10 +54,10 @@ function useWorkspaceInspection(events: AgentEvent[], status: ConversationStatus
   }, [events, status, importedWorkspace, persistedProject]);
   const manifestQuery = useProjectManifest(cid, hasAvailableWorkspace, workspaceRevision);
 
-  const inspectSavedWorkspace = !untrusted && (status === "FINISHED" ||
+  const inspectSavedWorkspace = hasAvailableWorkspace && !untrusted && (status === "FINISHED" ||
     (["IDLE", "PAUSED", "ERROR"].includes(status) && Boolean(importedWorkspace || persistedProject)));
 
-  return { manifestQuery, inspectSavedWorkspace, workspaceRevision };
+  return { manifestQuery, inspectSavedWorkspace, workspaceRevision, hasAvailableWorkspace };
 }
 
 export function ExecutionCanvas({
@@ -163,8 +163,8 @@ export function ExecutionCanvas({
   // The Cockpit also surfaces bound-port data from the same useBuildPreview
   // the Preview pane uses — shared query cache, no extra fetch.
   const previewQuery = useBuildPreview(cid, active);
-  const { manifestQuery, inspectSavedWorkspace, workspaceRevision } = useWorkspaceInspection(events, status, cid, untrusted);
-  const manifestFiles = manifestQuery.data?.files ?? [];
+  const { manifestQuery, inspectSavedWorkspace, workspaceRevision, hasAvailableWorkspace } = useWorkspaceInspection(events, status, cid, untrusted);
+  const manifestFiles = hasAvailableWorkspace ? manifestQuery.data?.files ?? [] : [];
   const anySessionBusy = sessions.some((s) => s.busy);
 
   return (

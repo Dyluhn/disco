@@ -1,3 +1,4 @@
+import { finishedWorkspaceEvents } from "@/test/workspaceFixtures";
 /**
  * BuildSurface — errored-session RECOVERY + clean title on resume.
  *
@@ -229,7 +230,7 @@ describe("finished app handoff isolation", () => {
         intent: (this.elements.namedItem("intent") as HTMLInputElement).value,
       });
     });
-    buildState = baseBuild({ status: "FINISHED", events: appEvents });
+    buildState = baseBuild({ status: "FINISHED", events: [...appEvents, ...finishedWorkspaceEvents("cid-1")] });
     renderSurface(<BuildSurface resumeCid="cid-1" />);
 
     const button = await screen.findByRole("button", {
@@ -270,7 +271,7 @@ describe("finished app handoff isolation", () => {
       "open",
       vi.fn(() => popup as unknown as Window),
     );
-    buildState = baseBuild({ status: "FINISHED", events: appEvents });
+    buildState = baseBuild({ status: "FINISHED", events: [...appEvents, ...finishedWorkspaceEvents("cid-1")] });
     renderSurface(<BuildSurface resumeCid="cid-1" />);
 
     const button = await screen.findByRole("button", {

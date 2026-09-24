@@ -1,3 +1,4 @@
+import { finishedWorkspaceEvents } from "@/test/workspaceFixtures";
 /**
  * UI-7 — the committed-workspace manifest is not fetched before it can exist.
  *
@@ -71,8 +72,8 @@ describe("ExecutionCanvas — the project manifest is only requested once one ca
   });
 
   it("requests it on a finished run", () => {
-    render(withQc(<ExecutionCanvas events={[]} status="FINISHED" cid="conv_done" />));
-    expect(useProjectManifestMock).toHaveBeenCalledWith("conv_done", true, "FINISHED:");
+    render(withQc(<ExecutionCanvas events={finishedWorkspaceEvents("conv_done")} status="FINISHED" cid="conv_done" />));
+    expect(useProjectManifestMock).toHaveBeenCalledWith("conv_done", true, "FINISHED:sealed-1");
   });
 });
 
@@ -137,4 +138,26 @@ it.each([{ status: "RUNNING", untrusted: false }, { status: "IDLE", untrusted: t
   render(withQc(<ExecutionCanvas events={[]} status={status} untrusted={untrusted} cid="conv_probe" />));
   expect(listProjectsMock).not.toHaveBeenCalled();
   expect(useProjectManifestMock).toHaveBeenLastCalledWith("conv_probe", false, `${status}:`);
+});
+
+it("ignores cached saved files while the current final capture is pending", () => {
+  const completed = finishedWorkspaceEvents("delayed");
+  useProjectManifestMock.mockReturnValue({ data: { files: [{ path: "original.txt", bytes: 20 }] } });
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const view = (events: AgentEvent[]) => <QueryClientProvider client={qc}><ExecutionCanvas events={events} status="FINISHED" cid="delayed" /></QueryClientProvider>;
+  const { rerender } = render(view([completed[0]]));
+  expect(useProjectManifestMock).toHaveBeenLastCalledWith("delayed", false, "FINISHED:");
+  expect(screen.queryByText("Imported source text")).not.toBeInTheDocument();
+  expect(useProjectFileMock).not.toHaveBeenCalled();
+  rerender(view(completed));
+  expect(useProjectManifestMock).toHaveBeenLastCalledWith("delayed", true, "FINISHED:sealed-1");
+  expect(screen.getByText("Imported source text")).toBeVisible();
+  const next = finishedWorkspaceEvents("delayed", 30, 2);
+  useProjectFileMock.mockClear();
+  rerender(view([...completed, next[0]]));
+  expect(useProjectManifestMock).toHaveBeenLastCalledWith("delayed", false, "FINISHED:sealed-1");
+  expect(screen.queryByText("Imported source text")).not.toBeInTheDocument();
+  expect(useProjectFileMock).not.toHaveBeenCalled();
+  rerender(view([...completed, ...next]));
+  expect(useProjectManifestMock).toHaveBeenLastCalledWith("delayed", true, "FINISHED:sealed-2");
 });

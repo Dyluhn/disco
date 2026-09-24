@@ -35,6 +35,7 @@ import { publishConversationTitle } from "@/lib/documentTitle";
 import { publishRunStatus } from "@/lib/runStatusBridge";
 import { useVerboseAgentChat } from "@/lib/useVerboseAgentChat";
 import { useDownloadProject, useExportManifest, useProjectRelease } from "@/hooks/useProjects";
+import { useSavedWorkspaceAvailability } from "@/hooks/useSavedWorkspaceAvailability";
 import { ResizableSplit } from "@/components/build/ResizableSplit";
 import { ExecutionCanvas } from "@/components/build/ExecutionCanvas";
 import { AgentCanvas } from "@/components/build/AgentCanvas";
@@ -98,10 +99,11 @@ export function BuildSurface({
   const download = useDownloadProject();
   const exportManifest = useExportManifest();
   // WO-9: the release verdict drives the capability-only Self-host panel in the
-  // finished-handoff region. Gated on FINISHED (like the DeliverablePanel) so the
+  // finished-handoff region. Gated on the current final workspace seal so the
   // fetch only fires once a persisted snapshot exists to assess; the panel renders
   // purely from this data, so Build and Agent get the IDENTICAL UI by construction.
-  const release = useProjectRelease(b.status === "FINISHED" ? (b.cid ?? null) : null);
+  const { finalWorkspace } = useSavedWorkspaceAvailability(b.events, b.status, b.cid);
+  const release = useProjectRelease(finalWorkspace ? b.cid : null, finalWorkspace?.id ?? "");
 
   const { verbose: verboseChat } = useVerboseAgentChat();
   const { isReplaying, steerable, settled, collapseFeed, draftingPlan, terminalIncomplete } =

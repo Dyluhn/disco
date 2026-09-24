@@ -5,6 +5,7 @@ import { restartPreview } from "@/api/agent";
 import { useToast } from "@/components/toastApi";
 import { useBuildPreview } from "@/hooks/useBuildPreview";
 import { useDownloadProject } from "@/hooks/useProjects";
+import { useSavedWorkspaceAvailability } from "@/hooks/useSavedWorkspaceAvailability";
 import { useElementMention } from "@/hooks/useElementMention";
 import { useElementSelect } from "@/hooks/useElementSelect";
 import { useWorkspaceVersions } from "@/hooks/useWorkspaceVersions";
@@ -73,6 +74,7 @@ export function PreviewPane({
   const queryClient = useQueryClient();
   const toast = useToast();
   const download = useDownloadProject();
+  const { hasAvailableWorkspace } = useSavedWorkspaceAvailability(events, status, cid, untrusted);
   const { versions, refetch: refetchVersions } = useWorkspaceVersions(cid, events, status);
   const files = useMemo(() => deriveFiles(events), [events]);
   const appDeliverable = useMemo(() => latestAppDeliverable(events), [events]);
@@ -306,7 +308,7 @@ export function PreviewPane({
         onApplyEdit={applyEdit}
         onRefresh={() => void refresh()}
         onDownloadSource={
-          cid ? () => download.mutate({ id: cid, binding: null, title: downloadTitle }) : null
+          cid && hasAvailableWorkspace ? () => download.mutate({ id: cid, binding: null, title: downloadTitle }) : null
         }
         downloadPending={download.isPending}
       />
