@@ -8,7 +8,7 @@
 import * as Dropdown from "@radix-ui/react-dropdown-menu";
 import * as Dialog from "@radix-ui/react-dialog";
 import { Check, ChevronDown, Cpu, Eye } from "lucide-react";
-import { useState } from "react";
+import { type Ref, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { cn } from "@/lib/cn";
 import { costTag, driverCostTag } from "@/lib/cost";
@@ -37,6 +37,7 @@ function VisionRecommendationDialog({
   busy,
   saveFailed,
   onSelect,
+  returnFocus,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -44,12 +45,19 @@ function VisionRecommendationDialog({
   busy: boolean;
   saveFailed: boolean;
   onSelect: (id: string) => void;
+  returnFocus: () => void;
 }) {
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-40 bg-black/45" />
-        <Dialog.Content className="fixed left-1/2 top-1/2 z-50 flex max-h-[80vh] w-[min(34rem,92vw)] -translate-x-1/2 -translate-y-1/2 flex-col gap-body overflow-y-auto rounded-card border border-hairline bg-bg p-body pmx-rise">
+        <Dialog.Content
+          onCloseAutoFocus={(event) => {
+            event.preventDefault();
+            returnFocus();
+          }}
+          className="fixed left-1/2 top-1/2 z-50 flex max-h-[80vh] w-[min(34rem,92vw)] -translate-x-1/2 -translate-y-1/2 flex-col gap-body overflow-y-auto rounded-card border border-hairline bg-bg p-body pmx-rise"
+        >
           <div className="flex items-start gap-inline">
             <Eye className="mt-px size-4 shrink-0 text-accent" aria-hidden />
             <div>
@@ -122,12 +130,14 @@ function DriverModelMenu({
   effectiveId,
   disabled,
   onSelect,
+  triggerRef,
 }: {
   models: DriverModel[];
   current: DriverModel | undefined;
   effectiveId: string | null;
   disabled?: boolean;
   onSelect: (model: DriverModel) => void;
+  triggerRef: Ref<HTMLButtonElement>;
 }) {
   const free = models.filter((model) => model.free && !isSubscriptionDriver(model));
   const subscription = models.filter(isSubscriptionDriver);
@@ -153,6 +163,7 @@ function DriverModelMenu({
   return (
     <Dropdown.Root>
       <Dropdown.Trigger
+        ref={triggerRef}
         disabled={disabled}
         aria-label="Choose the model that runs the agent"
         className="flex max-w-[15rem] max-lg:min-h-11 items-center gap-hair rounded-control border border-hairline bg-surface-1 px-inline py-hair font-ui text-[0.76rem] text-text-muted transition-colors hover:border-hairline-strong hover:text-text disabled:opacity-50"
@@ -245,6 +256,7 @@ export function BuildModelPicker({
   const { data: settingsModels } = useModels();
   const updateAssignments = useUpdateAssignments();
   const [visionPromptOpen, setVisionPromptOpen] = useState(false);
+  const driverTrigger = useRef<HTMLButtonElement>(null);
   const toast = useToast();
   // The same API model can be configured at multiple endpoints. Preserve the
   // catalogue label so choosing a driver does not present identical menu rows.
@@ -306,6 +318,7 @@ export function BuildModelPicker({
         effectiveId={effectiveId}
         disabled={disabled}
         onSelect={select}
+        triggerRef={driverTrigger}
       />
       <VisionRecommendationDialog
         open={visionPromptOpen}
@@ -314,6 +327,7 @@ export function BuildModelPicker({
         busy={updateAssignments.isPending}
         saveFailed={Boolean(updateAssignments.error)}
         onSelect={selectVision}
+        returnFocus={() => driverTrigger.current?.focus()}
       />
     </>
   );
