@@ -27,6 +27,7 @@ from disco.core.llm import (
 from disco.core.think import strip_think_spans
 
 from ._answer_budget import answer_request, followup_request
+from ._direct_source import _direct_discovery, _source_url
 from .engine import annotate_passage_dates, extract_discovered_hits
 from .grounding import (
     _CITE,
@@ -416,8 +417,16 @@ async def _discover_round(
     domains_deny: frozenset[str],
     discover_limit: int,
 ) -> list[SearchHit]:
-    """Search for this round (honoring the denied domains from re-scope);
+    """Read a complete URL or search (honoring denied domains from re-scope);
     raises `_ResearchAborted` on zero hits."""
+    direct = _direct_discovery(
+        RetrievalRequest(query=current_query, domains_deny=domains_deny)
+    )
+    if direct is not None:
+        hits, _diagnostic = direct
+        if not hits:
+            raise _ResearchAborted("The requested URL is excluded by the source domain filters.")
+        return hits
     hits = await search.search(
         current_query, limit=discover_limit, domains_deny=domains_deny or None
     )
@@ -608,6 +617,10 @@ async def stream_research_answer(
     ``seed_passages`` and ``corpus_ids`` add local evidence before rerank."""
     # F1: cap extra rounds at 2 regardless of the caller's value.
     bounded_extra = min(max(max_research_rounds - 1, 0), 2)
+    # A direct source read must not silently become open-web discovery when its
+    # evidence cannot support an answer. The answerer's bounded repair remains.
+    if _source_url(query) is not None:
+        bounded_extra = 0
 
     yield {"type": "state", "status": "running"}
     try:
