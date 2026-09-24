@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { subscribeLive } from "./agent";
+const session = vi.hoisted(() => vi.fn<() => Promise<void>>());
+vi.mock("./client", async (original) => ({
+  ...await original<typeof import("./client")>(),
+  ensureAgentSession: session,
+}));
 
 /** Minimal WebSocket stand-in: records instances + lets the test drive open/close. */
 class MockWS {
@@ -39,6 +44,7 @@ describe("subscribeLive — reconnect with backoff", () => {
   const originalVisibility = Object.getOwnPropertyDescriptor(document, "visibilityState");
 
   beforeEach(() => {
+    session.mockReset().mockResolvedValue(undefined);
     MockWS.instances = [];
     vi.stubGlobal("WebSocket", MockWS);
     vi.useFakeTimers();
@@ -51,6 +57,29 @@ describe("subscribeLive — reconnect with backoff", () => {
     } else {
       delete (document as { visibilityState?: string }).visibilityState;
     }
+  });
+
+  it("retries session bootstrap failures during restart without losing queued actions", async () => {
+    session.mockRejectedValueOnce(new Error("network unavailable"));
+    const h = subscribeLive("conv_restart", () => {});
+    h.send({ type: "ping" });
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(MockWS.instances).toHaveLength(1);
+    expect(session).toHaveBeenCalledTimes(2);
+    const socket = MockWS.instances.at(-1)!;
+    socket.open();
+    expect(socket.sent).toEqual([JSON.stringify({ type: "ping" })]);
+    h.cancel();
+  });
+
+  it("does not revive a cancelled connection after failed session bootstrap", async () => {
+    session.mockRejectedValue(new Error("offline"));
+    const h = subscribeLive("conv_cancel", () => {});
+    await vi.advanceTimersByTimeAsync(100);
+    h.cancel();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(MockWS.instances).toHaveLength(0);
+    expect(session).toHaveBeenCalledTimes(1);
   });
 
   it("force-closes a silently stale open socket, then reconnects", async () => {
