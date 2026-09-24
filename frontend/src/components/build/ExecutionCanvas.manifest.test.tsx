@@ -8,14 +8,17 @@
  */
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentEvent } from "@/types/agent";
 
-const { useProjectManifestMock, useProjectFileMock } = vi.hoisted(() => ({
+const { useProjectManifestMock, useProjectFileMock, listProjectsMock } = vi.hoisted(() => ({
   useProjectManifestMock: vi.fn<(...args: unknown[]) => { data?: { files: { path: string; bytes: number }[] } }>(() => ({ data: undefined })),
+  listProjectsMock: vi.fn(async () => ({ projects: [] as { id: string; files_missing: boolean; last_snapshot_at?: string }[], status: "ok" })),
   useProjectFileMock: vi.fn(() => ({ data: { content: "Imported source text", binary: false }, isPending: false, isError: false })),
 }));
+
+vi.mock("@/api/projects", () => ({ listProjects: listProjectsMock }));
 
 vi.mock("@/hooks/useProjects", () => ({
   useProjectManifest: (...args: unknown[]) => useProjectManifestMock(...args),
@@ -53,6 +56,7 @@ const sealed = {
 afterEach(() => {
   vi.clearAllMocks();
   useProjectManifestMock.mockReturnValue({ data: undefined });
+  listProjectsMock.mockResolvedValue({ projects: [], status: "ok" });
 });
 
 describe("ExecutionCanvas — the project manifest is only requested once one can exist", () => {
@@ -100,4 +104,37 @@ it.each([
   render(withQc(<ExecutionCanvas events={[event as AgentEvent]} untrusted={untrusted} status="IDLE" cid="conv_unready" />));
   expect(useProjectManifestMock).toHaveBeenCalledWith("conv_unready", false, "IDLE:");
   expect(useProjectFileMock).not.toHaveBeenCalled();
+});
+
+
+it.each(["IDLE", "PAUSED", "ERROR"] as const)("loads legacy persisted import bytes in %s without trusting the old message", async (status) => {
+  const legacy = { ...importReady, meta: {}, message: { role: "user", content: "Old localized import notice" } };
+  listProjectsMock.mockResolvedValue({ projects: [{ id: "conv_legacy", files_missing: false }], status: "ok" });
+  useProjectManifestMock.mockReturnValue({ data: { files: [{ path: "original.txt", bytes: 20 }] } });
+  const mount = () => render(withQc(<ExecutionCanvas events={[legacy]} status={status} cid="conv_legacy" />));
+  const view = mount();
+  await waitFor(() => expect(useProjectManifestMock).toHaveBeenCalledWith("conv_legacy", true, `${status}:project`));
+  expect(screen.getByText("Imported source text")).toBeVisible();
+  expect(useProjectFileMock).toHaveBeenCalledWith("conv_legacy", "original.txt", `${status}:project`);
+  expect(listProjectsMock).toHaveBeenCalledTimes(1);
+  view.unmount(); mount();
+  await waitFor(() => expect(screen.getByText("Imported source text")).toBeVisible());
+  expect(listProjectsMock).toHaveBeenCalledTimes(2);
+});
+
+it.each([
+  { id: "some_other_project", files_missing: false },
+  { id: "conv_missing", files_missing: true },
+])("does not request a manifest for unmatched or missing project storage: %j", async (project) => {
+  listProjectsMock.mockResolvedValue({ projects: [project], status: "ok" });
+  render(withQc(<ExecutionCanvas events={[]} status="IDLE" cid="conv_missing" />));
+  await waitFor(() => expect(listProjectsMock).toHaveBeenCalledTimes(1));
+  expect(useProjectManifestMock).toHaveBeenLastCalledWith("conv_missing", false, "IDLE:");
+  expect(useProjectFileMock).not.toHaveBeenCalled();
+});
+
+it.each([{ status: "RUNNING", untrusted: false }, { status: "IDLE", untrusted: true }] as const)("never probes legacy workspace existence during running/untrusted states: %j", ({ status, untrusted }) => {
+  render(withQc(<ExecutionCanvas events={[]} status={status} untrusted={untrusted} cid="conv_probe" />));
+  expect(listProjectsMock).not.toHaveBeenCalled();
+  expect(useProjectManifestMock).toHaveBeenLastCalledWith("conv_probe", false, `${status}:`);
 });

@@ -13,6 +13,8 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as Tabs from "@radix-ui/react-tabs";
+import { useQuery } from "@tanstack/react-query";
+import { listProjects } from "@/api/projects";
 import { FileCode2, Gauge, MonitorPlay, SquareTerminal } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { deriveFiles, deriveSrcDoc, deriveTerminal } from "@/lib/buildTrace";
@@ -38,6 +40,30 @@ const TABS: { id: TabId; label: string; icon: typeof FileCode2 }[] = [
   { id: "preview", label: "Preview", icon: MonitorPlay },
   { id: "cockpit", label: "Cockpit", icon: Gauge },
 ];
+
+function importedWorkspaceEvent(events: AgentEvent[], untrusted: boolean) {
+  if (untrusted) return undefined;
+  return events.find((event) => event.kind === "message" && event.source === "environment" &&
+    (event.meta?.project_import as { workspace_ready?: unknown } | undefined)?.workspace_ready === true);
+}
+
+// Older project imports predate the ready event. A successful owner-scoped
+// listing distinguishes their persisted workspace from an empty new run without
+// probing a missing manifest. This is a read-only presentation check.
+function usePersistedProject(cid: string | null, status: ConversationStatus, untrusted: boolean, known: boolean) {
+  const inactive = status === "IDLE" || status === "PAUSED" || status === "ERROR";
+  const query = useQuery({
+    queryKey: ["workspace-existence", cid],
+    queryFn: listProjects,
+    enabled: Boolean(cid) && inactive && !untrusted && !known,
+    retry: false,
+    staleTime: 30_000,
+    refetchOnWindowFocus: false,
+  });
+  return !untrusted
+    ? query.data?.projects.find((project) => project.id === cid && !project.files_missing)
+    : undefined;
+}
 
 export function ExecutionCanvas({
   events,
@@ -144,21 +170,21 @@ export function ExecutionCanvas({
   // Imports materialize a host workspace before any agent run/seal. Only the
   // server's environment-event hint enables that read, never message prose or
   // untrusted shared events. Manifest/file endpoints still enforce ownership.
-  const importedWorkspace = !untrusted && events.find((event) =>
-    event.kind === "message" && event.source === "environment" &&
-    (event.meta?.project_import as { workspace_ready?: unknown } | undefined)?.workspace_ready === true,
-  );
-  const hasAvailableWorkspace = Boolean(importedWorkspace) ||
-    status === "FINISHED" || events.some((event) => event.kind === "workspace_version");
+  const importedWorkspace = importedWorkspaceEvent(events, untrusted);
+  const sealedWorkspace = status === "FINISHED" || events.some((event) => event.kind === "workspace_version");
+  const persistedProject = usePersistedProject(cid, status, untrusted, Boolean(importedWorkspace) || sealedWorkspace);
+  const hasAvailableWorkspace = Boolean(importedWorkspace || persistedProject) || sealedWorkspace;
   const workspaceRevision = useMemo(() => {
     const latest = [...events].reverse().find(
       (event) => event.kind === "workspace_restored" || event.kind === "workspace_version",
     );
-    return `${status}:${latest?.id ?? (importedWorkspace ? importedWorkspace.id : "")}`;
-  }, [events, status, importedWorkspace]);
+    return `${status}:${latest?.id ?? (importedWorkspace ? importedWorkspace.id : persistedProject?.last_snapshot_at ?? (persistedProject ? "project" : ""))}`;
+  }, [events, status, importedWorkspace, persistedProject]);
   const manifestQuery = useProjectManifest(cid, hasAvailableWorkspace, workspaceRevision);
   const manifestFiles = manifestQuery.data?.files ?? [];
   const anySessionBusy = sessions.some((s) => s.busy);
+  const inspectSavedWorkspace = !untrusted && (status === "FINISHED" ||
+    (["IDLE", "PAUSED", "ERROR"].includes(status) && Boolean(importedWorkspace || persistedProject)));
 
   return (
     <Tabs.Root
@@ -230,7 +256,7 @@ export function ExecutionCanvas({
             events={events}
             streamingFile={streamingFile}
             manifestFiles={manifestFiles}
-            snapshot={cid && !untrusted && (status === "FINISHED" || (status === "IDLE" && importedWorkspace)) ? {
+            snapshot={cid && inspectSavedWorkspace ? {
               cid, revision: workspaceRevision,
               loading: manifestQuery.isPending,
               error: manifestQuery.isError,
