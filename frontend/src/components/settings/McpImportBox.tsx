@@ -96,6 +96,7 @@ export function McpImportBox({ onClose }: { onClose: () => void }) {
         secrets, never in the config.
       </p>
       <textarea
+        autoFocus
         value={text}
         onChange={(e) => {
           setText(e.target.value);

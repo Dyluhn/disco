@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Pencil, Plus, Trash2 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { TAP_TARGET_ICON } from "@/lib/tapTarget";
@@ -119,6 +119,7 @@ function SkillEditor({
   return (
     <div className="flex flex-col gap-inline rounded-card border border-accent/40 bg-surface-1 p-body">
       <input
+        autoFocus
         value={draft.name}
         onChange={(e) => setDraft({ ...draft, name: e.target.value })}
         placeholder="Skill name (e.g. Yahoo Finance API)"
@@ -207,7 +208,18 @@ export function SkillsSection() {
   const [creating, setCreating] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
 
-  const closeEditors = () => {
+  const returnFocus = useRef<{ skillId: string | null } | null>(null);
+  const restoreOpener = (node: HTMLButtonElement | null, skillId: string | null) => {
+    if (node && returnFocus.current?.skillId === skillId) {
+      returnFocus.current = null;
+      node.focus();
+    }
+  };
+
+  const closeEditors = (skillId: string | null) => {
+    // The initiating button unmounts while editing. Restore its replacement
+    // by stable skill ID, including after a successful rename.
+    returnFocus.current = { skillId };
     setCreating(false);
     setEditingId(null);
   };
@@ -227,6 +239,7 @@ export function SkillsSection() {
         {!creating && editingId === null && (
           <button
             type="button"
+            ref={(node) => restoreOpener(node, null)}
             data-disco-control="settings.skill-new"
             onClick={() => setCreating(true)}
             className="flex min-h-11 items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:border-accent hover:text-text lg:min-h-0"
@@ -255,7 +268,7 @@ export function SkillsSection() {
         <SkillEditor
           initial={EMPTY_DRAFT}
           busy={create.isPending}
-          onCancel={closeEditors}
+          onCancel={() => closeEditors(null)}
           onSave={(draft) =>
             create.mutate(
               {
@@ -264,7 +277,7 @@ export function SkillsSection() {
                 body: draft.body,
                 surfaces: draft.surfaces,
               },
-              { onSuccess: closeEditors },
+              { onSuccess: () => closeEditors(null) },
             )
           }
         />
@@ -292,7 +305,7 @@ export function SkillsSection() {
                   surfaces: s.surfaces ?? [],
                 }}
                 busy={update.isPending}
-                onCancel={closeEditors}
+                onCancel={() => closeEditors(s.id)}
                 onSave={(draft) =>
                   update.mutate(
                     {
@@ -304,7 +317,7 @@ export function SkillsSection() {
                         surfaces: draft.surfaces,
                       },
                     },
-                    { onSuccess: closeEditors },
+                    { onSuccess: () => closeEditors(s.id) },
                   )
                 }
               />
@@ -345,6 +358,7 @@ export function SkillsSection() {
               <div className="flex shrink-0 items-center gap-inline">
                 <button
                   type="button"
+                  ref={(node) => restoreOpener(node, s.id)}
                   data-disco-control="settings.skill-edit"
                   onClick={() => setEditingId(s.id)}
                   aria-label={`Edit ${s.name}`}

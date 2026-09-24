@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { ClipboardPaste, Plus, ShieldOff, Trash2 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { TAP_TARGET_ICON } from "@/lib/tapTarget";
@@ -112,6 +112,7 @@ function ConnectionForm({
   return (
     <div className="flex flex-col gap-inline rounded-card border border-accent/40 bg-surface-1 p-body">
       <input
+        autoFocus
         value={draft.name}
         onChange={(e) => setDraft({ ...draft, name: e.target.value })}
         placeholder="Server name (e.g. filesystem)"
@@ -246,12 +247,16 @@ function HeaderActions({
   isLoading,
   onImport,
   onCreate,
+  onImportMount,
+  onCreateMount,
 }: {
   creating: boolean;
   importing: boolean;
   isLoading: boolean;
   onImport: () => void;
   onCreate: () => void;
+  onImportMount: (node: HTMLButtonElement | null) => void;
+  onCreateMount: (node: HTMLButtonElement | null) => void;
 }) {
   if (creating) return null;
   return (
@@ -259,6 +264,7 @@ function HeaderActions({
       {!importing && (
         <button
           type="button"
+          ref={onImportMount}
           data-disco-control="settings.mcp-import-open"
           disabled={isLoading}
           onClick={onImport}
@@ -270,6 +276,7 @@ function HeaderActions({
       )}
       <button
         type="button"
+        ref={onCreateMount}
         data-disco-control="settings.mcp-add"
         disabled={isLoading}
         onClick={onCreate}
@@ -296,7 +303,21 @@ export function McpSection() {
   const mutationError =
     create.error ?? update.error ?? remove.error ?? approve.error ?? revoke.error;
 
-  const closeForm = () => setCreating(false);
+  const returnFocus = useRef<"create" | "import" | null>(null);
+  const restoreOpener = (node: HTMLButtonElement | null, kind: "create" | "import") => {
+    if (node && returnFocus.current === kind) {
+      returnFocus.current = null;
+      node.focus();
+    }
+  };
+  const closeForm = () => {
+    returnFocus.current = "create";
+    setCreating(false);
+  };
+  const closeImport = () => {
+    returnFocus.current = "import";
+    setImporting(false);
+  };
   const closeApproval = () => setApprovingServer(null);
 
   const handleCreate = (draft: DraftState) => {
@@ -344,6 +365,8 @@ export function McpSection() {
           isLoading={isLoading}
           onImport={() => setImporting(true)}
           onCreate={() => setCreating(true)}
+          onImportMount={(node) => restoreOpener(node, "import")}
+          onCreateMount={(node) => restoreOpener(node, "create")}
         />
       </div>
       <p className="font-ui text-[0.84rem] text-text-muted">
@@ -358,7 +381,7 @@ export function McpSection() {
         </p>
       )}
 
-      {importing && <McpImportBox onClose={() => setImporting(false)} />}
+      {importing && <McpImportBox onClose={closeImport} />}
 
       {creating && (
         <ConnectionForm
