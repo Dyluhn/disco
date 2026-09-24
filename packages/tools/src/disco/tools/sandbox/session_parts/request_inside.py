@@ -67,6 +67,47 @@ async def _stage_request(instance: SandboxInstance, frame: str, directory: str) 
             raise ValueError("cannot stage HTTP request")
 
 
+def _request_is_allowed(
+    session: SandboxSession,
+    port: int,
+    method: str,
+    target: str,
+    headers: list[tuple[str, str]],
+    body: bytes,
+) -> bool:
+    if method not in {"GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE"}:
+        return False
+    if not target.startswith("/") or target.startswith("//") or "#" in target:
+        return False
+    allowed_port = port in USER_PORTS or (
+        session.shares_host_network and is_managed_host_preview_port(port)
+    )
+    if not allowed_port or port == NOVNC_PORT or len(body) > 1024 * 1024:
+        return False
+    return sum(len(k) + len(v) for k, v in headers) <= 65536
+
+
+async def _dispatch_once(
+    session: SandboxSession,
+    instance: SandboxInstance,
+    generation: int,
+    argument: str,
+) -> HttpResponse | None:
+    if session._instance is not instance or session.generation != generation:
+        return None
+    result = await instance.exec_shell(
+        f"python3 -I -c {shlex.quote(_CLIENT_SOURCE)} {shlex.quote(argument)}", timeout_s=20
+    )
+    if (
+        result.exit_code != 0
+        or result.timed_out
+        or session._instance is not instance
+        or session.generation != generation
+    ):
+        return None
+    return _decode_response(result.stdout)
+
+
 async def request_inside(
     session: SandboxSession,
     port: int,
@@ -81,18 +122,11 @@ async def request_inside(
     workspace. Preparation cannot contact the application. The final exec is the
     sole HTTP dispatch; any failure has an unknown outcome and returns unavailable.
     """
-    if method not in {"GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE"}:
-        return None
-    if not target.startswith("/") or target.startswith("//") or "#" in target:
+    if not _request_is_allowed(session, port, method, target, headers, body):
         return None
     instance = session._instance
     generation = session.generation
-    allowed = port in USER_PORTS or (
-        session.shares_host_network and is_managed_host_preview_port(port)
-    )
-    if instance is None or not allowed or port == NOVNC_PORT or len(body) > 1024 * 1024:
-        return None
-    if sum(len(k) + len(v) for k, v in headers) > 65536:
+    if instance is None:
         return None
     frame = _encode_request(port, method, target, headers, body)
     directory = f"/tmp/disco-preview-http-{uuid.uuid4().hex}"
@@ -100,20 +134,8 @@ async def request_inside(
     try:
         if staged:
             await _stage_request(instance, frame, directory)
-        if session._instance is not instance or session.generation != generation:
-            return None
         argument = f"@{directory}/request" if staged else frame
-        result = await instance.exec_shell(
-            f"python3 -I -c {shlex.quote(_CLIENT_SOURCE)} {shlex.quote(argument)}", timeout_s=20
-        )
-        if (
-            result.exit_code != 0
-            or result.timed_out
-            or session._instance is not instance
-            or session.generation != generation
-        ):
-            return None
-        return _decode_response(result.stdout)
+        return await _dispatch_once(session, instance, generation, argument)
     except Exception:  # noqa: BLE001 — unknown outcomes must never trigger replay
         return None
     finally:
