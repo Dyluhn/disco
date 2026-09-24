@@ -520,6 +520,7 @@ async def test_write_report_reads_a_long_source_and_puts_its_notes_in_the_draft_
             "calls": 3,
             "input_tokens": 3,
             "output_tokens": 3,
+            "reader_output_tokens_charged": 3,
             "findings_accepted": 1,
             "findings_rejected": 0,
             "ok": True,

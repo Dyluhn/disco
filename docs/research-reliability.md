@@ -127,3 +127,40 @@ The final-check stage now reports real streamed activity and buffered-call
 starts through the same review progress events as the initial review. It
 uses the stage declared by the request, with no inferred activity or
 model/provider-specific selection.
+
+## Reader output budgets
+
+Long-source reading now has its own finite output allowance. Defaults are
+12,000 output tokens per request and 48,000 across the reader stage, including
+reasoning and visible notes. Operators can set positive integers with
+`DISCO_RESEARCH_READER_MAX_OUTPUT_TOKENS` and
+`DISCO_RESEARCH_READER_OUTPUT_BUDGET_TOKENS`; invalid values retain the defaults.
+These are task budgets, not inferred model capabilities. A configured model's
+`max_output_tokens` further limits each reader request. An unspecified model
+limit adds no guessed capability rule. Research-turn, draft and review budgets
+remain separate; this change does not lower research-readiness requirements.
+
+The existing source-notes checkpoint reserves output capacity before dispatch.
+Known positive provider usage reconciles that reservation; absent usage,
+provider failure, cancellation or restart retains it conservatively. Retries
+and remaining chunks spend the same ledger. Source changes invalidate notes,
+but do not refund already charged output. Streamed delivery counts are never
+used as token usage. Changing an operator budget changes the available ceiling,
+not the amount already spent. The cap bounds requests; it cannot guarantee that
+an external provider honors its requested output limit.
+
+A reply with `finish_reason="length"` is incomplete even if a JSON prefix can
+be parsed. Completed chunks and validated quotes keep their exact source
+offsets. Exhaustion leaves the original source available through retained
+excerpts and notes; the writer and the report's existing disclosure panel say
+that full-source reading was incomplete. No missing work is marked complete,
+and no timeout or model/provider-name exception substitutes for evidence.
+Reader requests express disabled reasoning intent, but do not claim that
+reasoning was disabled without a configured wire policy honored by the provider.
+
+The motivating Quick UI run took 33m02s including a server-restart pause;
+30m49.6s was recorded open-model-stream time. Its three source-reading calls
+alone reported 70,256 output tokens over 502 seconds. Those figures are the
+measured before case, not a claim of improved live latency or equivalent report
+quality after this change. Live browser validation must evaluate both output
+quality and incomplete-reading disclosures.

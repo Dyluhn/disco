@@ -32,6 +32,7 @@ from disco.core.llm import LLMError, LLMRouter
 
 from ..models import Passage
 from ._progress_events import EmitFn
+from ._reader_budget import ReaderBudget, charged_output
 from ._source_notes import (
     MAX_FINDINGS,
     NOTES_HEADER,
@@ -44,7 +45,7 @@ from ._source_notes import (
     render_source_notes,
 )
 from ._stop import ShouldCancelFn, await_stoppable, raise_if_stopped
-from ._writer_parts import _provider_failure, decode_review_json, review_call, review_max_tokens
+from ._writer_parts import _provider_failure, decode_review_json, review_call
 from ._writer_review import _inspect_metadata, _record_writer_io
 
 _LOG = logging.getLogger(__name__)
@@ -70,13 +71,6 @@ CHUNK_CHARS = 100_000
 #: silently unread.
 MAX_READER_CALLS = 60
 MAX_CALLS_PER_SOURCE = 8
-#: Visible JSON capacity for one reader call, above the shared think headroom.
-#: Eight thousand was not enough: on a dense 100,000-character chunk DeepSeek
-#: filled the whole 32,000-token ceiling with hidden reasoning and returned no
-#: visible JSON at all on 7 of 18 reads, and the source lost its notes. This is
-#: retained headroom for endpoints that reason despite the extraction intent.
-_READER_TOKENS = 24_000
-
 #: This is intent, not a guarantee: an empty answer takes the compact recovery
 #: path. The reader is copying quotes out of text that is already
 #: in front of it and saying what condition the source states for each one —
@@ -174,13 +168,24 @@ def _reader_instruction(
 
 
 def _reader_messages(
-    passage: Passage, chunk: str, query: str, part: tuple[int, int], notes: SourceNotes,
+    passage: Passage,
+    chunk: str,
+    query: str,
+    part: tuple[int, int],
+    notes: SourceNotes,
 ) -> list[LLMMessage]:
     return [
         LLMMessage(role="system", content=READER_SYSTEM_PROMPT),
-        LLMMessage(role="user", content=_reader_instruction(
-            passage, chunk, query=query, part=part, taken=notes,
-        )),
+        LLMMessage(
+            role="user",
+            content=_reader_instruction(
+                passage,
+                chunk,
+                query=query,
+                part=part,
+                taken=notes,
+            ),
+        ),
     ]
 
 
@@ -217,7 +222,8 @@ class _Reply:
     def can_retry(self, *, compact: bool) -> bool:
         """Repair malformed text once; never repeat an already compact empty read."""
         return (
-            self.payload is None and self.provider_error is None
+            self.payload is None
+            and self.provider_error is None
             and (bool(self.text.strip()) or not compact)
         )
 
@@ -231,6 +237,7 @@ async def _reader_reply(
     should_cancel: ShouldCancelFn,
     source_id: str,
     part: tuple[int, int],
+    max_tokens: int,
 ) -> _Reply:
     """One deterministic JSON-mode reader call, recorded like every writer call."""
     try:
@@ -238,7 +245,7 @@ async def _reader_reply(
             review_call(
                 router,
                 messages,
-                max_tokens=review_max_tokens(_READER_TOKENS),
+                max_tokens=max_tokens,
                 metadata={
                     **(_inspect_metadata(conversation_id, STAGE) or {"inspect_stage": STAGE}),
                     "source_id": source_id,
@@ -255,6 +262,9 @@ async def _reader_reply(
     payload, error = decode_review_json(call.text)
     if not call.text.strip():
         error = f"reader returned no visible notes (finish_reason={call.response.finish_reason})"
+    elif call.response.finish_reason == "length":
+        payload = None
+        error = "reader output allowance exhausted before notes completed"
     _record_writer_io(
         conversation_id,
         call.request,
@@ -286,6 +296,43 @@ async def _save_note(
         await checkpoint(notes)
 
 
+async def _budgeted_reply(
+    router: LLMRouter,
+    messages: list[LLMMessage],
+    *,
+    notes: SourceNotes,
+    budget: ReaderBudget,
+    checkpoint: Callable[[SourceNotes], Awaitable[None]] | None,
+    conversation_id: str | None,
+    should_cancel: ShouldCancelFn,
+    source_id: str,
+    part: tuple[int, int],
+) -> _Reply | None:
+    capacity = budget.reserve(notes, router)
+    if capacity <= 0:
+        notes.ok = False
+        notes.error = "reader output budget exhausted; remaining text uses source windows"
+        return None
+    notes.calls += 1
+    await _save_note(checkpoint, notes)
+    reply = await _reader_reply(
+        router,
+        messages,
+        conversation_id=conversation_id,
+        attempt=notes.calls,
+        should_cancel=should_cancel,
+        source_id=source_id,
+        part=part,
+        max_tokens=capacity,
+    )
+    notes.input_tokens += reply.input_tokens
+    notes.output_tokens += reply.output_tokens
+    notes.latency_ms += reply.latency_ms
+    budget.settle(notes, capacity, reply.output_tokens)
+    await _save_note(checkpoint, notes)
+    return reply
+
+
 async def _read_one_source(
     router: LLMRouter,
     passage: Passage,
@@ -293,6 +340,7 @@ async def _read_one_source(
     query: str,
     conversation_id: str | None,
     calls_allowed: int,
+    budget: ReaderBudget,
     should_cancel: ShouldCancelFn,
     retained: SourceNotes | None = None,
     checkpoint: Callable[[SourceNotes], Awaitable[None]] | None = None,
@@ -325,21 +373,20 @@ async def _read_one_source(
             break
         raise_if_stopped(should_cancel, boundary=STAGE)
         messages = _reader_messages(passage, chunk, query, (number, len(chunks)), notes)
-        notes.calls += 1
-        await _save_note(checkpoint, notes)
-        reply = await _reader_reply(
+        reply = await _budgeted_reply(
             router,
             messages,
             conversation_id=conversation_id,
-            attempt=notes.calls,
+            notes=notes,
+            budget=budget,
+            checkpoint=checkpoint,
             should_cancel=should_cancel,
             source_id=passage.id,
             part=(number, len(chunks)),
         )
+        if reply is None:
+            break
         calls += 1
-        notes.input_tokens += reply.input_tokens
-        notes.output_tokens += reply.output_tokens
-        notes.latency_ms += reply.latency_ms
         if calls < calls_allowed and reply.can_retry(compact=notes.compact_reading):
             if not reply.text.strip():
                 notes.compact_reading = True
@@ -349,24 +396,24 @@ async def _read_one_source(
                     *messages,
                     LLMMessage(role="assistant", content=reply.text),
                     LLMMessage(
-                        role="user", content=READER_PARSE_REASK.format(error=reply.parse_error),
+                        role="user",
+                        content=READER_PARSE_REASK.format(error=reply.parse_error),
                     ),
                 ]
-            notes.calls += 1
-            await _save_note(checkpoint, notes)
-            reply = await _reader_reply(
+            reply = await _budgeted_reply(
                 router,
                 messages,
                 conversation_id=conversation_id,
-                attempt=notes.calls,
+                notes=notes,
+                budget=budget,
+                checkpoint=checkpoint,
                 should_cancel=should_cancel,
                 source_id=passage.id,
                 part=(number, len(chunks)),
             )
+            if reply is None:
+                break
             calls += 1
-            notes.input_tokens += reply.input_tokens
-            notes.output_tokens += reply.output_tokens
-            notes.latency_ms += reply.latency_ms
         if reply.payload is None:
             notes.ok = False
             notes.error = reply.provider_error or reply.parse_error or "reader returned no notes"
@@ -383,19 +430,30 @@ async def _read_one_source(
 
 
 def _retained_notes(
-    long_sources: Sequence[Passage], retained: Mapping[str, SourceNotes] | None,
+    long_sources: Sequence[Passage],
+    retained: Mapping[str, SourceNotes] | None,
+    call_limit: int,
 ) -> dict[str, SourceNotes]:
-    return {
-        passage.id: retained[passage.id].model_copy(deep=True)
-        for passage in long_sources
-        if retained
-        and passage.id in retained
-        and retained[passage.id].source_sha256 == hashlib.sha256(passage.text.encode()).hexdigest()
-    }
+    notes = {}
+    for passage in long_sources:
+        prior = (retained or {}).get(passage.id)
+        if prior is None:
+            continue
+        digest = hashlib.sha256(passage.text.encode()).hexdigest()
+        notes[passage.id] = (
+            prior.model_copy(deep=True)
+            if prior.source_sha256 == digest
+            else SourceNotes(
+                source_sha256=digest,
+                reader_output_tokens_charged=charged_output(prior, call_limit),
+            )
+        )
+    return notes
 
 
 async def _finish_reading(
-    notes: dict[str, SourceNotes], calls_used: int,
+    notes: dict[str, SourceNotes],
+    calls_used: int,
     checkpoint: Callable[[dict[str, SourceNotes]], Awaitable[None]] | None,
 ) -> None:
     for note in notes.values():
@@ -424,7 +482,8 @@ async def read_sources(
     fall back to their windows.
     """
     long_sources = [passage for passage in passages if len(passage.text) > READ_THRESHOLD_CHARS]
-    notes = _retained_notes(long_sources, retained)
+    budget = ReaderBudget.start(retained or {})
+    notes = _retained_notes(long_sources, retained, budget.call_limit)
     calls_used = sum(note.calls for note in notes.values())
     for number, passage in enumerate(long_sources, start=1):
         prior = notes.get(passage.id)
@@ -458,6 +517,7 @@ async def read_sources(
             query=query,
             conversation_id=conversation_id,
             calls_allowed=allowance,
+            budget=budget,
             should_cancel=should_cancel,
             retained=prior,
             checkpoint=save,
@@ -480,6 +540,7 @@ def source_reading_trail(notes: Mapping[str, SourceNotes]) -> list[dict[str, Any
             "calls": note.calls,
             "input_tokens": note.input_tokens,
             "output_tokens": note.output_tokens,
+            "reader_output_tokens_charged": note.reader_output_tokens_charged,
             "latency_ms": round(note.latency_ms, 1),
             "findings_accepted": len(note.findings),
             "findings_rejected": note.findings_rejected,

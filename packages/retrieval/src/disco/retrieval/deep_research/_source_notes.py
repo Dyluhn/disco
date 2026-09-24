@@ -96,6 +96,8 @@ class SourceNotes(BaseModel):
     compact_reading: bool = False
     input_tokens: int = 0
     output_tokens: int = 0
+    # Includes pre-dispatch reservations that survive cancellation/restart.
+    reader_output_tokens_charged: int | None = Field(default=None, ge=0)
     latency_ms: float = 0.0
     findings_rejected: int = 0
     ok: bool = True
@@ -250,6 +252,17 @@ def render_source_notes(notes: SourceNotes, *, char_cap: int | None = None) -> s
             return block
         lines.pop()
     return ""
+
+
+def reading_disclosure(notes: Mapping[str, SourceNotes]) -> str:
+    incomplete = sum(not note.ok for note in notes.values())
+    if not incomplete:
+        return ""
+    return (
+        f"Full source reading was incomplete for {incomplete} source(s). "
+        "The report uses retained source excerpts and any validated notes; "
+        "do not treat these sources as read in full."
+    )
 
 
 def notes_blocks(notes: Mapping[str, SourceNotes]) -> dict[str, str]:
