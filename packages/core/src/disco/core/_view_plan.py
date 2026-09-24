@@ -80,11 +80,14 @@ def _progress_index(value: object) -> int | None:
         return None
 
 
-def _valid_progress_snapshot(rows: object) -> TypeGuard[list[dict[str, object]]]:
+def _valid_progress_snapshot(
+    rows: object, total: int | None = None
+) -> TypeGuard[list[dict[str, object]]]:
     # The tool rejects the whole malformed snapshot, not just its bad rows.
     return isinstance(rows, list) and all(
         isinstance(row, dict)
-        and _progress_index(row.get("index")) is not None
+        and (index := _progress_index(row.get("index"))) is not None
+        and (total is None or 1 <= index <= total)
         and row.get("state") in ("pending", "active", "done")
         for row in rows
     )
@@ -120,7 +123,7 @@ def _apply_one_progress_event(
             pass
     elif name == "update_plan_progress":
         rows = args.get("steps")
-        if not _valid_progress_snapshot(rows):
+        if not _valid_progress_snapshot(rows, total):
             return
         for s in rows:
             try:

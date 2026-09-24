@@ -65,10 +65,12 @@ export function deriveBuildProgress(
     if (e.kind !== "action" || e.tool_call?.tool_name !== "update_plan_progress") return;
     const rows = e.tool_call.arguments?.steps;
     // Failed validation rejects the entire snapshot, including plausible rows.
-    if (Array.isArray(rows) && rows.every((row) =>
-      row && typeof row === "object" && progressStepIndex(row.index) !== null
-      && typeof row.state === "string" && ["pending", "active", "done"].includes(row.state),
-    )) latest = e;
+    if (Array.isArray(rows) && rows.every((row) => {
+      if (!row || typeof row !== "object") return false;
+      const index = progressStepIndex(row.index);
+      return index !== null && index >= 1 && (nSteps === 0 || index <= nSteps)
+        && typeof row.state === "string" && ["pending", "active", "done"].includes(row.state);
+    })) latest = e;
   });
   // Apply the declarative snapshot IF one exists — but do NOT early-return when it's
   // absent. A SMALL model (the NL-done-at-finish tier, e.g. local Qwen) never calls
@@ -85,9 +87,8 @@ export function deriveBuildProgress(
       const st = String(s?.state);
       // Bound to the CURRENT plan's range. A malformed or stale index (e.g. index 99
       // on a 3-step plan, or a leftover from a longer prior plan) must NOT create a
-      // phantom step or inflate the done-count into a lying checklist (a snapshot of
-      // [{index:99,state:"done"}] would otherwise render "1/3" with every real step
-      // pending). Out-of-range / non-integer indices are dropped.
+      // phantom step or inflate the done-count. The complete snapshot was already
+      // validated above; keep the per-row bound as a defensive check.
       if (idx === null || idx < 1 || (nSteps > 0 && idx > nSteps)) continue;
       if (st === "done" || st === "active" || st === "pending") progress.set(idx, st as StepState);
     }

@@ -72,6 +72,26 @@ describe("Rejected plan progress stays out of the checklist", () => {
 });
 
 describe("Progress argument validation is atomic", () => {
+  it.each([false, true])(
+    "rejects all fourteen rows against revision two's six steps, historical success=%s", (accepted) => {
+      const invalid = snapshot("wrong-plan", Array.from({ length: 14 }, (_, i) => ({
+        index: i + 1, state: i < 13 ? "done" : "active",
+      })));
+      const events = [plan(1, 7), plan(2, 6),
+        snapshot("valid", [{ index: 1, state: "active" }]), invalid];
+      if (accepted) events.push({ kind: "observation", id: "old-success", action_id: invalid.id,
+        tool_result: { tool_name: "update_plan_progress", success: true,
+          content: "plan progress: 13/14 done" } } as AgentEvent);
+      expect([...deriveBuildProgress(JSON.parse(JSON.stringify(events)), "RUNNING")])
+        .toEqual([[1, "active"]]);
+      events.push(snapshot("corrected", Array.from({ length: 6 }, (_, i) => ({
+        index: i + 1, state: i < 5 ? "done" : "active",
+      }))));
+      expect([...deriveBuildProgress(events, "RUNNING")])
+        .toEqual([[1, "done"], [2, "done"], [3, "done"], [4, "done"], [5, "done"], [6, "active"]]);
+    },
+  );
+
   it.each([
     { label: "null", index: null },
     { label: "empty string", index: "" },

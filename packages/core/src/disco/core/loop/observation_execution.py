@@ -25,6 +25,7 @@ from ..events import (
 from ..llm import LLMContextWindowExceeded
 from ..obs import log_span
 from . import check_ledger
+from ._plan_progress_validation import _validate_plan_progress
 from .dedup import (
     _W39_NOTICE_TOOLS,
     _W39_PLAN_TOOLS,
@@ -630,6 +631,12 @@ async def execute_and_observe(
         with log_span("loop.ledger.snapshot", phase="before"):
             check_before = await check_ledger.snapshot(sandbox)
     persist = partial(_persist_primary_result, loop, action, check_before=check_before)
+
+    async def prepare() -> None:
+        await loop._prepare_executor()
+        if tool_name in {"plan_step", "update_plan_progress"}:
+            _validate_plan_progress(action, await loop._events())
+
     primary_persisted = False
     try:
         attributed_execute = getattr(loop.executor, "execute_attributed", None)
@@ -639,11 +646,11 @@ async def execute_and_observe(
                     action.tool_call,
                     action.agent_view_id,
                     persist,
-                    loop._prepare_executor,
+                    prepare,
                 )
                 primary_persisted = True
             else:
-                await loop._prepare_executor()
+                await prepare()
                 result = await loop.executor.execute(action.tool_call)
     except LLMContextWindowExceeded:
         raise

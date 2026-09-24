@@ -26,7 +26,10 @@ from disco.core import (
     ConversationStatus,
     NoOpCondenser,
     ObservationEvent,
+    PlanEvent,
+    PlanStep,
     SqliteEventStore,
+    StatusEvent,
     ToolCall,
 )
 from disco.core.llm import ModelExecutionPolicy, OperatingMode
@@ -92,6 +95,10 @@ async def test_first_error_is_actionable_and_corrected_call_succeeds():
     carry the nested shape + enum + example via to_llm_message(); the corrected
     call then produces a successful ObservationEvent (real recovery)."""
     loop, _ = _make_loop(_real_executor())
+    await loop.store.append(CID, PlanEvent(summary="p", steps=[PlanStep(title="do")]))
+    await loop.store.append(
+        CID, StatusEvent(status=ConversationStatus.RUNNING, detail="plan_approved")
+    )
 
     # 1. malformed: empty strings where each step must be an object.
     events = await _drive(loop, _upp("bad1", ["", "", ""]))

@@ -83,13 +83,44 @@ def test_replan_resets_progress():
 
 
 def test_out_of_range_indices_ignored():
-    """A stale/out-of-range index in a snapshot is bounded out (plan has 2 steps)."""
+    """An out-of-plan row invalidates the whole declarative snapshot."""
     events = [
         _plan(2, seq=1),
         _upp([{"index": 5, "state": "done"}, {"index": 1, "state": "done"}], seq=2),
     ]
     _, states = effective_plan_progress(events)
-    assert states == {1: "done"}
+    assert states == {}
+
+
+def test_historical_success_cannot_partially_apply_fourteen_rows_to_six_step_revision():
+    from disco.core.events import ObservationEvent, ToolResult
+
+    current = _plan(6, revision=2, seq=4)
+    valid = _upp([{"index": 1, "state": "active"}], seq=5)
+    invalid = _upp(
+        [{"index": i, "state": "done" if i < 14 else "active"} for i in range(1, 15)],
+        seq=6,
+    )
+    events = [
+        _plan(7, seq=1),
+        current,
+        valid,
+        invalid,
+        ObservationEvent(
+            action_id=invalid.id,
+            tool_result=ToolResult(
+                call_id="c",
+                tool_name="update_plan_progress",
+                success=True,
+                content="plan progress: 13/14 done",
+            ),
+            seq=7,
+        ),
+    ]
+    plan, states = effective_plan_progress(events)
+    assert plan == current
+    assert states == {1: "active"}
+    assert plan_is_incomplete(events) == (True, list(range(1, 7)))
 
 
 def test_seqless_events_order_by_list_position():
