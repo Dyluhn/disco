@@ -65,6 +65,28 @@ function usePersistedProject(cid: string | null, status: ConversationStatus, unt
     : undefined;
 }
 
+function useWorkspaceInspection(events: AgentEvent[], status: ConversationStatus, cid: string | null, untrusted: boolean) {
+  // Imports materialize a host workspace before any agent run/seal. Only the
+  // server's environment-event hint enables that read, never message prose or
+  // untrusted shared events. Manifest/file endpoints still enforce ownership.
+  const importedWorkspace = importedWorkspaceEvent(events, untrusted);
+  const sealedWorkspace = status === "FINISHED" || events.some((event) => event.kind === "workspace_version");
+  const persistedProject = usePersistedProject(cid, status, untrusted, Boolean(importedWorkspace) || sealedWorkspace);
+  const hasAvailableWorkspace = Boolean(importedWorkspace || persistedProject) || sealedWorkspace;
+  const workspaceRevision = useMemo(() => {
+    const latest = [...events].reverse().find(
+      (event) => event.kind === "workspace_restored" || event.kind === "workspace_version",
+    );
+    return `${status}:${latest?.id ?? (importedWorkspace ? importedWorkspace.id : persistedProject?.last_snapshot_at ?? (persistedProject ? "project" : ""))}`;
+  }, [events, status, importedWorkspace, persistedProject]);
+  const manifestQuery = useProjectManifest(cid, hasAvailableWorkspace, workspaceRevision);
+
+  const inspectSavedWorkspace = !untrusted && (status === "FINISHED" ||
+    (["IDLE", "PAUSED", "ERROR"].includes(status) && Boolean(importedWorkspace || persistedProject)));
+
+  return { manifestQuery, inspectSavedWorkspace, workspaceRevision };
+}
+
 export function ExecutionCanvas({
   events,
   status,
@@ -168,24 +190,9 @@ export function ExecutionCanvas({
   // The Cockpit also surfaces bound-port data from the same useBuildPreview
   // the Preview pane uses — shared query cache, no extra fetch.
   const previewQuery = useBuildPreview(cid, active);
-  // Imports materialize a host workspace before any agent run/seal. Only the
-  // server's environment-event hint enables that read, never message prose or
-  // untrusted shared events. Manifest/file endpoints still enforce ownership.
-  const importedWorkspace = importedWorkspaceEvent(events, untrusted);
-  const sealedWorkspace = status === "FINISHED" || events.some((event) => event.kind === "workspace_version");
-  const persistedProject = usePersistedProject(cid, status, untrusted, Boolean(importedWorkspace) || sealedWorkspace);
-  const hasAvailableWorkspace = Boolean(importedWorkspace || persistedProject) || sealedWorkspace;
-  const workspaceRevision = useMemo(() => {
-    const latest = [...events].reverse().find(
-      (event) => event.kind === "workspace_restored" || event.kind === "workspace_version",
-    );
-    return `${status}:${latest?.id ?? (importedWorkspace ? importedWorkspace.id : persistedProject?.last_snapshot_at ?? (persistedProject ? "project" : ""))}`;
-  }, [events, status, importedWorkspace, persistedProject]);
-  const manifestQuery = useProjectManifest(cid, hasAvailableWorkspace, workspaceRevision);
+  const { manifestQuery, inspectSavedWorkspace, workspaceRevision } = useWorkspaceInspection(events, status, cid, untrusted);
   const manifestFiles = manifestQuery.data?.files ?? [];
   const anySessionBusy = sessions.some((s) => s.busy);
-  const inspectSavedWorkspace = !untrusted && (status === "FINISHED" ||
-    (["IDLE", "PAUSED", "ERROR"].includes(status) && Boolean(importedWorkspace || persistedProject)));
 
   return (
     <Tabs.Root
