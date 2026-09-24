@@ -77,11 +77,22 @@ class ContraryNote(BaseModel):
     end: int
 
 
+class _PendingRead(BaseModel):
+    """One durable chunk request, including bounded recovery feedback."""
+
+    model_config = ConfigDict(extra="forbid")
+    chunk: int = Field(ge=1)
+    mode: Literal["initial", "compact", "repair"] = "initial"
+    reply: str = Field(default="", max_length=65536)
+    error: str = Field(default="", max_length=2048)
+
+
 class SourceNotes(BaseModel):
     """The validated notes for one source, plus what the read itself did.
 
-    ``ok`` is about the READ, not the source: false means a reply never parsed
-    or a provider failed, and the writer falls back to that source's windows.
+    ``ok`` is about the READ, not the source: false means full reading is
+    pending or failed, and the writer falls back to that source's windows.
+    ``complete`` means terminal scheduling state, not successful source coverage.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -94,6 +105,8 @@ class SourceNotes(BaseModel):
     complete: bool = False
     # Durable recovery after an empty answer; chunk boundaries never change.
     compact_reading: bool = False
+    # Present before reservation/dispatch and until its reply is durably applied.
+    reader_pending: _PendingRead | None = None
     input_tokens: int = 0
     output_tokens: int = 0
     # Includes pre-dispatch reservations that survive cancellation/restart.

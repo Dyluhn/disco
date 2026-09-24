@@ -22,7 +22,6 @@ the trail — this stage can add evidence to a report and can never remove any.
 from __future__ import annotations
 
 import hashlib
-import logging
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -39,6 +38,7 @@ from ._source_notes import (
     ContraryNote,
     SourceFinding,
     SourceNotes,
+    _PendingRead,
     locate_quote,
     notes_blocks,
     notes_from_payload,
@@ -47,8 +47,6 @@ from ._source_notes import (
 from ._stop import ShouldCancelFn, await_stoppable, raise_if_stopped
 from ._writer_parts import _provider_failure, decode_review_json, review_call
 from ._writer_review import _inspect_metadata, _record_writer_io
-
-_LOG = logging.getLogger(__name__)
 
 #: Shorter sources are already rendered in full in the evidence pool, so
 #: reading them would buy the writer nothing it does not already have.
@@ -329,104 +327,107 @@ async def _budgeted_reply(
     notes.output_tokens += reply.output_tokens
     notes.latency_ms += reply.latency_ms
     budget.settle(notes, capacity, reply.output_tokens)
-    await _save_note(checkpoint, notes)
+    # The caller checkpoints settlement together with parsed progress/recovery.
     return reply
 
 
-async def _read_one_source(
+async def _read_source_chunk(
     router: LLMRouter,
     passage: Passage,
     *,
     query: str,
     conversation_id: str | None,
-    calls_allowed: int,
     budget: ReaderBudget,
     should_cancel: ShouldCancelFn,
-    retained: SourceNotes | None = None,
-    checkpoint: Callable[[SourceNotes], Awaitable[None]] | None = None,
-) -> tuple[SourceNotes, int]:
-    """Read one source through as many chunks as its allowance covers.
+    notes: SourceNotes,
+    checkpoint: Callable[[SourceNotes], Awaitable[None]],
+) -> None:
+    """Attempt one chunk, persisting recovery instead of immediately retrying.
 
-    A visible malformed reply is re-asked once, naming the parse error. An
-    empty reply retries with fewer findings from the same full chunk. That
-    recovery mode survives pause/restart without resetting call allowances. A
-    second unusable reply, or a provider failure, ends this source's read with
-    whatever earlier chunks proved and ``ok=False``.
+    An interrupted request keeps both its pending request and charged reservation;
+    resuming it is another charged attempt, not a second completed repair. Applying
+    a reply, settling usage and scheduling its successor share one checkpoint.
     """
-    notes = (
-        retained.model_copy(deep=True)
-        if retained
-        else SourceNotes(source_sha256=hashlib.sha256(passage.text.encode()).hexdigest())
-    )
     chunks = _chunks(passage.text)
-    calls = 0
-    for number, chunk in enumerate(chunks, start=1):
-        if number <= notes.chunks:
-            continue
-        if calls >= calls_allowed:
-            _LOG.info(
-                "source_reading: %s stopped at chunk %d of %d on its call allowance",
-                passage.id,
-                number,
-                len(chunks),
-            )
-            break
-        raise_if_stopped(should_cancel, boundary=STAGE)
-        messages = _reader_messages(passage, chunk, query, (number, len(chunks)), notes)
-        reply = await _budgeted_reply(
-            router,
-            messages,
-            conversation_id=conversation_id,
-            notes=notes,
-            budget=budget,
-            checkpoint=checkpoint,
-            should_cancel=should_cancel,
-            source_id=passage.id,
-            part=(number, len(chunks)),
-        )
-        if reply is None:
-            break
-        calls += 1
-        if calls < calls_allowed and reply.can_retry(compact=notes.compact_reading):
-            if not reply.text.strip():
-                notes.compact_reading = True
-                messages = _reader_messages(passage, chunk, query, (number, len(chunks)), notes)
-            else:
-                messages = [
-                    *messages,
-                    LLMMessage(role="assistant", content=reply.text),
-                    LLMMessage(
-                        role="user",
-                        content=READER_PARSE_REASK.format(error=reply.parse_error),
-                    ),
-                ]
-            reply = await _budgeted_reply(
-                router,
-                messages,
-                conversation_id=conversation_id,
-                notes=notes,
-                budget=budget,
-                checkpoint=checkpoint,
-                should_cancel=should_cancel,
-                source_id=passage.id,
-                part=(number, len(chunks)),
-            )
-            if reply is None:
-                break
-            calls += 1
-        if reply.payload is None:
-            notes.ok = False
-            notes.error = reply.provider_error or reply.parse_error or "reader returned no notes"
-            break
-        _merge(notes, notes_from_payload(reply.payload, passage.text))
-        notes.chunks = number
+    pending = notes.reader_pending or _PendingRead(chunk=notes.chunks + 1)
+    if pending.chunk != notes.chunks + 1 or pending.chunk > len(chunks):
+        notes.ok, notes.complete = False, True
+        notes.error = "reader pending chunk does not match retained source progress"
         await _save_note(checkpoint, notes)
-    notes.complete = True
-    if notes.chunks < len(chunks) and notes.ok:
-        notes.ok = False
-        notes.error = "reader call allowance exhausted; remaining text uses source windows"
+        return
+    raise_if_stopped(should_cancel, boundary=STAGE)
+    notes.reader_pending = pending
+    notes.ok = False
+    notes.error = "reader chunk pending; source has not been read in full"
+    part = (pending.chunk, len(chunks))
+    messages = _reader_messages(passage, chunks[pending.chunk - 1], query, part, notes)
+    if pending.mode == "repair":
+        messages.extend(
+            [
+                LLMMessage(role="assistant", content=pending.reply),
+                LLMMessage(role="user", content=READER_PARSE_REASK.format(error=pending.error)),
+            ]
+        )
+    reply = await _budgeted_reply(
+        router,
+        messages,
+        conversation_id=conversation_id,
+        notes=notes,
+        budget=budget,
+        checkpoint=checkpoint,
+        should_cancel=should_cancel,
+        source_id=passage.id,
+        part=part,
+    )
+    _apply_chunk_reply(notes, pending, reply, passage, len(chunks))
     await _save_note(checkpoint, notes)
-    return notes, calls
+
+
+def _apply_chunk_reply(
+    notes: SourceNotes, pending: _PendingRead, reply: _Reply | None, passage: Passage, total: int
+) -> None:
+    """Apply one settled reply atomically with its next durable scheduling state."""
+    if reply is None:
+        notes.complete = True
+    elif reply.payload is not None:
+        _merge(notes, notes_from_payload(reply.payload, passage.text))
+        notes.chunks = pending.chunk
+        notes.reader_pending = None
+        notes.complete = notes.chunks == total
+        notes.ok = notes.complete
+        notes.error = None if notes.complete else "reader has remaining source chunks"
+    elif pending.mode == "initial" and reply.can_retry(compact=notes.compact_reading):
+        empty = not reply.text.strip()
+        notes.compact_reading = notes.compact_reading or empty
+        notes.reader_pending = _PendingRead(
+            chunk=pending.chunk,
+            mode="compact" if empty else "repair",
+            reply=reply.text[:65536] if not empty else "",
+            error=(reply.parse_error or "reader returned no notes")[:2048],
+        )
+        notes.error = reply.parse_error or "reader returned no notes"
+    else:
+        notes.complete = True
+        notes.error = reply.provider_error or reply.parse_error or "reader returned no notes"
+
+
+def _next_source(
+    sources: Sequence[Passage], notes: Mapping[str, SourceNotes]
+) -> tuple[int, Passage] | None:
+    # Unattempted chunks go first, round-robin by chunk depth then input order.
+    # Pending recovery/interrupted requests come afterward. This order is derived
+    # entirely from checkpointed state, so restart cannot reset scheduling priority.
+    candidates = [(i, p) for i, p in enumerate(sources, 1) if not notes[p.id].complete]
+    return min(
+        candidates,
+        key=lambda item: (
+            notes[item[1].id].reader_pending is not None,
+            notes[item[1].id].chunks,
+            notes[item[1].id].calls,
+            item[0],
+        ),
+        default=None,
+    )
 
 
 def _retained_notes(
@@ -439,6 +440,7 @@ def _retained_notes(
     notes = {
         source_id: SourceNotes(
             reader_output_tokens_charged=charged_output(note, call_limit),
+            calls=note.calls,
             complete=True,
         )
         for source_id, note in (retained or {}).items()
@@ -453,23 +455,36 @@ def _retained_notes(
             if prior.source_sha256 == digest
             else SourceNotes(
                 source_sha256=digest,
+                calls=prior.calls,
                 reader_output_tokens_charged=charged_output(prior, call_limit),
             )
         )
     return notes
 
 
-async def _finish_reading(
-    notes: dict[str, SourceNotes],
+def _close_exhausted_sources(
+    sources: Sequence[Passage],
+    notes: Mapping[str, SourceNotes],
     calls_used: int,
-    checkpoint: Callable[[dict[str, SourceNotes]], Awaitable[None]] | None,
+    budget: ReaderBudget,
 ) -> None:
-    for note in notes.values():
-        if not note.complete and calls_used >= MAX_READER_CALLS:
+    for passage in sources:
+        note = notes[passage.id]
+        if note.complete:
+            continue
+        if note.chunks >= len(_chunks(passage.text)):
+            note.complete, note.ok, note.error = True, True, None
+            continue
+        reason = None
+        if calls_used >= MAX_READER_CALLS:
+            reason = "reader run allowance exhausted"
+        elif note.calls >= MAX_CALLS_PER_SOURCE:
+            reason = "reader call allowance exhausted"
+        elif budget.used >= budget.stage_limit:
+            reason = "reader output budget exhausted"
+        if reason:
             note.ok, note.complete = False, True
-            note.error = "reader run allowance exhausted; remaining text uses source windows"
-    if checkpoint is not None:
-        await checkpoint(notes)
+            note.error = reason + "; remaining text uses source windows"
 
 
 async def read_sources(
@@ -483,35 +498,31 @@ async def read_sources(
     retained: Mapping[str, SourceNotes] | None = None,
     checkpoint: Callable[[dict[str, SourceNotes]], Awaitable[None]] | None = None,
 ) -> dict[str, SourceNotes]:
-    """Read every source too long to be rendered whole, one call per source.
+    """Read long sources fairly, with one durable bounded attempt at a time.
 
-    Returns the notes by passage id, including the sources whose read failed —
-    those carry ``ok=False`` so the trail can say so and the evidence pool can
-    fall back to their windows.
+    Fresh chunks precede deferred recovery; sources at the same chunk depth use
+    input order. Terminal failed/budget-skipped sources remain explicitly not ok.
     """
     long_sources = [passage for passage in passages if len(passage.text) > READ_THRESHOLD_CHARS]
     budget = ReaderBudget.start(retained or {})
     notes = _retained_notes(long_sources, retained, budget.call_limit)
-    calls_used = sum(note.calls for note in notes.values())
-    for number, passage in enumerate(long_sources, start=1):
-        prior = notes.get(passage.id)
-        if prior and (prior.complete or prior.chunks >= len(_chunks(passage.text))):
-            prior.complete = True
-            continue
-        if prior and prior.calls >= MAX_CALLS_PER_SOURCE:
-            prior.ok, prior.complete = False, True
-            prior.error = "reader call allowance exhausted; remaining text uses source windows"
-            continue
-        allowance = min(
-            MAX_CALLS_PER_SOURCE - (prior.calls if prior else 0), MAX_READER_CALLS - calls_used
+    for passage in long_sources:
+        notes.setdefault(
+            passage.id,
+            SourceNotes(
+                source_sha256=hashlib.sha256(passage.text.encode()).hexdigest(),
+                ok=False,
+                error="reader has not attempted this source",
+            ),
         )
-        if allowance <= 0:
-            _LOG.info(
-                "source_reading: run allowance of %d calls spent; %d source(s) keep their windows",
-                MAX_READER_CALLS,
-                len(long_sources) - number + 1,
-            )
+    while True:
+        calls_used = sum(note.calls for note in notes.values())
+        _close_exhausted_sources(long_sources, notes, calls_used, budget)
+        selected = _next_source(long_sources, notes)
+        if selected is None:
             break
+        raise_if_stopped(should_cancel, boundary=STAGE)
+        number, passage = selected
         await emit("phase", {"phase": "reading", "source": number, "of": len(long_sources)})
 
         async def save(note: SourceNotes, source_id: str = passage.id) -> None:
@@ -519,20 +530,18 @@ async def read_sources(
             if checkpoint is not None:
                 await checkpoint({key: value.model_copy(deep=True) for key, value in notes.items()})
 
-        source_notes, calls = await _read_one_source(
+        await _read_source_chunk(
             router,
             passage,
             query=query,
             conversation_id=conversation_id,
-            calls_allowed=allowance,
             budget=budget,
             should_cancel=should_cancel,
-            retained=prior,
+            notes=notes[passage.id].model_copy(deep=True),
             checkpoint=save,
         )
-        calls_used += calls
-        notes[passage.id] = source_notes
-    await _finish_reading(notes, calls_used, checkpoint)
+    if checkpoint is not None:
+        await checkpoint({key: value.model_copy(deep=True) for key, value in notes.items()})
     return notes
 
 
