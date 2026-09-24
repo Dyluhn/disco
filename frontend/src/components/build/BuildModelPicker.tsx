@@ -1,6 +1,6 @@
 /**
  * The Build chat model picker — chooses the driver model that runs the agent (the
- * cost-legible picker, applied to the agent). Selecting one pins it for the next task
+ * cost-legible picker). Selecting one prepares the model for the next submitted task
  * (model_override → AGENT_DRIVER on the agent-server). Free (local) vs paid (overflow)
  * is always legible at the point of choice.
  */
@@ -166,12 +166,16 @@ function DriverModelMenu({
         ref={triggerRef}
         disabled={disabled}
         aria-label="Choose the model that runs the agent"
+        title={effectiveId && !current
+          ? `Selected model '${effectiveId}' is unavailable. Choose another model for your next request.`
+          : "Model changes apply when you start or continue a task."}
         className="flex max-w-[15rem] max-lg:min-h-11 items-center gap-hair rounded-control border border-hairline bg-surface-1 px-inline py-hair font-ui text-[0.76rem] text-text-muted transition-colors hover:border-hairline-strong hover:text-text disabled:opacity-50"
       >
         <Cpu className="size-3.5 shrink-0" aria-hidden />
         <span className="truncate">
-          {current?.label ??
-            (models.length === 0 ? "Configure model" : "Default model")}
+          {current?.label ?? (effectiveId
+            ? `Unavailable model: ${effectiveId}`
+            : models.length === 0 ? "Configure model" : "Default model")}
         </span>
         {current && (
           <span className={cn("shrink-0", driverCostClass(current))}>
@@ -243,7 +247,6 @@ export function BuildModelPicker({
   value,
   onChange,
   disabled,
-  surface = "build",
 }: {
   value: string | null;
   onChange: (id: string | null) => void;
@@ -285,20 +288,19 @@ export function BuildModelPicker({
     // Every row is an explicit choice, including the settings default. Null
     // remains an untouched/inherited selection and can resolve to a sticky pick.
     onChange(m.id);
-    const action = surface === "agent" ? "working" : "building";
     // Cost honesty (A2): the build driver IS the whole agent — a paid/subscription
     // pick drives every step. Say it once; a genuinely free model stays silent.
     if (isSubscriptionDriver(m)) {
       toast.show({
         tone: "cost",
-        title: `Now ${action} with ${m.label}`,
-        body: "This subscription model drives every step of the agent (flat-rate plan, not per-token).",
+        title: `Selected ${m.label} for your next request`,
+        body: "Applied when you start or continue a task. This subscription model uses a flat-rate plan, not per-token billing.",
       });
     } else if (!m.free) {
       toast.show({
         tone: "cost",
-        title: `Now ${action} with ${m.label}`,
-        body: `This paid model drives every step of the agent for this ${surface === "agent" ? "task" : "build"}.`,
+        title: `Selected ${m.label} for your next request`,
+        body: "Applied when you start or continue a task. This paid model will drive every step of the agent.",
       });
     }
     if (

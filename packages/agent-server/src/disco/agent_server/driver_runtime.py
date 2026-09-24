@@ -478,9 +478,16 @@ class DriverPreflight:
         override = override if override is not None else self._drivers._model_override(cid)
         cfg = self._drivers.config_now()
         key = self._model_key(cfg, override, role)
+        # A removed selection is still the requested identity, never the default.
+        # Check current catalogue membership before reusing any readiness cache.
+        if key not in cfg.models:
+            self._record_failure(cid, cfg, key, override, role)
+            return (
+                f"Driver '{key}' is unavailable: the selected model is no longer "
+                "in the catalogue. Choose a configured model before continuing."
+            )
         proof = (cid, role, key)
-        cached = self._ok.get(key)
-        if cached is not None and time.monotonic() - cached < self._TTL_S:
+        if self._has_recent_success(key):
             self._proven.add(proof)
             self._record_success(cid, cfg, key, override, role, "cached")
             return None
@@ -527,6 +534,10 @@ class DriverPreflight:
         self._record_failure(cid, cfg, key, override, role)
         return result
 
+    def _has_recent_success(self, key: str) -> bool:
+        cached = self._ok.get(key)
+        return cached is not None and time.monotonic() - cached < self._TTL_S
+
     def discard_conversation(self, conversation_id: str) -> None:
         self._proven = {proof for proof in self._proven if proof[0] != conversation_id}
 
@@ -538,8 +549,7 @@ class DriverPreflight:
         override: str | None,
     ) -> bool:
         conversation_id, role, key = proof
-        refreshed = self._ok.get(key)
-        if not transient or refreshed is None or time.monotonic() - refreshed >= self._TTL_S:
+        if not transient or not self._has_recent_success(key):
             return False
         self._proven.add(proof)
         self._record_success(conversation_id, cfg, key, override, role, "live")
@@ -602,7 +612,7 @@ class DriverPreflight:
         override: str | None,
         role: ModelRole,
     ) -> str:
-        if override and override in cfg.models:
+        if override:
             return override
         try:
             return cfg.model_for(role)
