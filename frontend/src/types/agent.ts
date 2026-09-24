@@ -459,6 +459,9 @@ export interface VerifierStartedEvent extends EventBase {
   artifact_kind: string;
   verifier: string;
   requested_by_event_id?: string | null;
+  run_intent_id?: string | null;
+  target_id?: string;
+  check_id?: string;
 }
 
 /** REL-1b host verifier verdict marker. Suppressed in the UI event log. */
@@ -470,6 +473,10 @@ export interface VerifierVerdictEvent extends EventBase {
   verdict?: string | null;
   detail?: string | null;
   failures?: Array<Record<string, unknown>>;
+  target_id?: string;
+  check_id?: string;
+  /** Run binding from the backend's typed host receipt; absent on legacy events. */
+  verification_result?: { run_intent_id?: string | null } | null;
 }
 
 /** REL-1b shadow comparison between inline and host verifier results. */

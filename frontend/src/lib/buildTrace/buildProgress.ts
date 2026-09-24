@@ -9,20 +9,88 @@ import type { ActionEvent, AgentEvent, ConversationStatus } from "@/types/agent"
 import type { StepState } from "../buildTrace";
 import { progressStepIndex } from "./plan";
 
+/** Current-run host failure blocks synthetic completion, including when a
+ * permissive release ends FINISHED. Read durable events, never warning prose or
+ * volatile message metadata. A later host pass supersedes an earlier failure. */
+interface OutcomeState {
+  pending: Set<string>;
+  releaseUnverified: boolean;
+  ended: boolean;
+  intent: string | null;
+}
+
+function resetOutcome(state: OutcomeState): void {
+  state.pending.clear();
+  state.releaseUnverified = false;
+  state.ended = false;
+}
+
+function newOutcomeIntent(event: AgentEvent, current: string | null): string | null {
+  if (event.kind === "workspace_mutation" && event.run_protocol_version === 1
+    && event.operation.startsWith("agent.run-intent.")
+    && event.run_intent_id && event.run_intent_id !== current) return event.run_intent_id;
+  return null;
+}
+
+function updateOutcomeBoundary(event: AgentEvent, state: OutcomeState): void {
+  const intent = newOutcomeIntent(event, state.intent);
+  if (intent) {
+    state.intent = intent;
+    resetOutcome(state);
+  }
+  if (event.kind !== "status") return;
+  if (state.intent && event.run_intent_id && event.run_intent_id !== state.intent) return;
+  const terminal = event.status === "FINISHED" || event.status === "ERROR";
+  if (state.ended && !terminal) resetOutcome(state);
+  state.ended = terminal;
+  if (event.status === "RUNNING" && event.detail === "unverified_release") {
+    state.releaseUnverified = true;
+  }
+}
+
+function updateHostOutcome(event: AgentEvent, state: OutcomeState): void {
+  if (event.kind !== "verifier_started" && event.kind !== "verifier_verdict") return;
+  if (event.source === "agent" || event.source === "user") return;
+  const intent = event.kind === "verifier_started"
+    ? event.run_intent_id : event.verification_result?.run_intent_id;
+  if (state.intent && intent && intent !== state.intent) return;
+  const key = JSON.stringify([event.target_id || event.artifact_path, event.artifact_kind,
+    event.check_id || ""]);
+  if (event.kind === "verifier_verdict" && event.verified === true && event.verdict === "pass") {
+    state.pending.delete(key);
+    if (state.pending.size === 0) state.releaseUnverified = false;
+  } else {
+    state.pending.add(key);
+  }
+}
+
+function hasUnverifiedOutcome(events: AgentEvent[]): boolean {
+  const state: OutcomeState = {
+    pending: new Set(), releaseUnverified: false, ended: false, intent: null,
+  };
+  for (const event of events) {
+    updateOutcomeBoundary(event, state);
+    updateHostOutcome(event, state);
+  }
+  return state.releaseUnverified || state.pending.size > 0;
+}
+
 /** Terminal reconciliation:
- *  • FINISHED — the build passed the real finish gate, so the deliverable is
- *    complete: EVERY plan step reads done. This also stops a stale early snapshot
- *    from showing e.g. "2/3" (with no Done signal) after the build actually
- *    finished — the model isn't required to send a final 100%-done snapshot.
+ *  • FINISHED without a current unverified outcome retains the existing all-done
+ *    presentation; the model need not send a final 100%-done snapshot.
+ *  • FINISHED with host failure preserves explicit progress and stalls active
+ *    steps. Ending a run is not itself proof that its work passed verification.
  *  • STUCK/ERROR/IDLE (stopped without completing) → "active" reads as stalled. */
 function reconcileBuildProgress(
   progress: Map<number, StepState>,
   status: ConversationStatus | undefined,
   nSteps: number,
+  unverified: boolean,
 ): void {
-  if (status === "FINISHED" && nSteps > 0) {
+  if (status === "FINISHED" && nSteps > 0 && !unverified) {
     for (let i = 1; i <= nSteps; i++) progress.set(i, "done");
-  } else if (status === "STUCK" || status === "ERROR" || status === "IDLE") {
+  } else if (status === "STUCK" || status === "ERROR" || status === "IDLE"
+    || (status === "FINISHED" && unverified)) {
     for (const [idx, st] of progress) {
       if (st === "active") progress.set(idx, "stalled");
     }
@@ -93,6 +161,6 @@ export function deriveBuildProgress(
       if (st === "done" || st === "active" || st === "pending") progress.set(idx, st as StepState);
     }
   }
-  reconcileBuildProgress(progress, status, nSteps);
+  reconcileBuildProgress(progress, status, nSteps, hasUnverifiedOutcome(events));
   return progress;
 }
