@@ -55,16 +55,16 @@ afterEach(() => {
 describe("ExecutionCanvas — the project manifest is only requested once one can exist", () => {
   it("does NOT request the manifest while a run is still working with nothing committed", () => {
     render(withQc(<ExecutionCanvas events={[]} status="RUNNING" cid="conv_running" />));
-    expect(useProjectManifestMock).toHaveBeenCalledWith("conv_running", false);
+    expect(useProjectManifestMock).toHaveBeenCalledWith("conv_running", false, "RUNNING:");
   });
 
   it("requests it as soon as a workspace version has landed mid-run", () => {
     render(withQc(<ExecutionCanvas events={[sealed]} status="RUNNING" cid="conv_sealed" />));
-    expect(useProjectManifestMock).toHaveBeenCalledWith("conv_sealed", true);
+    expect(useProjectManifestMock).toHaveBeenCalledWith("conv_sealed", true, "RUNNING:wv-1");
   });
 
   it("requests it on a finished run", () => {
     render(withQc(<ExecutionCanvas events={[]} status="FINISHED" cid="conv_done" />));
-    expect(useProjectManifestMock).toHaveBeenCalledWith("conv_done", true);
+    expect(useProjectManifestMock).toHaveBeenCalledWith("conv_done", true, "FINISHED:");
   });
 });

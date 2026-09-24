@@ -147,7 +147,13 @@ export function ExecutionCanvas({
   // once a workspace version has actually landed (or the run has finished).
   const hasCommittedWorkspace =
     status === "FINISHED" || events.some((event) => event.kind === "workspace_version");
-  const manifestQuery = useProjectManifest(cid, hasCommittedWorkspace);
+  const workspaceRevision = useMemo(() => {
+    const latest = [...events].reverse().find(
+      (event) => event.kind === "workspace_restored" || event.kind === "workspace_version",
+    );
+    return `${status}:${latest?.id ?? ""}`;
+  }, [events, status]);
+  const manifestQuery = useProjectManifest(cid, hasCommittedWorkspace, workspaceRevision);
   const manifestFiles = manifestQuery.data?.files ?? [];
   const anySessionBusy = sessions.some((s) => s.busy);
 
@@ -221,6 +227,11 @@ export function ExecutionCanvas({
             events={events}
             streamingFile={streamingFile}
             manifestFiles={manifestFiles}
+            snapshot={cid && status === "FINISHED" && !untrusted ? {
+              cid, revision: workspaceRevision,
+              loading: manifestQuery.isPending,
+              error: manifestQuery.isError,
+            } : undefined}
           />
         </Tabs.Content>
         <Tabs.Content value="terminal" className="h-full focus:outline-none">

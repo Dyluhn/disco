@@ -27,6 +27,7 @@ import type {
   ProjectImportInput,
   ProjectImportResult,
   ProjectManifest,
+  ProjectFileContent,
   ProjectsList,
   ProjectStorageConfig,
   ProjectStorageSaveInput,
@@ -300,6 +301,12 @@ export async function getProjectManifest(cid: string): Promise<ProjectManifest> 
     };
   }
   return agentGet<ProjectManifest>(`/api/projects/${encodeURIComponent(cid)}/manifest`);
+}
+
+export async function getProjectFile(cid: string, path: string): Promise<ProjectFileContent> {
+  if (!agentLive()) throw new Error("File contents require a live workspace.");
+  const encodedPath = path.split("/").map(encodeURIComponent).join("/");
+  return agentGet<ProjectFileContent>(`/api/projects/${encodeURIComponent(cid)}/files/${encodedPath}`);
 }
 
 /** Assess whether a project's committed workspace can be self-hosted (WO-7).

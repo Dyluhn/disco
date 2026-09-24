@@ -51,6 +51,14 @@ export interface ProjectManifestFile {
   bytes: number;
 }
 
+export interface ProjectFileContent {
+  path: string;
+  content: string | null;
+  binary: boolean;
+  bytes: number;
+  version_seq: number | null;
+}
+
 export interface ProjectManifest {
   conversation_id: string;
   title: string;
