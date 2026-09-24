@@ -41,7 +41,7 @@ from .local_encoders import EncoderUnavailable
 from .models import ExtractedDoc, Passage, RetrievalRequest, SearchHit
 from .providers import ExtractionProvider, SearchProvider
 from .ranking import Embedder, QueryRewriter, Reranker
-from .url_policy import source_url_key
+from .url_policy import query_scoped_domains, source_url_key, url_allowed
 from .vectorstore import VectorStore
 
 _LOG = logging.getLogger(__name__)
@@ -416,11 +416,14 @@ async def _discover_round(
     current_query: str,
     domains_deny: frozenset[str],
     discover_limit: int,
+    *,
+    domains_allow: frozenset[str] | None = None,
 ) -> list[SearchHit]:
     """Read a complete URL or search (honoring denied domains from re-scope);
     raises `_ResearchAborted` on zero hits."""
+    allow, deny = query_scoped_domains(current_query, domains_allow, domains_deny)
     direct = _direct_discovery(
-        RetrievalRequest(query=current_query, domains_deny=domains_deny)
+        RetrievalRequest(query=current_query, domains_allow=allow, domains_deny=deny)
     )
     if direct is not None:
         hits, _diagnostic = direct
@@ -428,8 +431,9 @@ async def _discover_round(
             raise _ResearchAborted("The requested URL is excluded by the source domain filters.")
         return hits
     hits = await search.search(
-        current_query, limit=discover_limit, domains_deny=domains_deny or None
+        current_query, limit=discover_limit, domains_allow=allow, domains_deny=deny or None
     )
+    hits = [hit for hit in hits if url_allowed(hit.url, allow, deny)]
     if not hits:
         raise _ResearchAborted("No search results were found for this query.")
     return hits
@@ -493,11 +497,14 @@ async def _run_research_round(
     corpus_ids: frozenset[str],
     embedder: Embedder | None,
     vector_store: VectorStore | None,
+    domains_allow: frozenset[str] | None = None,
 ) -> _RoundResult:
     """Run one discover → extract → rerank → generate → verify round. Raises
     `_ResearchAborted` for any of the pipeline's three honest-failure exits;
     the caller (`stream_research_answer`) yields the error frame and stops."""
-    hits = await _discover_round(search, current_query, domains_deny, discover_limit)
+    hits = await _discover_round(
+        search, current_query, domains_deny, discover_limit, domains_allow=domains_allow
+    )
     docs, passages, all_hits, this_round_urls = await _extract_round_passages(
         extraction, hits, exclude_urls, extract_cap=extract_cap, discover_limit=discover_limit
     )
@@ -621,6 +628,10 @@ async def stream_research_answer(
     # evidence cannot support an answer. The answerer's bounded repair remains.
     if _source_url(query) is not None:
         bounded_extra = 0
+    # Rewriting may change search wording, but cannot loosen the user's
+    # original explicit host scope. New round scopes can only narrow it.
+    domains_allow, scoped_deny = query_scoped_domains(query, None, domains_deny)
+    domains_deny = scoped_deny or frozenset()
 
     yield {"type": "state", "status": "running"}
     try:
@@ -640,6 +651,7 @@ async def stream_research_answer(
                     nli=nli,
                     think=think,
                     domains_deny=domains_deny,
+                    domains_allow=domains_allow,
                     discover_limit=discover_limit,
                     extract_cap=extract_cap,
                     top_k=top_k,
