@@ -9,13 +9,38 @@ from ..auth import current_owner_id
 from ..runtime import ConversationRuntime
 
 
+async def _recent_runs(
+    store: SqliteEventStore,
+    runtime: ConversationRuntime,
+    owner_id: str,
+    limit: int,
+) -> list[dict]:
+    rows = runtime.schedules.list_recent_schedule_runs(owner_id=owner_id, limit=limit)
+    for run in runtime.schedules.list_workflow_schedule_runs(owner_id=owner_id, limit=limit):
+        cid = run["run_cid"]
+        if not await store.conversation_owned_by(cid, owner_id):
+            continue
+        rows.append(
+            {
+                "run_id": run["run_id"],
+                "schedule_id": run["schedule_id"],
+                "conversation_id": cid,
+                "fired_at": run["fired_at"],
+                "coalesced": int(run["coalesced"]),
+                "description": "Scheduled workflow",
+                "title": await store.get_title(cid),
+            }
+        )
+    return sorted(rows, key=lambda row: row["fired_at"], reverse=True)[:limit]
+
+
 def make_activity_router(store: SqliteEventStore, runtime: ConversationRuntime | None) -> APIRouter:
     router = APIRouter()
 
     @router.get("/api/activity")
     async def get_activity(
         request: Request,
-        limit: int = Query(default=50),
+        limit: int = Query(default=50, ge=1, le=500),
     ) -> dict:
         """The background-task dashboard feed for one owner:
         - `running`: conversations with a LIVE run task right now, enriched with
@@ -50,10 +75,7 @@ def make_activity_router(store: SqliteEventStore, runtime: ConversationRuntime |
                     }
                 )
 
-        recent_runs = runtime.schedules.list_recent_schedule_runs(
-            owner_id=owner_id,
-            limit=limit,
-        )
+        recent_runs = await _recent_runs(store, runtime, owner_id, limit)
         return {
             "running": running,
             "recent_runs": recent_runs,

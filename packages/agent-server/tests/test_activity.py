@@ -8,12 +8,18 @@ plus owner-scoping and the done-task / other-owner exclusions.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 from disco.agent_server import ConversationRuntime, create_app
+from disco.agent_server.workflow_schedule import (
+    JsonWorkflowScheduleStore,
+    WorkflowScheduleRunRecord,
+)
 from disco.core import SqliteEventStore
 from disco.core.llm import ConfigStore, RouterConfig
+from disco.core.workflow import ScheduleSpec
 from fastapi.testclient import TestClient
 
 
@@ -185,3 +191,54 @@ def test_activity_empty_when_nothing_running(store):
     client = TestClient(create_app(store, runtime=runtime))
     body = client.get("/api/activity").json()
     assert body == {"running": [], "recent_runs": [], "counts": {"running": 0}}
+
+
+def test_activity_includes_owned_workflows_in_sorted_limited_history(store, tmp_path, monkeypatch):
+    runtime = _runtime(store)
+    workflow_store = JsonWorkflowScheduleStore(tmp_path)
+    for owner, cid, hour in [
+        ("local", "older", 8),
+        ("local", "newer", 10),
+        ("other", "hidden", 11),
+    ]:
+        store.create_conversation(cid, owner_id=owner, title=cid)
+        schedule = workflow_store.create_schedule(
+            ScheduleSpec(
+                instance_id="test",
+                instance_digest="sha256:" + "a" * 64,
+                cron="0 9 * * *",
+                enabled=False,
+            ),
+            owner_id=owner,
+        )
+        workflow_store.append_run(
+            WorkflowScheduleRunRecord(
+                schedule_id=schedule.schedule_id,
+                run_cid=cid,
+                fired_at=datetime(2026, 9, 24, hour, tzinfo=UTC),
+                terminal_state="FINISHED",
+                output_path="report.md",
+                verify_verdict="pass",
+            )
+        )
+    monkeypatch.setattr(
+        runtime.schedules,
+        "list_workflow_schedule_runs",
+        lambda **kw: [row.model_dump(mode="json") for row in workflow_store.list_runs(**kw)],
+    )
+    client = TestClient(create_app(store, runtime=runtime))
+    rows = client.get("/api/activity?limit=1").json()["recent_runs"]
+    assert len(rows) == 1
+    assert rows[0]["conversation_id"] == "newer"
+    assert rows[0]["title"] == "newer"
+    assert rows[0]["description"] == "Scheduled workflow"
+    assert rows[0]["coalesced"] == 0
+    assert [
+        row["conversation_id"] for row in client.get("/api/activity").json()["recent_runs"]
+    ] == ["newer", "older"]
+
+
+@pytest.mark.parametrize("limit", [0, -1, 501])
+def test_activity_rejects_unbounded_history_limits(store, limit):
+    client = TestClient(create_app(store, runtime=_runtime(store)))
+    assert client.get(f"/api/activity?limit={limit}").status_code == 422
