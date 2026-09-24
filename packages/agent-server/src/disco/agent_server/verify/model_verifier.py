@@ -48,7 +48,7 @@ _SYSTEM_PROMPT = (
     "Schema: verified is a JSON boolean (true or false, never a string); "
     "verdict is one of pass, fail, degraded, unavailable, unverifiable; "
     "detail, next_action, and failure_fingerprint are strings; failures is an array "
-    'of objects, each with string kind and message, for example '
+    "of objects, each with string kind and message, for example "
     '[{"kind":"missing_content","message":"The requested footer is absent."}]. '
     "Use an empty failures array when there are no failures. Return verified=true "
     "only with verdict=pass and no failures; every other verdict requires "
@@ -97,6 +97,7 @@ def _extract_json_object(text: str) -> dict[str, Any]:
         end = raw.rfind("}")
         if start >= 0 and end > start:
             raw = raw[start : end + 1]
+
     def unique_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
         result: dict[str, Any] = {}
         for key, value in pairs:
