@@ -127,11 +127,8 @@ def current_run_events(events: list[Event]) -> list[Event]:
     intent = latest_workspace_run_intent(events)
     if intent is None or type(intent.seq) is not int:
         return events
-    return [
-        event
-        for event in events
-        if type(event.seq) is int and event.seq > intent.seq
-    ]
+    return [event for event in events if type(event.seq) is int and event.seq > intent.seq]
+
 
 # _BOOKKEEPING_TOOLS, _NON_PRODUCTIVE_TOOLS, _SYNTHETIC_FINISH_RESET_STATUSES,
 # _event_seq, _successful_action_ids, _is_successful_productive_action,
@@ -485,7 +482,12 @@ def has_unprocessed_user_message(events: list[Event]) -> bool:
     # SYSTEM (only AGENT messages count here), and status events no longer count at
     # all — neither can spuriously consume a real user turn. `latest_unprocessed_
     # user_text` reads through this same predicate, so it stays consistent.
-    last_progress = max(
+    return last_user > _last_user_processing_seq(events)
+
+
+def _last_user_processing_seq(events: list[Event]) -> int:
+    """Actual message-processing progress, independent of fresh view admission."""
+    return max(
         (
             e.seq or 0
             for e in events
@@ -494,7 +496,6 @@ def has_unprocessed_user_message(events: list[Event]) -> bool:
         ),
         default=0,
     )
-    return last_user > last_progress
 
 
 def latest_unprocessed_user_text(events: list[Event]) -> str | None:
@@ -509,17 +510,17 @@ def latest_unprocessed_user_text(events: list[Event]) -> str | None:
         if isinstance(e, MessageEvent) and e.source == EventSource.USER:
             if latest is None or (e.seq or 0) >= (latest.seq or 0):
                 latest = e
-    if latest is None:
+    if latest is None or (latest.seq or 0) <= _last_user_processing_seq(events):
         return None
+    # A new view may still owe run progress without making an already handled
+    # user message a fresh instruction. Never replay old recovery choices.
     latest_intent = latest_workspace_run_intent(events)
     if _user_text_suppressed_by_intent(latest, latest_intent):
         return None
     return (latest.message.content or "").strip() or None
 
 
-def _user_text_suppressed_by_intent(
-    latest: MessageEvent, latest_intent: object
-) -> bool:
+def _user_text_suppressed_by_intent(latest: MessageEvent, latest_intent: object) -> bool:
     """Whether the latest user text is suppressed by a later run-intent event."""
     if latest_intent is None:
         return False

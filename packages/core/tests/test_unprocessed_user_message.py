@@ -1019,3 +1019,85 @@ def test_untagged_running_and_idle_remain_compatible():
     assert len(statuses) == 2
     assert statuses[0].status == ConversationStatus.RUNNING
     assert statuses[1].status == ConversationStatus.IDLE
+
+
+@pytest.mark.parametrize("processed", [_action("file_read"), _obs("file_read"), _plan(), _agent()])
+def test_followup_after_intent_is_not_replayed_by_later_view_admission(processed: Event) -> None:
+    intent = WorkspaceMutationEvent(
+        operation="agent.run-intent.user-turn", run_protocol_version=1, id="intent-recovery"
+    )
+    events = _seq(
+        [
+            _user("recover the source"),
+            intent,
+            WorkspaceMutationEvent(
+                operation="agent.view-admitted",
+                run_intent_id=intent.id,
+                agent_view_id="recovery-view-1",
+                run_protocol_version=1,
+            ),
+            _user("Try the alternative approach: read backup A"),
+            processed.model_copy(update={"agent_view_id": "recovery-view-1"}),
+            _status(ConversationStatus.RUNNING, "plan_approved"),
+            WorkspaceMutationEvent(
+                operation="agent.view-admitted",
+                run_intent_id=intent.id,
+                agent_view_id="recovery-view-2",
+                run_protocol_version=1,
+            ),
+        ]
+    )
+    # Unlike the original launch prompt, this genuine recovery choice came AFTER
+    # the run intent. It was handled once before a new view was admitted.
+    assert pending_workspace_run_intent(events) is not None
+    assert signals.has_unprocessed_user_message(events) is True
+    assert signals.latest_unprocessed_user_text(events) is None
+    fresh = _seq([*events, _user("Try backup B instead")])
+    assert signals.latest_unprocessed_user_text(fresh) == "Try backup B instead"
+
+
+@pytest.mark.parametrize("reconstruct", [False, True])
+async def test_plan_approval_does_not_replay_already_handled_recovery_choice(reconstruct: bool):
+    cid = "recovery-choice-view-rollover"
+    loop, store = build_loop(ScriptedAgent([]), conversation_id=cid)
+    intent = WorkspaceMutationEvent(
+        operation="agent.run-intent.user-turn", run_protocol_version=1, id="intent-recovery"
+    )
+    history = [
+        _user("recover the source"),
+        intent,
+        WorkspaceMutationEvent(
+            operation="agent.view-admitted",
+            run_intent_id=intent.id,
+            agent_view_id="recovery-view-1",
+            run_protocol_version=1,
+        ),
+        _plan().model_copy(update={"agent_view_id": "recovery-view-1"}),
+        _status(ConversationStatus.RUNNING, "plan_approved"),
+        _user("Try the alternative approach: read backup A"),
+        _action("file_read").model_copy(update={"agent_view_id": "recovery-view-1"}),
+        _status(ConversationStatus.RUNNING, "planning"),
+        _plan().model_copy(update={"revision": 2, "agent_view_id": "recovery-view-1"}),
+        _status(ConversationStatus.RUNNING, "plan_approved"),
+        WorkspaceMutationEvent(
+            operation="agent.view-admitted",
+            run_intent_id=intent.id,
+            agent_view_id="recovery-view-2",
+            run_protocol_version=1,
+        ),
+    ]
+    for event in history:
+        await store.append(cid, event)
+    if reconstruct:
+        loop, _ = build_loop(
+            ScriptedAgent([]), store=store, conversation_id=cid, mode=OperatingMode.PLANNING
+        )
+    events = await store.get_events(cid)
+    assert await loop._maybe_reenter_planning_for_followup(events) is False
+    assert loop.mode == OperatingMode.LONG_HORIZON
+    assert len(await store.get_events(cid)) == len(history)
+    # A real subsequent choice still enters revision planning once; this is not
+    # a broad suppression of new user turns or durable pending run work.
+    await store.append(cid, _user("Try backup B instead"))
+    assert await loop._maybe_reenter_planning_for_followup(await store.get_events(cid)) is True
+    assert loop.mode == OperatingMode.PLANNING
