@@ -167,7 +167,7 @@ def existing_report_audio(out_dir: Path, report_key: str) -> list[dict[str, str]
 
 
 def select_report_audio(mp3_path: Path, report_key: str) -> None:
-    """Persist the successfully completed choice, including cached generations."""
+    """Persist the latest requested choice; restore only admits completed pairs."""
     with tempfile.NamedTemporaryFile(
         mode="w", encoding="utf-8", dir=mp3_path.parent,
         prefix=".audio-selection-", suffix=".part", delete=False,

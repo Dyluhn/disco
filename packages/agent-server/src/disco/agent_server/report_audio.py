@@ -704,6 +704,10 @@ async def generate_report_audio(
     run_started = time.monotonic()
     out_dir.mkdir(parents=True, exist_ok=True)
     mp3_path, transcript_path = _report_audio_cache_paths(report, follow_ups, mode, out_dir)
+    # Persist intent before yielding: an older slow generation must not replace
+    # a newer selected cache hit when it eventually finishes. Restore still
+    # considers only completed artifact pairs.
+    select_report_audio(mp3_path, report_content_key(report))
 
     # If a previous run for this conversation already wrote both files, hand
     # them back verbatim — see `_audio_cache_hit`. `force` is what "Regenerate"
@@ -714,7 +718,6 @@ async def generate_report_audio(
     if not force and _audio_cache_hit(mp3_path, transcript_path):
         # Cache hit — instant, no synth, no download.  Tell the UI so it shows
         # "ready" rather than a false "downloading voice model…" note (W-08).
-        select_report_audio(mp3_path, report_content_key(report))
         await _emit(on_progress, {"stage": "cache_hit"})
         return mp3_path, transcript_path
 
@@ -770,7 +773,6 @@ async def generate_report_audio(
         },
     )
 
-    select_report_audio(mp3_path, report_content_key(report))
     logger.info(
         "report audio generated: cid-artifact dir=%s mp3=%d bytes turns=%d backend=%s "
         "source=%s total=%.1fs note=%r",
