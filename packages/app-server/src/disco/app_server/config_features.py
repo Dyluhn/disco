@@ -36,6 +36,7 @@ from .config.mappers import (
     _tts_from,
 )
 from .config_state_errors import ConfigValidationError
+from .config_workflow_validation import validate_image_workflow
 
 
 class ConfigFeatures:
@@ -105,6 +106,7 @@ class ConfigFeatures:
         met — until then image generation fails NOT CONFIGURED (W-50, no placeholder)."""
         from disco.core.llm import ImageGenSettings
 
+        validate_image_workflow(dto.workflow_json)
         self._store.sections.save_image_gen(
             ImageGenSettings(
                 provider=dto.provider,

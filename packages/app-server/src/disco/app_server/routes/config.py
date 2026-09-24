@@ -148,7 +148,10 @@ def make_config_router(state: ConfigState) -> APIRouter:
 
     @router.put("/api/image-gen/config")
     async def put_image_gen_config(dto: ImageGenConfigDTO) -> ImageGenConfigDTO:
-        return state.features.update_image_gen_config(dto)
+        try:
+            return state.features.update_image_gen_config(dto)
+        except ConfigValidationError as exc:
+            raise _validation_error(exc) from exc
 
     @router.get("/api/data-sources/config")
     async def get_data_sources_config() -> DataSourcesConfigDTO:

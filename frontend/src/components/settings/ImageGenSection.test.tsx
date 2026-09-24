@@ -134,6 +134,10 @@ describe("ImageGenSection — A3 image-gen provider settings", () => {
     await openImageConfiguration();
 
     const textarea = await screen.findByPlaceholderText(/Save \(API Format\)/i);
+    fireEvent.change(textarea, { target: { value: "{invalid" } });
+    expect(screen.getByRole("button", { name: /^Save$/ })).toBeDisabled();
+    expect(screen.getByText(/Not valid JSON yet/)).toBeInTheDocument();
+    expect(lastPut).toBeNull();
     const graph = '{ "1": { "class_type": "CheckpointLoaderSimple", "inputs": { "ckpt_name": "%ckpt%" } } }';
     fireEvent.change(textarea, { target: { value: graph } });
     fireEvent.click(screen.getByRole("button", { name: /^Save$/ }));

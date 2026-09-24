@@ -103,7 +103,7 @@ export function ContextualFieldsPanel({
       {showPaid && (
         <StoredKeyField apiKeyEnv={apiKeyEnv} setApiKeyEnv={setApiKeyEnv} />
       )}
-      <SaveRow fieldsDirty={fieldsDirty} savePending={savePending} onSave={onSave} />
+      <SaveRow fieldsDirty={fieldsDirty} savePending={savePending} invalid={!!workflowJsonError} onSave={onSave} />
     </div>
   );
 }

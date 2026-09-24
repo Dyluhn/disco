@@ -65,7 +65,7 @@ export function ImageGenSection() {
 
   // Switching provider preserves the current field drafts so edits aren't lost.
   const selectProvider = (provider: Provider) => {
-    if (!data || provider === active) return;
+    if (!data || provider === active || getWorkflowJsonError(workflowJson)) return;
     save.mutate({
       provider,
       base_url: baseUrl,
@@ -84,7 +84,7 @@ export function ImageGenSection() {
   );
 
   const saveFields = () => {
-    if (!data) return;
+    if (!data || getWorkflowJsonError(workflowJson)) return;
     save.mutate({
       provider: data.provider,
       base_url: baseUrl,
@@ -152,7 +152,7 @@ export function ImageGenSection() {
             <div className="mt-inline flex flex-col gap-inline">
               <ProviderOptionList
                 active={active}
-                pending={save.isPending}
+                pending={save.isPending || !!workflowJsonError}
                 onSelect={selectProvider}
               />
 
