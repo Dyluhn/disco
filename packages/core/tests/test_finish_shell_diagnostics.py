@@ -316,6 +316,8 @@ async def test_wrapper_exit_zero_cannot_satisfy_missing_required_deliverable(tmp
 async def test_real_sandbox_restart_notice_invalidates_receipt_and_shell_diagnostics():
     from types import SimpleNamespace
 
+    from disco.core.loop import check_ledger
+    from disco.core.loop.finish._shell_diagnostics import _record_state
     from disco.core.loop.observation_execution import maybe_emit_sandbox_restart
 
     loop = _make_loop(_GateExecutor(None))
@@ -329,7 +331,10 @@ async def test_real_sandbox_restart_notice_invalidates_receipt_and_shell_diagnos
     assert "sandbox_restart" not in events[-1].meta
     assert not await reuse_finish_verify_receipt(loop, "bash smoke.sh", events)
     caveat = _shell_caveat(events)
-    assert caveat is not None and "stale after workspace/runtime change" in caveat
+    record = check_ledger.check_records(events)[0]
+    state = _record_state(record, {}, events)
+    assert state != _record_state(record, {}, events[:-2])
+    assert caveat is not None and state in caveat
 
 
 async def test_unchanged_sandbox_and_same_receipt_audit_do_not_invalidate_reuse():

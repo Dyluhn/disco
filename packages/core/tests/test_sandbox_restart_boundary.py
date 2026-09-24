@@ -25,8 +25,9 @@ from disco.core.events import (
     pending_workspace_run_intent,
     workspace_run_intent_admission_required,
 )
+from disco.core.loop import check_ledger
 from disco.core.loop.engine_contracts import _ACTIVE_AGENT_VIEW_ID
-from disco.core.loop.finish._shell_diagnostics import _shell_caveat
+from disco.core.loop.finish._shell_diagnostics import _record_state, _shell_caveat
 from disco.core.loop.finish.finalize_parts.verify_receipt import reuse_finish_verify_receipt
 from disco.core.loop.observation_execution import maybe_emit_sandbox_restart
 from event_fakes import with_seqs
@@ -80,7 +81,10 @@ async def test_restart_survives_sqlite_reopen_json_roundtrip_and_metadata_free_r
         decoded = [EventAdapter.validate_json(e.model_dump_json()) for e in stored]
         assert diff_sequences(stored, decoded) == []
         caveat = _shell_caveat(decoded)
-        assert caveat is not None and "stale after workspace/runtime change" in caveat
+        record = check_ledger.check_records(decoded)[0]
+        state = _record_state(record, {}, decoded)
+        assert state != _record_state(record, {}, decoded[:-2])
+        assert caveat is not None and state in caveat
         metadata_free = [e.model_copy(update={"meta": {}}) for e in decoded]
         loop = _make_loop(_GateExecutor(None))
         assert not await reuse_finish_verify_receipt(loop, "bash smoke.sh", metadata_free)
