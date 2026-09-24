@@ -493,6 +493,8 @@ class DefaultLLMRouter:
     @staticmethod
     def _effective_requirements(req: CompletionRequest) -> frozenset[Requirement]:
         requirements = set(req.profile.requirements)
+        if req.tools:
+            requirements.add(Requirement.TOOL_CALLING)
         if any(getattr(message, "images", None) for message in req.messages):
             requirements.add(Requirement.VISION)
         return frozenset(requirements)
