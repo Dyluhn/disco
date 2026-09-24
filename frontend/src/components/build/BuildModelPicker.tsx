@@ -301,7 +301,7 @@ export function BuildModelPicker({
       toast.show({
         tone: "cost",
         title: `Selected ${m.label} for your next request`,
-        body: `Applied when you start or continue a ${surface === "agent" ? "task" : "build"}. This paid model will drive every step of the agent.`,
+        body: `Applied when you start or continue a task. This paid model will drive every step of the ${surface === "agent" ? "task" : "build"}.`,
       });
     }
     if (
