@@ -359,7 +359,7 @@ async def test_workflow_draft_from_description_persists_unapproved_review(
     assert router.requests
     request = router.requests[0]
     assert request.response_format == "json"
-    assert request.max_tokens == 1400
+    assert request.max_tokens == 4096
     assert request.temperature == 0.3
     stored = JsonDirWorkflowStore(tmp_path).get_instance(workflow["instance_id"])
     assert stored is not None

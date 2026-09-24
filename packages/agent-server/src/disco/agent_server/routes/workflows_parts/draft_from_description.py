@@ -124,30 +124,34 @@ async def _draft_args_from_description(
     env: _SurfaceEnvironment,
     description: str,
 ) -> tuple[DraftWorkflowArgs, str]:
-    first = await _request_workflow_draft(
-        runtime=runtime,
-        env=env,
-        description=description,
-        max_tokens=1400,
-    )
-    parsed = _parse_draft_response(first)
-    if parsed is None:
-        second = await _request_workflow_draft(
+    previous = ""
+    failure = ""
+    for max_tokens in (4096, 8192):
+        response = await _request_workflow_draft(
             runtime=runtime,
             env=env,
             description=description,
-            max_tokens=2800,
+            max_tokens=max_tokens,
+            previous=previous,
+            failure=failure,
         )
-        parsed = _parse_draft_response(second)
-    if parsed is None:
-        raise _WorkflowDraftFailed("model did not return a usable JSON object")
-
-    normalized, summary = _normalize_draft_payload(parsed, description=description)
-    try:
-        args = DraftWorkflowArgs.model_validate(normalized)
-    except ValueError as exc:
-        raise _WorkflowDraftFailed(f"model returned an invalid workflow draft: {exc}") from exc
-    return args, summary
+        parsed = _parse_draft_response(response)
+        if parsed is None:
+            failure = "The response must be one complete JSON object in the requested schema."
+        else:
+            normalized, summary = _normalize_draft_payload(parsed, description=description)
+            try:
+                args = DraftWorkflowArgs.model_validate(normalized)
+                build_workflow_definition(args)
+                return args, summary
+            except ValueError as exc:
+                failure = f"The workflow does not satisfy the authoring schema: {exc}"
+        previous = strip_think_spans(response)[:6000]
+    raise _WorkflowDraftFailed(
+        "The model could not produce a valid workflow after one repair attempt. "
+        "Use the advanced builder to supply the workflow fields, or retry drafting. "
+        f"Validation: {failure[:1200]}"
+    )
 
 
 async def _request_workflow_draft(
@@ -156,8 +160,24 @@ async def _request_workflow_draft(
     env: _SurfaceEnvironment,
     description: str,
     max_tokens: int,
+    previous: str = "",
+    failure: str = "",
 ) -> str:
     router = runtime.drivers.router()
+    repair_messages = []
+    if failure:
+        if previous:
+            repair_messages.append(LLMMessage(role="assistant", content=previous))
+        repair_messages.append(
+            LLMMessage(
+                role="user",
+                content=(
+                    "Repair the previous draft without changing the user's requested task. "
+                    "Return only a compact, complete JSON object in the requested schema. "
+                    f"Validation failure: {failure[:2000]}"
+                ),
+            )
+        )
     resp = await router.complete(
         CompletionRequest(
             profile=CapabilityProfile(role=ModelRole.AGENT_DRIVER),
@@ -174,6 +194,7 @@ async def _request_workflow_draft(
                     role="user",
                     content=_draft_workflow_prompt(description=description, env=env),
                 ),
+                *repair_messages,
             ],
             response_format="json",
             max_tokens=max_tokens,
