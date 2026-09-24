@@ -403,7 +403,7 @@ async def test_seed_passages_in_stream_research_answer() -> None:
     )
 
     # Fake search returns one hit; extraction returns nothing useful.
-    fake_search = AsyncMock()
+    fake_search = AsyncMock(spec=["search"])
     fake_search.search = AsyncMock(
         return_value=[
             MagicMock(
