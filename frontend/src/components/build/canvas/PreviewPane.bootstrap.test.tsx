@@ -18,6 +18,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PreviewPane } from "@/components/build/canvas/PreviewPane";
 import { PREVIEW_BOOTSTRAP_TIMEOUT_MS } from "@/components/build/canvas/previewPaneParts/usePreviewLaunch";
 import type { AgentEvent, PreviewInfo } from "@/types/agent";
+import { finishedWorkspaceEvents } from "@/test/workspaceFixtures";
 
 const {
   canonicalPreviewBootstrapUrlMock,
@@ -122,7 +123,11 @@ describe("PreviewPane — the bootstrap handshake watchdog (UI-44)", () => {
         <PreviewPane
           status="RUNNING"
           cid="conv_boot"
-          events={[APP]}
+          events={[
+            APP,
+            ...finishedWorkspaceEvents("conv_boot"),
+            { id: "continued", kind: "status", source: "system", seq: 12, status: "RUNNING" },
+          ]}
           downloadTitle="Recipe box"
         />,
       ),
@@ -150,7 +155,8 @@ describe("PreviewPane — the bootstrap handshake watchdog (UI-44)", () => {
     expect(screen.queryByText("Preparing Preview update…")).toBeNull();
     expect(screen.queryByTestId("preview-status-overlay")).toBeNull();
 
-    // Both recovery actions are real, wired controls.
+    // This continuation has a committed saved workspace, so both recovery
+    // actions are real, wired controls. A fresh unsaved run cannot download source.
     expect(
       screen.getByRole("button", { name: "Refresh Preview" }),
     ).toHaveAttribute("data-disco-control", "build.preview-failure-refresh");
