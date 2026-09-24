@@ -1,7 +1,7 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { Pencil, Plus, Trash2 } from "lucide-react";
 import { type FormEvent, useState } from "react";
-import { isApiFailure } from "@/api/errors";
+import { readableRequestError } from "@/api/errors";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { cn } from "@/lib/cn";
 import { costLabel } from "@/lib/cost";
@@ -318,7 +318,7 @@ function ModelForm({
 
       {err && (
         <p role="alert" className="font-ui text-[0.8rem] text-unsupported">
-          {isApiFailure(err) ? err.message : "Couldn't save the model."}
+          {readableRequestError(err, "Couldn't save the model.")}
         </p>
       )}
 
@@ -491,9 +491,7 @@ export function ModelCatalogue() {
         </ul>
         {del.error && (
           <p role="alert" className="font-ui text-[0.8rem] text-unsupported">
-            {isApiFailure(del.error)
-              ? del.error.message
-              : "Couldn't remove the model."}
+            {readableRequestError(del.error, "Couldn't remove the model.")}
           </p>
         )}
 
