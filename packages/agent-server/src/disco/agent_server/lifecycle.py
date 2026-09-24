@@ -533,6 +533,10 @@ class LifecycleManager:
         # plan finished" bug — the second iteration started from nothing).
         self._rehydration.clear(conversation_id)
 
+    def restoring_workspace(self, conversation_id: str) -> contextlib.AbstractContextManager[None]:
+        """Guard a fenced, authority-checked host restore against partial snapshots."""
+        return self._rehydration.restoring(conversation_id)
+
     async def reconcile_orphaned_runs(self, *, owner_id: str = DEFAULT_OWNER_ID) -> int:
         return await self._orphan_reconciler.reconcile_orphaned_runs(owner_id=owner_id)
 

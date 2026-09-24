@@ -51,15 +51,12 @@ async def _verify_restored_files(
             raise WorkspaceArchiveError(f"rehydrated file differs from snapshot: {path}")
 
 
-async def _restore_batch(sandbox: _WorkspaceIO, src: Path, files: list[Path]) -> bool:
+async def _restore_batch(sandbox: _WorkspaceIO, mutations: tuple[SandboxFileMutation, ...]) -> bool:
     from ..archive import WorkspaceArchiveError
 
     commit = getattr(sandbox, "_commit_file_batch", None)
-    if not callable(commit) or not files:
+    if not callable(commit) or not mutations:
         return False
-    mutations = tuple(
-        SandboxFileMutation(path.relative_to(src).as_posix(), path.read_bytes()) for path in files
-    )
     try:
         commit_fn = cast(
             Callable[[tuple[SandboxFileMutation, ...]], Awaitable[SandboxFileBatchResult | None]],
@@ -83,16 +80,22 @@ async def _restore_batch(sandbox: _WorkspaceIO, src: Path, files: list[Path]) ->
 
 
 async def restore_files(sandbox: _WorkspaceIO, src: Path) -> int:
-    from ..archive import WorkspaceArchiveError
-
     if not src.exists() or not src.is_dir():
         return 0
     files = _source_files(src)
-    if not await _restore_batch(sandbox, src, files):
-        for path in files:
-            rel = path.relative_to(src).as_posix()
+    return await restore_file_bytes(
+        sandbox, tuple((path.relative_to(src).as_posix(), path.read_bytes()) for path in files)
+    )
+
+
+async def restore_file_bytes(sandbox: _WorkspaceIO, files: tuple[tuple[str, bytes], ...]) -> int:
+    from ..archive import WorkspaceArchiveError
+
+    mutations = tuple(SandboxFileMutation(path, data) for path, data in files)
+    if not await _restore_batch(sandbox, mutations):
+        for path, data in files:
             try:
-                await sandbox.write_file(rel, path.read_bytes())
+                await sandbox.write_file(path, data)
             except Exception as exc:
-                raise WorkspaceArchiveError(f"rehydrate {rel!r} failed: {exc}") from exc
+                raise WorkspaceArchiveError(f"rehydrate {path!r} failed: {exc}") from exc
     return len(files)

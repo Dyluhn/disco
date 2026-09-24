@@ -17,6 +17,7 @@ from .archive import (
     aiter_zip_workspace,
     is_runtime_secret_path,
     rehydrate_workspace,
+    rehydrate_workspace_files,
     snapshot_workspace,
     zip_workspace,
 )
@@ -48,6 +49,7 @@ __all__ = [
     "default_projects_root",
     "is_runtime_secret_path",
     "rehydrate_workspace",
+    "rehydrate_workspace_files",
     "resolve_projects_root",
     "snapshot_workspace",
     "validate_root",

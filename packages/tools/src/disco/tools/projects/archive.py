@@ -280,6 +280,19 @@ async def rehydrate_workspace(sandbox: _WorkspaceIO, src: Path) -> int:
     return await restore_files(sandbox, src)
 
 
+async def rehydrate_workspace_files(
+    sandbox: _WorkspaceIO, files: tuple[tuple[str, bytes], ...]
+) -> int:
+    """Restore host-verified snapshot bytes through the same jailed batch seam.
+
+    The caller owns clearing the destination and selecting authoritative files.
+    Unsupported backends use ordinary writes; batch failures never fall back.
+    """
+    from .archive_parts.rehydration import restore_file_bytes
+
+    return await restore_file_bytes(sandbox, files)
+
+
 # ---- streaming zip for download -------------------------------------------
 
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -11,6 +12,7 @@ from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 from disco.core import DeliverableEvent
+from disco.tools.projects import rehydrate_workspace_files
 
 from .preview_manager import PreviewManager
 from .preview_models import preview_requires_node_dependencies
@@ -204,9 +206,7 @@ async def prepare_sealed_node_dependencies(
         f"test -d {dependency_arg} && test ! -L {dependency_arg}",
         timeout_s=30,
     )
-    if getattr(probed, "exit_code", 1) != 0 or bool(
-        getattr(probed, "timed_out", False)
-    ):
+    if getattr(probed, "exit_code", 1) != 0 or bool(getattr(probed, "timed_out", False)):
         raise RuntimeError(
             "sealed Node Preview dependency restore did not produce node_modules; "
             "this package-manager layout is not yet supported for sealed replay"
@@ -306,13 +306,28 @@ async def replace_with_sealed_workspace(
         dependency_dir=normalized_dependency,
         staged_dependency=staged_dependency,
     )
-    for path, data in files:
-        await session.write_file(path, data)
+    await rehydrate_workspace_files(session, files)
     if normalized_dependency is not None and staged_dependency is not None:
         await _restore_dependency(session, normalized_dependency, staged_dependency)
-    for path, data in files:
-        if await session.read_file(path) != data:
-            raise RuntimeError(f"sealed Preview read-back changed: {path}")
+    await _verify_sealed_files(session, files)
+
+
+async def _verify_sealed_files(session: Any, files: tuple[tuple[str, bytes], ...]) -> None:
+    """Keep the final exact-byte check after dependency restoration, bounded to four reads."""
+    gate = asyncio.Semaphore(4)
+
+    async def verify(path: str, expected: bytes) -> None:
+        async with gate:
+            if await session.read_file(path) != expected:
+                raise RuntimeError(f"sealed Preview read-back changed: {path}")
+
+    try:
+        async with asyncio.TaskGroup() as tasks:
+            for path, expected in files:
+                tasks.create_task(verify(path, expected))
+    except* Exception as errors:
+        # TaskGroup drains siblings before the original read failure escapes.
+        raise errors.exceptions[0] from errors
 
 
 def restore_succeeded(restored: Any) -> bool:

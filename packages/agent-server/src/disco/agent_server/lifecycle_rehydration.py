@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterator
+from contextlib import contextmanager
 
 from disco.tools.projects import StorageStatus, rehydrate_workspace
 from disco.tools.projects.archive import WorkspaceArchiveError
@@ -40,6 +42,21 @@ class Rehydration:
 
     def _mark_rehydrated(self, conversation_id: str) -> None:
         self._rehydrated.add(conversation_id)
+
+    @contextmanager
+    def restoring(self, conversation_id: str) -> Iterator[None]:
+        """Keep interrupted host restoration out of snapshots, including cancellation."""
+        self._rehydrated.discard(conversation_id)
+        self._failed.add(conversation_id)
+        try:
+            yield
+        except BaseException:
+            # A transport recreation hook may have reset the markers meanwhile.
+            self._rehydrated.discard(conversation_id)
+            self._failed.add(conversation_id)
+            raise
+        self._failed.discard(conversation_id)
+        self._mark_rehydrated(conversation_id)
 
     async def _maybe_rehydrate(self, conversation_id: str) -> None:
         """Restore a prior snapshot once into the current live sandbox."""

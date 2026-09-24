@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 import pytest
-from disco.tools.projects import rehydrate_workspace
+from disco.tools.projects import rehydrate_workspace, rehydrate_workspace_files
 from disco.tools.projects.archive import WorkspaceArchiveError
 from disco.tools.sandbox._container_parts.file_batch import parse_file_batch_result
 from disco.tools.sandbox.file_batch import SandboxFileBatchResult
@@ -31,7 +31,8 @@ class GuestBatch:
 
 
 @pytest.mark.asyncio
-async def test_rehydrate_binary_import_and_resume_uses_verified_guest_batch(tmp_path):
+@pytest.mark.parametrize("in_memory", [False, True])
+async def test_rehydrate_binary_import_and_resume_uses_verified_guest_batch(tmp_path, in_memory):
     src = tmp_path / "snapshot"
     src.mkdir()
     files = {
@@ -47,10 +48,16 @@ async def test_rehydrate_binary_import_and_resume_uses_verified_guest_batch(tmp_
     guest_root = tmp_path / "guest"
     guest_root.mkdir()
     sandbox = GuestBatch(guest_root)
-    assert await rehydrate_workspace(sandbox, src) == len(files)
+
+    async def restore():
+        if in_memory:
+            return await rehydrate_workspace_files(sandbox, tuple(files.items()))
+        return await rehydrate_workspace(sandbox, src)
+
+    assert await restore() == len(files)
     assert {path: await sandbox.read_file(path) for path in files} == files
     # Repeated hydration has no transitions; identical-file evidence still passes.
-    assert await rehydrate_workspace(sandbox, src) == len(files)
+    assert await restore() == len(files)
     assert sandbox.calls == 2
 
 

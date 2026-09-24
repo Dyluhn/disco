@@ -11,7 +11,7 @@ from disco.core.appkit import (
     load_design_spec_from_bytes,
     spec_digest,
 )
-from disco.core.appkit.owner_controls import owner_tweak_spec, owner_tweak_values
+from disco.core.appkit.owner_controls import apply_owner_tweak, owner_tweak_spec, owner_tweak_values
 from disco.core.appkit.spec import AppSpec, DesignSpec
 from disco.core.store.sqlite import SqliteEventStore
 from disco.tools.anatomy import ToolContext
@@ -19,12 +19,15 @@ from disco.tools.builtin.app_kit_parts.errors import _AppKitError
 from disco.tools.builtin.app_kit_parts.set_tweak import commit_owner_tweaks, prepare_owner_tweaks
 from disco.tools.builtin.verify_appkit_parts.preview_lifecycle import PreviewLifecycle
 from disco.tools.builtin.verify_appkit_parts.sandbox_reader import SandboxReader
+from disco.tools.projects import StorageError, StorageStatus
 from disco.tools.secrets import CapabilityBroker
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictFloat, StrictInt, StrictStr
 
 from ..auth import current_owner_id
+from ..preview_sealed_restore import replace_with_sealed_workspace
 from ..runtime import ConversationRuntime
+from ..workspace_commit import WorkspaceCommitUnavailable, resolve_committed_workspace
 from ._common import _reject_if_imported, require_owned_conversation
 from .files_support import ArtifactRejected, _committed_artifact, _read_artifact_bytes
 
@@ -100,10 +103,6 @@ async def _apply_controls(
     state = await store.get_state(cid)
     if state.execution_status != ConversationStatus.FINISHED:
         raise HTTPException(409, detail="Finish the AppKit build before editing owner controls.")
-    # Rehydrate the exact sealed workspace through the normal preview path;
-    # never manufacture a session with an empty or mutable host mirror.
-    if not await runtime.preview.ensure_preview(cid, preserve_exact_finished=True):
-        raise HTTPException(409, detail="The saved AppKit preview could not be restored.")
     # A unique authority prevents another owner save from being mistaken for
     # this edit if it arrives between releasing the fence and sealing.
     operation = f"appkit.owner-tweaks.{uuid4().hex}"
@@ -116,9 +115,21 @@ async def _apply_controls(
             raise HTTPException(
                 409, detail="The run changed; wait for it to finish and reload controls."
             )
+        files = await _sealed_edit_files(store, runtime, cid, body)
         session = runtime.live_sessions.live_session(cid)
         if session is None:
+            runtime._loop_for(cid)
+            session = runtime.live_sessions.live_session(cid)
+        if session is None:
             raise HTTPException(409, detail="The AppKit sandbox is unavailable.")
+        try:
+            with runtime.lifecycle.restoring_workspace(cid):
+                await replace_with_sealed_workspace(session, files)
+        except Exception as exc:
+            raise HTTPException(
+                503,
+                detail="The saved AppKit source could not be restored; saved files are preserved.",
+            ) from exc
         ctx = ToolContext(
             sandbox=session,
             workspace_path=".",
@@ -127,10 +138,6 @@ async def _apply_controls(
             conversation_id=cid,
             owner_id=owner_id,
         )
-        current_app = load_app_spec_from_bytes(await session.read_file(APPSPEC_RELPATH))
-        current_design = load_design_spec_from_bytes(await session.read_file(DESIGNSPEC_RELPATH))
-        if spec_digest(current_app, current_design) != body.expected_spec_digest:
-            raise HTTPException(409, detail="This app changed; reload controls before saving.")
         try:
             app, design, tree = await prepare_owner_tweaks(ctx, body.values)
         except (ValueError, _AppKitError) as exc:
@@ -156,6 +163,37 @@ async def _apply_controls(
             503, detail="Controls changed but the new workspace could not be sealed."
         ) from exc
     return _payload(app, design, editable=True)
+
+
+async def _sealed_edit_files(
+    store: SqliteEventStore, runtime: ConversationRuntime, cid: str, body: OwnerTweaksBody
+) -> tuple[tuple[str, bytes], ...]:
+    """Read only the committed immutable source, while the caller holds its fence."""
+    project_store = runtime.projects.current_project_store()
+    if project_store is None or project_store.status() != StorageStatus.OK:
+        raise HTTPException(503, detail="The saved AppKit source is unavailable.")
+    try:
+        committed = resolve_committed_workspace(await store.get_events(cid), project_store, cid)
+        with project_store.open_verified_version(cid, committed.event.version_seq) as version:
+            files = tuple((entry.path, version.read_bytes(entry.path)) for entry in version.files)
+    except (WorkspaceCommitUnavailable, StorageError) as exc:
+        raise HTTPException(
+            409, detail="The AppKit workspace is not sealed; reload controls."
+        ) from exc
+    source = dict(files)
+    try:
+        app = load_app_spec_from_bytes(source[APPSPEC_RELPATH])
+        design = load_design_spec_from_bytes(source[DESIGNSPEC_RELPATH])
+    except (ValueError, KeyError) as exc:
+        raise HTTPException(409, detail="The saved AppKit specs are not readable.") from exc
+    if spec_digest(app, design) != body.expected_spec_digest:
+        raise HTTPException(409, detail="This app changed; reload controls before saving.")
+    try:
+        for key, value in sorted(body.values.items()):
+            app, design = apply_owner_tweak(app, design, key, value)
+    except ValueError as exc:
+        raise HTTPException(422, detail=str(exc)) from exc
+    return files
 
 
 def make_appkit_owner_router(
