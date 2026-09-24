@@ -230,7 +230,9 @@ async def probe_firecrawl_extract(
 
     ``transport`` is test-only, see ``probe_brave_search``.
     """
-    root = base_url.rstrip("/")
+    from disco.retrieval.bundled_providers import firecrawl_base_url
+
+    root = firecrawl_base_url(base_url)
     url = f"{root}/v2/scrape"
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
     payload = {"url": "https://example.com", "formats": ["markdown"]}

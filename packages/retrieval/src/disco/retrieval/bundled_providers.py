@@ -520,12 +520,12 @@ _FIRECRAWL_CONCURRENCY = 2
 _FIRECRAWL_DEFAULT_BASE = "https://api.firecrawl.dev"
 
 
-def _firecrawl_base(base_url: str) -> str:
+def firecrawl_base_url(base_url: str) -> str:
     """Normalise a configured base so the version path is appended exactly once.
 
     A user who pasted the versioned URL from Firecrawl's own docs must not end up
     requesting ``/v2/v2/scrape``. This strips a trailing version segment; it does
-    NOT guess between contracts — the adapter speaks V2 and only V2.
+    NOT guess between contracts — the adapter and Settings probe speak V2.
     """
     root = base_url.rstrip("/") or _FIRECRAWL_DEFAULT_BASE
     for version in ("/v1", "/v2"):
@@ -558,7 +558,7 @@ class FirecrawlExtractionProvider:
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self._key = api_key
-        self._base = _firecrawl_base(base_url)
+        self._base = firecrawl_base_url(base_url)
         self._transport = transport
 
     async def extract(self, url: str) -> ExtractedDoc:

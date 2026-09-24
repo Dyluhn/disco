@@ -135,8 +135,15 @@ def test_data_source_bundled_is_honest_not_remote_green(client):
 def test_data_source_new_keyless_search_tiers_are_bundled(client, state):
     from disco.app_server.config.dtos import DataSourcesConfigDTO
 
-    for provider in ("exa", "parallel", "wikipedia", "arxiv", "news",
-                     "semantic_scholar", "site_scoped"):
+    for provider in (
+        "exa",
+        "parallel",
+        "wikipedia",
+        "arxiv",
+        "news",
+        "semantic_scholar",
+        "site_scoped",
+    ):
         state.features.update_data_sources_config(
             DataSourcesConfigDTO(
                 search_provider=provider,
@@ -337,6 +344,52 @@ async def test_probe_firecrawl_extract_uses_bearer_on_real_scrape_endpoint():
     assert ok is True and status == "ok"
     assert captured["url"] == "https://api.firecrawl.dev/v2/scrape"
     assert captured["headers"]["authorization"].startswith("Bearer ")
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "https://extract.example.test/proxy",
+        "https://extract.example.test/proxy/",
+        "https://extract.example.test/proxy/v1",
+        "https://extract.example.test/proxy/v2/",
+    ],
+)
+async def test_firecrawl_probe_and_runtime_use_same_versioned_endpoint(base_url):
+    from disco.app_server.probe_clients import probe_firecrawl_extract
+    from disco.retrieval.bundled_providers import FirecrawlExtractionProvider
+
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append((str(request.url), request.headers["authorization"], request.read()))
+        return httpx.Response(
+            200,
+            json={
+                "success": True,
+                "data": {
+                    "markdown": "A real article with enough content for a passage.",
+                    "metadata": {"title": "Article", "statusCode": 200},
+                },
+            },
+        )
+
+    transport = httpx.MockTransport(handler)
+    ok, status, _ = await probe_firecrawl_extract(
+        base_url,
+        api_key="fixture-key",
+        transport=transport,
+    )
+    doc = await FirecrawlExtractionProvider(
+        "fixture-key",
+        base_url,
+        transport=transport,
+    ).extract("https://example.com")
+
+    assert ok and status == "ok" and doc.fetched_ok
+    assert len(calls) == 2
+    assert calls[0] == calls[1]
+    assert calls[0][0] == "https://extract.example.test/proxy/v2/scrape"
 
 
 async def test_probe_firecrawl_extract_bad_key_is_credential_failure():
