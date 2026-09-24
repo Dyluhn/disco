@@ -12,7 +12,7 @@ afterEach(() => vi.unstubAllGlobals());
 
 it("reads current bytes after restore and excludes files absent from the restored manifest", async () => {
   let content = "Version two";
-  const fetcher = vi.fn(async () => new Response(JSON.stringify({
+  const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
     path: "index.html", content, binary: false, bytes: content.length, version_seq: 1,
   }), { headers: { "content-type": "application/json" } }));
   vi.stubGlobal("fetch", fetcher);

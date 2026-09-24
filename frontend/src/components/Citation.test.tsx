@@ -43,7 +43,16 @@ describe("Citation", () => {
 });
 
 it("dismisses a fine-pointer source with Escape and restores focus from its link", async () => {
-  window.matchMedia = ((query: string) => ({ matches: false, media: query, addEventListener() {}, removeEventListener() {} })) as typeof window.matchMedia;
+  window.matchMedia = (query: string): MediaQueryList => ({
+    matches: false,
+    media: query,
+    onchange: null,
+    addEventListener() {},
+    removeEventListener() {},
+    addListener() {},
+    removeListener() {},
+    dispatchEvent: () => false,
+  });
   render(<Citation n={2} passage={passage} verdict="supported" />);
   const user = userEvent.setup();
   const trigger = screen.getByRole("button", { name: /Source 2/ });
