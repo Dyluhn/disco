@@ -19,6 +19,7 @@ import asyncio
 from datetime import datetime
 from typing import TYPE_CHECKING
 
+from ..events import Event, WorkspaceVersionEvent, _require_concrete_event
 from ..owners import DEFAULT_OWNER_ID
 from ..state import ConversationState
 from .base import ConversationSummary
@@ -74,6 +75,46 @@ class _ConversationMixin:
             ),
         )
         self._conn.commit()
+
+    if TYPE_CHECKING:
+
+        def _store_one(self, conversation_id: str, event: Event) -> tuple[Event, bool]: ...
+        def _publish(self, conversation_id: str, event: Event) -> None: ...
+
+    async def import_read_only_conversation(
+        self,
+        conversation_id: str,
+        events: list[Event],
+        *,
+        owner_id: str,
+        title: str,
+        surface: str,
+    ) -> None:
+        """Create read-only history and its events in one durable transaction.
+
+        Foreign workspace proofs must already be quarantined by the importer.
+        No await separates creation from append/commit, so cancellation and
+        append failures leave neither an orphan row nor a partial event log.
+        """
+        events = [_require_concrete_event(event) for event in events]
+        if any(isinstance(event, WorkspaceVersionEvent) and event.final_seal for event in events):
+            raise ValueError("read-only imports cannot carry live workspace seals")
+        if len({event.id for event in events}) != len(events):
+            raise ValueError("read-only imports must contain unique event IDs")
+        stored: list[Event] = []
+        async with self._write_lock:
+            with self._conn:
+                self._conn.execute(
+                    "INSERT INTO conversations "
+                    "(conversation_id, owner_id, title, created_at, surface, origin) "
+                    "VALUES (?, ?, ?, ?, ?, 'imported')",
+                    (conversation_id, owner_id, title, datetime.now().isoformat(), surface),
+                )
+                for event in events:
+                    persisted, _ = self._store_one(conversation_id, event)
+                    stored.append(persisted)
+            for event in stored:
+                self._publish(conversation_id, event)
 
     def conversation_appkit_mode_sync(self, conversation_id: str) -> bool | None:
         """Return immutable AppKit identity, or ``None`` for an unknown id."""

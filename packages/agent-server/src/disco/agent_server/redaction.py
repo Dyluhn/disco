@@ -169,10 +169,15 @@ _PATTERNS: list[tuple[str, re.Pattern[str], Any]] = [
         re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----"),
         _PEM_LABEL,
     ),
-    # URL-embedded credentials: https://user:pass@host
+    # URL-embedded credentials: https://user:pass@host. Scan each scheme-like
+    # token once; include malformed prefixes (e.g. 1https://) so the boundary
+    # optimization never exposes credentials that the old matcher removed.
     (
         _URL_CRED_LABEL,
-        re.compile(r"([a-zA-Z][a-zA-Z0-9+.\-]*://)([^\s/:@]+):([^\s/@]+)@"),
+        re.compile(
+            r"(?<![a-zA-Z0-9+.\-])([a-zA-Z0-9+.\-]+://)"
+            r"([^\s/:@]+):([^\s/@]+)@"
+        ),
         _URL_CRED_LABEL,
     ),
     # JSON "credential-like key": "value"  (key starts with secret/credential

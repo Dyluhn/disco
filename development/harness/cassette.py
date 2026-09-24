@@ -11,17 +11,11 @@ or a timestamp, so the same logical call replays the same response.
 
 from __future__ import annotations
 
-import hashlib
 import json
 from pathlib import Path
 from typing import Any
 
-
-def cassette_key(seam: str, payload: dict[str, Any]) -> str:
-    """Stable 16-hex key from a seam name + its semantic-input payload. `default=str`
-    so any stray non-JSON value still hashes (it just won't collide-protect it)."""
-    canon = json.dumps(payload, sort_keys=True, default=str, ensure_ascii=False)
-    return hashlib.sha256(f"{seam}:{canon}".encode()).hexdigest()[:16]
+from disco.core.share_projection import cassette_key as cassette_key
 
 
 class CassetteMiss(KeyError):

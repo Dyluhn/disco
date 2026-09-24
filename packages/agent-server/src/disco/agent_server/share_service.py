@@ -21,10 +21,61 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
-from disco.core import DEFAULT_OWNER_ID, ConversationState, Event, EventFilter
+from disco.core import (
+    DEFAULT_OWNER_ID,
+    ConversationState,
+    Event,
+    EventFilter,
+    WorkspaceVersionEvent,
+    derive_final_workspace_fence,
+)
 
 _IMPORT_MAX_EVENTS = 20_000
 _VALID_SURFACES = frozenset({"research", "build", "agent", "deep_research"})
+
+
+def _strip_foreign_final_seal(
+    event: Event,
+    *,
+    source_conversation_id: Any,
+    source_events: list[Event],
+) -> Event:
+    """Quarantine a foreign final workspace seal on an imported event.
+
+    A bundle's ``final_seal`` is proof scoped to the SOURCE conversation
+    (``scope.identifier == source cid``). Appending it verbatim under the
+    importer-minted cid trips the store's scope validator — correctly, since
+    a foreign proof must never become this conversation's authority. The safe
+    read-only normalization is to persist the version event WITHOUT the seal
+    while retaining the original proof in ``meta`` (the existing free-form,
+    non-semantic envelope field consumers never reconstruct from):
+
+      - ``final_seal`` → None (no foreign authority; the store validator and
+        the live seal checks keep enforcing untouched).
+      - ``meta["imported_final_seal"]`` → the original seal JSON.
+      - ``meta["imported_from_conversation"]`` → the bundle's source cid.
+
+    This never re-scopes, re-sequences, or re-signs the proof: the imported
+    conversation carries no seal of its own and can never be promoted as
+    sealed. Events without a seal pass through unchanged.
+    """
+    if not isinstance(event, WorkspaceVersionEvent) or event.final_seal is None:
+        return event
+    from disco.core import EventAdapter
+
+    seal = event.final_seal
+    if seal.scope.namespace != "workspace.tree" or seal.scope.identifier != source_conversation_id:
+        raise ValueError("foreign final seal does not match its source conversation")
+    terminal_seq, latest_effect_seq = derive_final_workspace_fence(source_events)
+    if seal.terminal_seq != terminal_seq or seal.latest_effect_seq != latest_effect_seq:
+        raise ValueError("foreign final seal does not match its source event history")
+    meta = dict(event.meta or {})
+    meta["imported_final_seal"] = event.final_seal.model_dump(mode="json")
+    meta["imported_from_event_seq"] = event.seq
+    if isinstance(source_conversation_id, str) and source_conversation_id:
+        meta["imported_from_conversation"] = source_conversation_id
+    normalized = event.model_copy(update={"final_seal": None, "meta": meta})
+    return EventAdapter.validate_python(normalized.model_dump(mode="python"))
 
 
 class ShareService:
@@ -117,8 +168,11 @@ class ShareService:
         # same row format the harness `Cassette` class produces) derived from
         # the SAME scrubbed events the viewer renders. The harness replay
         # path reads `bundle["cassette"]` via `Cassette.from_rows(...)` —
-        # one projection, two readers, no divergent serializer.
-        from harness.projection import project_cassette_rows
+        # one projection, two readers, no divergent serializer. The
+        # projection lives in the installed `disco-core` runtime package
+        # (never the development-only `harness` package, which is absent
+        # from published images); the harness delegates to the same module.
+        from disco.core.share_projection import project_cassette_rows
 
         cassette_rows = project_cassette_rows(scrubbed_events)
         bundle = {
@@ -150,10 +204,17 @@ class ShareService:
         scrubbing is a claim, not a property — re-running the idempotent redactor
         protects this instance's future re-export), and an `origin="imported"` marker
         that the server edge enforces read-only against. Returns {ok, conversation_id}
-        or {ok: False, reason} — the endpoint maps reason → 422. No partial imports."""
+        or {ok: False, reason} — the endpoint maps reason → 422. No partial imports.
+
+        A full completed run carries `final_seal` workspace proofs scoped to the
+        SOURCE conversation. Those are quarantined via `_strip_foreign_final_seal`
+        (seal removed, original retained in non-semantic `meta`): the import
+        replays history read-only and never mints a seal for the new cid, while
+        the store validator keeps rejecting genuinely tampered live seals."""
         import uuid as _uuid
 
         from disco.core import EventAdapter, migrate_event
+        from disco.core.store.sqlite import MAX_EVENT_PAYLOAD_BYTES, estimated_payload_bytes
 
         from .redaction import redact_event_payload
 
@@ -174,27 +235,46 @@ class ShareService:
             surface = "build"
         raw_title = bundle.get("title")
         title = (raw_title[:200] if isinstance(raw_title, str) else None) or "(imported)"
+        source_conversation_id = bundle.get("conversation_id")
 
-        # Validate + RE-SCRUB every event. Reject the WHOLE bundle on the first bad
-        # event (no partial import). Event ids are preserved (action/observation
-        # pairing is by id); seqs are reassigned by the store under the fresh cid.
+        # Validate + RE-SCRUB every event, then quarantine foreign seal proofs.
+        # Reject the WHOLE bundle on the first bad event (no partial import).
+        # Event ids are preserved (action/observation pairing is by id); seqs
+        # are reassigned by the store under the fresh cid.
         events: list[Event] = []
+        source_events: list[Event] = []
         for raw in raw_events:
             if not isinstance(raw, dict):
+                return {"ok": False, "reason": "malformed_event"}
+            if estimated_payload_bytes(raw) > MAX_EVENT_PAYLOAD_BYTES:
                 return {"ok": False, "reason": "malformed_event"}
             try:
                 migrated = migrate_event(raw)
                 validated = EventAdapter.validate_python(migrated)  # extra="forbid"
                 rescrubbed = redact_event_payload(validated.model_dump(mode="json"))
-                events.append(EventAdapter.validate_python(migrate_event(rescrubbed)))
+                revalidated = EventAdapter.validate_python(migrate_event(rescrubbed))
+                events.append(
+                    _strip_foreign_final_seal(
+                        revalidated,
+                        source_conversation_id=source_conversation_id,
+                        source_events=source_events,
+                    )
+                )
+                source_events.append(revalidated)
             except Exception:  # noqa: BLE001 — any validation failure rejects the bundle
                 return {"ok": False, "reason": "malformed_event"}
 
         cid = f"conv_{_uuid.uuid4().hex}"  # importer-minted — never trust bundle.conversation_id
-        self._store.create_conversation(
-            cid, owner_id=owner_id, title=title, surface=surface, origin="imported"
-        )
-        await self._store.append_many(cid, events)
+        try:
+            await self._store.import_read_only_conversation(
+                cid,
+                events,
+                owner_id=owner_id,
+                title=title,
+                surface=surface,
+            )
+        except ValueError:
+            return {"ok": False, "reason": "malformed_event"}
         return {"ok": True, "conversation_id": cid}
 
     def create_share_link(
