@@ -98,16 +98,7 @@ class SearchHistory:
                 yield {"type": "final", "answer": turn["answer"]}
                 yield {"type": "state", "status": "finished"}
                 return
-        if any(
-            isinstance(event, MessageEvent)
-            and event.meta.get(_KEY, {}).get("scope", {}).get("request_id") == scope.request_id
-            for event in await self.store.get_events(cid)
-        ):
-            raise ValueError("This search was interrupted; retry explicitly to start a new request")
-        if scope.parent_request_id and not any(
-            turn["scope"]["request_id"] == scope.parent_request_id for turn in history["turns"]
-        ):
-            raise ValueError("The parent answer does not belong to this conversation")
+        await self._require_new_request(scope, history["turns"])
         await self.store.append_many(
             cid,
             [
@@ -135,19 +126,34 @@ class SearchHistory:
                     yield frame
         finally:
             if not complete:
-                # Deleting a running Search must not resurrect its row when
-                # the socket/generator later unwinds.
-                with contextlib.suppress(KeyError):
-                    await self.store.append_many(
-                        cid,
-                        [
-                            StatusEvent(
-                                status=ConversationStatus.ERROR,
-                                detail="standard_search_interrupted",
-                            )
-                        ],
-                        require_existing=True,
+                await self._record_interrupted(cid)
+
+    async def _require_new_request(self, scope: SearchScope, turns: list[dict[str, Any]]) -> None:
+        if any(
+            isinstance(event, MessageEvent)
+            and event.meta.get(_KEY, {}).get("scope", {}).get("request_id") == scope.request_id
+            for event in await self.store.get_events(scope.conversation_id)
+        ):
+            raise ValueError("This search was interrupted; retry explicitly to start a new request")
+        if scope.parent_request_id and not any(
+            turn["scope"]["request_id"] == scope.parent_request_id for turn in turns
+        ):
+            raise ValueError("The parent answer does not belong to this conversation")
+
+    async def _record_interrupted(self, cid: str) -> None:
+        # Deleting a running Search must not resurrect its row when
+        # the socket/generator later unwinds.
+        with contextlib.suppress(KeyError):
+            await self.store.append_many(
+                cid,
+                [
+                    StatusEvent(
+                        status=ConversationStatus.ERROR,
+                        detail="standard_search_interrupted",
                     )
+                ],
+                require_existing=True,
+            )
 
     async def _save_answer(self, scope: SearchScope, answer: dict[str, Any]) -> None:
         if not isinstance(answer, dict) or not isinstance(answer.get("blocks"), list):
