@@ -61,6 +61,9 @@ async def destroy(instance: ContainerInstance) -> None:
             pass
         if instance._loopback_tunnel is not None:
             instance._loopback_tunnel.close()
+        with instance._kernel_tunnel_lock:
+            if instance._kernel_tunnel is not None:
+                instance._kernel_tunnel.close()
         # Successful force removal is the process-termination proof consumed
         # by SandboxSession and Preview. Never turn a failed removal into a
         # successful destroy or discard the retryable instance handle.

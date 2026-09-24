@@ -44,7 +44,10 @@ import tarfile
 import time
 import uuid
 from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from ._container_parts.kernel_tunnel import ExecStream
 
 # MODULE SURFACE, PRESERVED (Epic 10-B) ------------------------------------------
 #
@@ -264,6 +267,11 @@ class PodmanSandboxInstance(ContainerInstance):
     # SIDECAR binding: filtered/public boxes may expose curated user ports, while
     # sealed boxes publish only INTERNAL_PORTS and remain inverse-gated from user
     # preview. The inbound forwarder makes each accepted mapping real.
+
+    def _open_kernel_exec_stream(self) -> ExecStream:
+        from ._container_parts.kernel_tunnel import PodmanExecStream
+
+        return PodmanExecStream(self._cli_url, self._name)
 
     def _exec(self, argv: list[str], timeout: float) -> tuple[int, bytes, bytes]:
         return self._runner(["podman", "--url", self._cli_url, "exec", self._name, *argv], timeout)

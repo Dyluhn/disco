@@ -81,6 +81,7 @@ from .base import SandboxUnavailableError as SandboxUnavailableError
 from .file_batch import SandboxFileBatchResult, SandboxFileMutation
 
 if TYPE_CHECKING:
+    from ._container_parts.kernel_tunnel import ExecStream, KernelExecTunnel
     from .config import SandboxConfig
 
 _LOG = logging.getLogger(__name__)
@@ -465,6 +466,8 @@ class ContainerInstance:
         # anonymous attached volumes from container.remove(v=True).
         self._workspace_volume = workspace_volume
         self._loopback_tunnel = loopback_tunnel
+        self._kernel_tunnel: KernelExecTunnel | None = None
+        self._kernel_tunnel_lock = threading.Lock()
         # Wedge-guard bound for `_safe_reload()` (Dispo #25). A hung or failing
         # docker/podman client must never block the event loop. The service sources
         # this from `SandboxConfig.reload_timeout_s` at create time (hot-apply).
@@ -777,6 +780,29 @@ class ContainerInstance:
         if port not in INTERNAL_PORTS:
             return None
         return self._resolve_mapping(port)
+
+    def open_internal_port(self, port: int) -> tuple[str, int] | None:
+        """Reach the kernel across daemon/container network namespaces.
+
+        Remote SSH mappings already have a private local tunnel. Local daemon
+        sockets need exec transport: daemon-host loopback is not app loopback.
+        Keep the existing binding validation and inverse user-port gate.
+        """
+        from ._container_parts.kernel_tunnel import KernelExecTunnel
+
+        mapping = self.internal_port_mapping(port)
+        if mapping is None or self._loopback_tunnel is not None:
+            return mapping
+        with self._kernel_tunnel_lock:
+            self._alive()
+            if self._kernel_tunnel is None:
+                self._kernel_tunnel = KernelExecTunnel(self._open_kernel_exec_stream)
+            return self._kernel_tunnel.forward(port)
+
+    def _open_kernel_exec_stream(self) -> ExecStream:
+        from ._container_parts.kernel_tunnel import DockerExecStream
+
+        return DockerExecStream(self._container)
 
     def _resolve_mapping(self, port: int) -> tuple[str, int] | None:
         """Read the Docker/Podman port binding off the sidecar (or the
