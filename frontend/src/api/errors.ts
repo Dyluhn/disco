@@ -49,7 +49,10 @@ export function readableRequestError(error: unknown, fallback: string): string {
   if (typeof detail === "string") return detail;
   if (Array.isArray(detail)) return validationMessages(detail) || fallback;
   if (!detail || typeof detail !== "object") return fallback;
-  const row = detail as Record<string, unknown>;
+  return structuredReason(detail as Record<string, unknown>, fallback);
+}
+
+function structuredReason(row: Record<string, unknown>, fallback: string): string {
   for (const key of ["message", "detail"]) if (typeof row[key] === "string") return row[key];
   const reason = typeof row.reason === "string" ? row.reason : "";
   const reasons: Record<string, string> = {
