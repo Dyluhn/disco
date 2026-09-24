@@ -508,6 +508,19 @@ def _verify_claim_span(
     return record
 
 
+def _borrowed_span_citations(
+    span: _ClaimSpan,
+    paragraphs: dict[int, tuple[str, ...]],
+    table_context: dict[int, tuple[str, ...]],
+    by_id: dict[str, Passage],
+) -> list[str]:
+    """Select bounded context; caption IDs remain intact for unknown-ID checks."""
+    if span.start in table_context:
+        return list(table_context[span.start])
+    paragraph = max(start for start in paragraphs if start <= span.start)
+    return [passage_id for passage_id in paragraphs[paragraph] if passage_id in by_id]
+
+
 def _verify_claims(
     text: str,
     by_id: dict[str, Passage],
@@ -551,16 +564,7 @@ def _verify_claims(
         ids = list(span.cited_passage_ids)
         borrowed: list[str] = []
         if not ids and borrow_paragraph_citations:
-            paragraph = max(start for start in borrowed_by_paragraph if start <= span.start)
-            borrowed = (
-                list(table_context[span.start])
-                if span.start in table_context
-                else [
-                    passage_id
-                    for passage_id in borrowed_by_paragraph[paragraph]
-                    if passage_id in by_id
-                ]
-            )
+            borrowed = _borrowed_span_citations(span, borrowed_by_paragraph, table_context, by_id)
         checked = ids or borrowed
         record = _verify_claim_span(span, checked, by_id, nli, borrowed)
         if borrow_paragraph_citations and not ids and not borrowed:
