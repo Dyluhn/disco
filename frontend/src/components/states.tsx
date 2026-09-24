@@ -95,16 +95,10 @@ function RunFailureParts({ failure }: { failure: RunFailure }) {
 }
 
 /**
- * A model/provider error — the model couldn't perform the request and the
- * provider said so (Prompt 3E, reactive surfacing). The REAL provider content is
- * shown verbatim, never flattened to "something failed" and never swallowed. This
- * is distinct from a single SOURCE failing (paywalled/blocked), which renders
- * inline in the source panel.
- *
- * When the producing code path named its own boundary (`ErrorEvent.failure`),
- * the four parts replace the single sentence and the heading names the class
- * that raised — "the model returned an error" is wrong for a dead search pool
- * or a failed preflight. `message` stays the fallback for everything else.
+ * A request error with the producer's actual message. Untyped failures may
+ * originate in discovery, extraction, saved-state loading, or model inference;
+ * the fallback heading cannot reliably attribute them to a particular layer.
+ * Typed RunFailure records retain their precise boundary and recovery guidance.
  */
 export function ErrorState({
   message,
@@ -122,7 +116,7 @@ export function ErrorState({
     >
       <div className="flex items-center gap-hair font-ui text-[0.9rem] font-medium text-text">
         <AlertTriangle className="size-4 text-warn" aria-hidden />
-        {failure ? "The run stopped" : "The model returned an error"}
+        {failure ? "The run stopped" : "The request could not complete"}
         {failure && (
           <span
             data-failure-class={failure.failure_class}

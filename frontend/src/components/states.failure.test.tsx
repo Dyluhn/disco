@@ -46,7 +46,7 @@ describe("ErrorState with a typed RunFailure", () => {
 
   it("keeps `detail` as the fallback for an event with no failure", () => {
     render(<ErrorState message="ValueError: boom" onRetry={() => {}} failure={null} />);
-    expect(screen.getByText("The model returned an error")).toBeInTheDocument();
+    expect(screen.getByText("The request could not complete")).toBeInTheDocument();
     expect(screen.getByText("ValueError: boom")).toBeInTheDocument();
     expect(screen.queryByText("Still available")).not.toBeInTheDocument();
   });
