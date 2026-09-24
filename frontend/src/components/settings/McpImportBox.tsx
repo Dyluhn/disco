@@ -73,6 +73,7 @@ export function McpImportBox({ onClose }: { onClose: () => void }) {
   const [preview, setPreview] = useState<McpImportResult | null>(null);
 
   const handle = (dryRun: boolean) => {
+    if (importConfig.isPending) return;
     importConfig.mutate(
       { text, dryRun },
       {
@@ -135,7 +136,8 @@ export function McpImportBox({ onClose }: { onClose: () => void }) {
         <button
           type="button"
           data-disco-control="settings.mcp-import-preview"
-          disabled={text.trim().length === 0 || busy}
+          disabled={text.trim().length === 0}
+          aria-disabled={text.trim().length === 0 || busy}
           onClick={() => handle(true)}
           className="min-h-11 rounded-control border border-hairline px-inline py-hair font-ui text-[0.8rem] text-text-muted transition-colors hover:border-accent hover:text-text disabled:opacity-40 lg:min-h-0"
         >
@@ -144,7 +146,8 @@ export function McpImportBox({ onClose }: { onClose: () => void }) {
         <button
           type="button"
           data-disco-control="settings.mcp-import-apply"
-          disabled={!preview || preview.dry_run !== true || addable === 0 || busy}
+          disabled={!preview || preview.dry_run !== true || addable === 0}
+          aria-disabled={!preview || preview.dry_run !== true || addable === 0 || busy}
           onClick={() => handle(false)}
           className={cn(
             "min-h-11 rounded-control bg-accent px-body py-hair font-ui text-[0.8rem] font-medium text-bg transition-opacity disabled:opacity-40 lg:min-h-0",

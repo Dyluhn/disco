@@ -21,6 +21,10 @@ type Variant = (typeof variants)[number];
 let skills: Skill[];
 let rejectSave: boolean;
 let clients: QueryClient[];
+let holdSave: Promise<void> | undefined;
+let writes: number;
+let holdPreview: Promise<void> | undefined;
+let previews: number;
 
 function reply(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -32,11 +36,17 @@ beforeEach(() => {
   clients = [];
   skills = [{ id: "stable-id", name: "Existing", description: "", body: "Existing instructions", enabled: true }];
   rejectSave = false;
+  holdSave = undefined;
+  writes = 0;
+  holdPreview = undefined;
+  previews = 0;
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
     const method = init?.method ?? "GET";
     if (url === "/api/skills" && method === "GET") return reply(skills);
     if (url === "/api/mcp" && method === "GET") return reply([]);
     const body = JSON.parse(String(init?.body ?? "{}"));
+    if (method !== "GET" && !body.dry_run) { writes += 1; await holdSave; }
+    if (body.dry_run) { previews += 1; await holdPreview; }
     if (rejectSave) return reply({ detail: "Save rejected" }, 422);
     if (url === "/api/skills" && method === "POST") {
       const skill = { ...body, id: "new-id", enabled: true };
@@ -131,6 +141,52 @@ describe("Inline settings editor keyboard focus", () => {
     const name = variant.kind === "edit" ? "Edit Renamed" : variant.opener;
     await waitFor(() => expect(screen.getByRole("button", { name })).toHaveFocus());
     expect(screen.queryByRole("textbox", { name: variant.field })).not.toBeInTheDocument();
+  });
+
+  it.each(variants)("pending $kind save stays focusable and suppresses duplicate activation", async (variant) => {
+    const { user, field } = await open(variant);
+    await fill(variant, user);
+    let release!: () => void;
+    holdSave = new Promise<void>((resolve) => { release = resolve; });
+    const save = screen.getByRole("button", { name: variant.save });
+    await user.click(save);
+    await waitFor(() => expect(writes).toBe(1));
+    expect(save).toHaveAttribute("aria-disabled", "true");
+    // Native disabled buttons lose focus in Chromium; jsdom alone hides that bug.
+    expect((save as HTMLButtonElement).disabled).toBe(false);
+    expect(save).toHaveFocus();
+    await user.click(save);
+    await user.keyboard("{Enter}");
+    expect(writes).toBe(1);
+    rejectSave = true;
+    release();
+    await screen.findByRole("alert");
+    await waitFor(() => expect(save).toHaveAttribute("aria-disabled", "false"));
+    expect(field).toBeInTheDocument();
+    expect(save).toHaveFocus();
+  });
+
+  it.each([false, true])("import preview retains focus after success or rejection (%s)", async (reject) => {
+    const { user, field } = await open(variants[3]);
+    await user.type(field, "draft");
+    let release!: () => void;
+    holdPreview = new Promise<void>((resolve) => { release = resolve; });
+    const preview = screen.getByRole("button", { name: "Preview" });
+    await user.click(preview);
+    await waitFor(() => expect(previews).toBe(1));
+    expect(preview).toHaveAttribute("aria-disabled", "true");
+    expect((preview as HTMLButtonElement).disabled).toBe(false);
+    expect(preview).toHaveFocus();
+    await user.click(preview);
+    await user.keyboard("{Enter}");
+    expect(previews).toBe(1);
+    rejectSave = reject;
+    release();
+    if (reject) await screen.findByRole("alert");
+    else await screen.findByRole("list", { name: "Parsed MCP servers" });
+    await waitFor(() => expect(preview).toHaveAttribute("aria-disabled", "false"));
+    expect(preview).toHaveFocus();
+    expect(field).toHaveValue("draft");
   });
 
   it.each(variants)("failed $kind save retains the editor, draft and keyboard focus", async (variant) => {

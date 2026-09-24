@@ -189,8 +189,9 @@ function SkillEditor({
         <button
           type="button"
           data-disco-control="settings.skill-save"
-          disabled={!canSave || busy}
-          onClick={() => onSave(draft)}
+          disabled={!canSave}
+          aria-disabled={!canSave || busy}
+          onClick={() => { if (canSave && !busy) onSave(draft); }}
           className="min-h-11 rounded-control bg-accent px-body py-hair font-ui text-[0.8rem] font-medium text-bg transition-opacity disabled:opacity-40 lg:min-h-0"
         >
           {busy ? "Saving…" : "Save skill"}
