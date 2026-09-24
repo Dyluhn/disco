@@ -18,11 +18,15 @@ same command with no packaging-contract change.
 from __future__ import annotations
 
 from disco.core.auth import pairing_token
+from disco.core.llm.secrets import ensure_process_secret_key
 
 from .auth import public_ui_url
 
 
 def main() -> int:
+    # `compose exec` does not inherit exports made by the server entrypoint.
+    # Bootstrap the persisted install key exactly as the server does.
+    ensure_process_secret_key()
     print(f"UI: {public_ui_url()}")
     print(f"Pairing token: {pairing_token()}")
     print("Paste it if the browser asks to pair; it is valid until the install secret changes.")

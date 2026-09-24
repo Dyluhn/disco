@@ -149,6 +149,29 @@ afterEach(() => {
 });
 
 describe("ProviderKeysSection — store any provider key encrypted by name", () => {
+  it("saves a missing generated provider reference from its Add key control", async () => {
+    modelKeyEnvs = ["provider_river-lab"];
+    render(createElement(ProviderKeysSection), { wrapper: makeWrapper() });
+    await screen.findByText("provider_river-lab");
+    const buttons = screen.getAllByRole("button", { name: /^add key$/i });
+    const prefill = buttons.find((button) => button.getAttribute("type") !== "submit");
+    expect(prefill).toBeTruthy();
+    fireEvent.click(prefill!);
+    expect(screen.getByLabelText("Provider key name")).toHaveValue("provider_river-lab");
+    fireEvent.change(screen.getByLabelText("Provider key value"), {
+      target: { value: "replacement-private-value" },
+    });
+    fireEvent.click(buttons.find((button) => button.getAttribute("type") === "submit")!);
+    await waitFor(() => {
+      const put = fetchStub.mock.calls.find(
+        ([url, init]) => init?.method === "PUT" && url === "/api/secrets/provider_river-lab",
+      );
+      expect(put).toBeTruthy();
+      expect(JSON.parse(String(put?.[1]?.body))).toEqual({ value: "replacement-private-value" });
+    });
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
   it("PUTs a new key by name and shows it in the stored list", async () => {
     render(createElement(ProviderKeysSection), { wrapper: makeWrapper() });
     await screen.findByText("Provider API keys");

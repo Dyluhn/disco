@@ -19,16 +19,19 @@ from fastapi import APIRouter, HTTPException
 from ..config.dtos import ProbeResult, SecretBody, SecretsListDTO, SecretStatus
 from ..config_state import ConfigState
 
-# Provider keys are referenced by their env-var name; constrain the path param to
-# a valid env-var identifier (also blocks path-traversal / odd characters).
-_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+# References include both env-var names and generated provider_<slug> keys.
+# Preserve existing references while excluding path separators/odd characters.
+_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_-]*")
 
 
 def _validate(name: str) -> str:
     if not _NAME_RE.fullmatch(name):
         raise HTTPException(
             status_code=400,
-            detail="secret name must be an env-var identifier ([A-Za-z_][A-Za-z0-9_]*)",
+            detail=(
+                "secret name must start with a letter or underscore and contain only "
+                "letters, digits, underscores or hyphens"
+            ),
         )
     return name
 

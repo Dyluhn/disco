@@ -23,6 +23,31 @@ from fastapi.testclient import TestClient
 FIXTURES = Path(__file__).parent / "fixtures" / "provider_catalogues"
 
 
+@pytest.mark.parametrize("label", ["River Lab", "different.endpoint-example"])
+def test_generated_credential_is_editable_probeable_and_clearable(client, state, label):
+    """Advanced key routes must accept identifiers produced by provider setup."""
+    provider = state.providers.create_provider(ProviderCreate(
+        label=label, base_url="https://arbitrary.example/v1",
+        kind="openai-compat", api_key="original-private-value",
+    ))
+    name = provider.secret_name
+    assert "-" in name
+    url = f"/api/secrets/{name}"
+    assert client.get(url).status_code == 200
+    edited = client.put(url, json={"value": "replacement-private-value"})
+    assert edited.status_code == 200
+    assert edited.json()["configured"] is True
+    assert "replacement-private-value" not in edited.text
+    assert state.secrets_admin._resolve_secret_value(name) == "replacement-private-value"
+    probe = client.post(url + "/test")
+    assert probe.status_code == 200
+    # No model refers to this provider yet, so an inference probe cannot run.
+    assert probe.json()["status"] == "misconfigured"
+    assert "No configured model" in probe.json()["detail"]
+    assert client.delete(url).json()["configured"] is False
+    assert client.get(url).json()["configured"] is False
+
+
 class _CatalogueSink:
     """A real loopback HTTP sink that records bearer credentials."""
 

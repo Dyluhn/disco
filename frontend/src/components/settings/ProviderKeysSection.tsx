@@ -16,7 +16,7 @@ const field =
 
 // An env-var-style name (matches the server's validation). Shown inline so the
 // user knows WHY a name was rejected before the request round-trips.
-const NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const NAME_RE = /^[A-Za-z_][A-Za-z0-9_-]*$/;
 
 /** One stored key: name + Edit (replace value in place) + Clear (delete). Edit
  * reveals a value input — values are write-only (we never read a key back), so

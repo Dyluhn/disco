@@ -55,7 +55,7 @@ def test_blank_value_rejected(client):
 
 def test_invalid_name_rejected(client):
     # path-traversal / non-identifier names are 400 (also blocks weird store keys)
-    for bad in ("../etc", "has space", "has-dash", "9starts_with_digit"):
+    for bad in ("../etc", "has space", "has.dot", "9starts_with_digit"):
         assert client.put(f"/api/secrets/{bad}", json={"value": "x"}).status_code in (400, 404)
 
 
