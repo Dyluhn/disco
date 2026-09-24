@@ -64,3 +64,33 @@ describe("Rejected plan progress stays out of the checklist", () => {
     },
   );
 });
+
+describe("Progress argument validation is atomic", () => {
+  it.each([null, "", "bad", "1e0", "0x10", "1__0", "1.0_0", 1.5, [], {}, Infinity])(
+    "rejects every row in a snapshot containing invalid index %j before a rejection arrives", (index) => {
+      const events = [plan(2), snapshot("valid", [{ index: 1, state: "active" }]),
+        snapshot("invalid", [{ index: 1, state: "done" }, { index, state: "done" }])];
+      expect([...deriveBuildProgress(events, "RUNNING")]).toEqual([[1, "active"]]);
+    },
+  );
+
+  it.each([1, "1", " 1 ", "1.0", "+01.00", true])(
+    "retains valid tool integer coercion %j in both progress paths", (index) => {
+      const events = [plan(2), snapshot("valid", [{ index, state: "done" }])];
+      expect([...deriveBuildProgress(events, "RUNNING")]).toEqual([[1, "done"]]);
+      events.push({ kind: "action", id: "incremental", thought: "",
+        tool_call: { tool_name: "plan_step", arguments: { index, state: "done" } } } as AgentEvent);
+      expect([...derivePlanProgress(events, "RUNNING")]).toEqual([[1, "done"]]);
+    },
+  );
+
+  it("accepts integer separators supported by the tool, without coercing array states", () => {
+    expect([...deriveBuildProgress([plan(1, 12),
+      snapshot("valid", [{ index: "1_0.0", state: "done" }])], "RUNNING")]).toEqual([[10, "done"]]);
+    const events = [plan(2), snapshot("invalid", [{ index: 1, state: ["done"] }])];
+    expect(deriveBuildProgress(events, "RUNNING").size).toBe(0);
+    events.push({ kind: "action", id: "incremental", thought: "",
+      tool_call: { tool_name: "plan_step", arguments: { index: 1, state: ["done"] } } } as AgentEvent);
+    expect(derivePlanProgress(events, "RUNNING").size).toBe(0);
+  });
+});

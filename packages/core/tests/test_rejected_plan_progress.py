@@ -56,3 +56,33 @@ def test_failed_progress_keeps_genuine_prior_state_and_later_correction(kind, to
 def test_malformed_snapshot_does_not_override_valid_marks(rows):
     events = [_plan(2), _ps(1, "active"), _upp(rows)]
     assert effective_plan_progress(events)[1] == {1: "active"}
+
+
+@pytest.mark.parametrize("index", [None, "", "bad", "1e0", "0x10", "1__0", "1.0_0", 1.5, [], {}])
+def test_invalid_index_rejects_whole_snapshot_before_error_receipt(index):
+    from disco.tools.builtin.plan import UpdatePlanProgressArgs
+    from pydantic import ValidationError
+
+    rows = [{"index": 1, "state": "done"}, {"index": index, "state": "done"}]
+    with pytest.raises(ValidationError):
+        UpdatePlanProgressArgs.model_validate({"steps": rows})
+    events = [_plan(2), _ps(1, "active"), _upp(rows)]
+    assert effective_plan_progress(events)[1] == {1: "active"}
+
+
+@pytest.mark.parametrize("index", [1, "1", " 1 ", "1.0", "+01.00", True, "1_0.0"])
+def test_valid_index_coercion_matches_real_progress_tool(index):
+    from disco.tools.builtin.plan import UpdatePlanProgressArgs
+
+    rows = [{"index": index, "state": "done"}]
+    accepted = UpdatePlanProgressArgs.model_validate({"steps": rows})
+    expected = {accepted.steps[0].index: "done"}
+    assert effective_plan_progress([_plan(12), _upp(rows)])[1] == expected
+    assert effective_plan_progress([_plan(12), _ps(index, "done")])[1] == expected
+
+
+def test_array_state_is_not_a_valid_progress_declaration():
+    events = [_plan(2), _ps(1, "active"), _upp([{"index": 1, "state": ["done"]}])]
+    assert effective_plan_progress(events)[1] == {1: "active"}
+    events.append(_ps(1, ["done"]))
+    assert effective_plan_progress(events)[1] == {1: "active"}

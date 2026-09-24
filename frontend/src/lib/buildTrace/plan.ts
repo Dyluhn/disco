@@ -36,6 +36,18 @@ export function derivePlan(events: AgentEvent[]): PlanView | null {
   return latest;
 }
 
+/** JSON integer forms accepted by the progress tools, without Number(null/[])
+ * coercion or fractional truncation. Out-of-plan indices are bounded by callers. */
+export function progressStepIndex(value: unknown): number | null {
+  if (typeof value === "boolean") return Number(value);
+  if (typeof value === "string") {
+    const text = value.trim();
+    if (!/^[+-]?[0-9](?:_?[0-9])*(?:\.0+)?$/.test(text)) return null;
+    value = Number(text.replaceAll("_", ""));
+  }
+  return typeof value === "number" && Number.isInteger(value) ? value : null;
+}
+
 /** Per-step progress (1-based index → state), derived from the agent's `plan_step`
  * reports in the stream. Honest by construction: a step the agent never reported
  * stays "pending" — progress is agent-driven, never inferred from action counts.
@@ -68,9 +80,9 @@ export function derivePlanProgress(
     if (rejected.has(e.id)) return;
     if (i < latestPlanIdx) return; // belongs to a superseded plan
     if (e.kind !== "action" || !e.tool_call || e.tool_call.tool_name !== "plan_step") return;
-    const idx = Number(e.tool_call.arguments.index);
-    const state = String(e.tool_call.arguments.state);
-    if (!Number.isFinite(idx)) return;
+    const idx = progressStepIndex(e.tool_call.arguments.index);
+    const state = e.tool_call.arguments.state;
+    if (idx === null || idx < 1) return;
     if (state === "done") progress.set(idx, "done");
     else if (state === "active" && progress.get(idx) !== "done") progress.set(idx, "active");
   });

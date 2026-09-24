@@ -7,6 +7,7 @@
  */
 import type { ActionEvent, AgentEvent, ConversationStatus } from "@/types/agent";
 import type { StepState } from "../buildTrace";
+import { progressStepIndex } from "./plan";
 
 /** Terminal reconciliation:
  *  • FINISHED — the build passed the real finish gate, so the deliverable is
@@ -65,8 +66,8 @@ export function deriveBuildProgress(
     const rows = e.tool_call.arguments?.steps;
     // Failed validation rejects the entire snapshot, including plausible rows.
     if (Array.isArray(rows) && rows.every((row) =>
-      row && typeof row === "object" && "index" in row
-      && ["pending", "active", "done"].includes(String(row.state)),
+      row && typeof row === "object" && progressStepIndex(row.index) !== null
+      && typeof row.state === "string" && ["pending", "active", "done"].includes(row.state),
     )) latest = e;
   });
   // Apply the declarative snapshot IF one exists — but do NOT early-return when it's
@@ -80,14 +81,14 @@ export function deriveBuildProgress(
   }>;
   if (Array.isArray(steps)) {
     for (const s of steps) {
-      const idx = Number(s?.index);
+      const idx = progressStepIndex(s?.index);
       const st = String(s?.state);
       // Bound to the CURRENT plan's range. A malformed or stale index (e.g. index 99
       // on a 3-step plan, or a leftover from a longer prior plan) must NOT create a
       // phantom step or inflate the done-count into a lying checklist (a snapshot of
       // [{index:99,state:"done"}] would otherwise render "1/3" with every real step
       // pending). Out-of-range / non-integer indices are dropped.
-      if (!Number.isInteger(idx) || idx < 1 || (nSteps > 0 && idx > nSteps)) continue;
+      if (idx === null || idx < 1 || (nSteps > 0 && idx > nSteps)) continue;
       if (st === "done" || st === "active" || st === "pending") progress.set(idx, st as StepState);
     }
   }
