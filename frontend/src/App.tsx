@@ -157,9 +157,12 @@ function DocumentTitle() {
  * the same surface, general-task framing. */
 function MainSurface() {
   const { mode } = useMode();
-  if (mode === "build") return <BuildSurface />;
-  if (mode === "agent") return <AgentSurface />;
-  return <ResearchSurface />;
+  const { key } = useLocation();
+  // A fresh navigation to / (including New while already there) owns a new
+  // compose session, not the previous hook state or pre-created conversation.
+  if (mode === "build") return <BuildSurface key={key} />;
+  if (mode === "agent") return <AgentSurface key={key} />;
+  return <ResearchSurface key={key} />;
 }
 
 /** Resume an existing Build project from /build/:cid — opens the Build surface

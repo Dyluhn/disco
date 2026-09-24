@@ -652,9 +652,7 @@ async def _stream_research_frames(
             )
 
         frames = history.stream(scope, run) if scope else run()
-        async with close_search_stream(frames):
-            async for frame in frames:
-                await _send_json_redacted(websocket, frame)
+        await _send_search_until_disconnect(websocket, frames)
     except WebSocketDisconnect:
         return  # client cancelled mid-stream
     except EncoderUnavailable as exc:
@@ -671,6 +669,31 @@ async def _stream_research_frames(
     finally:
         with contextlib.suppress(Exception):
             await websocket.close()
+
+
+async def _send_search_until_disconnect(websocket: WebSocket, frames: Any) -> None:
+    """Observe cancellation while retrieval/inference is not yielding frames."""
+
+    async def send() -> None:
+        async with close_search_stream(frames):
+            async for frame in frames:
+                await _send_json_redacted(websocket, frame)
+
+    async def disconnected() -> None:
+        while True:
+            if (await websocket.receive())["type"] == "websocket.disconnect":
+                return
+
+    sender = asyncio.create_task(send())
+    receiver = asyncio.create_task(disconnected())
+    try:
+        done, _ = await asyncio.wait((sender, receiver), return_when=asyncio.FIRST_COMPLETED)
+        for task in done:
+            await task
+    finally:
+        sender.cancel()
+        receiver.cancel()
+        await asyncio.gather(sender, receiver, return_exceptions=True)
 
 
 def make_ws_router(store: SqliteEventStore, runtime: ConversationRuntime | None) -> APIRouter:
