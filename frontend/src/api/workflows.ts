@@ -6,6 +6,7 @@ import type {
   WorkflowDraftResult,
   WorkflowListResponse,
   WorkflowReview,
+  WorkflowSchedule,
 } from "@/types/workflow";
 
 function clone<T>(value: T): T {
@@ -329,14 +330,40 @@ export async function runWorkflow(
   return { conversation_id: `conv_${instanceId.slice(0, 16)}`, status: "started" };
 }
 
+const fixtureSchedules: WorkflowSchedule[] = [];
+
+export async function listWorkflowSchedules(): Promise<WorkflowSchedule[]> {
+  if (agentLive()) {
+    return (await agentGet<{ schedules: WorkflowSchedule[] }>("/api/workflows/schedules")).schedules;
+  }
+  await fixtureDelay();
+  return clone(fixtureSchedules);
+}
+
+export async function setWorkflowScheduleEnabled(input: {
+  scheduleId: string;
+  enabled: boolean;
+}): Promise<WorkflowSchedule> {
+  if (agentLive()) {
+    return agentSend<WorkflowSchedule>("PATCH", `/api/workflows/schedules/${encodeURIComponent(input.scheduleId)}`, {
+      enabled: input.enabled,
+    });
+  }
+  await fixtureDelay();
+  const row = fixtureSchedules.find((item) => item.schedule_id === input.scheduleId);
+  if (!row) throw new ApiError("workflow_schedule_not_found", 404);
+  row.spec.enabled = input.enabled;
+  return clone(row);
+}
+
 export async function scheduleWorkflow(input: {
   instanceId: string;
   instanceDigest: string;
   cron: string;
   timezone: string;
-}): Promise<Record<string, unknown>> {
+}): Promise<WorkflowSchedule> {
   if (agentLive()) {
-    return agentSend<Record<string, unknown>>("POST", "/api/workflows/schedules", {
+    return agentSend<WorkflowSchedule>("POST", "/api/workflows/schedules", {
       instance_id: input.instanceId,
       instance_digest: input.instanceDigest,
       cron: input.cron,
@@ -345,8 +372,13 @@ export async function scheduleWorkflow(input: {
     });
   }
   await fixtureDelay();
-  return {
-    schedule_id: `wfsched_${input.instanceId}`,
+  const existing = fixtureSchedules.find((row) => row.spec.instance_id === input.instanceId
+    && row.spec.instance_digest === input.instanceDigest && row.spec.cron === input.cron
+    && row.spec.timezone === input.timezone);
+  if (existing) return clone(existing);
+  const row: WorkflowSchedule = {
+    schedule_id: `wfsched_${input.instanceId}_${fixtureSchedules.length}`,
+    next_run: null,
     spec: {
       instance_id: input.instanceId,
       instance_digest: input.instanceDigest,
@@ -355,4 +387,6 @@ export async function scheduleWorkflow(input: {
       enabled: true,
     },
   };
+  fixtureSchedules.push(row);
+  return clone(row);
 }

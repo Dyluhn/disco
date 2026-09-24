@@ -268,3 +268,24 @@ parent, never an unfinished request. Imported conversations remain read-only;
 workspace/agent conversations cannot be run through this persistence path.
 Older websocket clients without a request identity retain their stateless
 streaming contract; previously unsaved answers cannot be recovered retroactively.
+
+### Workflow schedule management
+
+`GET /api/workflows/schedules` returns the authenticated owner's saved schedules.
+The workflow review UI filters that list by `spec.instance_id` and displays the
+cron, timezone, active/paused state and next run. Saving an identical owner,
+instance digest, cron and timezone returns the existing schedule; it does not
+create another timer or implicitly resume a paused one.
+
+`PATCH /api/workflows/schedules/{schedule_id}` accepts only `{ "enabled": boolean }`.
+It requires the session owner and normal CSRF protection. Unknown, unsafe,
+foreign-owner or unclaimed legacy IDs return 404; invalid bodies return 422.
+The response is the updated schedule row. Pausing retains its definition digest,
+ID, creation time and history, clears `next_run`, and prevents future automatic
+or fire-now dispatch. An already-started run continues. Resuming calculates the
+next future occurrence in the saved timezone, without replaying missed runs.
+
+New workflow run records persist their schedule owner's ID so history ownership
+survives a missing schedule file. Legacy records without ownership still require
+a surviving owner-scoped schedule; ownership is never inferred from an arbitrary
+run conversation ID. There is no destructive schedule-delete control.

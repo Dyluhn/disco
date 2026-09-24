@@ -7,11 +7,14 @@ import {
   listWorkflowReviews,
   runWorkflow,
   scheduleWorkflow,
+  listWorkflowSchedules,
+  setWorkflowScheduleEnabled,
 } from "@/api/workflows";
 import type { WorkflowListResponse } from "@/types/workflow";
 
 export const WORKFLOWS_KEY = ["workflows"] as const;
 export const WORKFLOW_AUTHORING_CONTEXT_KEY = ["workflows", "authoring-context"] as const;
+const WORKFLOW_SCHEDULES_KEY = ["workflow-schedules"] as const;
 
 export function useWorkflowReviews() {
   return useQuery<WorkflowListResponse>({
@@ -72,7 +75,21 @@ export function useRunWorkflow() {
 }
 
 export function useScheduleWorkflow() {
+  const qc = useQueryClient();
   return useMutation({
     mutationFn: scheduleWorkflow,
+    onSuccess: () => qc.invalidateQueries({ queryKey: WORKFLOW_SCHEDULES_KEY }),
+  });
+}
+
+export function useWorkflowSchedules() {
+  return useQuery({ queryKey: WORKFLOW_SCHEDULES_KEY, queryFn: listWorkflowSchedules });
+}
+
+export function useSetWorkflowScheduleEnabled() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: setWorkflowScheduleEnabled,
+    onSettled: () => qc.invalidateQueries({ queryKey: WORKFLOW_SCHEDULES_KEY }),
   });
 }
