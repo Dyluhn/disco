@@ -36,7 +36,7 @@ def _resolve_gateway_url(gk: GatewayKernel, port: int) -> str:
     # no transport to its own gateway. Container provisioning must provide
     # the explicit loopback mapping or code_exec fails closed.
     mapping = None
-    opener = getattr(gk._sandbox, "open_internal_port", None)
+    opener = getattr(gk._sandbox, "_open_kernel_port", None)
     if callable(opener):
         mapping = opener(port)
     elif hasattr(gk._sandbox, "internal_port_mapping"):

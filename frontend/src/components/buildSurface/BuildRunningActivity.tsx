@@ -13,7 +13,7 @@ import { ActivityFeed } from "@/components/build/ActivityFeed";
 import { AgentStageCard } from "@/components/build/AgentStageCard";
 import { LiveSignalBar } from "@/components/build/LiveSignalBar";
 import { PlanPanel } from "@/components/build/PlanPanel";
-import { BlockedRunNotice } from "@/components/build/BlockedRunNotice";
+import { BlockedRunNotice } from "./BlockedRunNotice";
 import type { ActivityItem, LiveSignal } from "@/lib/buildTrace";
 import type { BuildController } from "./types";
 import type { BuildFraming } from "@/components/BuildSurface";

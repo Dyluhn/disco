@@ -202,15 +202,15 @@ def test_container_opener_preserves_remote_tunnel_and_rejects_noninternal_ports(
 
     monkeypatch.setattr(kernel_tunnel, "KernelExecTunnel", Tunnel)
     instance = _inst(_Container({8899: "33333", 8000: "33334"}))
-    assert instance.open_internal_port(8000) is None
+    assert instance._open_kernel_port(8000) is None
     assert opened == []
-    assert instance.open_internal_port(8899) == ("127.0.0.1", 45678)
-    assert instance.open_internal_port(8899) == ("127.0.0.1", 45678)
+    assert instance._open_kernel_port(8899) == ("127.0.0.1", 45678)
+    assert instance._open_kernel_port(8899) == ("127.0.0.1", 45678)
     assert len(opened) == 1
     # Remote gVisor/Podman SSH forwarding retains its existing transport.
     remote = _inst(_Container({8899: "33333"}))
     remote._loopback_tunnel = SimpleNamespace(forward=lambda port: ("127.0.0.1", 44444))
-    assert remote.open_internal_port(8899) == ("127.0.0.1", 44444)
+    assert remote._open_kernel_port(8899) == ("127.0.0.1", 44444)
     assert len(opened) == 1
 
 

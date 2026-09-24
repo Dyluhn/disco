@@ -781,7 +781,7 @@ class ContainerInstance:
             return None
         return self._resolve_mapping(port)
 
-    def open_internal_port(self, port: int) -> tuple[str, int] | None:
+    def _open_kernel_port(self, port: int) -> tuple[str, int] | None:
         """Reach the kernel across daemon/container network namespaces.
 
         Remote SSH mappings already have a private local tunnel. Local daemon
