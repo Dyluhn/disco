@@ -1,5 +1,6 @@
 import { readableRequestError } from "@/api/errors";
 import * as Dialog from "@radix-ui/react-dialog";
+import * as Tabs from "@radix-ui/react-tabs";
 import { useQueryClient } from "@tanstack/react-query";
 import { FileArchive, FolderOpen, GitBranch, Loader2, X } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
@@ -102,85 +103,86 @@ export function ImportProjectDialog() {
             </Dialog.Close>
           </div>
 
-          <div
-            className="mt-section grid grid-cols-3 rounded-control border border-hairline bg-surface-1 p-px"
-            role="tablist"
-            aria-label="Import source"
-          >
-            {TABS.map(({ id, label, icon: Icon }) => (
-              <button
-                key={id}
-                type="button"
-                role="tab"
-                aria-selected={tab === id}
-                onClick={() => selectTab(id)}
-                className={cn(
-                  "flex min-h-11 min-w-0 items-center justify-center gap-hair rounded-control px-hair py-hair font-ui text-[0.76rem] transition-colors lg:min-h-0",
-                  tab === id
-                    ? "bg-bg text-text shadow-sm"
-                    : "text-text-muted hover:text-text",
-                )}
-              >
-                <Icon className="size-3.5 shrink-0" aria-hidden />
-                <span className="truncate">{label}</span>
-              </button>
-            ))}
-          </div>
+          <Tabs.Root value={tab} onValueChange={(value) => selectTab(value as ImportTab)}>
+            <Tabs.List
+              className="mt-section grid grid-cols-3 rounded-control border border-hairline bg-surface-1 p-px"
+              aria-label="Import source"
+              tabIndex={-1}
+            >
+              {TABS.map(({ id, label, icon: Icon }) => (
+                <Tabs.Trigger
+                  key={id}
+                  type="button"
+                  value={id}
+                  tabIndex={tab === id ? 0 : -1}
+                  className={cn(
+                    "flex min-h-11 min-w-0 items-center justify-center gap-hair rounded-control px-hair py-hair font-ui text-[0.76rem] transition-colors lg:min-h-0",
+                    tab === id
+                      ? "bg-bg text-text shadow-sm"
+                      : "text-text-muted hover:text-text",
+                  )}
+                >
+                  <Icon className="size-3.5 shrink-0" aria-hidden />
+                  <span className="truncate">{label}</span>
+                </Tabs.Trigger>
+              ))}
+            </Tabs.List>
 
-          <div className="mt-section">
-            {tab === "zip" && (
-              <label className="flex flex-col gap-hair font-ui text-[0.78rem] text-text-muted">
-                Zip file
-                <input
-                  type="file"
-                  accept=".zip,application/zip"
-                  aria-label="Project zip file"
-                  disabled={busy}
-                  onChange={(event) => {
-                    setZipFile(event.target.files?.[0] ?? null);
-                    setError(null);
-                  }}
-                  className="min-h-11 rounded-control border border-hairline bg-surface-1 px-inline py-hair text-text file:mr-inline file:rounded-control file:border-0 file:bg-accent file:px-inline file:py-hair file:font-ui file:text-bg lg:min-h-0"
-                />
-              </label>
-            )}
+            <div className="mt-section">
+              <Tabs.Content value="zip" forceMount hidden={tab !== "zip"} tabIndex={-1}>
+                <label className="flex flex-col gap-hair font-ui text-[0.78rem] text-text-muted">
+                  Zip file
+                  <input
+                    type="file"
+                    accept=".zip,application/zip"
+                    aria-label="Project zip file"
+                    disabled={busy}
+                    onChange={(event) => {
+                      setZipFile(event.target.files?.[0] ?? null);
+                      setError(null);
+                    }}
+                    className="min-h-11 rounded-control border border-hairline bg-surface-1 px-inline py-hair text-text file:mr-inline file:rounded-control file:border-0 file:bg-accent file:px-inline file:py-hair file:font-ui file:text-bg lg:min-h-0"
+                  />
+                </label>
+              </Tabs.Content>
 
-            {tab === "path" && (
-              <label className="flex flex-col gap-hair font-ui text-[0.78rem] text-text-muted">
-                Absolute folder path
-                <input
-                  type="text"
-                  value={localPath}
-                  disabled={busy}
-                  onChange={(event) => {
-                    setLocalPath(event.target.value);
-                    setError(null);
-                  }}
-                  placeholder="/absolute/path/to/project"
-                  aria-label="Local folder path"
-                  className="min-h-11 rounded-control border border-hairline bg-surface-1 px-inline py-hair font-mono text-[0.82rem] text-text outline-none transition-colors focus:border-hairline-strong lg:min-h-0"
-                />
-              </label>
-            )}
+              <Tabs.Content value="path" forceMount hidden={tab !== "path"} tabIndex={-1}>
+                <label className="flex flex-col gap-hair font-ui text-[0.78rem] text-text-muted">
+                  Absolute folder path
+                  <input
+                    type="text"
+                    value={localPath}
+                    disabled={busy}
+                    onChange={(event) => {
+                      setLocalPath(event.target.value);
+                      setError(null);
+                    }}
+                    placeholder="/absolute/path/to/project"
+                    aria-label="Local folder path"
+                    className="min-h-11 rounded-control border border-hairline bg-surface-1 px-inline py-hair font-mono text-[0.82rem] text-text outline-none transition-colors focus:border-hairline-strong lg:min-h-0"
+                  />
+                </label>
+              </Tabs.Content>
 
-            {tab === "git" && (
-              <label className="flex flex-col gap-hair font-ui text-[0.78rem] text-text-muted">
-                Git URL
-                <input
-                  type="url"
-                  value={gitUrl}
-                  disabled={busy}
-                  onChange={(event) => {
-                    setGitUrl(event.target.value);
-                    setError(null);
-                  }}
-                  placeholder="https://github.com/org/repo.git"
-                  aria-label="Git URL"
-                  className="min-h-11 rounded-control border border-hairline bg-surface-1 px-inline py-hair font-mono text-[0.82rem] text-text outline-none transition-colors focus:border-hairline-strong lg:min-h-0"
-                />
-              </label>
-            )}
-          </div>
+              <Tabs.Content value="git" forceMount hidden={tab !== "git"} tabIndex={-1}>
+                <label className="flex flex-col gap-hair font-ui text-[0.78rem] text-text-muted">
+                  Git URL
+                  <input
+                    type="url"
+                    value={gitUrl}
+                    disabled={busy}
+                    onChange={(event) => {
+                      setGitUrl(event.target.value);
+                      setError(null);
+                    }}
+                    placeholder="https://github.com/org/repo.git"
+                    aria-label="Git URL"
+                    className="min-h-11 rounded-control border border-hairline bg-surface-1 px-inline py-hair font-mono text-[0.82rem] text-text outline-none transition-colors focus:border-hairline-strong lg:min-h-0"
+                  />
+                </label>
+              </Tabs.Content>
+            </div>
+          </Tabs.Root>
 
           {error && (
             <p role="alert" className="mt-inline font-ui text-[0.78rem] leading-snug text-unsupported">
