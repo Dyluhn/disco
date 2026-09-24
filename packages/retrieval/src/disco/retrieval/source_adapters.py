@@ -35,6 +35,10 @@ def _with_params(base: str, params: Mapping[str, object]) -> str:
 class _SearchSourceUnavailable(RuntimeError):
     """A sanitized discovery failure, distinct from a successful empty search."""
 
+    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
 
 async def _fetch_get(
     url: str,
@@ -69,7 +73,8 @@ async def _fetch_get(
             429: "Rate limited. Try again later or choose another source.",
         }.get(response.status_code, "Try again later or choose another source.")
         raise _SearchSourceUnavailable(
-            f"Search source {source} returned HTTP {response.status_code}. {guidance}"
+            f"Search source {source} returned HTTP {response.status_code}. {guidance}",
+            status_code=response.status_code,
         )
     return response
 
