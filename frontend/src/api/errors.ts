@@ -47,14 +47,7 @@ export function readableRequestError(error: unknown, fallback: string): string {
   const outer = payload as Record<string, unknown>;
   const detail = outer.detail ?? outer;
   if (typeof detail === "string") return detail;
-  if (Array.isArray(detail)) {
-    const messages = detail.flatMap((item: unknown) => {
-      if (!item || typeof item !== "object") return [];
-      const row = item as Record<string, unknown>;
-      return typeof row.msg === "string" ? [row.msg] : [];
-    });
-    return messages.slice(0, 3).join("; ") || fallback;
-  }
+  if (Array.isArray(detail)) return validationMessages(detail) || fallback;
   if (!detail || typeof detail !== "object") return fallback;
   const row = detail as Record<string, unknown>;
   for (const key of ["message", "detail"]) if (typeof row[key] === "string") return row[key];
@@ -69,4 +62,12 @@ export function readableRequestError(error: unknown, fallback: string): string {
     request_policy_denied: "This request is blocked by the configured access policy. Review the destination and runtime settings.",
   };
   return reasons[reason] ?? (reason ? `${fallback} (${reason.replaceAll("_", " ")})` : fallback);
+}
+
+function validationMessages(detail: unknown[]): string {
+  return detail.flatMap((item: unknown) => {
+    if (!item || typeof item !== "object") return [];
+    const row = item as Record<string, unknown>;
+    return typeof row.msg === "string" ? [row.msg] : [];
+  }).slice(0, 3).join("; ");
 }

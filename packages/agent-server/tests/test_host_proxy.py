@@ -1219,7 +1219,7 @@ async def test_websocket_proxy(proxy_app_server, real_ws_server):
 
     # Test proxy
     async with websockets.connect(
-        f"ws://p2-aaaaaaaa-8000.localhost:{port}/ws", subprotocols=["vite-hmr"]
+        f"ws://p2-aaaaaaaa-8000.localhost:{port}/ws", host="127.0.0.1", subprotocols=["vite-hmr"]
     ) as ws:
         assert ws.subprotocol == "vite-hmr"
 
@@ -1303,6 +1303,7 @@ async def test_signed_live_capability_authorizes_only_exact_origin_cid_and_port(
 
     async with websockets.connect(
         url,
+        host="127.0.0.1",  # fixture listens on IPv4; preserve the URL Host/Origin
         origin=f"http://{host}",
         additional_headers=headers,
     ) as ws:
@@ -1316,6 +1317,7 @@ async def test_signed_live_capability_authorizes_only_exact_origin_cid_and_port(
     ):
         async with websockets.connect(
             url,
+            host="127.0.0.1",
             origin=f"http://{host}",
             additional_headers=duplicate_headers,
         ) as ws:
@@ -1327,6 +1329,7 @@ async def test_signed_live_capability_authorizes_only_exact_origin_cid_and_port(
     with pytest.raises(websockets.exceptions.InvalidStatus):
         async with websockets.connect(
             url,
+            host="127.0.0.1",
             origin="https://evil.example",
             additional_headers=headers,
         ):
@@ -1335,6 +1338,7 @@ async def test_signed_live_capability_authorizes_only_exact_origin_cid_and_port(
     with pytest.raises(websockets.exceptions.InvalidStatus):
         async with websockets.connect(
             url,
+            host="127.0.0.1",
             origin=f"https://{host}",
             additional_headers=headers,
         ):
@@ -1353,6 +1357,7 @@ async def test_signed_live_capability_authorizes_only_exact_origin_cid_and_port(
         with pytest.raises(websockets.exceptions.InvalidStatus):
             async with websockets.connect(
                 wrong_url,
+                host="127.0.0.1",
                 origin=wrong_origin,
                 additional_headers=headers,
             ):
