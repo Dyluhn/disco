@@ -273,6 +273,8 @@ export function PreviewPane({
         updateError={data?.update_error}
       />
       <VersionBanner
+        selectedVersionSeq={selectedVersionSeq}
+        versions={versions}
         displayedVersionSeq={displayedVersionSeq}
         restoringSeq={restoringSeq}
         onBackToCurrent={() => selectVersion(null)}

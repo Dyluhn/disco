@@ -3,21 +3,32 @@ import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { cn } from "@/lib/cn";
 
 export function VersionBanner({
+  selectedVersionSeq,
+  versions,
   displayedVersionSeq,
   restoringSeq,
   onBackToCurrent,
   onRollback,
 }: {
+  selectedVersionSeq: number | null;
+  versions: readonly { seq: number }[];
   displayedVersionSeq: number | null;
   restoringSeq: number | null;
   onBackToCurrent: () => void;
   onRollback: (seq: number) => Promise<void>;
 }) {
-  if (displayedVersionSeq === null) return null;
+  // Rollback authority is the selected server-listed snapshot. The frame's
+  // displayed version remains separate: minting/bootstrapping may be offline
+  // or may leave a different, previously loaded version on screen.
+  const selected = versions.find((version) => version.seq === selectedVersionSeq);
+  if (!selected) return null;
+  const versionSeq = selected.seq;
   return (
     <div className="flex shrink-0 items-center justify-between gap-inline border-b border-warn/30 bg-warn/10 px-body py-hair">
       <span className="font-ui text-[0.78rem] text-warn">
-        Viewing immutable v{displayedVersionSeq} (read-only)
+        {displayedVersionSeq === versionSeq
+          ? `Viewing immutable v${versionSeq} (read-only)`
+          : `Selected immutable v${versionSeq}; preview has not loaded this version.`}
       </span>
       <div className="flex items-center gap-inline">
         <button
@@ -28,11 +39,11 @@ export function VersionBanner({
           <MonitorPlay className="size-3" aria-hidden /> Back to current
         </button>
         <ConfirmDialog
-          title={`Roll back to v${displayedVersionSeq}?`}
+          title={`Roll back to v${versionSeq}?`}
           description="Restores the workspace to this exact version. The rollback is saved as a new version."
           confirmLabel="Roll back"
           confirmContext="workspace-rollback"
-          onConfirm={() => void onRollback(displayedVersionSeq)}
+          onConfirm={() => void onRollback(versionSeq)}
           trigger={
             <button
               type="button"
