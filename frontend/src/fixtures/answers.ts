@@ -61,7 +61,7 @@ const claims: VerifiedClaim[] = [
   },
   {
     claim: {
-      text: "RRF requires labelled training data",
+      text: "It is sometimes claimed that RRF requires labelled training data",
       cited_passage_ids: ["wiki_p0"],
     },
     verdict: "unsupported",
