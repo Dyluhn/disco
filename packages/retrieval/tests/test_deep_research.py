@@ -996,7 +996,9 @@ class _RecordingSearch:
         self.limits.append(limit)
         return [
             SearchHit(
-                url=f"https://example.test/hit-{i}",
+                # This fixture serves the explicit site:bis.doc.gov query below;
+                # off-domain hits are correctly rejected by source scoping.
+                url=f"https://bis.doc.gov/hit-{i}",
                 title=f"hit {i}",
                 snippet="",
                 source_engine="recording",

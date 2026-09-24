@@ -391,6 +391,7 @@ async def test_seed_passages_in_stream_research_answer() -> None:
     streaming tests; here we just verify seeds flow through."""
     from unittest.mock import AsyncMock, MagicMock
 
+    from disco.core.llm import CompletionResponse, StreamChunk, TokenUsage
     from disco.retrieval.models import Passage
     from disco.retrieval.streaming import stream_research_answer
 
@@ -437,19 +438,33 @@ async def test_seed_passages_in_stream_research_answer() -> None:
     # iterator in a coroutine and reproduces the "coroutine was never awaited"
     # RuntimeWarning. We assign a real async-generator function so calling
     # stream_complete yields an async iterator directly.
-    fake_router = AsyncMock()
-    follow_up_response = MagicMock()
-    follow_up_response.text = (
-        "What evidence supports the answer?\n"
-        "Which exceptions matter most?\n"
-        "What should be investigated next?"
+    fake_router = MagicMock()
+    fake_router.context_token_limit.return_value = None
+    fake_router.output_token_limit.return_value = None
+    follow_up_response = CompletionResponse(
+        text=(
+            "What evidence supports the answer?\n"
+            "Which exceptions matter most?\n"
+            "What should be investigated next?"
+        ),
+        usage=TokenUsage(input_tokens=1, output_tokens=1),
+        finish_reason="stop",
+        model_used="upload-fixture",
     )
     fake_router.complete = AsyncMock(return_value=follow_up_response)
 
-    async def _fake_token_stream(req: Any) -> AsyncIterator[Any]:
-        chunk = MagicMock()
-        chunk.delta_text = "The answer is 42. [[up_notes_0]]"
-        yield chunk
+    async def _fake_token_stream(req: Any) -> AsyncIterator[StreamChunk]:
+        text = "The answer is 42. [[up_notes_0]]"
+        yield StreamChunk(delta_text=text)
+        yield StreamChunk(
+            done=True,
+            final=CompletionResponse(
+                text=text,
+                usage=TokenUsage(input_tokens=1, output_tokens=1),
+                finish_reason="stop",
+                model_used="upload-fixture",
+            ),
+        )
 
     fake_router.stream_complete = _fake_token_stream
 
