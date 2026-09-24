@@ -209,6 +209,14 @@ class ModelVerifier:
                     req.model_copy(update={"max_tokens": _EMPTY_RESPONSE_RETRY_MAX_TOKENS}),
                     context=CallContext(conversation_id=self._conversation_id),
                 )
+            if resp.finish_reason == "length":
+                return TypedVerifierVerdict(
+                    verified=False,
+                    verdict="unavailable",
+                    detail="model verifier output budget exhausted before completion",
+                    failures=[{"kind": "verifier_unavailable", "message": "truncated response"}],
+                    failure_fingerprint="model_verifier_unavailable",
+                )
             obj = _normalise_verdict_payload(_extract_json_object(resp.text))
             return TypedVerifierVerdict.model_validate(obj)
         except Exception as exc:  # noqa: BLE001

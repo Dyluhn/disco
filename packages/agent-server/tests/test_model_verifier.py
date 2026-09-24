@@ -356,4 +356,22 @@ async def test_model_verifier_empty_retry_is_bounded_and_remains_unavailable(
     assert verdict.failure_fingerprint == "model_verifier_unavailable"
     assert len(router.requests) == 2
     assert caplog.text.count("retrying once") == 1
-    assert "JSONDecodeError" in verdict.detail
+    assert "output budget exhausted" in verdict.detail
+
+
+@pytest.mark.parametrize("retry", [False, True])
+async def test_model_verifier_rejects_parseable_but_truncated_pass(retry):
+    truncated = CompletionResponse(
+        text=json.dumps({"verified": True, "verdict": "pass"}),
+        usage=TokenUsage(input_tokens=100, output_tokens=900),
+        finish_reason="length",
+        model_used="arbitrary-verifier",
+    )
+    responses = [truncated.model_copy(update={"text": ""})] if retry else []
+    router = _SequenceRouter([*responses, truncated])
+
+    verdict = await ModelVerifier(router).judge(VerifierContextSeed())
+
+    assert not verdict.verified and verdict.verdict == "unavailable"
+    assert "output budget exhausted" in verdict.detail
+    assert len(router.requests) == (2 if retry else 1)

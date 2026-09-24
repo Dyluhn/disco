@@ -8,8 +8,9 @@ share.
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any
+
+from disco.core.llm.stream_progress import await_with_progress_timeout
 
 from ..common import (
     AgentStep,
@@ -55,8 +56,7 @@ def _missing_visual_evidence(
     claim: HostVerificationClaim, seed: VerifierContextSeed
 ) -> tuple[bool, bool]:
     missing_pixels = (
-        claim.kind is VerificationClaimKind.VISUAL_SEMANTIC
-        and not seed.screenshot.image_data_url
+        claim.kind is VerificationClaimKind.VISUAL_SEMANTIC and not seed.screenshot.image_data_url
     )
     missing_reference = (
         claim.kind is VerificationClaimKind.VISUAL_SEMANTIC
@@ -90,7 +90,7 @@ async def _run_semantic_judge(
     """Run one bounded judge call. Returns (typed, applied, fallback_cause)."""
 
     try:
-        raw_typed = await asyncio.wait_for(
+        raw_typed = await await_with_progress_timeout(
             judge.judge(seed),
             timeout=max(0.001, float(getattr(gate._loop, "_verifier_judge_timeout_s", 30.0))),
         )
@@ -110,7 +110,7 @@ async def _run_semantic_judge(
         typed = TypedVerifierVerdict(
             verified=False,
             verdict="unavailable",
-            detail="model verifier deadline exceeded",
+            detail="model verifier output inactivity deadline exceeded",
             failure_fingerprint="model_verifier_unavailable",
         )
         return typed, False, typed.detail
