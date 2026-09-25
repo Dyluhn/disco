@@ -10,6 +10,7 @@
  *  (e) Audio button shows the honest "not-wired" state, not fake success
  */
 
+import { useState } from "react";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -18,7 +19,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NeedMoreCard } from "./NeedMoreCard";
 import { ModeProvider } from "@/shell/ModeProvider";
 import { useMode } from "@/shell/mode";
-import type { ReportEvent } from "@/types/agent";
+import type { MessageEvent, ReportEvent } from "@/types/agent";
 
 // ── Mocks ─────────────────────────────────────────────────────────────────────
 
@@ -172,23 +173,37 @@ function ModeReadout() {
   return <span data-testid="active-mode">{mode}</span>;
 }
 
-function renderCard(overrides?: Partial<React.ComponentProps<typeof NeedMoreCard>>) {
+function renderCard(overrides?: Partial<React.ComponentProps<typeof NeedMoreCard>>, withTopbar = false) {
   const qc = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
   const onFollowUp = vi.fn();
+  function CardActions() {
+    const [action, setAction] = useState<{ name: "audio"; nonce: number } | null>(null);
+    return <>
+      {withTopbar && <button onClick={() => setAction({ name: "audio", nonce: (action?.nonce ?? 0) + 1 })}>Top bar audio</button>}
+      <NeedMoreCard
+        report={STUB_REPORT}
+        cid={STUB_CID}
+        onFollowUp={onFollowUp}
+        followUpBusy={false}
+        requestedAction={action}
+        {...overrides}
+      />
+    </>;
+  }
   const result = render(
     <QueryClientProvider client={qc}>
       <MemoryRouter>
         <ModeProvider>
           <ModeReadout />
-          <NeedMoreCard
+          {withTopbar ? <CardActions /> : <NeedMoreCard
             report={STUB_REPORT}
             cid={STUB_CID}
             onFollowUp={onFollowUp}
             followUpBusy={false}
             {...overrides}
-          />
+          />}
         </ModeProvider>
       </MemoryRouter>
     </QueryClientProvider>,
@@ -552,8 +567,97 @@ describe("NeedMoreCard", () => {
     );
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
 
-    // Still in idle — Audio Overview button is still there
-    expect(screen.getByRole("button", { name: /Audio Overview/i })).toBeInTheDocument();
+    // Still idle, and keyboard users return to the actual invoking button.
+    await waitFor(() => expect(screen.getByRole("button", { name: /Audio Overview/i })).toHaveFocus());
+  });
+
+  it("restores the top bar audio invoker on Escape and recaptures the bottom invoker on reopen", async () => {
+    const user = userEvent.setup();
+    renderCard(undefined, true);
+    const top = screen.getByRole("button", { name: "Top bar audio" });
+    top.focus();
+    await user.keyboard("{Enter}");
+    await screen.findByRole("dialog", { name: "Generate audio overview" });
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(top).toHaveFocus());
+    const bottom = screen.getByRole("button", { name: "Audio Overview" });
+    await user.click(bottom);
+    await screen.findByRole("dialog", { name: "Generate audio overview" });
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(bottom).toHaveFocus());
+  });
+
+  it.each([
+    ["Skip", "Top bar audio"],
+    ["Generate audio with 1 follow-up", "Top bar audio"],
+    ["Skip", "Audio Overview"],
+    ["Generate audio with 1 follow-up", "Audio Overview"],
+  ])(
+    "keeps focus inside the audio handoff via %s and restores its original %s invoker",
+    async (confirmLabel, invokerLabel) => {
+      const user = userEvent.setup();
+      const followUps = [
+        { kind: "message", seq: 10, source: "user", message: { role: "user", content: "More?" } },
+        { kind: "message", seq: 11, source: "agent", message: { role: "assistant", content: "Details." } },
+      ] as MessageEvent[];
+      renderCard({ followUps }, true);
+      const top = screen.getByRole("button", { name: invokerLabel });
+      await user.click(top);
+      let chooser = await screen.findByRole("dialog", { name: "Include follow-ups?" });
+      await user.keyboard("{Escape}");
+      await waitFor(() => expect(top).toHaveFocus());
+      await user.keyboard("{Enter}");
+      chooser = await screen.findByRole("dialog", { name: "Include follow-ups?" });
+      const restore = vi.spyOn(top, "focus");
+      await user.click(within(chooser).getByRole("button", { name: confirmLabel }));
+      const mode = await screen.findByRole("dialog", { name: "Generate audio overview" });
+      await waitFor(() => expect(within(mode).getByRole("button", { name: "Close audio mode dialog" })).toHaveFocus());
+      await user.tab();
+      expect(mode).toContainElement(document.activeElement as HTMLElement);
+      expect(restore).not.toHaveBeenCalled();
+      await user.keyboard("{Escape}");
+      await waitFor(() => expect(top).toHaveFocus());
+      // A later cancellation must not inherit the previous handoff suppression.
+      await user.keyboard("{Enter}");
+      chooser = await screen.findByRole("dialog", { name: "Include follow-ups?" });
+      await user.click(within(chooser).getByRole("button", { name: "Close dialog" }));
+      await waitFor(() => expect(top).toHaveFocus());
+      restore.mockRestore();
+    },
+  );
+
+  it("does not steal focus from the export dialog when the include chooser hands off", async () => {
+    const user = userEvent.setup();
+    renderCard({ followUps: [
+      { kind: "message", seq: 10, source: "user", message: { role: "user", content: "More?" } },
+      { kind: "message", seq: 11, source: "agent", message: { role: "assistant", content: "Details." } },
+    ] as MessageEvent[] });
+    const trigger = screen.getByRole("button", { name: /Export as/ });
+    await user.click(trigger);
+    const chooser = await screen.findByRole("dialog", { name: "Include follow-ups?" });
+    const restore = vi.spyOn(trigger, "focus");
+    await user.click(within(chooser).getByRole("button", { name: "Skip" }));
+    const exporter = await screen.findByRole("dialog", { name: "Export report" });
+    await waitFor(() => expect(exporter).toContainElement(document.activeElement as HTMLElement));
+    await user.tab();
+    expect(exporter).toContainElement(document.activeElement as HTMLElement);
+    expect(restore).not.toHaveBeenCalled();
+    restore.mockRestore();
+  });
+
+  it("does not refocus the removed Audio Overview invoker when generation starts", async () => {
+    const user = userEvent.setup();
+    _fetchMock.mockResolvedValueOnce(makeSseHangingResponse([{ stage: "writing" }]));
+    renderCard();
+    const trigger = screen.getByRole("button", { name: "Audio Overview" });
+    await user.click(trigger);
+    const restore = vi.spyOn(trigger, "focus");
+    const mode = await screen.findByRole("dialog", { name: "Generate audio overview" });
+    await user.click(within(mode).getByRole("button", { name: /Podcast style/i }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(trigger.isConnected).toBe(false);
+    expect(restore).not.toHaveBeenCalled();
+    restore.mockRestore();
   });
 
   it("audio failure surfaces an honest reason and is resettable to idle", async () => {

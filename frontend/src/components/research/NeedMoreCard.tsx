@@ -88,6 +88,7 @@ export function NeedMoreCard({
   const [includeForAudioOpen, setIncludeForAudioOpen] = useState(false);
   const [audioFollowUpSeqs, setAudioFollowUpSeqs] = useState<number[]>([]);
   const [audioModeOpen, setAudioModeOpen] = useState(false);
+  const audioInvoker = useRef<HTMLElement | null>(null);
 
   const hasFollowUps = followUps.length > 0;
   const navigate = useNavigate();
@@ -157,6 +158,9 @@ export function NeedMoreCard({
 
   // Audio button: show include-modal first if follow-ups exist.
   const handleAudioClick = useCallback(() => {
+    audioInvoker.current = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
     if (hasFollowUps) {
       setIncludeForAudioOpen(true);
     } else {
@@ -235,6 +239,7 @@ export function NeedMoreCard({
           onModeOpenChange={setAudioModeOpen}
           reportQuery={report.query}
           onRequestGenerate={handleAudioClick}
+          returnFocusRef={audioInvoker}
         />
 
         {/* 4. Build a deck — autonomous handoff: turn this report into slides */}
@@ -272,6 +277,7 @@ export function NeedMoreCard({
         onOpenChange={setIncludeForExportOpen}
         followUps={followUps}
         onConfirm={handleExportIncludeConfirm}
+        confirmOpensDialog
         actionLabel="Export"
       />
 
@@ -281,6 +287,8 @@ export function NeedMoreCard({
         onOpenChange={setIncludeForAudioOpen}
         followUps={followUps}
         onConfirm={handleAudioIncludeConfirm}
+        confirmOpensDialog
+        returnFocusRef={audioInvoker}
         actionLabel="Generate audio"
       />
 

@@ -12,7 +12,8 @@
  *  (h) Selection resets to all-selected when modal reopens
  */
 
-import { render, screen } from "@testing-library/react";
+import { useState } from "react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { IncludeFollowUpsModal } from "./IncludeFollowUpsModal";
@@ -229,4 +230,29 @@ describe("IncludeFollowUpsModal", () => {
     renderModal({ open: false });
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
+});
+
+
+describe("IncludeFollowUpsModal focus restoration", () => {
+  function Standalone() {
+    const [open, setOpen] = useState(false);
+    return <>
+      <button onClick={() => setOpen(true)}>Export with follow-ups</button>
+      <IncludeFollowUpsModal open={open} onOpenChange={setOpen} followUps={FOLLOW_UPS} onConfirm={() => {}} />
+    </>;
+  }
+
+  it.each(["Escape", "Close dialog", "Skip", "Export with 2 follow-ups"])(
+    "restores its standalone invoker after %s without a successor dialog",
+    async (action) => {
+      const user = userEvent.setup();
+      render(<Standalone />);
+      const trigger = screen.getByRole("button", { name: "Export with follow-ups" });
+      await user.click(trigger);
+      await screen.findByRole("dialog", { name: "Include follow-ups?" });
+      if (action === "Escape") await user.keyboard("{Escape}");
+      else await user.click(screen.getByRole("button", { name: action }));
+      await waitFor(() => expect(trigger).toHaveFocus());
+    },
+  );
 });

@@ -21,8 +21,9 @@
  */
 
 import * as Dialog from "@radix-ui/react-dialog";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 import { Check, X } from "lucide-react";
+import { useDialogRestoreFocus } from "@/hooks/useDialogRestoreFocus";
 import { cn } from "@/lib/cn";
 import type { MessageEvent } from "@/types/agent";
 
@@ -74,6 +75,9 @@ export interface IncludeFollowUpsModalProps {
   onConfirm: (selectedSeqs: number[]) => void;
   /** Label for the action (e.g. "Export" or "Generate audio"). */
   actionLabel?: string;
+  returnFocusRef?: RefObject<HTMLElement | null>;
+  /** Confirmation hands focus to a successor dialog instead of the invoker. */
+  confirmOpensDialog?: boolean;
 }
 
 export function IncludeFollowUpsModal({
@@ -82,7 +86,11 @@ export function IncludeFollowUpsModal({
   followUps,
   onConfirm,
   actionLabel = "Export",
+  returnFocusRef,
+  confirmOpensDialog = false,
 }: IncludeFollowUpsModalProps) {
+  const handingOff = useRef(false);
+  const focus = useDialogRestoreFocus(returnFocusRef, handingOff);
   const pairs = groupIntoPairs(followUps);
 
   // Default: all pairs with answers are selected.
@@ -126,14 +134,16 @@ export function IncludeFollowUpsModal({
   const deselectAll = useCallback(() => setSelected(new Set()), []);
 
   const handleConfirm = useCallback(() => {
+    handingOff.current = confirmOpensDialog;
     onOpenChange(false);
     onConfirm(Array.from(selected));
-  }, [selected, onConfirm, onOpenChange]);
+  }, [selected, onConfirm, onOpenChange, confirmOpensDialog]);
 
   const handleSkip = useCallback(() => {
+    handingOff.current = confirmOpensDialog;
     onOpenChange(false);
     onConfirm([]); // no follow-ups → proceed without them
-  }, [onConfirm, onOpenChange]);
+  }, [onConfirm, onOpenChange, confirmOpensDialog]);
 
   const allSelected = pairs.filter((p) => p.hasAnswer).every((p) => selected.has(p.questionSeq));
 
@@ -142,6 +152,11 @@ export function IncludeFollowUpsModal({
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-40 bg-black/40 backdrop-blur-md" />
         <Dialog.Content
+          onOpenAutoFocus={() => {
+            handingOff.current = false;
+            focus.onOpenAutoFocus();
+          }}
+          onCloseAutoFocus={focus.onCloseAutoFocus}
           className={cn(
             "fixed left-1/2 top-1/2 z-50 w-[min(32rem,92vw)]",
             "-translate-x-1/2 -translate-y-1/2",

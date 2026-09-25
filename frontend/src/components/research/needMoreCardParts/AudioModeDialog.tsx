@@ -3,6 +3,8 @@
  * NeedMoreCard.tsx.
  */
 
+import type { RefObject } from "react";
+import { useDialogRestoreFocus } from "@/hooks/useDialogRestoreFocus";
 import * as Dialog from "@radix-ui/react-dialog";
 import { Mic, Radio, X } from "lucide-react";
 import { cn } from "@/lib/cn";
@@ -14,14 +16,17 @@ export interface AudioModeDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onChoose: (mode: AudioMode) => void;
+  returnFocusRef?: RefObject<HTMLElement | null>;
 }
 
-export function AudioModeDialog({ open, onOpenChange, onChoose }: AudioModeDialogProps) {
+export function AudioModeDialog({ open, onOpenChange, onChoose, returnFocusRef }: AudioModeDialogProps) {
+  const focus = useDialogRestoreFocus(returnFocusRef);
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-40 bg-black/40 backdrop-blur-md" />
         <Dialog.Content
+          {...focus}
           className={cn(
             "fixed left-1/2 top-1/2 z-50 w-[min(26rem,92vw)]",
             "-translate-x-1/2 -translate-y-1/2",

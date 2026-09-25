@@ -5,6 +5,7 @@
  * branches (generating / done / unavailable / implicit idle).
  */
 
+import type { RefObject } from "react";
 import { ArrowDown, Headphones } from "lucide-react";
 import { AudioPlayer } from "../AudioPlayer";
 import { AudioModeDialog } from "./AudioModeDialog";
@@ -28,6 +29,7 @@ export interface AudioSectionProps {
   /** Open the mode picker (via the include-follow-ups step when the report has
    *  follow-ups). Owned by the parent because that step is the parent's. */
   onRequestGenerate: () => void;
+  returnFocusRef?: RefObject<HTMLElement | null>;
 }
 
 export function AudioSection({
@@ -37,6 +39,7 @@ export function AudioSection({
   onModeOpenChange,
   reportQuery,
   onRequestGenerate,
+  returnFocusRef,
 }: AudioSectionProps) {
   const { audio, generate, reset } = useAudioOverview({ cid, followUpSeqs, onModeOpenChange });
   const generatedMode = audio.status === "done" ? (audio.mode ?? "podcast") : "podcast";
@@ -59,6 +62,7 @@ export function AudioSection({
         open={modeOpen}
         onOpenChange={onModeOpenChange}
         onChoose={generate}
+        returnFocusRef={returnFocusRef}
       />
 
       {/* UI-23: the trigger lives HERE, not in the parent card, so it can
