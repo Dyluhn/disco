@@ -54,9 +54,13 @@ def reload_budget(budget):
     return adapter.validate_json(adapter.dump_json(budget))
 
 
-async def arc(router, saved, *, resume=None, stop=None, review_decisions=4, events=None):
+async def arc(
+    router, saved, *, resume=None, stop=None, review_decisions=4, events=None, on_saved=None
+):
     async def save(state):
         saved.append(WriterCheckpoint.model_validate_json(state.model_dump_json()))
+        if on_saved is not None:
+            on_saved(saved[-1])
 
     captured, capture = collect_emits()
 
@@ -352,22 +356,32 @@ def assessed_verdict(*, uncertain=False):
 
 
 async def test_unused_repair_reserve_resolves_conflicting_verdict_without_new_budget():
+    """The retained reserve follows a repair, not another unchanged-draft retry."""
     saved = []
+    repair = "## Executive summary\nThe measured evidence covers an observed window [[s1]]."
     router = RecordingRouter(
         [
             '{"inspect":[{"source_id":"s1"}]}',
             assessed_verdict(uncertain=True),
+            repair,
             assessed_verdict(),
         ]
     )
     final, review, _ = await arc(router, saved, review_decisions=3)
-    assert final == FINAL and review.outcome == "verdict"
-    assert router.stages == ["report_review", "report_review_reask", "report_final_check"]
+    assert final.summary != FINAL.summary and final.sections == FINAL.sections
+    assert review.outcome == "verdict"
+    assert router.stages == [
+        "report_review",
+        "report_review_reask",
+        "report_rework",
+        "report_final_check",
+    ]
     assert saved[-1].budget.used == saved[-1].budget.limit == 3
-    assert "conflicts" in router.prompt(2)
-    assert "REVIEW WORK REMAINING: 1 decision(s)" in router.last_message(2)
-    assert "Inspection is no longer available" in router.last_message(2)
-    assert not saved[-1].repair_started
+    assert "observed window" in router.prompt(3)
+    assert "REVIEW WORK REMAINING: 1 decision(s)" in router.last_message(3)
+    assert "Inspection is no longer available" in router.last_message(3)
+    assert saved[-1].repair_started
+    assert review.trail["draft_sha256"] == hashlib.sha256(final.markdown.encode()).hexdigest()
 
 
 async def test_stop_before_released_reserve_preserves_feedback_and_one_remaining_call():
@@ -379,13 +393,16 @@ async def test_stop_before_released_reserve_preserves_feedback_and_one_remaining
         ]
     )
     with pytest.raises(ResearchStopped):
-        await arc(first, saved, stop=lambda: first.calls == 2)
-    second = RecordingRouter([assessed_verdict()])
+        await arc(first, saved, review_decisions=3, stop=lambda: first.calls == 2)
+    assert saved[-1].budget.remaining == 1 and not saved[-1].repair_started
+    repair = "## Executive summary\nThe measured evidence covers an observed window [[s1]]."
+    second = RecordingRouter([repair, assessed_verdict()])
     final, review, _ = await arc(second, saved, resume=saved[-1])
-    assert final == FINAL and review.outcome == "verdict"
-    assert second.stages == ["report_final_check"]
+    assert final.summary != FINAL.summary and review.outcome == "verdict"
+    assert second.stages == ["report_rework", "report_final_check"]
     assert saved[-1].budget.used == 3
-    assert "conflicts" in second.prompt(0)
+    assert "PRIOR SOURCE INSPECTIONS" in second.prompt(0)
+    assert review.trail["draft_sha256"] == hashlib.sha256(final.markdown.encode()).hexdigest()
     repeated = RecordingRouter()
     await arc(repeated, [], resume=saved[-1])
     assert repeated.calls == 0
@@ -399,26 +416,28 @@ async def test_exhausted_conflict_feedback_keeps_one_scoped_repair_and_no_false_
     responses = [
         '{"inspect":[{"source_id":"s1"}]}',
         assessed_verdict(uncertain=True),
-        assessed_verdict(uncertain=True),
     ]
     repair = "## Executive summary\nThe measured evidence is limited to an observed window [[s1]]."
-    first = RecordingRouter(responses if stop_before_repair else [*responses, repair])
+    after = [repair, assessed_verdict(uncertain=True)]
+    first = RecordingRouter(responses if stop_before_repair else [*responses, *after])
     if stop_before_repair:
         with pytest.raises(ResearchStopped):
-            await arc(first, saved, review_decisions=3, stop=lambda: first.calls == 3)
-        assert saved[-1].stage == "final_check" and not saved[-1].repair_started
-        assert saved[-1].budget.used == 3 and saved[-1].budget.last_verdict
-        second = RecordingRouter([repair])
+            await arc(first, saved, review_decisions=3, stop=lambda: first.calls == 2)
+        assert saved[-1].stage == "review" and not saved[-1].repair_started
+        assert saved[-1].budget.used == 2 and saved[-1].budget.last_verdict
+        second = RecordingRouter(after)
         final, review, trail = await arc(second, saved, resume=saved[-1])
         stages = first.stages + second.stages
     else:
         final, review, trail = await arc(first, saved, review_decisions=3)
         stages = first.stages
-    assert stages == ["report_review", "report_review_reask", "report_final_check", "report_rework"]
+    assert stages == ["report_review", "report_review_reask", "report_rework", "report_final_check"]
     assert final.summary != FINAL.summary and final.sections == FINAL.sections
     assert saved[-1].budget.used == saved[-1].budget.limit == 3
     assert saved[-1].repair_started
-    assert review.outcome != "verdict", "No decision remains to verify the repaired prose."
+    assert review.outcome == "incomplete", "The changed prose still has an unresolved assessment."
+    assert review.trail["attempts"] == 1
+    assert review.trail["draft_sha256"] == hashlib.sha256(final.markdown.encode()).hexdigest()
     repairs = [row for row in trail if row["kind"] == "report_rework"]
     assert len(repairs) == 1 and repairs[0]["applied"] == ["executive summary"]
     repeated = RecordingRouter()
@@ -464,10 +483,11 @@ async def test_unresolved_initial_verdict_is_not_labelled_as_checking_revisions(
     router = RecordingRouter(["{}", "{}", CLEAN])
     saved, events = [], []
     await arc(router, saved, events=events)
-    assert "report_final_check" in router.stages
+    assert router.stages == ["report_review", "report_review_reask"]
+    assert saved[-1].stage == "complete" and saved[-1].review_outcome == "unavailable"
+    assert saved[-1].budget.remaining == 2
     assert not saved[-1].repair_started
     assert [payload for kind, payload in events if kind == "review"] == [
-        {"k": 1, "of": 1},
         {"k": 1, "of": 1},
     ]
     assert not any(kind == "rework" for kind, _ in events)
