@@ -23,6 +23,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { PanelRightClose, PanelRightOpen, GripVertical, X } from "lucide-react";
 import { cn } from "@/lib/cn";
+import { useMobileInspector } from "./useMobileInspector";
 
 const STORAGE_KEY = "pmx.build.inspectorWidth";
 const COLLAPSED_KEY = "pmx.build.inspectorCollapsed";
@@ -65,7 +66,7 @@ export function ResizableSplit({
   const [dragging, setDragging] = useState(false);
   // Mobile-only sheet visibility — deliberately NOT persisted (unlike `collapsed`
   // above): every run/visit starts on the chat pane, the moment-to-moment view.
-  const [mobileInspectorOpen, setMobileInspectorOpen] = useState(false);
+  const mobile = useMobileInspector(containerRef, collapsed);
 
   // Persist state changes (debounced naturally — only on commit, not every move).
   useEffect(() => {
@@ -148,6 +149,8 @@ export function ResizableSplit({
       className="relative flex h-full min-h-0 flex-col lg:flex-row"
     >
       <aside
+        ref={mobile.chatRef}
+        inert={mobile.active}
         className={cn(
           "flex h-full min-h-0 flex-1 flex-col border-hairline lg:shrink-0 lg:overflow-hidden lg:border-r",
           "lg:min-w-[var(--chat-min-w)] lg:flex-1",
@@ -161,7 +164,9 @@ export function ResizableSplit({
         <div className="flex shrink-0 items-center justify-end px-body py-hair lg:hidden">
           <button
             type="button"
-            onClick={() => setMobileInspectorOpen(true)}
+            ref={mobile.openerRef}
+            onClick={() => mobile.setOpen(true)}
+            aria-expanded={mobile.active}
             aria-label="Open inspector — files, terminal, preview"
             data-disco-control="build.mobile-inspector-open"
             className="flex min-h-11 items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:bg-surface-2 hover:text-text"
@@ -205,9 +210,12 @@ export function ResizableSplit({
           desktop copy AND a mobile copy — that would double-mount whatever
           live polling/tab-state `inspector` owns. */}
       <section
+        ref={mobile.inspectorRef}
+        inert={mobile.desktop ? collapsed : !mobile.open}
+        aria-label="Inspector"
         className={cn(
           "absolute inset-0 z-30 flex-col bg-bg",
-          mobileInspectorOpen ? "flex" : "hidden",
+          mobile.open ? "flex" : "hidden",
           "lg:static lg:inset-auto lg:z-auto lg:min-h-0 lg:w-[var(--ins-w)] lg:min-w-[var(--ins-min-w)] lg:border-t-0",
           collapsed ? "lg:hidden" : "lg:flex",
         )}
@@ -221,7 +229,8 @@ export function ResizableSplit({
               inline pane (chat takes the full width; a re-open tab remains). */}
           <button
             type="button"
-            onClick={() => setMobileInspectorOpen(false)}
+            ref={mobile.closeRef}
+            onClick={() => mobile.setOpen(false)}
             aria-label="Close inspector — back to chat"
             className="flex min-h-11 items-center gap-hair rounded-control px-hair py-px font-ui text-[0.74rem] text-text-faint transition-colors hover:bg-surface-2 hover:text-text lg:hidden"
           >
@@ -230,6 +239,7 @@ export function ResizableSplit({
           </button>
           <button
             type="button"
+            ref={mobile.collapseRef}
             onClick={() => setCollapsed(true)}
             aria-label="Collapse inspector pane — chat takes the full width"
             className="hidden items-center gap-hair rounded-control px-hair py-px font-ui text-[0.74rem] text-text-faint transition-colors hover:bg-surface-2 hover:text-text lg:flex"
@@ -245,6 +255,7 @@ export function ResizableSplit({
       {collapsed && (
         <button
           type="button"
+          ref={mobile.expandRef}
           onClick={() => setCollapsed(false)}
           aria-label="Show inspector pane"
           className="absolute right-0 top-1/2 z-20 hidden -translate-y-1/2 items-center gap-hair rounded-l-control border border-r-0 border-hairline bg-surface-1 px-hair py-inline font-ui text-[0.74rem] text-text-muted shadow-sm transition-colors hover:bg-surface-2 hover:text-text lg:flex"

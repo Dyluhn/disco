@@ -329,7 +329,12 @@ describe("W-41: scroll-to-latest chevron", () => {
   });
 
   it("uses an immediate scroll when the operator prefers reduced motion", async () => {
-    vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: true }));
+    vi.stubGlobal("matchMedia", vi.fn().mockImplementation((query: string) => ({
+      matches: query === "(prefers-reduced-motion: reduce)",
+      media: query,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    })));
     const user = userEvent.setup();
     buildState = baseBuild({ status: "RUNNING" });
     renderSurface(<BuildSurface />);
