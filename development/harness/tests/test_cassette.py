@@ -175,6 +175,26 @@ async def test_recorded_extraction_retries_and_redirects_preserve_each_response(
     assert inner.extract_many.await_count == 2
 
 
+def test_assert_all_consumed_rejects_unused_ordered_row():
+    cassette = Cassette()
+    cassette.record_next("search", {"query": "x"}, ["first"])
+    with pytest.raises(CassetteMiss, match="left over"):
+        cassette.assert_all_consumed()
+    assert cassette.lookup_next("search", {"query": "x"}) == ["first"]
+    cassette.assert_all_consumed()  # consumed ordered rows pass
+
+
+def test_assert_all_consumed_tracks_reusable_rows_without_changing_matching():
+    cassette = Cassette()
+    cassette.record("search.provider", {}, {"name": "n"})
+    with pytest.raises(CassetteMiss, match="reusable-unused"):
+        cassette.assert_all_consumed()
+    # matching unchanged: same payload still replays, repeatedly.
+    assert cassette.lookup("search.provider", {}) == {"name": "n"}
+    assert cassette.lookup("search.provider", {}) == {"name": "n"}
+    cassette.assert_all_consumed()  # successful reusable lookup satisfies the audit
+
+
 def test_ordered_cassette_share_rows_roundtrip_and_reject_corrupt_order():
     cassette = Cassette()
     cassette.record_next("search", {"query": "x"}, ["first"])

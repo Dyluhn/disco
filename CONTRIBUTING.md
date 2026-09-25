@@ -152,7 +152,7 @@ make capture       # record the real research cassette (HEAVY: cold fastembed + 
 make capture-loop  # record a real deep-research conversation (event-log + cassette)
 make canary        # live probe of a running agent-server: /health + a real grounded query
 make canary-health # live /health probe only (no model call)
-make replay        # event-log deterministic replay (needs the loop_demo fixture)
+make replay        # event-log deterministic replay (checked-in loop_paris_standard_low_v2 fixture; make capture-loop records the historical loop_demo pair only)
 make e2e           # frontend Playwright E2E + visual regression (fixture mode)
 make e2e-update    # refresh E2E visual snapshots
 ```

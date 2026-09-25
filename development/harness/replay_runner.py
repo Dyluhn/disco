@@ -216,7 +216,12 @@ async def _main() -> None:
     events_path = root / "loop_paris_standard_low_v2.events.jsonl"
     cassette_path = root / "loop_paris_standard_low_v2.cassette.jsonl"
     if not events_path.exists():
-        print(f"missing {events_path} — run 'make capture-loop' first", file=sys.stderr)
+        print(
+            f"missing {events_path} — the current replay fixture "
+            f"(loop_paris_standard_low_v2 pair, see its provenance.json) is checked in; "
+            f"make capture-loop records the historical loop_demo pair only",
+            file=sys.stderr,
+        )
         raise SystemExit(2)
 
     cassette = Cassette.load(cassette_path)
@@ -233,11 +238,17 @@ async def _main() -> None:
     def _builder(store):
         from harness.runtime import build_replay_runtime
 
-        return build_replay_runtime(cassette, store)
+        runtime = build_replay_runtime(cassette, store)
+        runtime.deep_research.set_depth("loop_paris_standard_low_v2", "standard_deep")
+        return runtime
 
     surface = "deep_research"
     outputs = await replay_conversation(
-        recorded, build_runtime=_builder, store=SqliteEventStore(":memory:"), surface=surface
+        recorded,
+        build_runtime=_builder,
+        store=SqliteEventStore(":memory:"),
+        cid="loop_paris_standard_low_v2",
+        surface=surface,
     )
     _, recorded_outputs = split_io(recorded)
     diffs = diff_sequences(recorded_outputs, outputs)

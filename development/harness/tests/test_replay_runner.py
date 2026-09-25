@@ -165,8 +165,21 @@ def _with_reading_checkpoints(recorded_outputs):
     return expected
 
 
+_CASE = "loop_paris_standard_low_v2"
+_DEPTH = "standard_deep"
+_PROVENANCE = Path(__file__).resolve().parents[1] / "cassettes" / (
+    "loop_paris_standard_low_v2.provenance.json"
+)
+
+
+def _sha256(path: Path) -> str:
+    import hashlib
+
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
 @pytest.mark.skipif(
-    not _FIXTURE.exists(), reason="needs the captured loop fixture (make capture-loop)"
+    not _FIXTURE.exists(), reason="needs the checked-in loop_paris_standard_low_v2 fixture"
 )
 async def test_deterministic_replay_reproduces_recorded_events():
     from disco.core import SqliteEventStore
@@ -175,23 +188,32 @@ async def test_deterministic_replay_reproduces_recorded_events():
     from harness.replay_runner import load_events, replay_conversation
     from harness.runtime import build_replay_runtime
 
+    provenance = json.loads(_PROVENANCE.read_text(encoding="utf-8"))
+    assert provenance["case"] == _CASE and provenance["cid"] == _CASE
+    assert provenance["depth"] == _DEPTH
+    assert provenance["query"] == "What is the capital of France and roughly its population?"
     cassette = Cassette.load(str(_FIXTURE.with_name("loop_paris_standard_low_v2.cassette.jsonl")))
     recorded = load_events(_FIXTURE)
     assert len(recorded) == 304, "versioned current fixture must stay byte-exact (304 events)"
     assert len(cassette) == 149, "versioned current fixture must stay byte-exact (149 interactions)"
+    for name, expected in provenance["artifact_sha256"].items():
+        actual = _sha256(_FIXTURE.with_name(name))
+        assert actual == expected, f"{name} diverged from provenance seal"
     assert not any(event.kind == EventKind.PLAN for event in recorded), (
-        "checked-in fixture must exercise the current gateless protocol; "
-        "recapture with make capture-loop"
+        "checked-in fixture must exercise the current gateless protocol"
     )
 
     def _builder(store):
-        return build_replay_runtime(cassette, store)
+        runtime = build_replay_runtime(cassette, store)
+        runtime.deep_research.set_depth(_CASE, _DEPTH)
+        return runtime
 
     outputs = await replay_conversation(
         recorded,
         build_runtime=_builder,
         store=SqliteEventStore(":memory:"),
-        # surface MUST match the capture, or the path (+ cassette key) differs
+        cid=_CASE,
+        # surface + depth + cid MUST match the capture, or the path (+ cassette key) differs
         surface="deep_research",
     )
     _, recorded_outputs = split_io(recorded)
@@ -210,7 +232,15 @@ def test_historical_loop_demo_migration_still_applies():
 
     recorded = load_events(_LEGACY_FIXTURE)
     _, recorded_outputs = split_io(recorded)
-    assert _with_reading_checkpoints(recorded_outputs) is not None
+    migration = json.loads(
+        _LEGACY_FIXTURE.with_name("loop_demo.reading-checkpoints.json").read_text()
+    )
+    assert len(migration["insertions"]) == 9, "migration must keep its 9 insertion rows"
+    assert (
+        sum(len(row["events"]) for row in migration["insertions"]) == 36
+    ), "migration must insert exactly 36 writing-stage checkpoint commits"
+    migrated = _with_reading_checkpoints(recorded_outputs)
+    assert len(migrated) - len(recorded_outputs) == 36
 
 
 def test_research_replay_ignores_transport_pulses_but_keeps_checkpoint_work():

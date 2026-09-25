@@ -33,6 +33,8 @@ class Cassette:
         self._log: list[dict[str, Any]] = []
         self._ordered: dict[tuple[str, str], list[Any]] = {}
         self._positions: dict[tuple[str, str], int] = {}
+        # successful reusable (occurrence-free) lookups; matching unchanged.
+        self._seen_reusable: set[tuple[str, str]] = set()
 
     # ---- io -----------------------------------------------------------------
 
@@ -116,18 +118,24 @@ class Cassette:
         return values[position]
 
     def assert_all_consumed(self) -> None:
-        """Fail if any occurrence-keyed recording was never replayed.
+        """Fail if any recorded row — ordered or reusable — was never replayed.
 
-        Audit only — matching (`lookup`/`lookup_next`) is unchanged. Reusable
-        rows are construction-time reads (provider identity, environment
-        schema) or position-keyed environment reads whose own scope already
-        asserts full consumption; occurrence rows advance only when replay
-        serves them, so a leftover means replay skipped recorded calls.
+        Audit only — matching (`lookup`/`lookup_next`) is unchanged. Ordered
+        rows advance only when replay serves them; reusable (occurrence-free)
+        rows are tracked on successful `lookup` and any untracked one means
+        replay skipped recorded calls.
         """
         leftover = sorted(
             f"{seam} key={key} consumed={self._positions.get((seam, key), 0)}/{len(values)}"
             for (seam, key), values in self._ordered.items()
             if self._positions.get((seam, key), 0) != len(values)
+        )
+        leftover.extend(
+            sorted(
+                f"{seam} key={key} reusable-unused"
+                for (seam, key) in self._entries
+                if (seam, key) not in self._ordered and (seam, key) not in self._seen_reusable
+            )
         )
         if leftover:
             raise CassetteMiss("cassette reads left over: " + "; ".join(leftover))
@@ -151,9 +159,11 @@ class Cassette:
     def lookup(self, seam: str, payload: dict[str, Any]) -> Any:
         key = cassette_key(seam, payload)
         try:
-            return self._entries[(seam, key)]
+            value = self._entries[(seam, key)]
         except KeyError as e:
             raise CassetteMiss(f"cassette miss: {seam} key={key} input={payload!r:.200}") from e
+        self._seen_reusable.add((seam, key))
+        return value
 
     def __len__(self) -> int:
         return len(self._log)
