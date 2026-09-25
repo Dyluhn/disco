@@ -17,7 +17,13 @@ def budgets(monkeypatch):
     monkeypatch.setenv("DISCO_RESEARCH_READER_OUTPUT_BUDGET_TOKENS", "48000")
 
 
-async def test_exhaustion_trail_distinguishes_empty_truncated_and_unattempted_after_reload():
+async def test_exhaustion_trail_distinguishes_empty_truncated_and_unattempted_after_reload(
+    monkeypatch,
+):
+    # Initial opportunities now reach all six sources when capacity permits.
+    # Keep genuinely unattempted sources in this diagnostic case with a budget
+    # smaller than the source count; do not classify attempted recovery as unread.
+    monkeypatch.setenv("DISCO_RESEARCH_READER_OUTPUT_BUDGET_TOKENS", "4")
     passages = sources(6)
     raw_response = '{"findings": [{"quote": "PRIVATE_RESPONSE_SENTINEL'
     router = UsageRouter(
@@ -32,8 +38,8 @@ async def test_exhaustion_trail_distinguishes_empty_truncated_and_unattempted_af
     notes = await read(router, passages, checkpoint=save)
     trail = reader.source_reading_trail(notes)
     assert [request.metadata["source_id"] for request in router.requests] == ["0", "1", "2", "3"]
-    assert [request.max_tokens for request in router.requests] == [12000] * 4
-    assert sum(note.reader_output_tokens_charged or 0 for note in notes.values()) == 48000
+    assert [request.max_tokens for request in router.requests] == [1] * 4
+    assert sum(note.reader_output_tokens_charged or 0 for note in notes.values()) == 4
     assert all(note.complete and not note.ok and not note.findings for note in notes.values())
     assert [row["calls"] for row in trail] == [1, 1, 1, 1, 0, 0]
     assert all("reader output budget exhausted" in row["error"] for row in trail)
@@ -86,10 +92,13 @@ async def test_success_on_last_budget_token_keeps_validated_notes_and_clean_trai
     monkeypatch.setenv("DISCO_RESEARCH_READER_OUTPUT_BUDGET_TOKENS", "12000")
     quote = "Measured capacity was 12 GW."
     passage = _source((quote + " ") * 400)
-    router = UsageRouter([_reply([_finding("result", quote, "12 GW")])], usage="capacity")
+    router = UsageRouter(
+        [("", "length"), _reply([_finding("result", quote, "12 GW")])], usage="capacity"
+    )
     notes = await read(router, [passage])
     note = notes[passage.id]
-    assert router.calls == 1 and note.reader_output_tokens_charged == 12000
+    assert router.calls == 2 and note.reader_output_tokens_charged == 12000
+    assert [request.max_tokens for request in router.requests] == [6000, 6000]
     assert note.complete and note.ok and note.chunks == 1 and note.error is None
     assert note.reader_pending is None
     assert len(note.findings) == 1

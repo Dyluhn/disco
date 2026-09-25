@@ -54,21 +54,21 @@ async def test_truncated_parseable_notes_cannot_pass_and_retry_spends_same_budge
     truncated = _reply([_finding("result", "Measured capacity was 12 GW.", "12 GW")])
     router = UsageRouter([(truncated, "length"), (truncated, "length")], usage="capacity")
     note = (await read(router, [passage]))[passage.id]
-    assert [r.max_tokens for r in router.requests] == [100, 50]
+    assert [r.max_tokens for r in router.requests] == [75, 75]
     assert note.reader_output_tokens_charged == 150
     assert not note.ok and note.chunks == 0 and not note.findings
     assert "allowance exhausted" in note.error
 
 
 async def test_usage_missing_retains_reservation_and_later_source_is_honestly_unread():
+    # Retained historical ID: missing usage must no longer starve the third
+    # source when capacity permits its initial opportunity.
     sources = [_source("Source evidence. " * 800, str(i)) for i in range(3)]
-    router = UsageRouter([_reply([]), _reply([])], usage=0)
+    router = UsageRouter([_reply([])] * 3, usage=0)
     notes = await read(router, sources)
-    assert [r.max_tokens for r in router.requests] == [100, 50]
-    assert notes["0"].reader_output_tokens_charged == 100
-    assert notes["1"].reader_output_tokens_charged == 50
-    assert not notes["2"].ok and notes["2"].chunks == 0
-    assert "budget exhausted" in notes["2"].error
+    assert [r.max_tokens for r in router.requests] == [37, 37, 38]
+    assert [notes[str(i)].reader_output_tokens_charged for i in range(3)] == [37, 37, 38]
+    assert all(n.ok and n.chunks == 1 and n.output_tokens == 0 for n in notes.values())
     assert all(source.text == "Source evidence. " * 800 for source in sources)
 
 
@@ -93,10 +93,10 @@ async def test_cancelled_dispatch_reservation_survives_json_checkpoint_and_resum
     interrupted = UsageRouter([asyncio.CancelledError()])
     with pytest.raises(asyncio.CancelledError):
         await read(interrupted, [passage], checkpoint=save)
-    assert saved[passage.id].reader_output_tokens_charged == 100
+    assert saved[passage.id].reader_output_tokens_charged == 75
     resumed = UsageRouter([_reply([])], usage="capacity")
     note = (await read(resumed, [passage], retained=saved))[passage.id]
-    assert resumed.requests[0].max_tokens == 50
+    assert resumed.requests[0].max_tokens == 75
     assert note.reader_output_tokens_charged == 150 and note.ok
 
 
@@ -106,9 +106,13 @@ async def test_partial_chunk_notes_and_offsets_survive_exhaustion(monkeypatch):
     quote = "Measured capacity was 12 GW."
     text = quote + "a" * (9000 - len(quote)) + "b" * 9000
     passage = _source(text)
-    router = UsageRouter([_reply([_finding("result", quote, "12 GW")])], usage="capacity")
+    router = UsageRouter(
+        [_reply([_finding("result", quote, "12 GW")]), ("", "length")], usage="capacity"
+    )
     note = (await read(router, [passage]))[passage.id]
-    assert router.calls == 1 and note.chunks == 1 and not note.ok
+    assert router.calls == 2 and note.chunks == 1 and not note.ok
+    assert [r.max_tokens for r in router.requests] == [50, 50]
+    assert note.reader_output_tokens_charged == 100
     finding = note.findings[0]
     assert text[finding.start : finding.end] == quote
     assert quote in notes_blocks({passage.id: note})[passage.id]
@@ -125,8 +129,8 @@ async def test_changed_source_requires_fresh_proof_without_refunding_prior_outpu
     )
     router = UsageRouter([_reply([])], usage="capacity")
     note = (await read(router, [passage], retained={passage.id: prior}))[passage.id]
-    assert router.requests[0].max_tokens == 50
-    assert note.reader_output_tokens_charged == 150
+    assert router.requests[0].max_tokens == 25
+    assert note.reader_output_tokens_charged == 125
     assert note.source_sha256 != "old"
 
 
@@ -134,7 +138,8 @@ async def test_incomplete_read_is_disclosed_to_writer_and_finished_report(monkey
     monkeypatch.setenv("DISCO_RESEARCH_READER_OUTPUT_BUDGET_TOKENS", "100")
     passage = _source("Measured evidence with reported figures. " * 400)
     router = UsageRouter(
-        [("", "length"), _REPORT, '{"passes": true, "failures": []}'], usage="capacity"
+        [("", "length"), ("", "length"), _REPORT, '{"passes": true, "failures": []}'],
+        usage="capacity",
     )
     _, emit = collect_emits()
     written = await write_report(
@@ -183,5 +188,5 @@ async def test_removed_or_shortened_source_spend_survives_another_checkpoint(rep
     assert reader.source_reading_trail(notes) == []
     later = UsageRouter([_reply([])], usage="capacity")
     note = (await read(later, [_source("Source evidence. " * 800)], retained=saved))["p1"]
-    assert later.requests[0].max_tokens == 50
-    assert note.reader_output_tokens_charged == 150
+    assert later.requests[0].max_tokens == 25
+    assert note.reader_output_tokens_charged == 125

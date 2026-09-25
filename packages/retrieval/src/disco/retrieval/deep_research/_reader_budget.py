@@ -43,8 +43,12 @@ class ReaderBudget:
         stage = _configured_limit("RESEARCH_READER_OUTPUT_BUDGET_TOKENS", _DEFAULT_STAGE_TOKENS)
         return cls(call, stage, sum(charged_output(note, call) for note in retained.values()))
 
-    def reserve(self, note: SourceNotes, router: Any) -> int:
-        capacity = min(self.call_limit, max(0, self.stage_limit - self.used))
+    def reserve(self, note: SourceNotes, router: Any, *, allocation_slots: int) -> int:
+        remaining = max(0, self.stage_limit - self.used)
+        # Share available capacity before dispatch. A one-token floor permits
+        # progress with tiny budgets without ever reserving beyond the remainder.
+        share = max(1, remaining // allocation_slots)
+        capacity = min(self.call_limit, remaining, share)
         declared_limit = getattr(router, "output_token_limit", None)
         if callable(declared_limit):
             configured = declared_limit(ModelRole.RAG_ANSWERER)

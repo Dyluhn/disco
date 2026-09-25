@@ -300,13 +300,14 @@ async def _budgeted_reply(
     *,
     notes: SourceNotes,
     budget: ReaderBudget,
+    allocation_slots: int,
     checkpoint: Callable[[SourceNotes], Awaitable[None]] | None,
     conversation_id: str | None,
     should_cancel: ShouldCancelFn,
     source_id: str,
     part: tuple[int, int],
 ) -> _Reply | None:
-    capacity = budget.reserve(notes, router)
+    capacity = budget.reserve(notes, router, allocation_slots=allocation_slots)
     if capacity <= 0:
         notes.ok = False
         notes.error = "reader output budget exhausted; remaining text uses source windows"
@@ -338,6 +339,7 @@ async def _read_source_chunk(
     query: str,
     conversation_id: str | None,
     budget: ReaderBudget,
+    allocation_slots: int,
     should_cancel: ShouldCancelFn,
     notes: SourceNotes,
     checkpoint: Callable[[SourceNotes], Awaitable[None]],
@@ -374,6 +376,7 @@ async def _read_source_chunk(
         conversation_id=conversation_id,
         notes=notes,
         budget=budget,
+        allocation_slots=allocation_slots,
         checkpoint=checkpoint,
         should_cancel=should_cancel,
         source_id=passage.id,
@@ -413,21 +416,36 @@ def _apply_chunk_reply(
 
 def _next_source(
     sources: Sequence[Passage], notes: Mapping[str, SourceNotes]
-) -> tuple[int, Passage] | None:
-    # Unattempted chunks go first, round-robin by chunk depth then input order.
-    # Pending recovery/interrupted requests come afterward. This order is derived
-    # entirely from checkpointed state, so restart cannot reset scheduling priority.
+) -> tuple[int, Passage, int] | None:
+    # A source with changed text retains its old charges/calls, but still needs
+    # an initial opportunity for its new hash. Interrupted initial requests have
+    # a pending record and a durable reservation, so do not qualify again.
     candidates = [(i, p) for i, p in enumerate(sources, 1) if not notes[p.id].complete]
-    return min(
+    if not candidates:
+        return None
+    initial = [
+        item
+        for item in candidates
+        if notes[item[1].id].chunks == 0 and notes[item[1].id].reader_pending is None
+    ]
+    if initial:
+        # Keep one share available for recovery after every source's first
+        # opportunity. Known lower usage releases capacity for subsequent work.
+        number, passage = initial[0]
+        return number, passage, len(initial) + 1
+    # Once initial opportunities are served, rotate by charged attempts, giving
+    # pending work priority at ties. Share capacity across active sources so a
+    # recovery cannot consume the entire remainder ahead of peers' later chunks.
+    number, passage = min(
         candidates,
         key=lambda item: (
-            notes[item[1].id].reader_pending is not None,
-            notes[item[1].id].chunks,
             notes[item[1].id].calls,
+            notes[item[1].id].reader_pending is None,
+            notes[item[1].id].chunks,
             item[0],
         ),
-        default=None,
     )
+    return number, passage, len(candidates)
 
 
 def _retained_notes(
@@ -523,8 +541,8 @@ async def read_sources(
 ) -> dict[str, SourceNotes]:
     """Read long sources fairly, with one durable bounded attempt at a time.
 
-    Fresh chunks precede deferred recovery; sources at the same chunk depth use
-    input order. Terminal failed/budget-skipped sources remain explicitly not ok.
+    Initial opportunities preserve recovery capacity, then active sources share
+    the remainder. Terminal failed/budget-skipped sources remain explicitly not ok.
     """
     long_sources = [passage for passage in passages if len(passage.text) > READ_THRESHOLD_CHARS]
     budget = ReaderBudget.start(retained or {})
@@ -545,7 +563,7 @@ async def read_sources(
         if selected is None:
             break
         raise_if_stopped(should_cancel, boundary=STAGE)
-        number, passage = selected
+        number, passage, allocation_slots = selected
         await emit("phase", {"phase": "reading", "source": number, "of": len(long_sources)})
 
         async def save(note: SourceNotes, source_id: str = passage.id) -> None:
@@ -559,6 +577,7 @@ async def read_sources(
             query=query,
             conversation_id=conversation_id,
             budget=budget,
+            allocation_slots=allocation_slots,
             should_cancel=should_cancel,
             notes=notes[passage.id].model_copy(deep=True),
             checkpoint=save,

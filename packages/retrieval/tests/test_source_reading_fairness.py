@@ -49,14 +49,16 @@ def snapshot(notes):
 
 
 async def test_six_empty_sources_receive_four_first_attempts_not_two_immediate_retries():
-    router = UsageRouter([("", "length")] * 4, usage="capacity")
+    # Retain this ID, but strengthen the old four-of-six policy: every source
+    # now receives an initial opportunity and a bounded compact recovery.
+    router = UsageRouter([("", "length")] * 12, usage="capacity")
     notes = await read(router, sources(6))
-    assert order(router) == [(str(i), "1") for i in range(4)]
-    assert [r.max_tokens for r in router.requests] == [12000] * 4
+    assert order(router) == [(str(i), "1") for i in range(6)] * 2
+    assert [r.max_tokens for r in router.requests] == [6857] * 6 + [1143] * 6
     assert sum(n.reader_output_tokens_charged or 0 for n in notes.values()) == 48000
     assert all(n.complete and not n.ok and n.chunks == 0 for n in notes.values())
-    assert [notes[str(i)].calls for i in range(6)] == [1, 1, 1, 1, 0, 0]
-    assert all("budget exhausted" in n.error for n in notes.values())
+    assert [notes[str(i)].calls for i in range(6)] == [2] * 6
+    assert all(n.compact_reading and "no visible notes" in n.error for n in notes.values())
 
 
 async def test_released_capacity_recovers_after_peers_with_exact_source_and_feedback():
