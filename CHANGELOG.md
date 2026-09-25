@@ -67,6 +67,9 @@
 - Restore keyboard focus across dialogs, menus and inline editors; keep focus
   out of covered mobile chat and restore it after Inspector dismissal. Add
   keyboard pane resizing and accessible import tabs and mobile navigation.
+- Keep screenshot capture paths unique across browser restarts so new captures
+  cannot overwrite previous frames. Name thumbnail controls and display a clear
+  unavailable state when an image cannot load.
 - Retain the latest audio selection during concurrent generation and support
   full-track seeking. Reject invalid image workflow configuration before save.
 - Include Git and the SSH client in release images for project imports and
