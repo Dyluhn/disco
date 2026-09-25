@@ -22,6 +22,7 @@ from .host_proxy_parts._forwarding import (
     _resolve_upstream,
     _respond_missing_upstream,
 )
+from .host_proxy_parts._live_http import _try_live_http_via_session
 from .host_proxy_parts._redirects import (
     _rewrite_canonical_upstream_location as _rewrite_canonical_upstream_location,
 )
@@ -169,6 +170,15 @@ class HostPreviewProxyMiddleware:
             return
 
         canonical_gateway = _is_canonical_gateway(route, cap)
+        if scope["type"] == "http" and await _try_live_http_via_session(
+            self,
+            scope,
+            receive,
+            send,
+            route=route,
+            cap=cap,
+        ):
+            return
         upstream = await _resolve_upstream(self, route.cid8, route.port, cap_owner_id)
 
         # Re-check after the (possibly awaited) upstream resolution: a
