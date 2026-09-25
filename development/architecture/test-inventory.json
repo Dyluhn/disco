@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "1ccbe5990db14f07eaf2da474938678694650b19",
+  "source_identity": "48784fb6749b23c54f8a24a8fa5895c21e9fec86",
   "collected": {
     "counts": {
-      "packages": 13238,
+      "packages": 13268,
       "harness": 1593,
       "integrations": 9,
       "tests": 468
     },
-    "total": 15308,
+    "total": 15338,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -1720,6 +1720,36 @@
         "packages/agent-server/tests/test_lifecycle_ordered_trace.py::test_direct_locked_status_append_without_fence_is_rejected",
         "packages/agent-server/tests/test_lifecycle_ordered_trace.py::test_kill_cleanup_publish_order_and_repeat_are_idempotent",
         "packages/agent-server/tests/test_lifecycle_ordered_trace.py::test_lifecycle_service_is_the_only_agent_server_status_constructor",
+        "packages/agent-server/tests/test_live_preview_mutation_inside.py::test_host_shared_live_keeps_published_transport",
+        "packages/agent-server/tests/test_live_preview_mutation_inside.py::test_live_ambiguous_mutation_never_retries[exception]",
+        "packages/agent-server/tests/test_live_preview_mutation_inside.py::test_live_ambiguous_mutation_never_retries[unknown]",
+        "packages/agent-server/tests/test_live_preview_mutation_inside.py::test_live_authority_rechecked_after_awaited_session_resolution",
+        "packages/agent-server/tests/test_live_preview_mutation_inside.py::test_live_binding_is_rechecked_after_request_body[authority]",
+        "packages/agent-server/tests/test_live_preview_mutation_inside.py::test_live_binding_is_rechecked_after_request_body[detached]",
+        "packages/agent-server/tests/test_live_preview_mutation_inside.py::test_live_binding_is_rechecked_after_request_body[generation]",
+        "packages/agent-server/tests/test_live_preview_mutation_inside.py::test_live_binding_is_rechecked_after_request_body[selection]",
+        "packages/agent-server/tests/test_live_preview_mutation_inside.py::test_live_mutation_uses_single_in_session_dispatch[DELETE]",
+        "packages/agent-server/tests/test_live_preview_mutation_inside.py::test_live_mutation_uses_single_in_session_dispatch[GET]",
+        "packages/agent-server/tests/test_live_preview_mutation_inside.py::test_live_mutation_uses_single_in_session_dispatch[HEAD]",
+        "packages/agent-server/tests/test_live_preview_mutation_inside.py::test_live_mutation_uses_single_in_session_dispatch[OPTIONS]",
+        "packages/agent-server/tests/test_live_preview_mutation_inside.py::test_live_mutation_uses_single_in_session_dispatch[PATCH]",
+        "packages/agent-server/tests/test_live_preview_mutation_inside.py::test_live_mutation_uses_single_in_session_dispatch[POST]",
+        "packages/agent-server/tests/test_live_preview_mutation_inside.py::test_live_mutation_uses_single_in_session_dispatch[PUT]",
+        "packages/agent-server/tests/test_live_preview_mutation_inside.py::test_live_owner_lookup_error_never_downgrades_to_unowned_lookup",
+        "packages/agent-server/tests/test_live_preview_mutation_inside.py::test_live_request_guards_precede_dispatch[capability]",
+        "packages/agent-server/tests/test_live_preview_mutation_inside.py::test_live_request_guards_precede_dispatch[framing]",
+        "packages/agent-server/tests/test_live_preview_mutation_inside.py::test_live_request_guards_precede_dispatch[origin]",
+        "packages/agent-server/tests/test_live_preview_mutation_inside.py::test_live_request_guards_precede_dispatch[oversize]",
+        "packages/agent-server/tests/test_live_preview_mutation_inside.py::test_live_request_guards_precede_dispatch[secret]",
+        "packages/agent-server/tests/test_live_preview_mutation_inside.py::test_live_request_guards_precede_dispatch[stale]",
+        "packages/agent-server/tests/test_live_preview_mutation_inside.py::test_live_unbound_target_never_dispatches[crashed]",
+        "packages/agent-server/tests/test_live_preview_mutation_inside.py::test_live_unbound_target_never_dispatches[foreign]",
+        "packages/agent-server/tests/test_live_preview_mutation_inside.py::test_live_unbound_target_never_dispatches[generation]",
+        "packages/agent-server/tests/test_live_preview_mutation_inside.py::test_live_unbound_target_never_dispatches[instance]",
+        "packages/agent-server/tests/test_live_preview_mutation_inside.py::test_live_unbound_target_never_dispatches[manager]",
+        "packages/agent-server/tests/test_live_preview_mutation_inside.py::test_live_unbound_target_never_dispatches[missing]",
+        "packages/agent-server/tests/test_live_preview_mutation_inside.py::test_live_unbound_target_never_dispatches[port]",
+        "packages/agent-server/tests/test_live_preview_mutation_inside.py::test_live_unbound_target_never_dispatches[stopped]",
         "packages/agent-server/tests/test_live_probe_nonblocking.py::test_probe_does_not_block_running_loop",
         "packages/agent-server/tests/test_live_probe_nonblocking.py::test_probe_empty_base_url_is_noop",
         "packages/agent-server/tests/test_live_probe_nonblocking.py::test_probe_off_loop_blocks_and_returns",
@@ -15329,9 +15359,9 @@
     }
   },
   "mapping_static": {
-    "identity": "1ccbe5990db14f07eaf2da474938678694650b19",
-    "python_test_file_count": 1030,
-    "python_static_test_id_count": 12188,
+    "identity": "48784fb6749b23c54f8a24a8fa5895c21e9fec86",
+    "python_test_file_count": 1031,
+    "python_static_test_id_count": 12196,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -15533,6 +15563,7 @@
       "packages/agent-server/tests/test_kill_generation_guard.py",
       "packages/agent-server/tests/test_lifecycle.py",
       "packages/agent-server/tests/test_lifecycle_ordered_trace.py",
+      "packages/agent-server/tests/test_live_preview_mutation_inside.py",
       "packages/agent-server/tests/test_live_probe_nonblocking.py",
       "packages/agent-server/tests/test_mcp_e6_new_hash.py",
       "packages/agent-server/tests/test_mcp_egress.py",
@@ -18884,6 +18915,14 @@
       "packages/agent-server/tests/test_lifecycle_ordered_trace.py::test_direct_locked_status_append_without_fence_is_rejected",
       "packages/agent-server/tests/test_lifecycle_ordered_trace.py::test_kill_cleanup_publish_order_and_repeat_are_idempotent",
       "packages/agent-server/tests/test_lifecycle_ordered_trace.py::test_lifecycle_service_is_the_only_agent_server_status_constructor",
+      "packages/agent-server/tests/test_live_preview_mutation_inside.py::test_host_shared_live_keeps_published_transport",
+      "packages/agent-server/tests/test_live_preview_mutation_inside.py::test_live_ambiguous_mutation_never_retries",
+      "packages/agent-server/tests/test_live_preview_mutation_inside.py::test_live_authority_rechecked_after_awaited_session_resolution",
+      "packages/agent-server/tests/test_live_preview_mutation_inside.py::test_live_binding_is_rechecked_after_request_body",
+      "packages/agent-server/tests/test_live_preview_mutation_inside.py::test_live_mutation_uses_single_in_session_dispatch",
+      "packages/agent-server/tests/test_live_preview_mutation_inside.py::test_live_owner_lookup_error_never_downgrades_to_unowned_lookup",
+      "packages/agent-server/tests/test_live_preview_mutation_inside.py::test_live_request_guards_precede_dispatch",
+      "packages/agent-server/tests/test_live_preview_mutation_inside.py::test_live_unbound_target_never_dispatches",
       "packages/agent-server/tests/test_live_probe_nonblocking.py::test_probe_does_not_block_running_loop",
       "packages/agent-server/tests/test_live_probe_nonblocking.py::test_probe_empty_base_url_is_noop",
       "packages/agent-server/tests/test_live_probe_nonblocking.py::test_probe_off_loop_blocks_and_returns",
@@ -28554,8 +28593,8 @@
       "tests/unbiased_gate/test_authorB_models_imagegen.py::test_w50_slides_degrade_to_image_less_when_image_backend_unconfigured",
       "tests/unbiased_gate/test_authorB_models_imagegen.py::test_w50_unconfigured_image_backend_fails_loudly_instead_of_procedural_fallback"
     ],
-    "typescript_test_file_count": 340,
-    "typescript_static_test_id_count": 1729,
+    "typescript_test_file_count": 341,
+    "typescript_static_test_id_count": 1737,
     "typescript_test_files": [
       "frontend/e2e-full/scenarios/click-provenance.smoke.spec.ts",
       "frontend/e2e-full/scenarios/per-surface.full.spec.ts",
@@ -28727,6 +28766,7 @@
       "frontend/src/components/build/canvas/PreviewPane.bootstrap.test.tsx",
       "frontend/src/components/build/canvas/PreviewPane.discuss.test.tsx",
       "frontend/src/components/build/canvas/PreviewPane.edit.test.tsx",
+      "frontend/src/components/build/canvas/PreviewPane.inspect.test.tsx",
       "frontend/src/components/build/canvas/PreviewPane.reload.test.tsx",
       "frontend/src/components/build/canvas/PreviewPane.statusstrip.test.tsx",
       "frontend/src/components/build/canvas/PreviewPane.versions.test.tsx",
@@ -29514,6 +29554,11 @@
       "frontend/src/components/build/canvas/PreviewPane.edit.test.tsx::hides Edit without a host wire and for an untrusted artifact viewer",
       "frontend/src/components/build/canvas/PreviewPane.edit.test.tsx::offers Edit only after the canonical Preview exists",
       "frontend/src/components/build/canvas/PreviewPane.edit.test.tsx::submits the selected typed ref from the canonical frame",
+      "frontend/src/components/build/canvas/PreviewPane.inspect.test.tsx::Edit retains its edit box and switching to Point exits both editing and selection",
+      "frontend/src/components/build/canvas/PreviewPane.inspect.test.tsx::plain Inspect exposes Stop inspecting and rejects the dismissed nonce without Edit",
+      "frontend/src/components/build/canvas/PreviewPane.inspect.test.tsx::switching Inspect to Point disarms inspection and clears the old selection",
+      "frontend/src/components/build/canvas/PreviewPane.inspect.test.tsx::switching Point to Inspect disarms Point before arming inspection",
+      "frontend/src/components/build/canvas/PreviewPane.inspect.test.tsx::untrusted artifacts expose no Inspect, Point, or Edit controls",
       "frontend/src/components/build/canvas/PreviewPane.reload.test.tsx::debounces a plain/static file rewrite into one canonical remint",
       "frontend/src/components/build/canvas/PreviewPane.reload.test.tsx::does not event-refresh a finished immutable Preview",
       "frontend/src/components/build/canvas/PreviewPane.reload.test.tsx::keeps the last healthy frame visible with a host-owned refresh warning",
@@ -30035,6 +30080,9 @@
       "frontend/src/hooks/useElementMention.test.tsx::arms the iframe, turns a valid picker message into a chip, and serializes on send",
       "frontend/src/hooks/useElementMention.test.tsx::rejects wrong-origin and malformed picker messages",
       "frontend/src/hooks/useElementSelect.test.tsx::disarm clears the visible selection and rejects messages from the dismissed nonce",
+      "frontend/src/hooks/useElementSelect.test.tsx::disconnects on disarm and unmount and ignores callbacks for a replaced frame",
+      "frontend/src/hooks/useElementSelect.test.tsx::keeps the selected element on an unchanged initial resize observation",
+      "frontend/src/hooks/useElementSelect.test.tsx::retains the measured size across rerenders before resize delivery",
       "frontend/src/hooks/useProjectRelease.test.ts::candidate carries a resolved ingress + self_host; not_web carries neither",
       "frontend/src/hooks/useProjectRelease.test.ts::covers the six assessment states and only those",
       "frontend/src/hooks/useProjectRelease.test.ts::fixture required_env entries are NAMES-only ({name,scope,required,secret}, no value)",
@@ -31483,6 +31531,12 @@
         "scope": "pytest.fixture(autouse=True)"
       },
       {
+        "path": "packages/agent-server/tests/test_live_preview_mutation_inside.py",
+        "line": 26,
+        "fixture": "live",
+        "scope": "pytest.fixture"
+      },
+      {
         "path": "packages/agent-server/tests/test_artifact_route.py",
         "line": 242,
         "fixture": "live_client",
@@ -32599,8 +32653,8 @@
         ]
       }
     },
-    "vitest_ids": 1760,
-    "vitest_files": 262,
+    "vitest_ids": 1770,
+    "vitest_files": 263,
     "vitest_ids_list": [
       "frontend/src/App.moderesume.test.tsx::A2 \u2014 fresh sessions and resume targets > New preserves the active mode, then a mode chip lands on that mode's splash",
       "frontend/src/App.moderesume.test.tsx::A2 \u2014 fresh sessions and resume targets > does not resume a just-killed conversation id from the mode chip",
@@ -33156,6 +33210,11 @@
       "frontend/src/components/build/canvas/PreviewPane.edit.test.tsx::PreviewPane canonical edit mode > hides Edit without a host wire and for an untrusted artifact viewer",
       "frontend/src/components/build/canvas/PreviewPane.edit.test.tsx::PreviewPane canonical edit mode > offers Edit only after the canonical Preview exists",
       "frontend/src/components/build/canvas/PreviewPane.edit.test.tsx::PreviewPane canonical edit mode > submits the selected typed ref from the canonical frame",
+      "frontend/src/components/build/canvas/PreviewPane.inspect.test.tsx::Edit retains its edit box and switching to Point exits both editing and selection",
+      "frontend/src/components/build/canvas/PreviewPane.inspect.test.tsx::plain Inspect exposes Stop inspecting and rejects the dismissed nonce without Edit",
+      "frontend/src/components/build/canvas/PreviewPane.inspect.test.tsx::switching Inspect to Point disarms inspection and clears the old selection",
+      "frontend/src/components/build/canvas/PreviewPane.inspect.test.tsx::switching Point to Inspect disarms Point before arming inspection",
+      "frontend/src/components/build/canvas/PreviewPane.inspect.test.tsx::untrusted artifacts expose no Inspect, Point, or Edit controls",
       "frontend/src/components/build/canvas/PreviewPane.reload.test.tsx::PreviewPane \u2014 canonical refresh policy > debounces a plain/static file rewrite into one canonical remint",
       "frontend/src/components/build/canvas/PreviewPane.reload.test.tsx::PreviewPane \u2014 canonical refresh policy > does not event-refresh a finished immutable Preview",
       "frontend/src/components/build/canvas/PreviewPane.reload.test.tsx::PreviewPane \u2014 canonical refresh policy > keeps the last healthy frame visible with a host-owned refresh warning",
@@ -33704,7 +33763,12 @@
       "frontend/src/hooks/useDeepResearchStream.test.ts::reducer \u2014 reset > WALK-08: reset action returns the initial state regardless of prior state",
       "frontend/src/hooks/useElementMention.test.tsx::useElementMention > arms the iframe, turns a valid picker message into a chip, and serializes on send",
       "frontend/src/hooks/useElementMention.test.tsx::useElementMention > rejects wrong-origin and malformed picker messages",
+      "frontend/src/hooks/useElementSelect.test.tsx::clears stale selection on changed frame height without disarming",
+      "frontend/src/hooks/useElementSelect.test.tsx::clears stale selection on changed frame width without disarming",
       "frontend/src/hooks/useElementSelect.test.tsx::disarm clears the visible selection and rejects messages from the dismissed nonce",
+      "frontend/src/hooks/useElementSelect.test.tsx::disconnects on disarm and unmount and ignores callbacks for a replaced frame",
+      "frontend/src/hooks/useElementSelect.test.tsx::keeps the selected element on an unchanged initial resize observation",
+      "frontend/src/hooks/useElementSelect.test.tsx::retains the measured size across rerenders before resize delivery",
       "frontend/src/hooks/useProjectRelease.test.ts::WO-8 release types (criterion 1) > covers the six assessment states and only those",
       "frontend/src/hooks/useProjectRelease.test.ts::WO-8 release types (criterion 1) > fixture required_env entries are NAMES-only ({name,scope,required,secret}, no value)",
       "frontend/src/hooks/useProjectRelease.test.ts::getProjectRelease \u2014 live targets the AGENT base (criterion 3) > issues GET /api/projects/{cid}/release on the agent origin, never the app server",
@@ -34458,6 +34522,7 @@
       "frontend/src/components/build/canvas/PreviewPane.bootstrap.test.tsx",
       "frontend/src/components/build/canvas/PreviewPane.discuss.test.tsx",
       "frontend/src/components/build/canvas/PreviewPane.edit.test.tsx",
+      "frontend/src/components/build/canvas/PreviewPane.inspect.test.tsx",
       "frontend/src/components/build/canvas/PreviewPane.reload.test.tsx",
       "frontend/src/components/build/canvas/PreviewPane.statusstrip.test.tsx",
       "frontend/src/components/build/canvas/PreviewPane.versions.test.tsx",
@@ -44455,6 +44520,86 @@
         "typescript_test_files": [],
         "typescript_static_test_ids": [],
         "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-24-UI-PREVIEW-FOLLOWUP",
+      "root": "packages",
+      "source_identity_before": "1ccbe5990db14f07eaf2da474938678694650b19",
+      "source_identity_after": "48784fb6749b23c54f8a24a8fa5895c21e9fec86",
+      "collected_roots": {
+        "packages": {
+          "before_count": 13238,
+          "after_count": 13268,
+          "added_ids": [
+            "packages/agent-server/tests/test_live_preview_mutation_inside.py::test_host_shared_live_keeps_published_transport",
+            "packages/agent-server/tests/test_live_preview_mutation_inside.py::test_live_ambiguous_mutation_never_retries[exception]",
+            "packages/agent-server/tests/test_live_preview_mutation_inside.py::test_live_ambiguous_mutation_never_retries[unknown]",
+            "packages/agent-server/tests/test_live_preview_mutation_inside.py::test_live_authority_rechecked_after_awaited_session_resolution",
+            "packages/agent-server/tests/test_live_preview_mutation_inside.py::test_live_binding_is_rechecked_after_request_body[authority]",
+            "packages/agent-server/tests/test_live_preview_mutation_inside.py::test_live_binding_is_rechecked_after_request_body[detached]",
+            "packages/agent-server/tests/test_live_preview_mutation_inside.py::test_live_binding_is_rechecked_after_request_body[generation]",
+            "packages/agent-server/tests/test_live_preview_mutation_inside.py::test_live_binding_is_rechecked_after_request_body[selection]",
+            "packages/agent-server/tests/test_live_preview_mutation_inside.py::test_live_mutation_uses_single_in_session_dispatch[DELETE]",
+            "packages/agent-server/tests/test_live_preview_mutation_inside.py::test_live_mutation_uses_single_in_session_dispatch[GET]",
+            "packages/agent-server/tests/test_live_preview_mutation_inside.py::test_live_mutation_uses_single_in_session_dispatch[HEAD]",
+            "packages/agent-server/tests/test_live_preview_mutation_inside.py::test_live_mutation_uses_single_in_session_dispatch[OPTIONS]",
+            "packages/agent-server/tests/test_live_preview_mutation_inside.py::test_live_mutation_uses_single_in_session_dispatch[PATCH]",
+            "packages/agent-server/tests/test_live_preview_mutation_inside.py::test_live_mutation_uses_single_in_session_dispatch[POST]",
+            "packages/agent-server/tests/test_live_preview_mutation_inside.py::test_live_mutation_uses_single_in_session_dispatch[PUT]",
+            "packages/agent-server/tests/test_live_preview_mutation_inside.py::test_live_owner_lookup_error_never_downgrades_to_unowned_lookup",
+            "packages/agent-server/tests/test_live_preview_mutation_inside.py::test_live_request_guards_precede_dispatch[capability]",
+            "packages/agent-server/tests/test_live_preview_mutation_inside.py::test_live_request_guards_precede_dispatch[framing]",
+            "packages/agent-server/tests/test_live_preview_mutation_inside.py::test_live_request_guards_precede_dispatch[origin]",
+            "packages/agent-server/tests/test_live_preview_mutation_inside.py::test_live_request_guards_precede_dispatch[oversize]",
+            "packages/agent-server/tests/test_live_preview_mutation_inside.py::test_live_request_guards_precede_dispatch[secret]",
+            "packages/agent-server/tests/test_live_preview_mutation_inside.py::test_live_request_guards_precede_dispatch[stale]",
+            "packages/agent-server/tests/test_live_preview_mutation_inside.py::test_live_unbound_target_never_dispatches[crashed]",
+            "packages/agent-server/tests/test_live_preview_mutation_inside.py::test_live_unbound_target_never_dispatches[foreign]",
+            "packages/agent-server/tests/test_live_preview_mutation_inside.py::test_live_unbound_target_never_dispatches[generation]",
+            "packages/agent-server/tests/test_live_preview_mutation_inside.py::test_live_unbound_target_never_dispatches[instance]",
+            "packages/agent-server/tests/test_live_preview_mutation_inside.py::test_live_unbound_target_never_dispatches[manager]",
+            "packages/agent-server/tests/test_live_preview_mutation_inside.py::test_live_unbound_target_never_dispatches[missing]",
+            "packages/agent-server/tests/test_live_preview_mutation_inside.py::test_live_unbound_target_never_dispatches[port]",
+            "packages/agent-server/tests/test_live_preview_mutation_inside.py::test_live_unbound_target_never_dispatches[stopped]"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [
+          "packages/agent-server/tests/test_live_preview_mutation_inside.py"
+        ],
+        "python_static_test_ids": [
+          "packages/agent-server/tests/test_live_preview_mutation_inside.py::test_host_shared_live_keeps_published_transport",
+          "packages/agent-server/tests/test_live_preview_mutation_inside.py::test_live_ambiguous_mutation_never_retries",
+          "packages/agent-server/tests/test_live_preview_mutation_inside.py::test_live_authority_rechecked_after_awaited_session_resolution",
+          "packages/agent-server/tests/test_live_preview_mutation_inside.py::test_live_binding_is_rechecked_after_request_body",
+          "packages/agent-server/tests/test_live_preview_mutation_inside.py::test_live_mutation_uses_single_in_session_dispatch",
+          "packages/agent-server/tests/test_live_preview_mutation_inside.py::test_live_owner_lookup_error_never_downgrades_to_unowned_lookup",
+          "packages/agent-server/tests/test_live_preview_mutation_inside.py::test_live_request_guards_precede_dispatch",
+          "packages/agent-server/tests/test_live_preview_mutation_inside.py::test_live_unbound_target_never_dispatches"
+        ],
+        "typescript_test_files": [
+          "frontend/src/components/build/canvas/PreviewPane.inspect.test.tsx"
+        ],
+        "typescript_static_test_ids": [
+          "frontend/src/components/build/canvas/PreviewPane.inspect.test.tsx::Edit retains its edit box and switching to Point exits both editing and selection",
+          "frontend/src/components/build/canvas/PreviewPane.inspect.test.tsx::plain Inspect exposes Stop inspecting and rejects the dismissed nonce without Edit",
+          "frontend/src/components/build/canvas/PreviewPane.inspect.test.tsx::switching Inspect to Point disarms inspection and clears the old selection",
+          "frontend/src/components/build/canvas/PreviewPane.inspect.test.tsx::switching Point to Inspect disarms Point before arming inspection",
+          "frontend/src/components/build/canvas/PreviewPane.inspect.test.tsx::untrusted artifacts expose no Inspect, Point, or Edit controls",
+          "frontend/src/hooks/useElementSelect.test.tsx::disconnects on disarm and unmount and ignores callbacks for a replaced frame",
+          "frontend/src/hooks/useElementSelect.test.tsx::keeps the selected element on an unchanged initial resize observation",
+          "frontend/src/hooks/useElementSelect.test.tsx::retains the measured size across rerenders before resize delivery"
+        ],
+        "fixtures": [
+          {
+            "path": "packages/agent-server/tests/test_live_preview_mutation_inside.py",
+            "line": 26,
+            "fixture": "live",
+            "scope": "pytest.fixture"
+          }
+        ]
       }
     },
     {

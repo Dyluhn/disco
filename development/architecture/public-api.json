@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-public-api-v1",
-  "source_identity": "1ccbe5990db14f07eaf2da474938678694650b19",
+  "source_identity": "48784fb6749b23c54f8a24a8fa5895c21e9fec86",
   "python_initializers": [
     {
       "path": "packages/agent-server/src/disco/agent_server/__init__.py",
@@ -20904,7 +20904,12 @@
         {
           "kind": "function",
           "name": "SelectionOverlay",
-          "signature": "export function SelectionOverlay({ armed, untrusted, selection, onArm, onDisarm, onWalkUp, onDiscuss, }: Props)"
+          "signature": "export function SelectionOverlay({ armed, untrusted, selection, onArm, onDisarm, onWalkUp, onDiscuss, showToolbar = true, }: Props)"
+        },
+        {
+          "kind": "function",
+          "name": "SelectionToolbar",
+          "signature": "export function SelectionToolbar({ armed, untrusted, onArm, onDisarm, }: Pick<Props, \"armed\" | \"untrusted\" | \"onArm\" | \"onDisarm\">)"
         }
       ]
     },
@@ -20949,7 +20954,7 @@
         {
           "kind": "function",
           "name": "PreviewStage",
-          "signature": "export function PreviewStage({ frameRef, launch, onFrameLoad, onBootstrapReady, visibleFailure, dataReason, minting, runtimeUnavailable, frameReady, editMode, untrusted, selection, onSteer, onDisarmEdit, onApplyEdit, onRefresh, onDownloadSource, downloadPending, }: { frameRef: MutableRefObject<HTMLIFrameElement | null>; launch: PreviewLaunch | null; onFrameLoad: () => void; onBootstrapReady: () => void; visibleFailure: string | null; dataReason: string | undefined; minting: boolean; runtimeUnavailable: boolean; frameReady: boolean; editMode: boolean; untrusted: boolean; selection: ElementSelectState; onSteer?: (text: string) => void; onDisarmEdit: () => void; onApplyEdit: (instruction: string) => void; onRefresh: () => void; /** Null when there is no conversation to download (the static run view). */ onDownloadSource: (() => void) | null; downloadPending: boolean; })"
+          "signature": "export function PreviewStage({ frameRef, launch, onFrameLoad, onBootstrapReady, visibleFailure, dataReason, minting, runtimeUnavailable, frameReady, editMode, untrusted, selection, onSteer, onArmInspect, onDisarmEdit, onApplyEdit, onRefresh, onDownloadSource, downloadPending, }: { frameRef: MutableRefObject<HTMLIFrameElement | null>; launch: PreviewLaunch | null; onFrameLoad: () => void; onBootstrapReady: () => void; visibleFailure: string | null; dataReason: string | undefined; minting: boolean; runtimeUnavailable: boolean; frameReady: boolean; editMode: boolean; untrusted: boolean; selection: ElementSelectState; onSteer?: (text: string) => void; onArmInspect: () => void; onDisarmEdit: () => void; onApplyEdit: (instruction: string) => void; onRefresh: () => void; /** Null when there is no conversation to download (the static run view). */ onDownloadSource: (() => void) | null; downloadPending: boolean; })"
         }
       ]
     },
@@ -31840,6 +31845,30 @@
     },
     {
       "surface": "frontend",
+      "path": "frontend/src/components/build/canvas/SelectionOverlay.tsx",
+      "public_name": "SelectionOverlay",
+      "target_sha256": "05940a8dab03175e72c5833aa99afba7f1bf3999125ed53b30ef51cfa177cdcd",
+      "owner_package": "PKG-24-UI-PREVIEW-FOLLOWUP",
+      "reason": "Optional showToolbar defaults true; preserve existing callers while iframe hosts place controls outside app bounds."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/canvas/SelectionOverlay.tsx",
+      "public_name": "SelectionToolbar",
+      "target_sha256": "23e2779b98a88662445bebadb98589967fb90021d9221332a7bb6e4380e134d9",
+      "owner_package": "PKG-24-UI-PREVIEW-FOLLOWUP",
+      "reason": "Extract existing controls into separate host layout; preserve callbacks/untrusted behavior and iframe-relative selection coordinates."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/canvas/previewPaneParts/PreviewStage.tsx",
+      "public_name": "PreviewStage",
+      "target_sha256": "9faeecf4f2bfa534b751ac83bba1c053cb924418f4bac4f60587772f257cc2b2",
+      "owner_package": "PKG-24-UI-PREVIEW-FOLLOWUP",
+      "reason": "Explicit host onArmInspect callback replaces direct arm call so Inspect and Point modes are mutually exclusive; only caller updated."
+    },
+    {
+      "surface": "frontend",
       "path": "frontend/src/lib/reportQualifications.ts",
       "public_name": "qualificationMarkdown",
       "target_sha256": "06ca235af21e6ea5efa06e24ef66130d8ffb8d714cd1774278685666b5fcd7ca",
@@ -33003,14 +33032,6 @@
       "path": "frontend/src/components/build/canvas/previewPaneParts/PreviewNotices.tsx",
       "public_name": "PreviewNotices",
       "target_sha256": "c72bf3ee7cefde7b6a00e6ce053d33f57ace8076b297fb7efdfa26585adf4e82",
-      "owner_package": "PKG-38-UI-FIXES-V51",
-      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
-    },
-    {
-      "surface": "frontend",
-      "path": "frontend/src/components/build/canvas/previewPaneParts/PreviewStage.tsx",
-      "public_name": "PreviewStage",
-      "target_sha256": "01b0238a5696961f49116d2cf4e5b882f52ecffb1b5fbd7c133c53432bced88c",
       "owner_package": "PKG-38-UI-FIXES-V51",
       "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
     },
@@ -34864,6 +34885,32 @@
     },
     {
       "surface": "frontend",
+      "path": "frontend/src/components/build/canvas/previewPaneParts/PreviewStage.tsx",
+      "public_name": "PreviewStage",
+      "owner_package": "PKG-24-UI-PREVIEW-FOLLOWUP",
+      "accepting_commit": "48784fb6749b23c54f8a24a8fa5895c21e9fec86",
+      "accepting_receipt": "development/notes/ui-preview-live-transport-20260925.md",
+      "declaration_kind": "function",
+      "old_signature": "export function PreviewStage({ frameRef, launch, onFrameLoad, onBootstrapReady, visibleFailure, dataReason, minting, runtimeUnavailable, frameReady, editMode, untrusted, selection, onSteer, onDisarmEdit, onApplyEdit, onRefresh, onDownloadSource, downloadPending, }: { frameRef: MutableRefObject<HTMLIFrameElement | null>; launch: PreviewLaunch | null; onFrameLoad: () => void; onBootstrapReady: () => void; visibleFailure: string | null; dataReason: string | undefined; minting: boolean; runtimeUnavailable: boolean; frameReady: boolean; editMode: boolean; untrusted: boolean; selection: ElementSelectState; onSteer?: (text: string) => void; onDisarmEdit: () => void; onApplyEdit: (instruction: string) => void; onRefresh: () => void; /** Null when there is no conversation to download (the static run view). */ onDownloadSource: (() => void) | null; downloadPending: boolean; })",
+      "new_signature": "export function PreviewStage({ frameRef, launch, onFrameLoad, onBootstrapReady, visibleFailure, dataReason, minting, runtimeUnavailable, frameReady, editMode, untrusted, selection, onSteer, onArmInspect, onDisarmEdit, onApplyEdit, onRefresh, onDownloadSource, downloadPending, }: { frameRef: MutableRefObject<HTMLIFrameElement | null>; launch: PreviewLaunch | null; onFrameLoad: () => void; onBootstrapReady: () => void; visibleFailure: string | null; dataReason: string | undefined; minting: boolean; runtimeUnavailable: boolean; frameReady: boolean; editMode: boolean; untrusted: boolean; selection: ElementSelectState; onSteer?: (text: string) => void; onArmInspect: () => void; onDisarmEdit: () => void; onApplyEdit: (instruction: string) => void; onRefresh: () => void; /** Null when there is no conversation to download (the static run view). */ onDownloadSource: (() => void) | null; downloadPending: boolean; })",
+      "old_target_sha256": "01b0238a5696961f49116d2cf4e5b882f52ecffb1b5fbd7c133c53432bced88c",
+      "new_target_sha256": "9faeecf4f2bfa534b751ac83bba1c053cb924418f4bac4f60587772f257cc2b2"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/canvas/SelectionOverlay.tsx",
+      "public_name": "SelectionOverlay",
+      "owner_package": "PKG-24-UI-PREVIEW-FOLLOWUP",
+      "accepting_commit": "48784fb6749b23c54f8a24a8fa5895c21e9fec86",
+      "accepting_receipt": "development/notes/ui-preview-live-transport-20260925.md",
+      "declaration_kind": "function",
+      "old_signature": "export function SelectionOverlay({ armed, untrusted, selection, onArm, onDisarm, onWalkUp, onDiscuss, }: Props)",
+      "new_signature": "export function SelectionOverlay({ armed, untrusted, selection, onArm, onDisarm, onWalkUp, onDiscuss, showToolbar = true, }: Props)",
+      "old_target_sha256": "2dfecba958b38be9c950c7c86e6aaf6b0cd1ce262a884e9bdba67fdecde438b8",
+      "new_target_sha256": "05940a8dab03175e72c5833aa99afba7f1bf3999125ed53b30ef51cfa177cdcd"
+    },
+    {
+      "surface": "frontend",
       "path": "frontend/src/lib/harness/productEvidence.ts",
       "public_name": "ProductObservations",
       "declaration_kind": "InterfaceDeclaration",
@@ -35225,19 +35272,6 @@
       "new_signature": "export function PreviewPane({ status, cid, events, untrusted = false, onSteer, onSelectionEdit, onElementMention, downloadTitle = null, }: { status: ConversationStatus; cid: string | null; events: AgentEvent[]; untrusted?: boolean; /** Names the SAVED FILE for the failure card's Download source action, the * same way the header's download does (UI-40). Presentation only. */ downloadTitle?: string | null; onSteer?: (text: string) => void; onSelectionEdit?: (ref: SelectionRef, instruction: string, humanLabel?: string) => void; onElementMention?: (payload: ElementMentionPayload) => void; })",
       "old_target_sha256": "ae17f1af2eb0b4291f5e8a131965f71e83e13ca6669f5502432a2ccc2f06c6c8",
       "new_target_sha256": "04d37d50a942d08840b43502288cb8b5c4478b388e94a356fb24303a49dc8705"
-    },
-    {
-      "surface": "frontend",
-      "path": "frontend/src/components/build/canvas/previewPaneParts/PreviewStage.tsx",
-      "public_name": "PreviewStage",
-      "owner_package": "PKG-38-UI-FIXES-V51",
-      "accepting_commit": "731f1c29b44c5654df33486fcfe4382ce6de841b",
-      "accepting_receipt": "PKG-38-UI-FIXES-V51: exact source-backed declaration migration",
-      "declaration_kind": "function",
-      "old_signature": "export function PreviewStage({ frameRef, launch, onFrameLoad, visibleFailure, dataReason, minting, runtimeUnavailable, frameReady, editMode, untrusted, selection, onSteer, onDisarmEdit, onApplyEdit, }: { frameRef: MutableRefObject<HTMLIFrameElement | null>; launch: PreviewLaunch | null; onFrameLoad: () => void; visibleFailure: string | null; dataReason: string | undefined; minting: boolean; runtimeUnavailable: boolean; frameReady: boolean; editMode: boolean; untrusted: boolean; selection: ElementSelectState; onSteer?: (text: string) => void; onDisarmEdit: () => void; onApplyEdit: (instruction: string) => void; })",
-      "new_signature": "export function PreviewStage({ frameRef, launch, onFrameLoad, onBootstrapReady, visibleFailure, dataReason, minting, runtimeUnavailable, frameReady, editMode, untrusted, selection, onSteer, onDisarmEdit, onApplyEdit, onRefresh, onDownloadSource, downloadPending, }: { frameRef: MutableRefObject<HTMLIFrameElement | null>; launch: PreviewLaunch | null; onFrameLoad: () => void; onBootstrapReady: () => void; visibleFailure: string | null; dataReason: string | undefined; minting: boolean; runtimeUnavailable: boolean; frameReady: boolean; editMode: boolean; untrusted: boolean; selection: ElementSelectState; onSteer?: (text: string) => void; onDisarmEdit: () => void; onApplyEdit: (instruction: string) => void; onRefresh: () => void; /** Null when there is no conversation to download (the static run view). */ onDownloadSource: (() => void) | null; downloadPending: boolean; })",
-      "old_target_sha256": "ad8e177962ce9585fb085ae26484373b35a9396e8e3793dd0f42859ac5792d74",
-      "new_target_sha256": "01b0238a5696961f49116d2cf4e5b882f52ecffb1b5fbd7c133c53432bced88c"
     },
     {
       "surface": "frontend",
