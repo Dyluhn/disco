@@ -178,8 +178,10 @@ def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+# Preserve the accepted skip marker identity; current capture provenance and
+# commands are documented in CONTRIBUTING and the versioned fixture record.
 @pytest.mark.skipif(
-    not _FIXTURE.exists(), reason="needs the checked-in loop_paris_standard_low_v2 fixture"
+    not _FIXTURE.exists(), reason="needs the captured loop fixture (make capture-loop)"
 )
 async def test_deterministic_replay_reproduces_recorded_events():
     from disco.core import SqliteEventStore

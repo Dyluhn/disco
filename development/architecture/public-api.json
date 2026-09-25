@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-public-api-v1",
-  "source_identity": "3c582b54aff73e5cf344cfd5d8c3e603e19d62a8",
+  "source_identity": "1ccbe5990db14f07eaf2da474938678694650b19",
   "python_initializers": [
     {
       "path": "packages/agent-server/src/disco/agent_server/__init__.py",
@@ -3915,7 +3915,7 @@
           "signature": "class SqliteEventStore(_ClosableSqliteStore)",
           "members": [
             "async def append(self, conversation_id: str, event: Event) -> Event",
-            "async def append_many(self, conversation_id: str, events: list[Event]) -> list[Event]",
+            "async def append_many(self, conversation_id: str, events: list[Event], *, require_existing: bool=False) -> list[Event]",
             "async def clear_space_members(self, space_id: str, *, owner_id: str | None=None) -> None",
             "async def conversation_exists(self, conversation_id: str) -> bool",
             "async def conversation_owned_by(self, conversation_id: str, owner_id: str) -> bool",
@@ -5523,10 +5523,12 @@
           "members": [],
           "fields": [
             "component_style: _ShortStr",
+            "content_width: OwnerContentWidth",
             "density: _ShortStr",
             "justifications: tuple[Justification, ...]",
             "layout_family: _ShortStr",
             "palette: Palette",
+            "reduced_motion: OwnerReducedMotion",
             "schema_version: int",
             "typography: Typography"
           ]
@@ -10715,6 +10717,8 @@
             "async def complete(self, req: CompletionRequest, *, context: CallContext | None=None) -> CompletionResponse",
             "async def stream_complete(self, req: CompletionRequest, *, context: CallContext | None=None) -> AsyncIterator[StreamChunk]",
             "def __init__(self, config: RouterConfig, providers: dict[str, ModelProvider], *, prompt_provider: PromptProvider | None=None, sink: RoutingSink | None=None, cost_tracker: CostTracker | None=None) -> None",
+            "def context_token_limit(self, role: ModelRole) -> int | None",
+            "def output_token_limit(self, role: ModelRole) -> int | None",
             "def request_budget_preview(self, req: CompletionRequest, *, context: CallContext) -> RequestBudgetEstimate | None",
             "def visual_inspection_route(self) -> tuple[Literal['main', 'dedicated', 'unavailable'], str | None, str]"
           ],
@@ -11720,7 +11724,7 @@
             "async def enter_planning(self, text: str='') -> ConversationState",
             "async def get_state(self) -> ConversationState",
             "async def pause(self) -> ConversationState",
-            "async def pick_alternative(self, option_id: str) -> ConversationState",
+            "async def pick_alternative(self, option_id: str, *, resume: bool=True) -> ConversationState",
             "async def reject(self, reason: str='rejected by user') -> ConversationState",
             "async def resume(self) -> ConversationState",
             "async def run(self) -> ConversationState",
@@ -13180,7 +13184,7 @@
           "signature": "class SqliteEventStore(_ClosableSqliteStore)",
           "members": [
             "async def append(self, conversation_id: str, event: Event) -> Event",
-            "async def append_many(self, conversation_id: str, events: list[Event]) -> list[Event]",
+            "async def append_many(self, conversation_id: str, events: list[Event], *, require_existing: bool=False) -> list[Event]",
             "async def clear_space_members(self, space_id: str, *, owner_id: str | None=None) -> None",
             "async def conversation_exists(self, conversation_id: str) -> bool",
             "async def conversation_owned_by(self, conversation_id: str, owner_id: str) -> bool",
@@ -17332,6 +17336,7 @@
         "default_projects_root",
         "is_runtime_secret_path",
         "rehydrate_workspace",
+        "rehydrate_workspace_files",
         "resolve_projects_root",
         "snapshot_workspace",
         "validate_root",
@@ -17351,6 +17356,7 @@
         "default_projects_root",
         "is_runtime_secret_path",
         "rehydrate_workspace",
+        "rehydrate_workspace_files",
         "resolve_projects_root",
         "snapshot_workspace",
         "validate_root",
@@ -17384,6 +17390,14 @@
         {
           "public_name": "rehydrate_workspace",
           "name": "rehydrate_workspace",
+          "module": "archive",
+          "level": 1,
+          "alias": null,
+          "kind": "from"
+        },
+        {
+          "public_name": "rehydrate_workspace_files",
+          "name": "rehydrate_workspace_files",
           "module": "archive",
           "level": 1,
           "alias": null,
@@ -17625,6 +17639,10 @@
         "rehydrate_workspace": {
           "kind": "function",
           "signature": "async def rehydrate_workspace(sandbox: _WorkspaceIO, src: Path) -> int"
+        },
+        "rehydrate_workspace_files": {
+          "kind": "function",
+          "signature": "async def rehydrate_workspace_files(sandbox: _WorkspaceIO, files: tuple[tuple[str, bytes], ...]) -> int"
         },
         "resolve_projects_root": {
           "kind": "function",
@@ -18366,7 +18384,7 @@
         {
           "kind": "function",
           "name": "createBuildConversation",
-          "signature": "export async function createBuildConversation( modelOverride?: string | null, surface: \"build\" | \"agent\" = \"build\", autonomous = false, /** Weak-model assist tier \u2014 EXPLICIT user toggle only (null/false = standard). * Assist is never auto-enabled by hosting; the user opts in via the UI toggle. */ assist: boolean | null = null, quiet = false, /** PKG-47: Reference Packs to bind before the first model call (ids from the library). */ referencePackIds: string[] = [], ): Promise<string>"
+          "signature": "export async function createBuildConversation( modelOverride?: string | null, surface: \"build\" | \"agent\" | \"research\" = \"build\", autonomous = false, /** Weak-model assist tier \u2014 EXPLICIT user toggle only (null/false = standard). * Assist is never auto-enabled by hosting; the user opts in via the UI toggle. */ assist: boolean | null = null, quiet = false, /** PKG-47: Reference Packs to bind before the first model call (ids from the library). */ referencePackIds: string[] = [], appkitMode = false, ): Promise<string>"
         },
         {
           "kind": "function",
@@ -18536,6 +18554,21 @@
       ]
     },
     {
+      "path": "frontend/src/api/agentAppkitOwner.ts",
+      "public_declarations": [
+        {
+          "kind": "variable",
+          "name": "getAppKitControls",
+          "signature": "export const getAppKitControls = (cid: string) => agentGet<Response>(endpoint(cid));"
+        },
+        {
+          "kind": "variable",
+          "name": "saveAppKitControls",
+          "signature": "export const saveAppKitControls = (cid: string, digest: string, values: Record<string, TweakValue>) => agentSend<Response>(\"PATCH\", endpoint(cid), { expected_spec_digest: digest, values });"
+        }
+      ]
+    },
+    {
       "path": "frontend/src/api/agentParts/deckEditor.ts",
       "public_declarations": [
         {
@@ -18592,6 +18625,11 @@
           "kind": "function",
           "name": "createShare",
           "signature": "export async function createShare(conversationId: string): Promise<ShareLink>"
+        },
+        {
+          "kind": "function",
+          "name": "exportConversationBundle",
+          "signature": "export async function exportConversationBundle(cid: string): Promise<ShareBundle>"
         },
         {
           "kind": "function",
@@ -19077,6 +19115,11 @@
           "kind": "function",
           "name": "isApiFailure",
           "signature": "export function isApiFailure(error: unknown): error is ApiFailure"
+        },
+        {
+          "kind": "function",
+          "name": "readableRequestError",
+          "signature": "export function readableRequestError(error: unknown, fallback: string): string"
         },
         {
           "kind": "InterfaceDeclaration",
@@ -19605,6 +19648,11 @@
         },
         {
           "kind": "function",
+          "name": "getProjectFile",
+          "signature": "export async function getProjectFile(cid: string, path: string): Promise<ProjectFileContent>"
+        },
+        {
+          "kind": "function",
           "name": "getProjectManifest",
           "signature": "export async function getProjectManifest(cid: string): Promise<ProjectManifest>"
         },
@@ -19690,6 +19738,11 @@
       "public_declarations": [
         {
           "kind": "function",
+          "name": "getResearchHistory",
+          "signature": "export function getResearchHistory(cid: string): Promise<SearchHistory>"
+        },
+        {
+          "kind": "function",
           "name": "requestResearch",
           "signature": "export async function requestResearch(scope: ReScope): Promise<ReScope>"
         },
@@ -19697,6 +19750,16 @@
           "kind": "function",
           "name": "subscribeResearch",
           "signature": "export function subscribeResearch(scope: ReScope, onFrame: (f: StreamFrame) => void): StreamHandle"
+        },
+        {
+          "kind": "InterfaceDeclaration",
+          "name": "SavedSearchTurn",
+          "signature": "export interface SavedSearchTurn { scope: ReScope; answer: GroundedAnswer }"
+        },
+        {
+          "kind": "InterfaceDeclaration",
+          "name": "SearchHistory",
+          "signature": "export interface SearchHistory { conversation_id: string; turns: SavedSearchTurn[]; latest_request: { scope: ReScope } | null; }"
         },
         {
           "kind": "InterfaceDeclaration",
@@ -19870,13 +19933,23 @@
         },
         {
           "kind": "function",
+          "name": "listWorkflowSchedules",
+          "signature": "export async function listWorkflowSchedules(): Promise<WorkflowSchedule[]>"
+        },
+        {
+          "kind": "function",
           "name": "runWorkflow",
           "signature": "export async function runWorkflow( instanceId: string, ): Promise<{ conversation_id: string; status: string }>"
         },
         {
           "kind": "function",
           "name": "scheduleWorkflow",
-          "signature": "export async function scheduleWorkflow(input: { instanceId: string; instanceDigest: string; cron: string; timezone: string; }): Promise<Record<string, unknown>>"
+          "signature": "export async function scheduleWorkflow(input: { instanceId: string; instanceDigest: string; cron: string; timezone: string; }): Promise<WorkflowSchedule>"
+        },
+        {
+          "kind": "function",
+          "name": "setWorkflowScheduleEnabled",
+          "signature": "export async function setWorkflowScheduleEnabled(input: { scheduleId: string; enabled: boolean; }): Promise<WorkflowSchedule>"
         }
       ]
     },
@@ -19966,7 +20039,7 @@
         {
           "kind": "function",
           "name": "ConfirmDialog",
-          "signature": "export function ConfirmDialog({ trigger, title, description, confirmLabel, onConfirm, confirmContext = \"generic\", }: Props)"
+          "signature": "export function ConfirmDialog({ trigger, title, description, confirmLabel, onConfirm, onConfirmedClose, confirmContext = \"generic\", }: Props)"
         }
       ]
     },
@@ -20066,7 +20139,7 @@
         {
           "kind": "function",
           "name": "ResearchSurface",
-          "signature": "export function ResearchSurface()"
+          "signature": "export function ResearchSurface({ resumeCid = null }: { resumeCid?: string | null })"
         }
       ]
     },
@@ -20121,7 +20194,7 @@
         {
           "kind": "function",
           "name": "SourcePanel",
-          "signature": "export function SourcePanel({ answer, onReScope }: Props)"
+          "signature": "export function SourcePanel({ answer, onReScope, domainsDeny = [], busy = false }: Props)"
         }
       ]
     },
@@ -20241,7 +20314,7 @@
         {
           "kind": "function",
           "name": "CitationMarker",
-          "signature": "export function CitationMarker({ id, answer }: { id: string; answer: GroundedAnswer | null })"
+          "signature": "export function CitationMarker({ id, answer, textBefore = \"\", textAfter = \"\" }: { id: string; answer: GroundedAnswer | null; /** Prose before this exact marker, including earlier markers in its group. */ textBefore?: string; /** Remaining prose, including any qualification after an inline marker. */ textAfter?: string; })"
         },
         {
           "kind": "function",
@@ -20361,17 +20434,7 @@
         {
           "kind": "function",
           "name": "AlternativesGate",
-          "signature": "export function AlternativesGate({ alternatives, onPick, onSteer, }: { alternatives: AlternativesEvent; onPick: (optionId: string) => void; /** Optional: render a \"Skip\" link that drops focus into the steer input. */ onSteer?: () => void; })"
-        }
-      ]
-    },
-    {
-      "path": "frontend/src/components/build/AppCard.tsx",
-      "public_declarations": [
-        {
-          "kind": "function",
-          "name": "AppCard",
-          "signature": "export function AppCard({ title, fields, values, onTweak }: Props)"
+          "signature": "export function AlternativesGate({ alternatives, onPick, onSteer, }: { alternatives: AlternativesEvent; onPick: (optionId: string) => void; /** Focus the existing steer input without resolving or submitting the gate. */ onSteer?: () => void; })"
         }
       ]
     },
@@ -20581,32 +20644,7 @@
         {
           "kind": "function",
           "name": "SteerInput",
-          "signature": "export function SteerInput({ onSteer, disabled, attachment, }: { onSteer: (text: string) => void; disabled?: boolean; attachment?: React.ReactNode; })"
-        }
-      ]
-    },
-    {
-      "path": "frontend/src/components/build/TweakPanel.tsx",
-      "public_declarations": [
-        {
-          "kind": "function",
-          "name": "TweakPanel",
-          "signature": "export function TweakPanel({ fields, values, onTweak }: Props)"
-        },
-        {
-          "kind": "InterfaceDeclaration",
-          "name": "TweakFieldView",
-          "signature": "export interface TweakFieldView { key: string; label: string; /** A documented editor; an unrecognized value renders the unsupported note (API boundary). */ editor: TweakEditor; options?: string[]; // enum colors?: string[]; // palette swatches min?: number; // int/float max?: number; step?: number; maxLength?: number; // text bound (default 120) }"
-        },
-        {
-          "kind": "TypeAliasDeclaration",
-          "name": "TweakEditor",
-          "signature": "export type TweakEditor = \"boolean\" | \"enum\" | \"int\" | \"float\" | \"color\" | \"palette\" | \"text\";"
-        },
-        {
-          "kind": "TypeAliasDeclaration",
-          "name": "TweakValue",
-          "signature": "export type TweakValue = string | number | boolean;"
+          "signature": "export function SteerInput({ onSteer, inputRef, disabled, attachment, }: { onSteer: (text: string) => void; inputRef?: Ref<HTMLInputElement>; disabled?: boolean; attachment?: React.ReactNode; })"
         }
       ]
     },
@@ -20846,7 +20884,7 @@
         {
           "kind": "function",
           "name": "FilesPane",
-          "signature": "export function FilesPane({ events, streamingFile, manifestFiles = [], }: { events: AgentEvent[]; streamingFile: StreamingFile | null; manifestFiles?: ManifestFile[]; })"
+          "signature": "export function FilesPane({ events, streamingFile, manifestFiles = [], snapshot, }: { events: AgentEvent[]; streamingFile: StreamingFile | null; manifestFiles?: ManifestFile[]; snapshot?: { cid: string; revision: string; loading: boolean; error: boolean }; })"
         }
       ]
     },
@@ -20961,7 +20999,7 @@
         {
           "kind": "function",
           "name": "VersionBanner",
-          "signature": "export function VersionBanner({ displayedVersionSeq, restoringSeq, onBackToCurrent, onRollback, }: { displayedVersionSeq: number | null; restoringSeq: number | null; onBackToCurrent: () => void; onRollback: (seq: number) => Promise<void>; })"
+          "signature": "export function VersionBanner({ selectedVersionSeq, versions, displayedVersionSeq, restoringSeq, onBackToCurrent, onRollback, }: { selectedVersionSeq: number | null; versions: readonly { seq: number }[]; displayedVersionSeq: number | null; restoringSeq: number | null; onBackToCurrent: () => void; onRollback: (seq: number) => Promise<void>; })"
         }
       ]
     },
@@ -21311,6 +21349,16 @@
       ]
     },
     {
+      "path": "frontend/src/components/buildSurface/BlockedRunNotice.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "BlockedRunNotice",
+          "signature": "export function BlockedRunNotice({ events, status }: { events: AgentEvent[]; status: ConversationStatus })"
+        }
+      ]
+    },
+    {
       "path": "frontend/src/components/buildSurface/BuildActivityFeed.tsx",
       "public_declarations": [
         {
@@ -21346,7 +21394,7 @@
         {
           "kind": "function",
           "name": "BuildComposerSection",
-          "signature": "export function BuildComposerSection({ b, copy, steerable, settled, terminalIncomplete, steerWithMention, requestPlanWithMention, elementMentionChip, framing, }: { b: BuildController; copy: FramingCopy; steerable: boolean; settled: boolean; terminalIncomplete: boolean; steerWithMention: (text: string) => void; requestPlanWithMention: (text: string) => void; elementMentionChip: ReactNode; framing: BuildFraming; })"
+          "signature": "export function BuildComposerSection({ b, copy, steerable, settled, terminalIncomplete, steerInputRef, steerWithMention, requestPlanWithMention, elementMentionChip, framing, }: { b: BuildController; copy: FramingCopy; steerable: boolean; settled: boolean; terminalIncomplete: boolean; steerInputRef?: Ref<HTMLInputElement>; steerWithMention: (text: string) => void; requestPlanWithMention: (text: string) => void; elementMentionChip: ReactNode; framing: BuildFraming; })"
         }
       ]
     },
@@ -21356,7 +21404,7 @@
         {
           "kind": "function",
           "name": "BuildDecisionGates",
-          "signature": "export function BuildDecisionGates({ b }: { b: BuildController })"
+          "signature": "export function BuildDecisionGates({ b, onSteer }: { b: BuildController; onSteer?: () => void })"
         }
       ]
     },
@@ -21377,6 +21425,16 @@
           "kind": "function",
           "name": "BuildEmptyState",
           "signature": "export function BuildEmptyState({ framing, copy, b, draft, setDraft, }: { framing: BuildFraming; copy: FramingCopy; b: BuildController; draft: string; setDraft: (value: string) => void; })"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/buildSurface/BuildRouteSync.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "BuildRouteSync",
+          "signature": "export function BuildRouteSync({ cid, resumeCid, framing, hasPersistedEvents }: { cid: string | null; resumeCid?: string | null; framing: \"build\" | \"agent\"; hasPersistedEvents: boolean; })"
         }
       ]
     },
@@ -21407,6 +21465,41 @@
           "kind": "function",
           "name": "ReferencePackPicker",
           "signature": "export function ReferencePackPicker({ selected, onChange, disabled = false, defaultOpen = false, }: { selected: string[]; onChange: (next: string[]) => void; disabled?: boolean; /** Start expanded (tests and screenshots). */ defaultOpen?: boolean; })"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/buildSurface/ownerControls/AppCard.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "AppCard",
+          "signature": "export function AppCard({ title, fields, values, onTweak }: Props)"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/buildSurface/ownerControls/AppKitOwnerPanel.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "AppKitOwnerPanel",
+          "signature": "export function AppKitOwnerPanel({ cid, status }: { cid: string; status: string })"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/buildSurface/ownerControls/TweakPanel.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "TweakPanel",
+          "signature": "export function TweakPanel({ fields, values, onTweak }: Props)"
+        },
+        {
+          "kind": "reexport",
+          "name": "export",
+          "signature": "export type { TweakEditor, TweakFieldView, TweakValue } from \"@/types/appkitOwner\";"
         }
       ]
     },
@@ -22081,6 +22174,16 @@
       ]
     },
     {
+      "path": "frontend/src/components/researchSurfaceParts/SavedSearchControls.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "SavedSearchControls",
+          "signature": "export function SavedSearchControls({ controller: r }: { controller: ResearchController })"
+        }
+      ]
+    },
+    {
       "path": "frontend/src/components/researchSurfaceParts/derive.ts",
       "public_declarations": [
         {
@@ -22172,6 +22275,21 @@
           "kind": "function",
           "name": "LiveBrowserSection",
           "signature": "export function LiveBrowserSection()"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/settings/McpConnectionForm.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "McpConnectionForm",
+          "signature": "export function McpConnectionForm({ busy, onSave, onCancel, }: { busy: boolean; onSave: (draft: McpConnectionDraft) => void; onCancel: () => void; })"
+        },
+        {
+          "kind": "InterfaceDeclaration",
+          "name": "McpConnectionDraft",
+          "signature": "export interface McpConnectionDraft { name: string; url: string; transport: string; risk_tier: string; }"
         }
       ]
     },
@@ -22566,7 +22684,7 @@
         {
           "kind": "function",
           "name": "ProviderOptionList",
-          "signature": "export function ProviderOptionList({ active, pending, onSelect, }: { active: Provider | undefined; pending: boolean; onSelect: (provider: Provider) => void; })"
+          "signature": "export function ProviderOptionList({ active, pending, disabled = false, onSelect, }: { active: Provider | undefined; pending: boolean; disabled?: boolean; onSelect: (provider: Provider) => void; })"
         }
       ]
     },
@@ -22576,7 +22694,7 @@
         {
           "kind": "function",
           "name": "SaveRow",
-          "signature": "export function SaveRow({ fieldsDirty, savePending, onSave, }: { fieldsDirty: boolean; savePending: boolean; onSave: () => void; })"
+          "signature": "export function SaveRow({ fieldsDirty, savePending, invalid = false, onSave, }: { fieldsDirty: boolean; savePending: boolean; invalid?: boolean; onSave: () => void; })"
         }
       ]
     },
@@ -24180,13 +24298,18 @@
         },
         {
           "kind": "function",
+          "name": "useProjectFile",
+          "signature": "export function useProjectFile(conversationId: string, path: string, revision: string)"
+        },
+        {
+          "kind": "function",
           "name": "useProjectManifest",
-          "signature": "export function useProjectManifest(conversationId: string | null, available = true)"
+          "signature": "export function useProjectManifest(conversationId: string | null, available = true, revision = \"\")"
         },
         {
           "kind": "function",
           "name": "useProjectRelease",
-          "signature": "export function useProjectRelease(conversationId: string | null)"
+          "signature": "export function useProjectRelease(conversationId: string | null, revision = \"\")"
         },
         {
           "kind": "function",
@@ -24261,7 +24384,7 @@
         {
           "kind": "function",
           "name": "useResearch",
-          "signature": "export function useResearch()"
+          "signature": "export function useResearch(resumeCid: string | null = null)"
         },
         {
           "kind": "TypeAliasDeclaration",
@@ -24297,6 +24420,16 @@
           "kind": "variable",
           "name": "initialResearchStreamState",
           "signature": "export const initialResearchStreamState: StreamState = { phase: \"idle\", blocks: [], partial: {}, streamingBlockId: null, answer: null, error: null, stage: null, };"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/hooks/useSavedWorkspaceAvailability.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "useSavedWorkspaceAvailability",
+          "signature": "export function useSavedWorkspaceAvailability(events: AgentEvent[], status: ConversationStatus, cid: string | null, untrusted = false)"
         }
       ]
     },
@@ -24430,8 +24563,18 @@
         },
         {
           "kind": "function",
+          "name": "useSetWorkflowScheduleEnabled",
+          "signature": "export function useSetWorkflowScheduleEnabled()"
+        },
+        {
+          "kind": "function",
           "name": "useWorkflowReviews",
           "signature": "export function useWorkflowReviews()"
+        },
+        {
+          "kind": "function",
+          "name": "useWorkflowSchedules",
+          "signature": "export function useWorkflowSchedules()"
         },
         {
           "kind": "variable",
@@ -24732,6 +24875,11 @@
           "kind": "function",
           "name": "planProgressSummary",
           "signature": "export function planProgressSummary( totalSteps: number, progress: Map<number, StepState>, ): { done: number; total: number; fraction: number }"
+        },
+        {
+          "kind": "function",
+          "name": "progressStepIndex",
+          "signature": "export function progressStepIndex(value: unknown): number | null"
         }
       ]
     },
@@ -24786,7 +24934,7 @@
         {
           "kind": "variable",
           "name": "UNRESOLVED_MEANING",
-          "signature": "export const UNRESOLVED_MEANING = \"Unresolved means the checker found no source excerpt to match the sentence \" + \"against \u2014 it is not a contradiction.\";"
+          "signature": "export const UNRESOLVED_MEANING = \"Unresolved means the check did not establish support or contradiction; \" + \"it does not mean the claim is false.\";"
         }
       ]
     },
@@ -25046,7 +25194,7 @@
         {
           "kind": "InterfaceDeclaration",
           "name": "DeepRoundActivity",
-          "signature": "export interface DeepRoundActivity { kind: \"review\" | \"rework\" | \"continuation\"; k: number; of: number; }"
+          "signature": "export interface DeepRoundActivity { kind: \"review\" | \"rework\" | \"continuation\"; /** Explicit producer marker for a review of revised prose; absent on old events. */ afterRework?: boolean; k: number; of: number; }"
         },
         {
           "kind": "InterfaceDeclaration",
@@ -25786,6 +25934,16 @@
       ]
     },
     {
+      "path": "frontend/src/lib/savedWorkspace.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "currentFinalWorkspaceEvent",
+          "signature": "export function currentFinalWorkspaceEvent(events: AgentEvent[], cid: string | null)"
+        }
+      ]
+    },
+    {
       "path": "frontend/src/lib/scheduleLocal.ts",
       "public_declarations": [
         {
@@ -26399,11 +26557,6 @@
         },
         {
           "kind": "InterfaceDeclaration",
-          "name": "PreviewInfo",
-          "signature": "export interface PreviewInfo { available: boolean; proxy?: boolean; // served via the agent-server proxy (the browser builds the URL) reason?: string; stub?: boolean; /** Exact platform-managed process generation. Rotates on restart/recovery. */ generation?: string; /** Current PreviewManager lifecycle state. */ status?: \"starting\" | \"running\" | \"unavailable\" | \"restarting\" | \"crashed\" | \"stopped\"; /** Authoritative launcher class, not inferred from a process name in the UI. */ launch_kind?: \"static\" | \"framework\" | \"custom\" | string; /** Whether workspace changes are applied by the runtime or need a frame reload. */ reload_strategy?: \"hmr\" | \"reload\"; /** Latest host-owned refresh failure while the prior healthy frame remains visible. */ update_error?: string | null; /** Canonical platform-selected runtime port; clients never choose it. */ port?: number | null; owner?: { pid: number; cmdline: string; session: string | null; } | null; ports?: Array<{ port: number; owner: { pid: number; cmdline: string; session: string | null } | null; }>; }"
-        },
-        {
-          "kind": "InterfaceDeclaration",
           "name": "QueryRefusedPayload",
           "signature": "export interface QueryRefusedPayload { /** The proposed query, verbatim. Empty string when the proposal was blank. */ query: string; reason: QueryRefusedReason; /** The query this one matched \u2014 a duplicate wall or the re-issue queue. */ duplicates?: string; /** The turn the matched query ran on (duplicate wall only). */ duplicates_turn?: number; /** The angle the host closed (`exhausted` only). */ angle?: string; /** The host's own sentence for closing it (`exhausted` only). */ why?: string; }"
         },
@@ -26520,12 +26673,12 @@
         {
           "kind": "InterfaceDeclaration",
           "name": "VerifierStartedEvent",
-          "signature": "export interface VerifierStartedEvent extends EventBase { kind: \"verifier_started\"; artifact_path: string; artifact_kind: string; verifier: string; requested_by_event_id?: string | null; }"
+          "signature": "export interface VerifierStartedEvent extends EventBase { kind: \"verifier_started\"; artifact_path: string; artifact_kind: string; verifier: string; requested_by_event_id?: string | null; run_intent_id?: string | null; target_id?: string; check_id?: string; }"
         },
         {
           "kind": "InterfaceDeclaration",
           "name": "VerifierVerdictEvent",
-          "signature": "export interface VerifierVerdictEvent extends EventBase { kind: \"verifier_verdict\"; artifact_path: string; artifact_kind: string; verified: boolean; verdict?: string | null; detail?: string | null; failures?: Array<Record<string, unknown>>; }"
+          "signature": "export interface VerifierVerdictEvent extends EventBase { kind: \"verifier_verdict\"; artifact_path: string; artifact_kind: string; verified: boolean; verdict?: string | null; detail?: string | null; failures?: Array<Record<string, unknown>>; target_id?: string; check_id?: string; /** Run binding from the backend's typed host receipt; absent on legacy events. */ verification_result?: { run_intent_id?: string | null } | null; }"
         },
         {
           "kind": "InterfaceDeclaration",
@@ -26541,6 +26694,11 @@
           "kind": "InterfaceDeclaration",
           "name": "WorkspaceVersionEvent",
           "signature": "export interface WorkspaceVersionEvent extends EventBase { kind: \"workspace_version\"; version_seq: number; tree_digest: string; trigger: string; final_seal?: { schema_version: 1; scope: { namespace: string; identifier: string }; terminal_seq: number; latest_effect_seq: number | null; version_seq: number; tree_digest: string; file_count: number; total_bytes: number; } | null; }"
+        },
+        {
+          "kind": "reexport",
+          "name": "export",
+          "signature": "export type { PreviewInfo } from \"./agentPreview\";"
         },
         {
           "kind": "TypeAliasDeclaration",
@@ -26606,6 +26764,41 @@
           "kind": "TypeAliasDeclaration",
           "name": "WSWireServerFrame",
           "signature": "export type WSWireServerFrame = | { type: \"state\"; state: ConversationState } | { type: \"event\"; event: AgentEvent } | { type: \"token\"; token: string; token_for_event_id?: string | null } | { type: \"file_stream\"; file_stream: FileStreamFrame } | { type: \"error\"; error: { detail?: string } } | { type: \"pong\" } | { type: \"mcp_approval_required\"; mcp_approval: McpApprovalPayload };"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/types/agentPreview.ts",
+      "public_declarations": [
+        {
+          "kind": "InterfaceDeclaration",
+          "name": "PreviewInfo",
+          "signature": "export interface PreviewInfo { available: boolean; proxy?: boolean; // served via the agent-server proxy (the browser builds the URL) reason?: string; stub?: boolean; /** Exact platform-managed process generation. Rotates on restart/recovery. */ generation?: string; /** Current PreviewManager lifecycle state. */ status?: \"starting\" | \"running\" | \"unavailable\" | \"restarting\" | \"crashed\" | \"stopped\"; /** Authoritative launcher class, not inferred from a process name in the UI. */ launch_kind?: \"static\" | \"framework\" | \"custom\" | string; /** Whether workspace changes are applied by the runtime or need a frame reload. */ reload_strategy?: \"hmr\" | \"reload\"; /** Latest host-owned refresh failure while the prior healthy frame remains visible. */ update_error?: string | null; /** Canonical platform-selected runtime port; clients never choose it. */ port?: number | null; owner?: { pid: number; cmdline: string; session: string | null; } | null; ports?: Array<{ port: number; owner: { pid: number; cmdline: string; session: string | null } | null; }>; }"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/types/appkitOwner.ts",
+      "public_declarations": [
+        {
+          "kind": "InterfaceDeclaration",
+          "name": "AppKitOwnerControls",
+          "signature": "export interface AppKitOwnerControls { title: string; fields: TweakFieldView[]; values: Record<string, TweakValue>; spec_digest: string; editable: boolean; }"
+        },
+        {
+          "kind": "InterfaceDeclaration",
+          "name": "TweakFieldView",
+          "signature": "export interface TweakFieldView { key: string; label: string; editor: TweakEditor; options?: string[]; colors?: string[]; min?: number; max?: number; step?: number; maxLength?: number; }"
+        },
+        {
+          "kind": "TypeAliasDeclaration",
+          "name": "TweakEditor",
+          "signature": "export type TweakEditor = \"boolean\" | \"enum\" | \"int\" | \"float\" | \"color\" | \"palette\" | \"text\";"
+        },
+        {
+          "kind": "TypeAliasDeclaration",
+          "name": "TweakValue",
+          "signature": "export type TweakValue = string | number | boolean;"
         }
       ]
     },
@@ -26750,7 +26943,7 @@
         {
           "kind": "InterfaceDeclaration",
           "name": "ReScope",
-          "signature": "export interface ReScope { query: string; domains_deny?: string[]; drop_weak?: boolean; /** Per-conversation lead-model override (the main-screen pill \u2192 CallContext * .model_override). null/undefined \u2192 use the Settings default. */ model_override?: string | null; /** The Think toggle: run the answerer in reasoning mode (it thinks first, then * the answer streams). Honored by the live backend for reasoning models. */ think?: boolean; /** G1/DR-4: pre-created conversation id for the research session. When set, * the server loads any pre-attached upload passages (text files from the * initial-box UploadComposer) and seeds them into the rerank step. * null/undefined \u2192 OFF path (byte-identical to pre-DR-4 code). */ conversation_id?: string | null; /** Per-query source ids. Empty/undefined means use the Settings default. */ sources?: string[]; }"
+          "signature": "export interface ReScope { request_id?: string; parent_request_id?: string | null; space_ids?: string[]; query: string; domains_deny?: string[]; drop_weak?: boolean; /** Per-conversation lead-model override (the main-screen pill \u2192 CallContext * .model_override). null/undefined \u2192 use the Settings default. */ model_override?: string | null; /** The Think toggle: run the answerer in reasoning mode (it thinks first, then * the answer streams). Honored by the live backend for reasoning models. */ think?: boolean; /** G1/DR-4: pre-created conversation id for the research session. When set, * the server loads any pre-attached upload passages (text files from the * initial-box UploadComposer) and seeds them into the rerank step. * null/undefined \u2192 OFF path (byte-identical to pre-DR-4 code). */ conversation_id?: string | null; /** Per-query source ids. Empty/undefined means use the Settings default. */ sources?: string[]; }"
         },
         {
           "kind": "InterfaceDeclaration",
@@ -27019,6 +27212,11 @@
         },
         {
           "kind": "InterfaceDeclaration",
+          "name": "ProjectFileContent",
+          "signature": "export interface ProjectFileContent { path: string; content: string | null; binary: boolean; bytes: number; version_seq: number | null; }"
+        },
+        {
+          "kind": "InterfaceDeclaration",
           "name": "ProjectImportResult",
           "signature": "export interface ProjectImportResult { conversation_id: string; files: number; bytes: number; title: string; }"
         },
@@ -27264,6 +27462,11 @@
         },
         {
           "kind": "InterfaceDeclaration",
+          "name": "WorkflowSchedule",
+          "signature": "export interface WorkflowSchedule { schedule_id: string; spec: { instance_id: string; instance_digest: string; cron: string; timezone: string; enabled: boolean; }; next_run: string | null; }"
+        },
+        {
+          "kind": "InterfaceDeclaration",
           "name": "WorkflowSimulation",
           "signature": "export interface WorkflowSimulation { ok: boolean; output_path: string | null; output_format: string | null; fixture_bytes: number; findings: WorkflowValidationFinding[]; }"
         },
@@ -27360,6 +27563,16 @@
       ]
     },
     {
+      "path": "frontend/src/views/historyViewParts/ExportRunButton.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "ExportRunButton",
+          "signature": "export function ExportRunButton({ cid, title }: { cid: string; title: string })"
+        }
+      ]
+    },
+    {
       "path": "frontend/src/views/historyViewParts/deriveVisibility.ts",
       "public_declarations": [
         {
@@ -27431,6 +27644,16 @@
           "kind": "function",
           "name": "WorkflowRunSchedule",
           "signature": "export function WorkflowRunSchedule({ workflow }: { workflow: WorkflowReview })"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/views/workflowReview/WorkflowScheduleList.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "WorkflowScheduleList",
+          "signature": "export function WorkflowScheduleList({ rows }: { rows: WorkflowSchedule[] })"
         }
       ]
     },
@@ -28084,22 +28307,6 @@
       "path": "frontend/src/components/buildSurface/BuildAskGate.tsx",
       "public_name": "BuildAskGate",
       "target_sha256": "23e87b4cba5303df33b2f6a88519fcbf2915693e2074bb04a789f081c3490054",
-      "owner_package": "PKG-12-FE-BUILD",
-      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
-    },
-    {
-      "surface": "frontend",
-      "path": "frontend/src/components/buildSurface/BuildComposerSection.tsx",
-      "public_name": "BuildComposerSection",
-      "target_sha256": "d84e284632fe3a9838ecf8cd98c619bcf96d67cb907f503217b702d4876979cc",
-      "owner_package": "PKG-12-FE-BUILD",
-      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
-    },
-    {
-      "surface": "frontend",
-      "path": "frontend/src/components/buildSurface/BuildDecisionGates.tsx",
-      "public_name": "BuildDecisionGates",
-      "target_sha256": "96a3240772adfdfd59682a7a876a871e00c423644e185ba46684085430bb2b96",
       "owner_package": "PKG-12-FE-BUILD",
       "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
     },
@@ -28876,14 +29083,6 @@
       "path": "frontend/src/components/build/canvas/previewPaneParts/StaticArtifactViewer.tsx",
       "public_name": "StaticArtifactViewer",
       "target_sha256": "43aa495840ef5a03053c7c289b4a849ed8c7713e15c329f83641f5cce9693400",
-      "owner_package": "PKG-12-FE-PREVIEW",
-      "reason": "Epic 12-C (PKG-12-FE-PREVIEW): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
-    },
-    {
-      "surface": "frontend",
-      "path": "frontend/src/components/build/canvas/previewPaneParts/VersionBanner.tsx",
-      "public_name": "VersionBanner",
-      "target_sha256": "26560038a72d6f7b786a70b4ba6ffbc76590bd496c840ef830c78ab9d7a187fd",
       "owner_package": "PKG-12-FE-PREVIEW",
       "reason": "Epic 12-C (PKG-12-FE-PREVIEW): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
     },
@@ -30065,22 +30264,6 @@
     },
     {
       "surface": "frontend",
-      "path": "frontend/src/components/settings/imageGenSectionParts/ProviderOptionList.tsx",
-      "public_name": "ProviderOptionList",
-      "target_sha256": "cde05abd952a699c207d41c24feac17a20ff21b61f1a46ddaccc6a7f94a13fd8",
-      "owner_package": "PKG-12-FE-SETTINGS",
-      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
-    },
-    {
-      "surface": "frontend",
-      "path": "frontend/src/components/settings/imageGenSectionParts/SaveRow.tsx",
-      "public_name": "SaveRow",
-      "target_sha256": "8c56049d7f1d58eca8b6f30e0b9a8eee4674d99a3c0b647d33258b82178467ec",
-      "owner_package": "PKG-12-FE-SETTINGS",
-      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
-    },
-    {
-      "surface": "frontend",
       "path": "frontend/src/components/settings/imageGenSectionParts/StoredKeyField.tsx",
       "public_name": "StoredKeyField",
       "target_sha256": "a89f59f7c289cd3511c5a1636c5295949a1eb30a780df9bdfc0e605662adb83a",
@@ -30881,14 +31064,6 @@
     },
     {
       "surface": "python",
-      "path": "packages/core/src/disco/core/loop/__init__.py",
-      "public_name": "AgentLoop",
-      "target_sha256": "2a249128505164e6cfe39b886d816828392a6517cd073cdba8fe3331c3d67af6",
-      "owner_package": "PKG-19-V31-ARTIFACT-DELIVERY",
-      "reason": "PKG-19 v31 derives the delivery target from host artifact evidence and binds that exact target before handoff."
-    },
-    {
-      "surface": "python",
       "path": "packages/core/src/disco/core/appkit/__init__.py",
       "public_name": "SectionContent",
       "target_sha256": "bccc3ce1f3185463220e04077c9359e69815330c32eb05c71e1b2e567d38bc5f",
@@ -30942,14 +31117,6 @@
       "target_sha256": "b1027703adcebcf4f608dc00f05d074c56f0bc9b41c77c50185c760966a8c3e7",
       "owner_package": "PKG-19-V36-BROWSER-VERIFICATION-GUIDANCE",
       "reason": "Reports the optional dedicated visual-model assignment."
-    },
-    {
-      "surface": "python",
-      "path": "packages/core/src/disco/core/llm/__init__.py",
-      "public_name": "DefaultLLMRouter",
-      "target_sha256": "816f47133875e3839168008566b5b693994dec571663e340a05f61b8a7a22e09",
-      "owner_package": "PKG-19-V36-BROWSER-VERIFICATION-GUIDANCE",
-      "reason": "Adds bounded visual-observer route selection without transferring the agent loop."
     },
     {
       "surface": "frontend",
@@ -31166,6 +31333,510 @@
       "target_sha256": "c8665a4306b4470f55a5ce0946e5f786cf72c590082c0f07b1f2d5c988a66a67",
       "owner_package": "PKG-24-RESEARCH-RELIABILITY",
       "reason": "Provider-neutral request controls, recoverable research activity, review reserves, and retained export qualifications."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/agent.ts",
+      "public_name": "createBuildConversation",
+      "target_sha256": "b1f005f9f211d7e25101008e8dcda17994abed61683fd81a298ab76ef6569c43",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "reason": "Adds research surface and optional immutable AppKit creation flag; preserves existing defaults."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/agentAppkitOwner.ts",
+      "public_name": "getAppKitControls",
+      "target_sha256": "aec3926c8de1f4d1e0a9c8ccc373521975710f6ffab7acf7bdc3384e2b1b19de",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "reason": "Owner-scoped read of canonical AppKit controls from saved specs; active builds remain noneditable."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/agentAppkitOwner.ts",
+      "public_name": "saveAppKitControls",
+      "target_sha256": "cc82ca2342e1abf263d5c506993b42a548cbc2510b85b44a791a20bf1b772a59",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "reason": "Owner-scoped digest-bound batch save; finished/no active run guard, rebuild and normal seal."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/agentParts/share.ts",
+      "public_name": "exportConversationBundle",
+      "target_sha256": "d492c09e2da89d969a670c0ae19bb830c6741a730ec5c2f19b8cd6b7df909a76",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "reason": "Downloads the existing owner-authorized scrubbed bundle without publishing a share link."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/errors.ts",
+      "public_name": "readableRequestError",
+      "target_sha256": "192cf0268b19d8ef687ed02edda854e3fb438688ee276ddd9959623d37bf45c7",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "reason": "Turns validated structured request failures into readable explanations without dumping response metadata."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/projects.ts",
+      "public_name": "getProjectFile",
+      "target_sha256": "1c5e27804f157ef4aefe047fd3bb6de5cb07212b6bf83615197b909e4a5778f0",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "reason": "Reads owner project bytes with bounded size, safe path handling and committed-version authority."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/research.ts",
+      "public_name": "SavedSearchTurn",
+      "target_sha256": "8ed621169a760d1c5001900864d07eb151536bd473a15d9ea7495e5336f8d865",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "reason": "Persists scope plus finished grounded answer for recoverable standard search."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/research.ts",
+      "public_name": "SearchHistory",
+      "target_sha256": "9839498a6a5ddf5325e99cb408a385769c472c8682663de1e44a64dd2fd914e7",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "reason": "Types owner search history and latest request for reload/reconnect."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/research.ts",
+      "public_name": "getResearchHistory",
+      "target_sha256": "d6687c79e77bca3a0d0103ae3c2f75257894cdd743372d3b5694e79a12b401bb",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "reason": "Owner-scoped restoration of persisted standard search history."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/workflows.ts",
+      "public_name": "listWorkflowSchedules",
+      "target_sha256": "6224f15e35f1c5c8d60e89b125d3c6f9cf011e6674993250487f1c967fe672b8",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "reason": "Add owner-scoped schedule listing so saved schedules remain visible and manageable after reload."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/workflows.ts",
+      "public_name": "scheduleWorkflow",
+      "target_sha256": "ce8044d35aedd53159fed303780b476a274aba9eea725b138f5e5dca24d2d0ad",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "reason": "Narrow the former generic Record return to the documented WorkflowSchedule response; arguments and route remain compatible and caller consumes the explicit persisted schedule shape."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/workflows.ts",
+      "public_name": "setWorkflowScheduleEnabled",
+      "target_sha256": "5ceb8b5883fc8794bb0301aa218a9db07deaa848963003dddb8694fb01598ff7",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "reason": "Add owner-authorized pause/resume by exact schedule ID with a strict enabled boolean; retain schedule identity and prior runs."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/ConfirmDialog.tsx",
+      "public_name": "ConfirmDialog",
+      "target_sha256": "d5276780ae91d4259d7c92dea8b41423f068bdf21835881a2f5cef7add371134",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "reason": "Adds optional onConfirmedClose callback so a confirmed dialog close can focus a stable control after its initiating row disappears. Existing cancellation and callers without callback retain Radix trigger restoration. The callback represents confirmation-driven closure, not awaited asynchronous mutation success."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/ResearchSurface.tsx",
+      "public_name": "ResearchSurface",
+      "target_sha256": "3dcb23713733a3cc11c70b2e7b93868843fa286590bc49d099c82e5fca4822cb",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "reason": "Adds optional resumeCid prop for canonical saved-search route."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/SourcePanel.tsx",
+      "public_name": "SourcePanel",
+      "target_sha256": "84fa28170e64f5cae6556d53988615e73322820328c258d7d13f156885a8c1cc",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "reason": "Adds optional domain exclusions and busy state for rescope controls."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/blocks/CitedText.tsx",
+      "public_name": "CitationMarker",
+      "target_sha256": "f5d5a682d93429b685f3aba20c442df2117f39eda73c2d67ca0fd3e2092fc35a",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "reason": "Add optional surrounding prose to CitationMarker so each reused citation resolves its own recorded claim verdict; missing/ambiguous association remains weak. Existing callers remain syntactically compatible. No backend semantic/NLI or source-panel aggregate change."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/AlternativesGate.tsx",
+      "public_name": "AlternativesGate",
+      "target_sha256": "5ae33cc14a945d7d696fd6d00c14e92ee2c637ea87c1441ac6ab56c053a343b0",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "reason": "Comment-only signature change clarifies that optional onSteer focuses the existing composer without resolving the gate or submitting text; callback type is unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/SteerInput.tsx",
+      "public_name": "SteerInput",
+      "target_sha256": "334847af79154eeaa40feab5793f744ce6b1596dedf30c48b5df6e10314e50be",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "reason": "Adds optional inputRef for focusing the existing input from the alternatives shortcut; existing onSteer, disabled and attachment contracts and explicit submit behavior remain unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/canvas/FilesPane.tsx",
+      "public_name": "FilesPane",
+      "target_sha256": "ef59168dece6d2976446977e2ac8008b68e7c0f5d8e3ad52cbaae527e3c83c9a",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "reason": "Adds optional snapshot identity/status props to read actual committed project files."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/canvas/previewPaneParts/VersionBanner.tsx",
+      "public_name": "VersionBanner",
+      "target_sha256": "5d3b5d106eadba887d3576159c379593ad02f76e388b42d755326a092fbd351f",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "reason": "Adds required selectedVersionSeq and versions props for real version selection/rollback; PreviewPane caller migrated."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/buildSurface/BlockedRunNotice.tsx",
+      "public_name": "BlockedRunNotice",
+      "target_sha256": "ed367c887660972e40f35bdeb1070db363674ec4c3bb38cddb9c90550cdc4f00",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "reason": "Displays actual workflow blocked explanation in Build activity."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/buildSurface/BuildComposerSection.tsx",
+      "public_name": "BuildComposerSection",
+      "target_sha256": "0bdad30b551b6cf78abacab139f29147a0b78a35ec13908fb5f6732c17d51e78",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "reason": "Adds optional steerInputRef and forwards it to the existing SteerInput; preserves draft state and all existing composer controls."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/buildSurface/BuildDecisionGates.tsx",
+      "public_name": "BuildDecisionGates",
+      "target_sha256": "77a17540ff32107c591d2cd29ebdbdb43bb2e0be8ee8c24a789b4c9c5795def0",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "reason": "Adds optional onSteer callback forwarded to AlternativesGate; production BuildSurface supplies focus only, with no automatic option selection or submission."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/buildSurface/BuildRouteSync.tsx",
+      "public_name": "BuildRouteSync",
+      "target_sha256": "f048aa3ab7bb99bc012dae1246f820d0186fce1cbb06b43de049e00a6367a902",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "reason": "Canonicalizes persisted Build/Agent conversation URLs after matching real kickoff."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/buildSurface/ownerControls/AppCard.tsx",
+      "public_name": "AppCard",
+      "target_sha256": "e64bd02f4f3559dcffc129ff635daf2233ae2e685fa6ebe1e80f249e22497b96",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "reason": "Moves unchanged owner card function into Build context; no component capability removed."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/buildSurface/ownerControls/AppKitOwnerPanel.tsx",
+      "public_name": "AppKitOwnerPanel",
+      "target_sha256": "72dcb41301dec03540ec3204e5aca9303e63e01d5be0a9a73cccb08bb8049281",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "reason": "Mounts six canonical controls with staged batch save, failure recovery and persisted preview refresh."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/buildSurface/ownerControls/TweakPanel.tsx",
+      "public_name": "TweakPanel",
+      "target_sha256": "e5c5a8d2bdbf13962d4ca46f1cfc6530c44f17b5cd09d3895639d8686e8ee865",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "reason": "Moves unchanged six-editor function into Build context; production owner panel now mounts it."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/buildSurface/ownerControls/TweakPanel.tsx",
+      "public_name": "export",
+      "target_sha256": "12a8aa6718d6a7d33962b16c62d4c1fb102d1caccc24b18903550e5ce977bb00",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "reason": "Type-only reexports preserve owner control type imports at the relocated TweakPanel path."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/researchSurfaceParts/SavedSearchControls.tsx",
+      "public_name": "SavedSearchControls",
+      "target_sha256": "431ce0099309634115e2d3e1ed6791bcbc22b132d4a35f7acee93f20165fe7c1",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "reason": "Restores saved standard-search controls and surfaces history/reconnect errors."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/McpConnectionForm.tsx",
+      "public_name": "McpConnectionDraft",
+      "target_sha256": "5519d6859aab20452b39ad68fad03a2497fc89c5a8312dc678a3dbc3a39c0521",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "reason": "Publishes the previously private MCP connection draft interface from the new form module. Same name/url/transport/risk_tier string fields; this is a new exported symbol, not relocation of a previously public API."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/McpConnectionForm.tsx",
+      "public_name": "McpConnectionForm",
+      "target_sha256": "e6db11d6a08e058647c9c03ff76332a4c287db23f93cd189592052d077c83d4d",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "reason": "Extracts the existing inline add-connection editor into its own module to satisfy module complexity/size boundaries. Busy/onSave/onCancel remain explicit; first-field focus and guarded aria-disabled pending save preserve keyboard focus while suppressing duplicate mutations. Initial draft remains internal and empty, matching the sole former call site."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/imageGenSectionParts/ProviderOptionList.tsx",
+      "public_name": "ProviderOptionList",
+      "target_sha256": "0986f4c8212820fd8ac26bb95aecc2fa130edcd297a7aef72e10eeccc272a072",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "reason": "Adds optional disabled guard while image provider settings are invalid or unsaved."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/imageGenSectionParts/SaveRow.tsx",
+      "public_name": "SaveRow",
+      "target_sha256": "0526ff263acdb544ec4e85e321d29dd5ef5037b8eb66dcd5fc424bb6ac1a9f31",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "reason": "Adds optional invalid guard so invalid image-workflow JSON cannot save."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/hooks/useProjects.ts",
+      "public_name": "useProjectFile",
+      "target_sha256": "5ab425fd8280b8d2e371e600e50d49bdd46f954f4a856f3c3ea8534f0da46993",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "reason": "Loads bounded selected project file for Files preview."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/hooks/useProjects.ts",
+      "public_name": "useProjectManifest",
+      "target_sha256": "3694d96986ea1e2ad17d5998e644ec4dda8d38d8115a5b6fa0e73e9241c7525c",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "reason": "Adds optional revision key so restored/edited manifests invalidate correctly."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/hooks/useProjects.ts",
+      "public_name": "useProjectRelease",
+      "target_sha256": "c316f36a5656e06f92e02a7dc9d7d8b822c17f86517571b0718367b5c960ce67",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "reason": "Adds defaulted revision cache-key parameter; existing one-argument callers retain their key and request behavior, while finished Build verdicts refetch for the current final workspace seal."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/hooks/useResearch.ts",
+      "public_name": "useResearch",
+      "target_sha256": "215269287a99e6288881306e1a7a0171872cf7f4d940bbc475ab07494924aba2",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "reason": "Adds optional resumeCid and restores saved request identity/history."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/hooks/useSavedWorkspaceAvailability.ts",
+      "public_name": "useSavedWorkspaceAvailability",
+      "target_sha256": "bd36cf1dadc89c43c4946d04bd7063e59a2e1026fd99072b5014c5a58c155168",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "reason": "Shared presentation-only source readiness: current FINISHED requires a matching final seal; preserves ready imports, owner-listed inactive legacy projects and saved live continuations, without granting untrusted or backend commit authority."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/hooks/useWorkflows.ts",
+      "public_name": "useSetWorkflowScheduleEnabled",
+      "target_sha256": "401330f41299e7b1794c993fa65ba5f67b550568b501eb93fef36e189530eb57",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "reason": "Expose pause/resume mutation and invalidate saved schedule state on settlement so network ambiguity is reconciled."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/hooks/useWorkflows.ts",
+      "public_name": "useWorkflowSchedules",
+      "target_sha256": "32524f5f28215bcf3933823defde48a559ce383e11a7cb4112850ec8474bbb76",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "reason": "Expose persisted owner schedule query for reload and lifecycle management."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/buildTrace/plan.ts",
+      "public_name": "progressStepIndex",
+      "target_sha256": "c3edb2e0ce0a4ce3318f515ba05266510c05c01fc14f63c98c74011ccb77ea62",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "reason": "Adds shared frontend progress-index normalization for tool-compatible integer values; malformed/null/fractional/array/object values cannot partially project plan progress. Declarative replay and incremental updates use the same validation and reject correlated failed tool actions while retaining genuine accepted progress."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/claimCheck.ts",
+      "public_name": "UNRESOLVED_MEANING",
+      "target_sha256": "e4ccd005f19017faca995bb37f09ef7e575af379709dd364686b30c61a4cfaff",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "reason": "Intentional public literal wording correction: neutral or conflicting checks may have source excerpts. Defines unresolved as neither support nor contradiction established, without treating it as false. UI and report-export wording are aligned; labels, probabilities, counts and grounding decisions are unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/deepResearchTrace.ts",
+      "public_name": "DeepRoundActivity",
+      "target_sha256": "78d85c16877ac3f2123bdfccabda238d0a7718b4f2ae057457cd2820c56d6bb2",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "reason": "Adds optional afterRework boolean to carry the explicit existing review-event marker for verification of changed prose. Missing/legacy events retain the original review round label; only literal true on a review event renders Checking revisions. Initial incomplete-verdict checks are not relabelled, and generation budgets, verification gates and cancellation are unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/savedWorkspace.ts",
+      "public_name": "currentFinalWorkspaceEvent",
+      "target_sha256": "0738f195e44705b77c70bbccd80c2b674de744d59acf6094c822ed3d64b1926d",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "reason": "Finds the latest persisted system FINISHED and matching workspace-tree seal for the conversation/effect/version/digest; rejects stale or conflicting evidence. Backend immutable-record and ownership checks remain authoritative."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/agent.ts",
+      "public_name": "VerifierStartedEvent",
+      "target_sha256": "7410d9fe15b885ad6189689f6d8796e2b8f4d168ca74f7492a27da65039bb880",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "reason": "Add optional TypeScript mirrors of existing backend run_intent_id, target_id and check_id fields for durable current-run UI progress projection. Backend schema/validation unchanged; missing legacy fields remain valid."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/agent.ts",
+      "public_name": "VerifierVerdictEvent",
+      "target_sha256": "a99163d006175ba739e2dd97f326d4046eb82a9f414bb1aa2a8c82f447b4ff05",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "reason": "Add optional target_id/check_id and optional nullable verification_result containing optional nullable run_intent_id, mirroring existing typed host receipt identity. Used only for UI projection; backend verifier ownership/authority/validation unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/agent.ts",
+      "public_name": "export",
+      "target_sha256": "9199127ae1beae559dad6e7e83b0d1a33471ee63e40ec4ed49dab46b868a19b1",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "reason": "Byte-identical PreviewInfo interface and comments moved to dedicated agentPreview.ts for architecture file budget; agent.ts preserves the old import route via type-only reexport. No runtime JavaScript, contract fields or optionality changed. The unchanged scanner names this reexport statement export; reviewed as compatibility syntax, not an invented callable."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/agentPreview.ts",
+      "public_name": "PreviewInfo",
+      "target_sha256": "1b4b2cf7cb41c5033882cc082552ef9d49b2e9890062333f630f9496bde02bea",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "reason": "Byte-identical PreviewInfo interface and comments moved to dedicated agentPreview.ts for architecture file budget; agent.ts preserves the old import route via type-only reexport. No runtime JavaScript, contract fields or optionality changed."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/appkitOwner.ts",
+      "public_name": "AppKitOwnerControls",
+      "target_sha256": "b14e1ea5a8b14400da02f1085e9add078033b32afa77b5f59823312b21858794",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "reason": "Types canonical owner controls, spec digest and editability for guarded save."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/appkitOwner.ts",
+      "public_name": "TweakEditor",
+      "target_sha256": "d9d00de1571a70216cb47beb37fb78afc21e66e27d59676f960e6b6764e4290c",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "reason": "Moves unchanged editor union to shared owner API types."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/appkitOwner.ts",
+      "public_name": "TweakFieldView",
+      "target_sha256": "46804acac732453e76fbb621f37d3d9927870391f850cd933c8f032c0c977d19",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "reason": "Moves same field interface to shared owner API types; only inline comments removed from signature text."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/appkitOwner.ts",
+      "public_name": "TweakValue",
+      "target_sha256": "fe970c7563966cc560ef6112e49a82e258d9c7c9065037ca6ecc2b9727a2f9f7",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "reason": "Moves unchanged value union to shared owner API types."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/grounded.ts",
+      "public_name": "ReScope",
+      "target_sha256": "edda544070cbb358c2056a62fe8fbd47d265c95ac54f212de9705fec3725f90b",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "reason": "Adds optional request/parent IDs and space IDs for persisted search and scoped replay."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/project.ts",
+      "public_name": "ProjectFileContent",
+      "target_sha256": "ae207d66b5f0594d18d21e30fa5105528450989f5b43e685aa01d717c070616f",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "reason": "Types actual file content, binary indicator, byte count and sealed version sequence."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/workflow.ts",
+      "public_name": "WorkflowSchedule",
+      "target_sha256": "899f0f0a88e2ce070ce883583bcc225be5d029b4c6443d51650dd554a9419769",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "reason": "Declare existing schedule response fields and nullable next_run so paused state is represented explicitly."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/views/historyViewParts/ExportRunButton.tsx",
+      "public_name": "ExportRunButton",
+      "target_sha256": "ba10bd3103e77952362400f4bac4d5843124e009f63aba864ef53794baafcc1a",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "reason": "Provides owner event-bundle download directly from History."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/views/workflowReview/WorkflowScheduleList.tsx",
+      "public_name": "WorkflowScheduleList",
+      "target_sha256": "348284600e8f7034fd09a4c770b7a57c788b79aa45aaa1886b270c2b907cb518",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "reason": "Add visible saved schedule list with pause/resume controls, pending guard, and update failure feedback."
+    },
+    {
+      "surface": "python",
+      "path": "packages/core/src/disco/core/__init__.py",
+      "public_name": "SqliteEventStore",
+      "target_sha256": "7ec56fe6458cf1033184f313561f9648a74f276f5262354d934dc76c971af2e1",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "reason": "Adds optional require_existing to append_many to prevent deleted search conversations being resurrected by late output; existing default preserved."
+    },
+    {
+      "surface": "python",
+      "path": "packages/core/src/disco/core/appkit/__init__.py",
+      "public_name": "DesignSpec",
+      "target_sha256": "c42f22a70b31848049818d3836c22c9a03f1e311f8537cb6212fdc3c097f45e1",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "reason": "Adds direct optional content_width and reduced_motion fields with strict bounds; full JSON schema unchanged by direct-field refactor and old absent fields omit serialization."
+    },
+    {
+      "surface": "python",
+      "path": "packages/core/src/disco/core/llm/__init__.py",
+      "public_name": "DefaultLLMRouter",
+      "target_sha256": "ab136a347c0462cd5c0d0efe1ffc5b5c836de7be2e790086d8a9c9960950bb83",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "reason": "Adds context_token_limit(role) and output_token_limit(role), both returning optional declared capacities for the currently assigned role without provider calls; existing constructor, complete/stream and routing behavior retain their signatures."
+    },
+    {
+      "surface": "python",
+      "path": "packages/core/src/disco/core/loop/__init__.py",
+      "public_name": "AgentLoop",
+      "target_sha256": "b05defd92f413c02eb2c3673c998e4d60c608b48b46f3efde105a7958a98c857",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "reason": "Adds keyword-only resume=True to pick_alternative so server resolves a recovery choice before scheduling its owned worker; direct callers retain prior default."
+    },
+    {
+      "surface": "python",
+      "path": "packages/core/src/disco/core/store/__init__.py",
+      "public_name": "SqliteEventStore",
+      "target_sha256": "457c53291be0475b6719a57189a1cbee8486f274c516537edbf0baf13982c3ec",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "reason": "Adds optional require_existing to append_many to prevent deleted search conversations being resurrected by late output; existing default preserved."
+    },
+    {
+      "surface": "python",
+      "path": "packages/tools/src/disco/tools/projects/__init__.py",
+      "public_name": "rehydrate_workspace_files",
+      "target_sha256": "c78aa0510409dbf1229351cbe6e85a2c50989e293c59a6e025b6db1b7fc8eabd",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "reason": "Adds restoration of caller-verified path/byte tuples through the existing jailed batch/fallback seam; unsupported batches use ordinary jailed writes, while failed supported batches are never replayed. Authoritative selection, clearing and final readback remain caller responsibilities."
     },
     {
       "surface": "frontend",
@@ -31668,14 +32339,6 @@
       "path": "frontend/src/lib/deepResearchTrace.ts",
       "public_name": "DeepObservationActivity",
       "target_sha256": "fe93bb05418557f59e25b3256cba1c4172a5924a4e719a51ab4190119c6e3406",
-      "owner_package": "PKG-35-DEEP-RESEARCH-CLOSEOUT",
-      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
-    },
-    {
-      "surface": "frontend",
-      "path": "frontend/src/lib/deepResearchTrace.ts",
-      "public_name": "DeepRoundActivity",
-      "target_sha256": "9608d8d70148f55b004e5e089f1ff2e3374994ce4a37a23dd1107461dfa046f7",
       "owner_package": "PKG-35-DEEP-RESEARCH-CLOSEOUT",
       "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
     },
@@ -32553,14 +33216,6 @@
     },
     {
       "surface": "frontend",
-      "path": "frontend/src/hooks/useProjects.ts",
-      "public_name": "useProjectManifest",
-      "target_sha256": "a90014eca7e41622af1361a8a60a39b707a55c8b8da61ce3de9514a3d6fa1b22",
-      "owner_package": "PKG-38-UI-FIXES-V51",
-      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
-    },
-    {
-      "surface": "frontend",
       "path": "frontend/src/lib/claimCheck.ts",
       "public_name": "CHECK_LABEL",
       "target_sha256": "9c71b43616afd9c30284fed1b3d2bc047ae4a4b777e5fda5feedea467d253b70",
@@ -32572,14 +33227,6 @@
       "path": "frontend/src/lib/claimCheck.ts",
       "public_name": "CheckCounts",
       "target_sha256": "e9686108abce9f321fb7bd3dc5fd52f0ac8c819afca52d48a73f1420ceb9a104",
-      "owner_package": "PKG-38-UI-FIXES-V51",
-      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
-    },
-    {
-      "surface": "frontend",
-      "path": "frontend/src/lib/claimCheck.ts",
-      "public_name": "UNRESOLVED_MEANING",
-      "target_sha256": "f8be6e8108a2c38e16b7d252e8ba8c6bea4f543b5cdf1f6a36a7a00b9194a055",
       "owner_package": "PKG-38-UI-FIXES-V51",
       "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
     },
@@ -32745,35 +33392,11 @@
     },
     {
       "surface": "python",
-      "path": "packages/core/src/disco/core/__init__.py",
-      "public_name": "SqliteEventStore",
-      "target_sha256": "0274df4cdfcaeeeb66ed5068cdb76cd1d9ac962d84edf09ed3cfea19dd904cc4",
-      "owner_package": "PKG-38-UI-FIXES-V51",
-      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
-    },
-    {
-      "surface": "python",
       "path": "packages/core/src/disco/core/llm/__init__.py",
       "public_name": "ProviderSettings",
       "target_sha256": "c01dbe20a93e37b71d1b4261559939face437755e93ee152f85bc9322403317d",
       "owner_package": "PKG-38-UI-FIXES-V51",
       "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
-    },
-    {
-      "surface": "python",
-      "path": "packages/core/src/disco/core/store/__init__.py",
-      "public_name": "SqliteEventStore",
-      "target_sha256": "15c512be6a3d8208ffc7b2dfe76d4a46967c2582b7e5ebe9575243b531354327",
-      "owner_package": "PKG-38-UI-FIXES-V51",
-      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
-    },
-    {
-      "surface": "frontend",
-      "path": "frontend/src/api/agent.ts",
-      "public_name": "createBuildConversation",
-      "target_sha256": "e54ae52cf1e410a16e6490690b4a8bd774dc30c3ea026e64aaee19ec51cb450d",
-      "owner_package": "PKG-47-REFERENCE-PACKS",
-      "reason": "PKG-47-REFERENCE-PACKS: Reference Packs: the writer port on ToolContext/DefaultToolExecutor, the bound-pack store on ConversationRuntime, three tools in the free-form scope, the packs router, and the frontend picker/section/API/hooks/types"
     },
     {
       "surface": "frontend",
@@ -33133,6 +33756,89 @@
     },
     {
       "surface": "python",
+      "path": "packages/core/src/disco/core/__init__.py",
+      "public_name": "SqliteEventStore",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "accepting_commit": "1ccbe5990db14f07eaf2da474938678694650b19",
+      "accepting_receipt": "development/notes/ui-acceptance-remediation-20260923.md",
+      "origin": "disco.core.store.sqlite.SqliteEventStore",
+      "removed_members": [
+        "async def append_many(self, conversation_id: str, events: list[Event]) -> list[Event]"
+      ],
+      "added_members": [
+        "async def append_many(self, conversation_id: str, events: list[Event], *, require_existing: bool=False) -> list[Event]"
+      ],
+      "old_signature_sha256": "915116fffc61ab842a23a910d1f407b7195f1db05966bb1402572450c872b09e",
+      "new_signature_sha256": "35e463cf3da2c5e26489175254aea88079ff22a4ddbafc41d47f054e3fd89fe6"
+    },
+    {
+      "surface": "python",
+      "path": "packages/core/src/disco/core/store/__init__.py",
+      "public_name": "SqliteEventStore",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "accepting_commit": "1ccbe5990db14f07eaf2da474938678694650b19",
+      "accepting_receipt": "development/notes/ui-acceptance-remediation-20260923.md",
+      "origin": "disco.core.store.sqlite.SqliteEventStore",
+      "removed_members": [
+        "async def append_many(self, conversation_id: str, events: list[Event]) -> list[Event]"
+      ],
+      "added_members": [
+        "async def append_many(self, conversation_id: str, events: list[Event], *, require_existing: bool=False) -> list[Event]"
+      ],
+      "old_signature_sha256": "915116fffc61ab842a23a910d1f407b7195f1db05966bb1402572450c872b09e",
+      "new_signature_sha256": "35e463cf3da2c5e26489175254aea88079ff22a4ddbafc41d47f054e3fd89fe6"
+    },
+    {
+      "surface": "python",
+      "path": "packages/core/src/disco/core/loop/__init__.py",
+      "public_name": "AgentLoop",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "accepting_commit": "1ccbe5990db14f07eaf2da474938678694650b19",
+      "accepting_receipt": "development/notes/ui-acceptance-remediation-20260923.md",
+      "origin": "disco.core.loop.engine.AgentLoop",
+      "removed_members": [
+        "async def pick_alternative(self, option_id: str) -> ConversationState"
+      ],
+      "added_members": [
+        "async def pick_alternative(self, option_id: str, *, resume: bool=True) -> ConversationState"
+      ],
+      "old_signature_sha256": "44d45503479be1aebb342a36298da96c21365870b5f960f3c9500452d615bcdf",
+      "new_signature_sha256": "f3dea2c1beca5e77b3d80e34d9d62eb1571824d107a6f3862c364ccbf13157e0"
+    },
+    {
+      "surface": "python",
+      "path": "packages/core/src/disco/core/appkit/__init__.py",
+      "public_name": "DesignSpec",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "accepting_commit": "1ccbe5990db14f07eaf2da474938678694650b19",
+      "accepting_receipt": "development/notes/ui-acceptance-remediation-20260923.md",
+      "origin": "disco.core.appkit.spec.DesignSpec",
+      "removed_members": [],
+      "added_members": [
+        "content_width: OwnerContentWidth",
+        "reduced_motion: OwnerReducedMotion"
+      ],
+      "old_signature_sha256": "9b1926ede5997bac0d5b08eef23e921ec5f309a6a269b5158e160fe1da4c84f8",
+      "new_signature_sha256": "05b1a3245f7790f2a4324818aa474c63c5e96a2f68d7bb0af7fe296142d02752"
+    },
+    {
+      "surface": "python",
+      "path": "packages/core/src/disco/core/llm/__init__.py",
+      "public_name": "DefaultLLMRouter",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "accepting_commit": "1ccbe5990db14f07eaf2da474938678694650b19",
+      "accepting_receipt": "development/notes/ui-acceptance-remediation-20260923.md",
+      "origin": "disco.core.llm.routing.DefaultLLMRouter",
+      "removed_members": [],
+      "added_members": [
+        "def context_token_limit(self, role: ModelRole) -> int | None",
+        "def output_token_limit(self, role: ModelRole) -> int | None"
+      ],
+      "old_signature_sha256": "7858fa90b28e873bed7518b7b4c15f6872f9e2695ca1b356bb555869076bcb7a",
+      "new_signature_sha256": "50f8a68d2e49ff509d2122bbfab081b3ea812aa3184636e3880b0ffad90b4814"
+    },
+    {
+      "surface": "python",
       "path": "packages/core/src/disco/core/appkit/__init__.py",
       "public_name": "Entity",
       "origin": "disco.core.appkit.spec.Entity",
@@ -33297,36 +34003,6 @@
     },
     {
       "surface": "python",
-      "path": "packages/core/src/disco/core/__init__.py",
-      "public_name": "SqliteEventStore",
-      "owner_package": "PKG-38-UI-FIXES-V51",
-      "accepting_commit": "731f1c29b44c5654df33486fcfe4382ce6de841b",
-      "accepting_receipt": "PKG-38-UI-FIXES-V51: exact source-backed declaration migration",
-      "origin": "disco.core.store.sqlite.SqliteEventStore",
-      "removed_members": [],
-      "added_members": [
-        "async def update_title_unique(self, conversation_id: str, title: str) -> str"
-      ],
-      "old_signature_sha256": "1b086b44d654be0db69ccb09da279a2d0c6b142e2e4b39de5ff8a3c352c102a2",
-      "new_signature_sha256": "915116fffc61ab842a23a910d1f407b7195f1db05966bb1402572450c872b09e"
-    },
-    {
-      "surface": "python",
-      "path": "packages/core/src/disco/core/store/__init__.py",
-      "public_name": "SqliteEventStore",
-      "owner_package": "PKG-38-UI-FIXES-V51",
-      "accepting_commit": "731f1c29b44c5654df33486fcfe4382ce6de841b",
-      "accepting_receipt": "PKG-38-UI-FIXES-V51: exact source-backed declaration migration",
-      "origin": "disco.core.store.sqlite.SqliteEventStore",
-      "removed_members": [],
-      "added_members": [
-        "async def update_title_unique(self, conversation_id: str, title: str) -> str"
-      ],
-      "old_signature_sha256": "1b086b44d654be0db69ccb09da279a2d0c6b142e2e4b39de5ff8a3c352c102a2",
-      "new_signature_sha256": "915116fffc61ab842a23a910d1f407b7195f1db05966bb1402572450c872b09e"
-    },
-    {
-      "surface": "python",
       "path": "packages/core/src/disco/core/llm/__init__.py",
       "public_name": "ProviderSettings",
       "owner_package": "PKG-38-UI-FIXES-V51",
@@ -33407,21 +34083,6 @@
     },
     {
       "surface": "python",
-      "path": "packages/core/src/disco/core/llm/__init__.py",
-      "public_name": "DefaultLLMRouter",
-      "origin": "disco.core.llm.routing.DefaultLLMRouter",
-      "removed_members": [],
-      "added_members": [
-        "def visual_inspection_route(self) -> tuple[Literal['main', 'dedicated', 'unavailable'], str | None, str]"
-      ],
-      "old_signature_sha256": "d075fe99572e79fded65f295ffa7045b77f63e2460c798895c13bb14f0066e36",
-      "new_signature_sha256": "7858fa90b28e873bed7518b7b4c15f6872f9e2695ca1b356bb555869076bcb7a",
-      "owner_package": "PKG-19-V36-BROWSER-VERIFICATION-GUIDANCE",
-      "accepting_commit": "90dd49022c88203dba5cd9674dd06e2872d8b06d",
-      "accepting_receipt": "2026-07-28/STATUS.md"
-    },
-    {
-      "surface": "python",
       "path": "packages/core/src/disco/core/__init__.py",
       "public_name": "LLMSummarizingCondenser",
       "origin": "disco.core.view.LLMSummarizingCondenser",
@@ -33434,23 +34095,6 @@
       "owner_package": "PKG-59-HARD-BATCH",
       "accepting_commit": "91eb58c6e7f6b8ff15f6c1079f20511a451e55ac",
       "accepting_receipt": "Hard batching: LLMSummarizingCondenser gains hard_max_tokens (member transition); no initializer or frontend change"
-    },
-    {
-      "surface": "python",
-      "path": "packages/core/src/disco/core/loop/__init__.py",
-      "public_name": "AgentLoop",
-      "origin": "disco.core.loop.engine.AgentLoop",
-      "removed_members": [
-        "def __init__(self, conversation_id: str, store: EventStore, agent: Agent, executor: ToolExecutor, router: LLMRouter, analyzer: SecurityAnalyzer, policy: ConfirmationPolicy, condenser: Condenser, summarizer: Summarizer, *, mode: OperatingMode, max_iterations: int=500, stop_hooks: list[StopHook] | None=None, stuck_thresholds: StuckThresholds | None=None, veto_feedback: str=_DEFAULT_VETO_FEEDBACK, planning_tools: frozenset[str]=frozenset(), plan_tool: str='submit_plan', execution_mode: OperatingMode=OperatingMode.LONG_HORIZON, autonomous: bool=False, model_policy: ModelExecutionPolicy=_DEFAULT_MODEL_POLICY, driver_context_window: int | None=None, finish_alias: str | None=None, recitation_cadence: int=_RECITATION_CADENCE_DEFAULT, reground_cadence: int=_HS03_REGROUND_INTERVAL, dod_evaluator_factory: Callable[[], DoDEvaluator | Coroutine[Any, Any, DoDEvaluator]] | None=None, host_verifier: HostVerifier | None=None, host_verify_timeout_s: float=30.0, host_verifier_verdict_hook: Callable[[VerifierVerdictEvent], Awaitable[None]] | None=None, host_verify_authoritative: bool | None=None, verifier_judge: VerifierJudge | None=None, verifier_judge_timeout_s: float=30.0, finish_sealability_probe: SealabilityProbe | None=None, finish_seal_timeout_s: float=150.0, workflow_run: WorkflowRun | None=None, terminal_commit_hook: TerminalCommitHook=None, control_fence: ControlFenceFactory=None, quiet: bool=False, strict_appkit_active: Callable[[], bool] | None=None, declared_delivery_kind: Literal['app', 'files'] | None=None, delivery_contract_resolver: Callable[[str], Awaitable[None]] | None=None) -> None"
-      ],
-      "added_members": [
-        "def __init__(self, conversation_id: str, store: EventStore, agent: Agent, executor: ToolExecutor, router: LLMRouter, analyzer: SecurityAnalyzer, policy: ConfirmationPolicy, condenser: Condenser, summarizer: Summarizer, *, mode: OperatingMode, max_iterations: int=500, stop_hooks: list[StopHook] | None=None, stuck_thresholds: StuckThresholds | None=None, veto_feedback: str=_DEFAULT_VETO_FEEDBACK, planning_tools: frozenset[str]=frozenset(), plan_tool: str='submit_plan', execution_mode: OperatingMode=OperatingMode.LONG_HORIZON, require_productive_action_before_finish: bool=True, autonomous: bool=False, model_policy: ModelExecutionPolicy=_DEFAULT_MODEL_POLICY, driver_context_window: int | None=None, finish_alias: str | None=None, recitation_cadence: int=_RECITATION_CADENCE_DEFAULT, reground_cadence: int=_HS03_REGROUND_INTERVAL, dod_evaluator_factory: Callable[[], DoDEvaluator | Coroutine[Any, Any, DoDEvaluator]] | None=None, host_verifier: HostVerifier | None=None, host_verify_timeout_s: float=30.0, host_verifier_verdict_hook: Callable[[VerifierVerdictEvent], Awaitable[None]] | None=None, host_verify_authoritative: bool | None=None, verifier_judge: VerifierJudge | None=None, verifier_judge_timeout_s: float=30.0, finish_sealability_probe: SealabilityProbe | None=None, finish_seal_timeout_s: float=150.0, workflow_run: WorkflowRun | None=None, terminal_commit_hook: TerminalCommitHook=None, control_fence: ControlFenceFactory=None, quiet: bool=False, strict_appkit_active: Callable[[], bool] | None=None, declared_delivery_kind: Literal['app', 'files'] | None=None, delivery_contract_resolver: Callable[[str], Awaitable[None]] | None=None) -> None"
-      ],
-      "old_signature_sha256": "a0d9565421f7fd3e83ca46c62ca94074dc6edb3dc6e8af5082a40f0a143f8f91",
-      "new_signature_sha256": "44d45503479be1aebb342a36298da96c21365870b5f960f3c9500452d615bcdf",
-      "owner_package": "PKG-19-AGENT-SURFACE",
-      "accepting_commit": "94f9a155276ade4df52ee83cf250d0814366d296",
-      "accepting_receipt": "2026-07-28/STATUS.md"
     },
     {
       "surface": "python",
@@ -33879,6 +34523,292 @@
       "owner_package": "PKG-24-MOBILE-AND-RUNTIME-HONESTY",
       "accepting_commit": "05b2484c4fe16b0c54c3082dc73f4175c5b82716",
       "accepting_receipt": "automation/runtime/boundary-20260818-mobile-first-class/BOUNDARY-RECEIPT.md"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/deepResearchTrace.ts",
+      "public_name": "DeepRoundActivity",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "accepting_commit": "1ccbe5990db14f07eaf2da474938678694650b19",
+      "accepting_receipt": "development/notes/ui-acceptance-remediation-20260923.md",
+      "declaration_kind": "InterfaceDeclaration",
+      "old_signature": "export interface DeepRoundActivity { kind: \"review\" | \"rework\" | \"continuation\"; k: number; of: number; }",
+      "new_signature": "export interface DeepRoundActivity { kind: \"review\" | \"rework\" | \"continuation\"; /** Explicit producer marker for a review of revised prose; absent on old events. */ afterRework?: boolean; k: number; of: number; }",
+      "old_target_sha256": "9608d8d70148f55b004e5e089f1ff2e3374994ce4a37a23dd1107461dfa046f7",
+      "new_target_sha256": "78d85c16877ac3f2123bdfccabda238d0a7718b4f2ae057457cd2820c56d6bb2"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/grounded.ts",
+      "public_name": "ReScope",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "accepting_commit": "1ccbe5990db14f07eaf2da474938678694650b19",
+      "accepting_receipt": "development/notes/ui-acceptance-remediation-20260923.md",
+      "declaration_kind": "InterfaceDeclaration",
+      "old_signature": "export interface ReScope { query: string; domains_deny?: string[]; drop_weak?: boolean; /** Per-conversation lead-model override (the main-screen pill \u2192 CallContext * .model_override). null/undefined \u2192 use the Settings default. */ model_override?: string | null; /** The Think toggle: run the answerer in reasoning mode (it thinks first, then * the answer streams). Honored by the live backend for reasoning models. */ think?: boolean; /** G1/DR-4: pre-created conversation id for the research session. When set, * the server loads any pre-attached upload passages (text files from the * initial-box UploadComposer) and seeds them into the rerank step. * null/undefined \u2192 OFF path (byte-identical to pre-DR-4 code). */ conversation_id?: string | null; /** Per-query source ids. Empty/undefined means use the Settings default. */ sources?: string[]; }",
+      "new_signature": "export interface ReScope { request_id?: string; parent_request_id?: string | null; space_ids?: string[]; query: string; domains_deny?: string[]; drop_weak?: boolean; /** Per-conversation lead-model override (the main-screen pill \u2192 CallContext * .model_override). null/undefined \u2192 use the Settings default. */ model_override?: string | null; /** The Think toggle: run the answerer in reasoning mode (it thinks first, then * the answer streams). Honored by the live backend for reasoning models. */ think?: boolean; /** G1/DR-4: pre-created conversation id for the research session. When set, * the server loads any pre-attached upload passages (text files from the * initial-box UploadComposer) and seeds them into the rerank step. * null/undefined \u2192 OFF path (byte-identical to pre-DR-4 code). */ conversation_id?: string | null; /** Per-query source ids. Empty/undefined means use the Settings default. */ sources?: string[]; }",
+      "old_target_sha256": "1fd9378efceb7e779f8b044895a9266b722358bfce5e96190e0238c364ebef63",
+      "new_target_sha256": "edda544070cbb358c2056a62fe8fbd47d265c95ac54f212de9705fec3725f90b"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/agent.ts",
+      "public_name": "VerifierStartedEvent",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "accepting_commit": "1ccbe5990db14f07eaf2da474938678694650b19",
+      "accepting_receipt": "development/notes/ui-acceptance-remediation-20260923.md",
+      "declaration_kind": "InterfaceDeclaration",
+      "old_signature": "export interface VerifierStartedEvent extends EventBase { kind: \"verifier_started\"; artifact_path: string; artifact_kind: string; verifier: string; requested_by_event_id?: string | null; }",
+      "new_signature": "export interface VerifierStartedEvent extends EventBase { kind: \"verifier_started\"; artifact_path: string; artifact_kind: string; verifier: string; requested_by_event_id?: string | null; run_intent_id?: string | null; target_id?: string; check_id?: string; }",
+      "old_target_sha256": "75f717e29be1da46d45e8119efe45359461424442914b93ab5ca89fbe2c8c0f9",
+      "new_target_sha256": "7410d9fe15b885ad6189689f6d8796e2b8f4d168ca74f7492a27da65039bb880"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/agent.ts",
+      "public_name": "VerifierVerdictEvent",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "accepting_commit": "1ccbe5990db14f07eaf2da474938678694650b19",
+      "accepting_receipt": "development/notes/ui-acceptance-remediation-20260923.md",
+      "declaration_kind": "InterfaceDeclaration",
+      "old_signature": "export interface VerifierVerdictEvent extends EventBase { kind: \"verifier_verdict\"; artifact_path: string; artifact_kind: string; verified: boolean; verdict?: string | null; detail?: string | null; failures?: Array<Record<string, unknown>>; }",
+      "new_signature": "export interface VerifierVerdictEvent extends EventBase { kind: \"verifier_verdict\"; artifact_path: string; artifact_kind: string; verified: boolean; verdict?: string | null; detail?: string | null; failures?: Array<Record<string, unknown>>; target_id?: string; check_id?: string; /** Run binding from the backend's typed host receipt; absent on legacy events. */ verification_result?: { run_intent_id?: string | null } | null; }",
+      "old_target_sha256": "ed0c506c445877408938486018ca8ccf1f9a12883837b646e53e80c2e9ed1a45",
+      "new_target_sha256": "a99163d006175ba739e2dd97f326d4046eb82a9f414bb1aa2a8c82f447b4ff05"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/agent.ts",
+      "public_name": "createBuildConversation",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "accepting_commit": "1ccbe5990db14f07eaf2da474938678694650b19",
+      "accepting_receipt": "development/notes/ui-acceptance-remediation-20260923.md",
+      "declaration_kind": "function",
+      "old_signature": "export async function createBuildConversation( modelOverride?: string | null, surface: \"build\" | \"agent\" = \"build\", autonomous = false, /** Weak-model assist tier \u2014 EXPLICIT user toggle only (null/false = standard). * Assist is never auto-enabled by hosting; the user opts in via the UI toggle. */ assist: boolean | null = null, quiet = false, /** PKG-47: Reference Packs to bind before the first model call (ids from the library). */ referencePackIds: string[] = [], ): Promise<string>",
+      "new_signature": "export async function createBuildConversation( modelOverride?: string | null, surface: \"build\" | \"agent\" | \"research\" = \"build\", autonomous = false, /** Weak-model assist tier \u2014 EXPLICIT user toggle only (null/false = standard). * Assist is never auto-enabled by hosting; the user opts in via the UI toggle. */ assist: boolean | null = null, quiet = false, /** PKG-47: Reference Packs to bind before the first model call (ids from the library). */ referencePackIds: string[] = [], appkitMode = false, ): Promise<string>",
+      "old_target_sha256": "e54ae52cf1e410a16e6490690b4a8bd774dc30c3ea026e64aaee19ec51cb450d",
+      "new_target_sha256": "b1f005f9f211d7e25101008e8dcda17994abed61683fd81a298ab76ef6569c43"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/workflows.ts",
+      "public_name": "scheduleWorkflow",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "accepting_commit": "1ccbe5990db14f07eaf2da474938678694650b19",
+      "accepting_receipt": "development/notes/ui-acceptance-remediation-20260923.md",
+      "declaration_kind": "function",
+      "old_signature": "export async function scheduleWorkflow(input: { instanceId: string; instanceDigest: string; cron: string; timezone: string; }): Promise<Record<string, unknown>>",
+      "new_signature": "export async function scheduleWorkflow(input: { instanceId: string; instanceDigest: string; cron: string; timezone: string; }): Promise<WorkflowSchedule>",
+      "old_target_sha256": "0cb6bf61b465aaf33a112f17bc885b1888c6a6f04cfdcc909b77c118a9b15540",
+      "new_target_sha256": "ce8044d35aedd53159fed303780b476a274aba9eea725b138f5e5dca24d2d0ad"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/AlternativesGate.tsx",
+      "public_name": "AlternativesGate",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "accepting_commit": "1ccbe5990db14f07eaf2da474938678694650b19",
+      "accepting_receipt": "development/notes/ui-acceptance-remediation-20260923.md",
+      "declaration_kind": "function",
+      "old_signature": "export function AlternativesGate({ alternatives, onPick, onSteer, }: { alternatives: AlternativesEvent; onPick: (optionId: string) => void; /** Optional: render a \"Skip\" link that drops focus into the steer input. */ onSteer?: () => void; })",
+      "new_signature": "export function AlternativesGate({ alternatives, onPick, onSteer, }: { alternatives: AlternativesEvent; onPick: (optionId: string) => void; /** Focus the existing steer input without resolving or submitting the gate. */ onSteer?: () => void; })",
+      "old_target_sha256": "c30ed7c328ade339355c7f0ca6f0253708f40fff190b8f2fcb8933e588fa3378",
+      "new_target_sha256": "5ae33cc14a945d7d696fd6d00c14e92ee2c637ea87c1441ac6ab56c053a343b0"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/buildSurface/BuildComposerSection.tsx",
+      "public_name": "BuildComposerSection",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "accepting_commit": "1ccbe5990db14f07eaf2da474938678694650b19",
+      "accepting_receipt": "development/notes/ui-acceptance-remediation-20260923.md",
+      "declaration_kind": "function",
+      "old_signature": "export function BuildComposerSection({ b, copy, steerable, settled, terminalIncomplete, steerWithMention, requestPlanWithMention, elementMentionChip, framing, }: { b: BuildController; copy: FramingCopy; steerable: boolean; settled: boolean; terminalIncomplete: boolean; steerWithMention: (text: string) => void; requestPlanWithMention: (text: string) => void; elementMentionChip: ReactNode; framing: BuildFraming; })",
+      "new_signature": "export function BuildComposerSection({ b, copy, steerable, settled, terminalIncomplete, steerInputRef, steerWithMention, requestPlanWithMention, elementMentionChip, framing, }: { b: BuildController; copy: FramingCopy; steerable: boolean; settled: boolean; terminalIncomplete: boolean; steerInputRef?: Ref<HTMLInputElement>; steerWithMention: (text: string) => void; requestPlanWithMention: (text: string) => void; elementMentionChip: ReactNode; framing: BuildFraming; })",
+      "old_target_sha256": "d84e284632fe3a9838ecf8cd98c619bcf96d67cb907f503217b702d4876979cc",
+      "new_target_sha256": "0bdad30b551b6cf78abacab139f29147a0b78a35ec13908fb5f6732c17d51e78"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/buildSurface/BuildDecisionGates.tsx",
+      "public_name": "BuildDecisionGates",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "accepting_commit": "1ccbe5990db14f07eaf2da474938678694650b19",
+      "accepting_receipt": "development/notes/ui-acceptance-remediation-20260923.md",
+      "declaration_kind": "function",
+      "old_signature": "export function BuildDecisionGates({ b }: { b: BuildController })",
+      "new_signature": "export function BuildDecisionGates({ b, onSteer }: { b: BuildController; onSteer?: () => void })",
+      "old_target_sha256": "96a3240772adfdfd59682a7a876a871e00c423644e185ba46684085430bb2b96",
+      "new_target_sha256": "77a17540ff32107c591d2cd29ebdbdb43bb2e0be8ee8c24a789b4c9c5795def0"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/blocks/CitedText.tsx",
+      "public_name": "CitationMarker",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "accepting_commit": "1ccbe5990db14f07eaf2da474938678694650b19",
+      "accepting_receipt": "development/notes/ui-acceptance-remediation-20260923.md",
+      "declaration_kind": "function",
+      "old_signature": "export function CitationMarker({ id, answer }: { id: string; answer: GroundedAnswer | null })",
+      "new_signature": "export function CitationMarker({ id, answer, textBefore = \"\", textAfter = \"\" }: { id: string; answer: GroundedAnswer | null; /** Prose before this exact marker, including earlier markers in its group. */ textBefore?: string; /** Remaining prose, including any qualification after an inline marker. */ textAfter?: string; })",
+      "old_target_sha256": "bdb8c4c9b8532d2c2d9deb6f27b1686cc5209ea891464474a20e2733379fcc50",
+      "new_target_sha256": "f5d5a682d93429b685f3aba20c442df2117f39eda73c2d67ca0fd3e2092fc35a"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/ConfirmDialog.tsx",
+      "public_name": "ConfirmDialog",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "accepting_commit": "1ccbe5990db14f07eaf2da474938678694650b19",
+      "accepting_receipt": "development/notes/ui-acceptance-remediation-20260923.md",
+      "declaration_kind": "function",
+      "old_signature": "export function ConfirmDialog({ trigger, title, description, confirmLabel, onConfirm, confirmContext = \"generic\", }: Props)",
+      "new_signature": "export function ConfirmDialog({ trigger, title, description, confirmLabel, onConfirm, onConfirmedClose, confirmContext = \"generic\", }: Props)",
+      "old_target_sha256": "71307475f143daf8fa2356980c0288f4fddc2ca7c2b20eb0971eb5dce8e32845",
+      "new_target_sha256": "d5276780ae91d4259d7c92dea8b41423f068bdf21835881a2f5cef7add371134"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/canvas/FilesPane.tsx",
+      "public_name": "FilesPane",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "accepting_commit": "1ccbe5990db14f07eaf2da474938678694650b19",
+      "accepting_receipt": "development/notes/ui-acceptance-remediation-20260923.md",
+      "declaration_kind": "function",
+      "old_signature": "export function FilesPane({ events, streamingFile, manifestFiles = [], }: { events: AgentEvent[]; streamingFile: StreamingFile | null; manifestFiles?: ManifestFile[]; })",
+      "new_signature": "export function FilesPane({ events, streamingFile, manifestFiles = [], snapshot, }: { events: AgentEvent[]; streamingFile: StreamingFile | null; manifestFiles?: ManifestFile[]; snapshot?: { cid: string; revision: string; loading: boolean; error: boolean }; })",
+      "old_target_sha256": "fdec7f4e4ffc735cac439033af54103deeef488c4405afb6b548e8014703e923",
+      "new_target_sha256": "ef59168dece6d2976446977e2ac8008b68e7c0f5d8e3ad52cbaae527e3c83c9a"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/imageGenSectionParts/ProviderOptionList.tsx",
+      "public_name": "ProviderOptionList",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "accepting_commit": "1ccbe5990db14f07eaf2da474938678694650b19",
+      "accepting_receipt": "development/notes/ui-acceptance-remediation-20260923.md",
+      "declaration_kind": "function",
+      "old_signature": "export function ProviderOptionList({ active, pending, onSelect, }: { active: Provider | undefined; pending: boolean; onSelect: (provider: Provider) => void; })",
+      "new_signature": "export function ProviderOptionList({ active, pending, disabled = false, onSelect, }: { active: Provider | undefined; pending: boolean; disabled?: boolean; onSelect: (provider: Provider) => void; })",
+      "old_target_sha256": "cde05abd952a699c207d41c24feac17a20ff21b61f1a46ddaccc6a7f94a13fd8",
+      "new_target_sha256": "0986f4c8212820fd8ac26bb95aecc2fa130edcd297a7aef72e10eeccc272a072"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/ResearchSurface.tsx",
+      "public_name": "ResearchSurface",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "accepting_commit": "1ccbe5990db14f07eaf2da474938678694650b19",
+      "accepting_receipt": "development/notes/ui-acceptance-remediation-20260923.md",
+      "declaration_kind": "function",
+      "old_signature": "export function ResearchSurface()",
+      "new_signature": "export function ResearchSurface({ resumeCid = null }: { resumeCid?: string | null })",
+      "old_target_sha256": "7589755a4d6dd8885a8f3e05f036a9a73a9857cee7492fd2d2229a161f54a324",
+      "new_target_sha256": "3dcb23713733a3cc11c70b2e7b93868843fa286590bc49d099c82e5fca4822cb"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/imageGenSectionParts/SaveRow.tsx",
+      "public_name": "SaveRow",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "accepting_commit": "1ccbe5990db14f07eaf2da474938678694650b19",
+      "accepting_receipt": "development/notes/ui-acceptance-remediation-20260923.md",
+      "declaration_kind": "function",
+      "old_signature": "export function SaveRow({ fieldsDirty, savePending, onSave, }: { fieldsDirty: boolean; savePending: boolean; onSave: () => void; })",
+      "new_signature": "export function SaveRow({ fieldsDirty, savePending, invalid = false, onSave, }: { fieldsDirty: boolean; savePending: boolean; invalid?: boolean; onSave: () => void; })",
+      "old_target_sha256": "8c56049d7f1d58eca8b6f30e0b9a8eee4674d99a3c0b647d33258b82178467ec",
+      "new_target_sha256": "0526ff263acdb544ec4e85e321d29dd5ef5037b8eb66dcd5fc424bb6ac1a9f31"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/SourcePanel.tsx",
+      "public_name": "SourcePanel",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "accepting_commit": "1ccbe5990db14f07eaf2da474938678694650b19",
+      "accepting_receipt": "development/notes/ui-acceptance-remediation-20260923.md",
+      "declaration_kind": "function",
+      "old_signature": "export function SourcePanel({ answer, onReScope }: Props)",
+      "new_signature": "export function SourcePanel({ answer, onReScope, domainsDeny = [], busy = false }: Props)",
+      "old_target_sha256": "97f0b1f2bc8e936028f4ea45d7da75e196d73b1f404fcefea5c8af8d04e6de9c",
+      "new_target_sha256": "84fa28170e64f5cae6556d53988615e73322820328c258d7d13f156885a8c1cc"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/SteerInput.tsx",
+      "public_name": "SteerInput",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "accepting_commit": "1ccbe5990db14f07eaf2da474938678694650b19",
+      "accepting_receipt": "development/notes/ui-acceptance-remediation-20260923.md",
+      "declaration_kind": "function",
+      "old_signature": "export function SteerInput({ onSteer, disabled, attachment, }: { onSteer: (text: string) => void; disabled?: boolean; attachment?: React.ReactNode; })",
+      "new_signature": "export function SteerInput({ onSteer, inputRef, disabled, attachment, }: { onSteer: (text: string) => void; inputRef?: Ref<HTMLInputElement>; disabled?: boolean; attachment?: React.ReactNode; })",
+      "old_target_sha256": "74483cf1e22d8cdecae3394dcaf29ea6323818ba87b50a7bffc3532382ebe515",
+      "new_target_sha256": "334847af79154eeaa40feab5793f744ce6b1596dedf30c48b5df6e10314e50be"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/canvas/previewPaneParts/VersionBanner.tsx",
+      "public_name": "VersionBanner",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "accepting_commit": "1ccbe5990db14f07eaf2da474938678694650b19",
+      "accepting_receipt": "development/notes/ui-acceptance-remediation-20260923.md",
+      "declaration_kind": "function",
+      "old_signature": "export function VersionBanner({ displayedVersionSeq, restoringSeq, onBackToCurrent, onRollback, }: { displayedVersionSeq: number | null; restoringSeq: number | null; onBackToCurrent: () => void; onRollback: (seq: number) => Promise<void>; })",
+      "new_signature": "export function VersionBanner({ selectedVersionSeq, versions, displayedVersionSeq, restoringSeq, onBackToCurrent, onRollback, }: { selectedVersionSeq: number | null; versions: readonly { seq: number }[]; displayedVersionSeq: number | null; restoringSeq: number | null; onBackToCurrent: () => void; onRollback: (seq: number) => Promise<void>; })",
+      "old_target_sha256": "26560038a72d6f7b786a70b4ba6ffbc76590bd496c840ef830c78ab9d7a187fd",
+      "new_target_sha256": "5d3b5d106eadba887d3576159c379593ad02f76e388b42d755326a092fbd351f"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/hooks/useProjects.ts",
+      "public_name": "useProjectManifest",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "accepting_commit": "1ccbe5990db14f07eaf2da474938678694650b19",
+      "accepting_receipt": "development/notes/ui-acceptance-remediation-20260923.md",
+      "declaration_kind": "function",
+      "old_signature": "export function useProjectManifest(conversationId: string | null, available = true)",
+      "new_signature": "export function useProjectManifest(conversationId: string | null, available = true, revision = \"\")",
+      "old_target_sha256": "a90014eca7e41622af1361a8a60a39b707a55c8b8da61ce3de9514a3d6fa1b22",
+      "new_target_sha256": "3694d96986ea1e2ad17d5998e644ec4dda8d38d8115a5b6fa0e73e9241c7525c"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/hooks/useProjects.ts",
+      "public_name": "useProjectRelease",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "accepting_commit": "1ccbe5990db14f07eaf2da474938678694650b19",
+      "accepting_receipt": "development/notes/ui-acceptance-remediation-20260923.md",
+      "declaration_kind": "function",
+      "old_signature": "export function useProjectRelease(conversationId: string | null)",
+      "new_signature": "export function useProjectRelease(conversationId: string | null, revision = \"\")",
+      "old_target_sha256": "147b12a3b92c23f671533a1c6df6f1b0c7b257d70bbd172d89a882c78fbfa9af",
+      "new_target_sha256": "c316f36a5656e06f92e02a7dc9d7d8b822c17f86517571b0718367b5c960ce67"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/hooks/useResearch.ts",
+      "public_name": "useResearch",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "accepting_commit": "1ccbe5990db14f07eaf2da474938678694650b19",
+      "accepting_receipt": "development/notes/ui-acceptance-remediation-20260923.md",
+      "declaration_kind": "function",
+      "old_signature": "export function useResearch()",
+      "new_signature": "export function useResearch(resumeCid: string | null = null)",
+      "old_target_sha256": "7013a8903322291017dfd5bcf955a1d2f221da2e7b38f1fb72779e15a2fb289a",
+      "new_target_sha256": "215269287a99e6288881306e1a7a0171872cf7f4d940bbc475ab07494924aba2"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/claimCheck.ts",
+      "public_name": "UNRESOLVED_MEANING",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "accepting_commit": "1ccbe5990db14f07eaf2da474938678694650b19",
+      "accepting_receipt": "development/notes/ui-acceptance-remediation-20260923.md",
+      "declaration_kind": "variable",
+      "old_signature": "export const UNRESOLVED_MEANING = \"Unresolved means the checker found no source excerpt to match the sentence \" + \"against \u2014 it is not a contradiction.\";",
+      "new_signature": "export const UNRESOLVED_MEANING = \"Unresolved means the check did not establish support or contradiction; \" + \"it does not mean the claim is false.\";",
+      "old_target_sha256": "f8be6e8108a2c38e16b7d252e8ba8c6bea4f543b5cdf1f6a36a7a00b9194a055",
+      "new_target_sha256": "e4ccd005f19017faca995bb37f09ef7e575af379709dd364686b30c61a4cfaff"
     },
     {
       "surface": "frontend",
@@ -34337,19 +35267,6 @@
     },
     {
       "surface": "frontend",
-      "path": "frontend/src/hooks/useProjects.ts",
-      "public_name": "useProjectManifest",
-      "owner_package": "PKG-38-UI-FIXES-V51",
-      "accepting_commit": "731f1c29b44c5654df33486fcfe4382ce6de841b",
-      "accepting_receipt": "PKG-38-UI-FIXES-V51: exact source-backed declaration migration",
-      "declaration_kind": "function",
-      "old_signature": "export function useProjectManifest(conversationId: string | null)",
-      "new_signature": "export function useProjectManifest(conversationId: string | null, available = true)",
-      "old_target_sha256": "b1026ba40b863354f19309543c92a7b0d29c7339d17697b676cf1fd22893e972",
-      "new_target_sha256": "a90014eca7e41622af1361a8a60a39b707a55c8b8da61ce3de9514a3d6fa1b22"
-    },
-    {
-      "surface": "frontend",
       "path": "frontend/src/hooks/useDeepResearchStream.ts",
       "public_name": "initial",
       "owner_package": "PKG-38-UI-FIXES-V51",
@@ -34360,19 +35277,6 @@
       "new_signature": "export const initial: RawState = { status: \"IDLE\", statusDetail: null, followUpStatus: null, events: [], error: null, failure: null, connectionState: \"connected\", };",
       "old_target_sha256": "970bb154e057238d8971c01172f52c1aacb52265fefeaae33a9e9f2cd39d2cfa",
       "new_target_sha256": "ca4d7d4e14843626d813dec2bdeb84a498fa42d303bc9eaa49e32c2863081e05"
-    },
-    {
-      "surface": "frontend",
-      "path": "frontend/src/api/agent.ts",
-      "public_name": "createBuildConversation",
-      "declaration_kind": "function",
-      "old_signature": "export async function createBuildConversation( modelOverride?: string | null, surface: \"build\" | \"agent\" = \"build\", autonomous = false, /** Weak-model assist tier \u2014 EXPLICIT user toggle only (null/false = standard). * Assist is never auto-enabled by hosting; the user opts in via the UI toggle. */ assist: boolean | null = null, quiet = false, ): Promise<string>",
-      "new_signature": "export async function createBuildConversation( modelOverride?: string | null, surface: \"build\" | \"agent\" = \"build\", autonomous = false, /** Weak-model assist tier \u2014 EXPLICIT user toggle only (null/false = standard). * Assist is never auto-enabled by hosting; the user opts in via the UI toggle. */ assist: boolean | null = null, quiet = false, /** PKG-47: Reference Packs to bind before the first model call (ids from the library). */ referencePackIds: string[] = [], ): Promise<string>",
-      "old_target_sha256": "d50603b756ef58279a5478787ed23836aa220c12df70d5a5291fc579fd0df8fa",
-      "new_target_sha256": "e54ae52cf1e410a16e6490690b4a8bd774dc30c3ea026e64aaee19ec51cb450d",
-      "owner_package": "PKG-47-REFERENCE-PACKS",
-      "accepting_commit": "77ce35eaa560b1b42aee470a2e4f920eebfa08f6",
-      "accepting_receipt": "Reference Packs: the writer port on ToolContext/DefaultToolExecutor, the bound-pack store on ConversationRuntime, three tools in the free-form scope, the packs router, and the frontend picker/section/API/hooks/types"
     },
     {
       "surface": "frontend",
@@ -34513,19 +35417,6 @@
       "new_signature": "export function BuildActivityFeedContent({ b, activity, liveSignal, finalMessage, draftingPlan, collapseFeed, framing, }: { b: BuildController; activity: ActivityItem[]; liveSignal: LiveSignal; finalMessage: string | null; draftingPlan: boolean; collapseFeed: boolean; framing: BuildFraming; })",
       "old_target_sha256": "fa3459bab5f1b801a988d6158f396001d0dbbd5796b18532314d5f8fd0db7f34",
       "new_target_sha256": "c0c9c7d0ce5161a98c468287f93819bbb516a0ce3def0efbcf079328b4dde395",
-      "owner_package": "PKG-19-AGENT-SURFACE",
-      "accepting_commit": "94f9a155276ade4df52ee83cf250d0814366d296",
-      "accepting_receipt": "2026-07-28/STATUS.md"
-    },
-    {
-      "surface": "frontend",
-      "path": "frontend/src/components/buildSurface/BuildComposerSection.tsx",
-      "public_name": "BuildComposerSection",
-      "declaration_kind": "function",
-      "old_signature": "export function BuildComposerSection({ b, copy, steerable, settled, terminalIncomplete, steerWithMention, requestPlanWithMention, elementMentionChip, }: { b: BuildController; copy: FramingCopy; steerable: boolean; settled: boolean; terminalIncomplete: boolean; steerWithMention: (text: string) => void; requestPlanWithMention: (text: string) => void; elementMentionChip: ReactNode; })",
-      "new_signature": "export function BuildComposerSection({ b, copy, steerable, settled, terminalIncomplete, steerWithMention, requestPlanWithMention, elementMentionChip, framing, }: { b: BuildController; copy: FramingCopy; steerable: boolean; settled: boolean; terminalIncomplete: boolean; steerWithMention: (text: string) => void; requestPlanWithMention: (text: string) => void; elementMentionChip: ReactNode; framing: BuildFraming; })",
-      "old_target_sha256": "63ab4ddfa870501a086a9a0f10bb49f971e4170c1c980548cb230d45cfe613bd",
-      "new_target_sha256": "d84e284632fe3a9838ecf8cd98c619bcf96d67cb907f503217b702d4876979cc",
       "owner_package": "PKG-19-AGENT-SURFACE",
       "accepting_commit": "94f9a155276ade4df52ee83cf250d0814366d296",
       "accepting_receipt": "2026-07-28/STATUS.md"
@@ -35013,6 +35904,78 @@
     }
   ],
   "frontend_target_relocations": [
+    {
+      "old_path": "frontend/src/types/agent.ts",
+      "old_public_name": "PreviewInfo",
+      "new_path": "frontend/src/types/agentPreview.ts",
+      "new_public_name": "PreviewInfo",
+      "reason": "Byte-identical PreviewInfo interface and comments moved to dedicated agentPreview.ts for architecture file budget; agent.ts preserves the old import route via type-only reexport. No runtime JavaScript, contract fields or optionality changed.",
+      "surface": "frontend",
+      "declaration_kind": "InterfaceDeclaration",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "accepting_commit": "1ccbe5990db14f07eaf2da474938678694650b19",
+      "accepting_receipt": "development/notes/ui-acceptance-remediation-20260923.md"
+    },
+    {
+      "old_path": "frontend/src/components/build/TweakPanel.tsx",
+      "old_public_name": "TweakFieldView",
+      "new_path": "frontend/src/types/appkitOwner.ts",
+      "new_public_name": "TweakFieldView",
+      "reason": "Moves same field interface to shared owner API types; only inline comments removed from signature text.",
+      "surface": "frontend",
+      "declaration_kind": "InterfaceDeclaration",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "accepting_commit": "1ccbe5990db14f07eaf2da474938678694650b19",
+      "accepting_receipt": "development/notes/ui-acceptance-remediation-20260923.md"
+    },
+    {
+      "old_path": "frontend/src/components/build/TweakPanel.tsx",
+      "old_public_name": "TweakEditor",
+      "new_path": "frontend/src/types/appkitOwner.ts",
+      "new_public_name": "TweakEditor",
+      "reason": "Moves unchanged editor union to shared owner API types.",
+      "surface": "frontend",
+      "declaration_kind": "TypeAliasDeclaration",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "accepting_commit": "1ccbe5990db14f07eaf2da474938678694650b19",
+      "accepting_receipt": "development/notes/ui-acceptance-remediation-20260923.md"
+    },
+    {
+      "old_path": "frontend/src/components/build/TweakPanel.tsx",
+      "old_public_name": "TweakValue",
+      "new_path": "frontend/src/types/appkitOwner.ts",
+      "new_public_name": "TweakValue",
+      "reason": "Moves unchanged value union to shared owner API types.",
+      "surface": "frontend",
+      "declaration_kind": "TypeAliasDeclaration",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "accepting_commit": "1ccbe5990db14f07eaf2da474938678694650b19",
+      "accepting_receipt": "development/notes/ui-acceptance-remediation-20260923.md"
+    },
+    {
+      "old_path": "frontend/src/components/build/AppCard.tsx",
+      "old_public_name": "AppCard",
+      "new_path": "frontend/src/components/buildSurface/ownerControls/AppCard.tsx",
+      "new_public_name": "AppCard",
+      "reason": "Moves unchanged owner card function into Build context; no component capability removed.",
+      "surface": "frontend",
+      "declaration_kind": "function",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "accepting_commit": "1ccbe5990db14f07eaf2da474938678694650b19",
+      "accepting_receipt": "development/notes/ui-acceptance-remediation-20260923.md"
+    },
+    {
+      "old_path": "frontend/src/components/build/TweakPanel.tsx",
+      "old_public_name": "TweakPanel",
+      "new_path": "frontend/src/components/buildSurface/ownerControls/TweakPanel.tsx",
+      "new_public_name": "TweakPanel",
+      "reason": "Moves unchanged six-editor function into Build context; production owner panel now mounts it.",
+      "surface": "frontend",
+      "declaration_kind": "function",
+      "owner_package": "PKG-24-UI-ACCEPTANCE",
+      "accepting_commit": "1ccbe5990db14f07eaf2da474938678694650b19",
+      "accepting_receipt": "development/notes/ui-acceptance-remediation-20260923.md"
+    },
     {
       "surface": "frontend",
       "old_path": "frontend/src/components/build/ActivityFeed.tsx",
