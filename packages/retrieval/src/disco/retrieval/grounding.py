@@ -181,6 +181,7 @@ class _ClaimSpan(NamedTuple):
     end: int
     text: str
     cited_passage_ids: tuple[str, ...]
+    evidence_focus: str | None = None
 
 
 def _sentence_boundaries(text: str) -> list[re.Match[str]]:
@@ -233,11 +234,17 @@ def _best_entail(passage_text: str, claim: str, nli: _NLILike) -> tuple[str, flo
     return label, score
 
 
-def _passage_check(passage_text: str, claim: str, nli: _NLILike) -> tuple[str, float, bool]:
+def _passage_check(
+    passage_text: str, claim: str, nli: _NLILike, *, evidence_focus: str | None = None
+) -> tuple[str, float, bool]:
     # Keep surrounding qualifications together rather than selecting the most
     # agreeable of twelve isolated opening sentences. Relevant late text stays
     # reachable while each model input remains bounded.
-    premise = relevant_excerpt(_clean_premise(passage_text), claim, max_chars=1600).text
+    premise = relevant_excerpt(
+        _clean_premise(passage_text),
+        claim if evidence_focus is None else evidence_focus,
+        max_chars=1600,
+    ).text
     label = nli.entail(premise, claim)
     score = nli.score(premise, claim)
     availability = getattr(nli, "verification_available", None)
@@ -426,9 +433,16 @@ def _table_claim_spans(text: str) -> list[_ClaimSpan]:
             if index + 1 < len(lines) and _is_gfm_table_divider(lines[index + 1]):
                 headers = [_plain(cell) for cell in cells]
             elif headers and len(cells) == len(headers):
+                values = [_CITE.sub("", cell).strip() for cell in cells]
                 hypothesis = "; ".join(
-                    f"{header}: {_CITE.sub('', cell).strip()}"
-                    for header, cell in zip(headers, cells, strict=True)
+                    f"{header}: {value}" for header, value in zip(headers, values, strict=True)
+                )
+                # Citation-only columns carry provenance, not search terms. Keep
+                # the canonical claim intact while selecting evidence for this row.
+                evidence_focus = "; ".join(
+                    f"{header}: {value}"
+                    for header, value in zip(headers, values, strict=True)
+                    if value
                 )
                 rows.append(
                     _ClaimSpan(
@@ -436,6 +450,7 @@ def _table_claim_spans(text: str) -> list[_ClaimSpan]:
                         offset + len(line.rstrip("\r\n")),
                         hypothesis,
                         tuple(dict.fromkeys(_CITE.findall(line))),
+                        evidence_focus,
                     )
                 )
         offset += len(line)
@@ -489,7 +504,14 @@ def _verify_claim_span(
     if not unknown_id:
         measurements: list[tuple[str, str, float, bool]] = []
         for passage_id in checked:
-            verdict, score, available = _passage_check(by_id[passage_id].text, hypothesis, nli)
+            verdict, score, available = _passage_check(
+                by_id[passage_id].text,
+                hypothesis,
+                nli,
+                evidence_focus=_plain(span.evidence_focus)
+                if span.evidence_focus is not None
+                else None,
+            )
             measurements.append((passage_id, verdict, score, available))
         best_verdict, status, reason = _measurement_status(measurements)
         candidates = [row for row in measurements if row[1] == best_verdict and row[3]]
