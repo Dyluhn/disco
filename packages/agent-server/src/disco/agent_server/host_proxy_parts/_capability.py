@@ -156,6 +156,11 @@ async def _authority_changed(
     return True
 
 
+def _bind_canonical_capability(scope: Scope, cap: PreviewCapability) -> None:
+    """Share verified cookie policy with both live and internally routed responses."""
+    scope["state"] = {**(scope.get("state") or {}), "canonical_preview_capability": cap}
+
+
 async def _apply_canonical_routing(
     self: HostPreviewProxyMiddleware,
     scope: Scope,
@@ -174,6 +179,7 @@ async def _apply_canonical_routing(
         return False
     if await _authority_changed(self, scope, send, cap):
         return True
+    _bind_canonical_capability(scope, cap)
     safe_path = safe_capability_target_path(path)
     if safe_path is None or is_runtime_secret_path(safe_path):
         if scope["type"] == "http":

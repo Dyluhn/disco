@@ -14,7 +14,7 @@ import ipaddress
 import json
 import secrets
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Literal, Protocol
 from urllib.parse import urlsplit, urlunsplit
@@ -110,6 +110,7 @@ class PreviewCapability:
     authority_id: str | None = None
     immutable_version: int | None = None
     capture_generation: int | None = None
+    partitioned_cookies: bool = False
 
 
 class PreviewIntentRedemptionStore(Protocol):
@@ -547,6 +548,7 @@ class PreviewCapabilitySigner:
         expected_conversation_id: str | None = None,
         expected_owner_id: str | None = None,
         expected_authority_id: str | None = None,
+        partitioned_cookies: bool = False,
     ) -> tuple[str, str] | None:
         """Validate an endpoint-specific intent, then atomically exchange it once.
 
@@ -555,6 +557,8 @@ class PreviewCapabilitySigner:
         exchange prevents a wrong-host handoff from burning the correct launch.
         """
 
+        if not isinstance(partitioned_cookies, bool):
+            return None
         intent_payload = self._codec.unsign(intent)
         if intent_payload is None or intent_payload.get("kind") != "preview_intent":
             return None
@@ -590,7 +594,7 @@ class PreviewCapabilitySigner:
             return None
         if not self._consume_intent(intent_payload):
             return None
-        return self._mint_cookie(cap, target)
+        return self._mint_cookie(replace(cap, partitioned_cookies=partitioned_cookies), target)
 
     def _consume_intent(self, payload: dict[str, Any]) -> bool:
         store = self._redemption_store
@@ -613,6 +617,7 @@ class PreviewCapabilitySigner:
                 "authority": cap.authority_id,
                 "version": cap.immutable_version,
                 "capture_generation": cap.capture_generation,
+                "partitioned": cap.partitioned_cookies,
                 "exp": int(time.time()) + preview_ttl_s(),
             }
         )
@@ -751,6 +756,9 @@ class PreviewCapabilitySigner:
         authority_id = payload.get("authority")
         immutable_version = payload.get("version")
         capture_generation = payload.get("capture_generation")
+        partitioned_cookies = payload.get("partitioned", False)
+        if not isinstance(partitioned_cookies, bool):
+            return None
         scalars = _cap_scalar_fields(owner, cid, prefix, port, exp, allow_websocket)
         if scalars is None:
             return None
@@ -777,6 +785,7 @@ class PreviewCapabilitySigner:
             authority_id=authority_id,
             immutable_version=immutable_version,
             capture_generation=capture_generation,
+            partitioned_cookies=partitioned_cookies,
         )
 
 

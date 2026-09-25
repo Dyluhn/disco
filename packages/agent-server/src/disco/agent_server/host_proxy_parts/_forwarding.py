@@ -34,6 +34,7 @@ from disco.agent_server.preview_inject import (
 )
 from starlette.types import Receive, Scope, Send
 
+from ._cookies import _rewrite_embedded_app_cookie
 from ._headers import _forwardable_response_header, _strip_reserved_preview_cookie
 from ._redirects import _rewrite_canonical_upstream_location
 
@@ -251,6 +252,21 @@ async def _respond_missing_upstream(
         await send({"type": "websocket.close", "code": 1008, "reason": "preview not available"})
 
 
+def _forwarded_header_value(
+    name: str,
+    value: str,
+    *,
+    local_gateway: bool,
+    upstream: str,
+    request_scope: Scope | None,
+) -> str:
+    if local_gateway and request_scope is not None and name.lower() == "location":
+        return _rewrite_canonical_upstream_location(value, upstream=upstream, scope=request_scope)
+    if local_gateway and name.lower() == "set-cookie":
+        return _rewrite_embedded_app_cookie(value, request_scope)
+    return value
+
+
 def _response_forward_headers(
     res: httpx.Response,
     hop_by_hop: set[str],
@@ -262,10 +278,8 @@ def _response_forward_headers(
     return [
         (
             k.encode("latin1"),
-            (
-                _rewrite_canonical_upstream_location(v, upstream=upstream, scope=request_scope)
-                if local_gateway and request_scope is not None and k.lower() == "location"
-                else v
+            _forwarded_header_value(
+                k, v, local_gateway=local_gateway, upstream=upstream, request_scope=request_scope
             ).encode("latin1"),
         )
         for k, v in res.headers.multi_items()
@@ -343,8 +357,9 @@ def _injected_html_headers(
             "content-security-policy-report-only",
         }:
             continue
-        if local_gateway and request_scope is not None and k_lower == "location":
-            v = _rewrite_canonical_upstream_location(v, upstream=upstream, scope=request_scope)
+        v = _forwarded_header_value(
+            k, v, local_gateway=local_gateway, upstream=upstream, request_scope=request_scope
+        )
         res_headers.append((k.encode("latin1"), v.encode("latin1")))
     res_headers.append((b"content-length", str(len(injected)).encode("latin1")))
     return res_headers

@@ -157,7 +157,11 @@ def _mint(app, cid, *, version=None):
 
 
 @pytest.mark.integration
-async def test_restored_finished_application_login_reload_and_writes(tmp_path, monkeypatch):
+async def test_restored_finished_application_login_reload_and_writes(
+    tmp_path,
+    monkeypatch,
+    embedded: bool = False,
+):
     monkeypatch.setenv("DISCO_AUTH_SECRET", "finished-http-roundtrip")
     monkeypatch.setenv("DISCO_ALLOW_PROCESS_SANDBOX_FOR_DEV", "1")
     monkeypatch.setenv("DISCO_LOCAL_PREVIEW_PORT_START", "19810")
@@ -182,7 +186,13 @@ async def test_restored_finished_application_login_reload_and_writes(tmp_path, m
     try:
         launch = _mint(app, cid)
         origin = urlsplit(launch["bootstrap_url"])
-        base_url = f"{origin.scheme}://{origin.netloc}"
+        # The ASGI client uses HTTPS for Secure-cookie transport. Browser acceptance
+        # separately exercises the product's actual HTTP loopback exception.
+        scheme = "https" if embedded else origin.scheme
+        base_url = f"{scheme}://{origin.netloc}"
+        bootstrap_headers = (
+            {"Sec-Fetch-Dest": "iframe", "Sec-Fetch-Site": "cross-site"} if embedded else None
+        )
         host = runtime.live_sessions.live_session(cid)
         assert host is not None
         host_read = AsyncMock(side_effect=AssertionError("wrong sandbox"))
@@ -191,7 +201,12 @@ async def test_restored_finished_application_login_reload_and_writes(tmp_path, m
         monkeypatch.setattr(runtime.preview, "port_upstream", lambda *_args: "http://127.0.0.1:1")
         with TestClient(app, base_url=base_url) as client:
             assert (
-                _redeem(client, launch["bootstrap_url"], launch["bootstrap_intent"]).status_code
+                _redeem(
+                    client,
+                    launch["bootstrap_url"],
+                    launch["bootstrap_intent"],
+                    headers=bootstrap_headers,
+                ).status_code
                 == 200
             )
             assert client.get("/private").status_code == 401
@@ -202,9 +217,13 @@ async def test_restored_finished_application_login_reload_and_writes(tmp_path, m
             )
             login = client.post("/login", headers={"Origin": base_url}, content=b"\x00\xffpassword")
             assert login.status_code == 201 and login.content == b"\x00\xffpassword"
+            session_policy = (
+                "; Secure; SameSite=None; Partitioned" if embedded else "; SameSite=Strict"
+            )
+            theme_policy = "; Secure; SameSite=None; Partitioned" if embedded else "; SameSite=Lax"
             assert login.headers.get_list("set-cookie") == [
-                "app_session=accepted; HttpOnly; Path=/",
-                "app_theme=dark; Path=/",
+                "app_session=accepted; HttpOnly; Path=/" + session_policy,
+                "app_theme=dark; Path=/" + theme_policy,
             ]
             assert login.headers.get_list("x-app-repeat") == ["one", "two"]
             for _reload in range(2):
@@ -233,6 +252,12 @@ async def test_restored_finished_application_login_reload_and_writes(tmp_path, m
                 stale = client.post("/write", headers={"Origin": base_url}, content=b"stale")
                 assert stale.status_code == 409
             assert client.get("/private").json()["count"] == 5
+            logged_out = client.post("/logout", headers={"Origin": base_url})
+            assert logged_out.status_code == 200
+            assert logged_out.headers.get_list("set-cookie") == [
+                "app_session=; HttpOnly; Path=/; Max-Age=0" + session_policy,
+            ]
+            assert client.get("/private").status_code == 401
             # Cap deletion does not downgrade to app authentication or published routing.
             cookie_name = local_preview_cookie_name(origin.port)
             old_cookie = client.cookies.get(cookie_name)
@@ -262,3 +287,14 @@ async def test_restored_finished_application_login_reload_and_writes(tmp_path, m
     finally:
         await runtime._teardown_sandbox(cid)
         store.close()
+
+
+@pytest.mark.integration
+async def test_restored_finished_application_embedded_cookie_login_reload_logout(
+    tmp_path, monkeypatch
+):
+    await test_restored_finished_application_login_reload_and_writes(
+        tmp_path,
+        monkeypatch,
+        embedded=True,
+    )

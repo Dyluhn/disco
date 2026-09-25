@@ -37,14 +37,23 @@ class Application(BaseHTTPRequestHandler):
                 201,
                 body,
                 [
-                    ("Set-Cookie", "app_session=accepted; HttpOnly; Path=/"),
-                    ("Set-Cookie", "app_theme=dark; Path=/"),
+                    ("Set-Cookie", "app_session=accepted; HttpOnly; Path=/; SameSite=Strict"),
+                    ("Set-Cookie", "app_theme=dark; Path=/; SameSite=Lax"),
                     ("Set-Cookie", "disco_session=forged; Path=/"),
                     ("Set-Cookie", "disco_preview_cap=forged; Path=/"),
                     ("Set-Cookie", "disco_path_preview_bad=forged; Path=/"),
                     ("Set-Cookie", "disco_local_preview_bad=forged; Path=/"),
                     ("X-App-Repeat", "one"),
                     ("X-App-Repeat", "two"),
+                ],
+            )
+            return
+        if self.path == "/logout":
+            self.reply(
+                200,
+                b"logged out",
+                [
+                    ("Set-Cookie", "app_session=; HttpOnly; Path=/; Max-Age=0; SameSite=Strict"),
                 ],
             )
             return
