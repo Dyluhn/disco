@@ -58,6 +58,7 @@ from .auth_parts.origin_policy import (
     request_traversed_proxy,
     session_cookie_secure,
 )
+from .auth_parts.preview_claims import _cap_authority_invalid, _cap_scalar_fields
 from .auth_parts.preview_origin import (
     _is_generated_preview_label,
     _is_local_preview_hostname,
@@ -357,38 +358,6 @@ def _immutable_preview_version_invalid(value: object) -> bool:
 def _check_immutable_preview_version(value: int | None) -> None:
     if _immutable_preview_version_invalid(value):
         raise ValueError("invalid immutable preview version")
-
-
-def _cap_scalar_fields(
-    owner: object,
-    cid: object,
-    prefix: object,
-    port: object,
-    exp: object,
-    allow_websocket: object,
-) -> tuple[str, str, str, int, int, bool] | None:
-    """The capability's scalar payload fields, or None if any is the wrong type.
-
-    Returns the values rather than a bool so the caller keeps the narrowing the
-    inline isinstance chain used to give it. A bool-returning predicate erases
-    it, and PreviewCapability's constructor then receives ``Any | None``.
-    """
-    if (
-        isinstance(owner, str)
-        and isinstance(cid, str)
-        and isinstance(prefix, str)
-        and isinstance(port, int)
-        and isinstance(exp, int)
-        and isinstance(allow_websocket, bool)
-    ):
-        return owner, cid, prefix, port, exp, allow_websocket
-    return None
-
-
-def _cap_authority_invalid(authority_id: object) -> bool:
-    return authority_id is not None and (
-        not isinstance(authority_id, str) or not authority_id or len(authority_id) > 256
-    )
 
 
 def _normalize_cap_methods(payload: dict[str, Any], methods: object) -> tuple[str, ...] | None:
