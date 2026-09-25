@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-public-api-v1",
-  "source_identity": "65c0cea8e7273371f89118e8bda592a470c81ad8",
+  "source_identity": "1ff5647f870eaa8f5cd67ea9d1ad41708b3d50a2",
   "python_initializers": [
     {
       "path": "packages/agent-server/src/disco/agent_server/__init__.py",
@@ -18849,7 +18849,7 @@
         {
           "kind": "TypeAliasDeclaration",
           "name": "PreviewLaunch",
-          "signature": "export type PreviewLaunch = { url: string; intent: string };"
+          "signature": "export type PreviewLaunch = { url: string; intent: string; /** Local browser deadline derived from the server's actual origin lease. */ accessDeadline?: number; };"
         }
       ]
     },
@@ -20114,12 +20114,22 @@
       ]
     },
     {
+      "path": "frontend/src/components/PreviewAccessBoundary.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "PreviewAccessBoundary",
+          "signature": "export function PreviewAccessBoundary({ launch, onReload, onExpiredChange, children }: { launch: PreviewLaunch; onReload?: () => void | Promise<void>; onExpiredChange?: (expired: boolean) => void; children: (accept: (expires: unknown, serverTime: unknown) => void) => ReactNode; })"
+        }
+      ]
+    },
+    {
       "path": "frontend/src/components/PreviewLaunchFrame.tsx",
       "public_declarations": [
         {
           "kind": "variable",
           "name": "PreviewLaunchFrame",
-          "signature": "export const PreviewLaunchFrame = forwardRef<HTMLIFrameElement, PreviewLaunchFrameProps>( function PreviewLaunchFrame(props, forwardedRef) { // The one-time handoff message is intentionally bearer-free. A keyed child // gives every exact launch a fresh browsing context and fresh load gate, so // a late message/load from launch A cannot arm launch B. const launchKey = `${props.launch.url}\\0${props.launch.intent}`; const identityRef = useRef({ launchKey: \"\", identity: \"\" }); if (identityRef.current.launchKey !== launchKey) { frameLaunchCounter = (frameLaunchCounter + 1) % Number.MAX_SAFE_INTEGER; identityRef.current = { launchKey, identity: `preview-launch-${frameLaunchCounter}`, }; } return ( <PreviewLaunchFrameInstance key={identityRef.current.identity} {...props} launchIdentity={identityRef.current.identity} ref={forwardedRef} /> ); }, );"
+          "signature": "export const PreviewLaunchFrame = forwardRef<HTMLIFrameElement, PreviewLaunchFrameProps>( function PreviewLaunchFrame(props, forwardedRef) { // The one-time handoff message is intentionally bearer-free. A keyed child // gives every exact launch a fresh browsing context and fresh load gate, so // a late message/load from launch A cannot arm launch B. const launchKey = `${props.launch.url}\\0${props.launch.intent}`; const identityRef = useRef({ launchKey: \"\", identity: \"\" }); if (identityRef.current.launchKey !== launchKey) { frameLaunchCounter = (frameLaunchCounter + 1) % Number.MAX_SAFE_INTEGER; identityRef.current = { launchKey, identity: `preview-launch-${frameLaunchCounter}`, }; } const { onReload, onExpiredChange, ...frameProps } = props; return ( <PreviewAccessBoundary key={identityRef.current.identity} launch={props.launch} onReload={onReload} onExpiredChange={onExpiredChange}> {(accept) => <PreviewLaunchFrameInstance {...frameProps} launchIdentity={identityRef.current.identity} onAccessDeadline={accept} ref={forwardedRef} />} </PreviewAccessBoundary> ); }, );"
         }
       ]
     },
@@ -20679,6 +20689,16 @@
       ]
     },
     {
+      "path": "frontend/src/components/build/agentCanvas/ArtifactPreview.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "ArtifactPreview",
+          "signature": "export function ArtifactPreview({ srcDoc, staticPreviewSrc, untrusted, onSteer, reloadPreview }: { srcDoc: string; staticPreviewSrc: PreviewLaunch | null; untrusted: boolean; onSteer?: (text: string) => void; reloadPreview: () => Promise<void>; })"
+        }
+      ]
+    },
+    {
       "path": "frontend/src/components/build/agentCanvas/ArtifactsPane.tsx",
       "public_declarations": [
         {
@@ -20824,7 +20844,7 @@
         {
           "kind": "InterfaceDeclaration",
           "name": "LiveBrowserSession",
-          "signature": "export interface LiveBrowserSession { liveView: { launch: PreviewLaunch; ownerCid: string } | null; liveReady: boolean; iframeConnected: boolean; setIframeConnected: (connected: boolean) => void; liveStartFailure: LiveStartFailure; /** The HONEST \"actually streaming\" signal: the stack started, the noVNC iframe * has loaded, AND the backend still confirms the stack is running. */ streaming: boolean; }"
+          "signature": "export interface LiveBrowserSession { liveView: { launch: PreviewLaunch; ownerCid: string } | null; liveReady: boolean; iframeConnected: boolean; setIframeConnected: (connected: boolean) => void; liveStartFailure: LiveStartFailure; /** The HONEST \"actually streaming\" signal: the stack started, the noVNC iframe * has loaded, AND the backend still confirms the stack is running. */ streaming: boolean; reloadPreview: () => Promise<void>; }"
         },
         {
           "kind": "TypeAliasDeclaration",
@@ -20954,7 +20974,7 @@
         {
           "kind": "function",
           "name": "PreviewStage",
-          "signature": "export function PreviewStage({ frameRef, launch, onFrameLoad, onBootstrapReady, visibleFailure, dataReason, minting, runtimeUnavailable, frameReady, editMode, untrusted, selection, onSteer, onArmInspect, onDisarmEdit, onApplyEdit, onRefresh, onDownloadSource, downloadPending, }: { frameRef: MutableRefObject<HTMLIFrameElement | null>; launch: PreviewLaunch | null; onFrameLoad: () => void; onBootstrapReady: () => void; visibleFailure: string | null; dataReason: string | undefined; minting: boolean; runtimeUnavailable: boolean; frameReady: boolean; editMode: boolean; untrusted: boolean; selection: ElementSelectState; onSteer?: (text: string) => void; onArmInspect: () => void; onDisarmEdit: () => void; onApplyEdit: (instruction: string) => void; onRefresh: () => void; /** Null when there is no conversation to download (the static run view). */ onDownloadSource: (() => void) | null; downloadPending: boolean; })"
+          "signature": "export function PreviewStage({ frameRef, launch, onFrameLoad, onBootstrapReady, visibleFailure, dataReason, minting, runtimeUnavailable, frameReady, editMode, untrusted, selection, onSteer, onArmInspect, onDisarmEdit, onApplyEdit, onReloadAccess, accessExpired, onExpiredChange, onRefresh, onDownloadSource, downloadPending, }: { frameRef: MutableRefObject<HTMLIFrameElement | null>; launch: PreviewLaunch | null; onFrameLoad: () => void; onBootstrapReady: () => void; visibleFailure: string | null; dataReason: string | undefined; minting: boolean; runtimeUnavailable: boolean; frameReady: boolean; editMode: boolean; untrusted: boolean; selection: ElementSelectState; onSteer?: (text: string) => void; onArmInspect: () => void; onDisarmEdit: () => void; onApplyEdit: (instruction: string) => void; onReloadAccess: () => void | Promise<void>; accessExpired: boolean; onExpiredChange: (expired: boolean) => void; onRefresh: () => void; /** Null when there is no conversation to download (the static run view). */ onDownloadSource: (() => void) | null; downloadPending: boolean; })"
         }
       ]
     },
@@ -20974,7 +20994,7 @@
         {
           "kind": "function",
           "name": "PreviewToolbar",
-          "signature": "export function PreviewToolbar({ versions, selectedVersionSeq, onSelectVersion, onRefresh, restarting, cid, showPointButton, mentionArmed, onArmMention, onDisarmMention, canEdit, editMode, onToggleEdit, onOpenPreview, }: { versions: WorkspaceVersion[]; selectedVersionSeq: number | null; onSelectVersion: (seq: number | null) => void; onRefresh: () => void; restarting: boolean; cid: string | null; showPointButton: boolean; mentionArmed: boolean; onArmMention: () => void; onDisarmMention: () => void; canEdit: boolean; editMode: boolean; onToggleEdit: () => void; onOpenPreview: () => void; })"
+          "signature": "export function PreviewToolbar({ versions, selectedVersionSeq, onSelectVersion, onRefresh, restarting, accessExpired = false, cid, showPointButton, mentionArmed, onArmMention, onDisarmMention, canEdit, editMode, onToggleEdit, onOpenPreview, }: { versions: WorkspaceVersion[]; selectedVersionSeq: number | null; onSelectVersion: (seq: number | null) => void; onRefresh: () => void; restarting: boolean; accessExpired?: boolean; cid: string | null; showPointButton: boolean; mentionArmed: boolean; onArmMention: () => void; onDisarmMention: () => void; canEdit: boolean; editMode: boolean; onToggleEdit: () => void; onOpenPreview: () => void; })"
         }
       ]
     },
@@ -21199,12 +21219,22 @@
         {
           "kind": "InterfaceDeclaration",
           "name": "PreviewLaunchState",
-          "signature": "export interface PreviewLaunchState { launch: PreviewLaunch | null; launchKey: string; launchVersionSeq: number | null; minting: boolean; launchFailure: string | null; /** Reason code for a launch that MINTED FINE but whose frame never handed * back its bootstrap handshake. Separate from `launchFailure` on purpose \u2014 * see `computeVisibleFailure`. */ bootstrapFailure: string | null; /** Hand to `PreviewLaunchFrame` as `onBootstrapReady` to disarm the watchdog. */ onBootstrapReady: () => void; frameReady: boolean; setFrameReady: (ready: boolean) => void; }"
+          "signature": "export interface PreviewLaunchState { launch: PreviewLaunch | null; launchKey: string; launchVersionSeq: number | null; minting: boolean; reloadPreview: () => Promise<void>; launchFailure: string | null; /** Reason code for a launch that MINTED FINE but whose frame never handed * back its bootstrap handshake. Separate from `launchFailure` on purpose \u2014 * see `computeVisibleFailure`. */ bootstrapFailure: string | null; /** Hand to `PreviewLaunchFrame` as `onBootstrapReady` to disarm the watchdog. */ onBootstrapReady: () => void; frameReady: boolean; setFrameReady: (ready: boolean) => void; }"
         },
         {
           "kind": "variable",
           "name": "PREVIEW_BOOTSTRAP_TIMEOUT_MS",
           "signature": "export const PREVIEW_BOOTSTRAP_TIMEOUT_MS = 15_000;"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/build/canvas/previewPaneParts/usePreviewOpenError.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "usePreviewOpenError",
+          "signature": "export function usePreviewOpenError()"
         }
       ]
     },
@@ -21749,12 +21779,12 @@
         {
           "kind": "function",
           "name": "IncludeFollowUpsModal",
-          "signature": "export function IncludeFollowUpsModal({ open, onOpenChange, followUps, onConfirm, actionLabel = \"Export\", }: IncludeFollowUpsModalProps)"
+          "signature": "export function IncludeFollowUpsModal({ open, onOpenChange, followUps, onConfirm, actionLabel = \"Export\", returnFocusRef, confirmOpensDialog = false, }: IncludeFollowUpsModalProps)"
         },
         {
           "kind": "InterfaceDeclaration",
           "name": "IncludeFollowUpsModalProps",
-          "signature": "export interface IncludeFollowUpsModalProps { open: boolean; onOpenChange: (open: boolean) => void; /** All post-report follow-up MessageEvents (user + assistant, in order). */ followUps: MessageEvent[]; /** Called when the user confirms their selection. * ``selectedSeqs`` are the seq values of the selected USER messages. * An empty array means \"none selected \u2192 export without follow-ups\". */ onConfirm: (selectedSeqs: number[]) => void; /** Label for the action (e.g. \"Export\" or \"Generate audio\"). */ actionLabel?: string; }"
+          "signature": "export interface IncludeFollowUpsModalProps { open: boolean; onOpenChange: (open: boolean) => void; /** All post-report follow-up MessageEvents (user + assistant, in order). */ followUps: MessageEvent[]; /** Called when the user confirms their selection. * ``selectedSeqs`` are the seq values of the selected USER messages. * An empty array means \"none selected \u2192 export without follow-ups\". */ onConfirm: (selectedSeqs: number[]) => void; /** Label for the action (e.g. \"Export\" or \"Generate audio\"). */ actionLabel?: string; returnFocusRef?: RefObject<HTMLElement | null>; /** Confirmation hands focus to a successor dialog instead of the invoker. */ confirmOpensDialog?: boolean; }"
         }
       ]
     },
@@ -21954,12 +21984,12 @@
         {
           "kind": "function",
           "name": "AudioModeDialog",
-          "signature": "export function AudioModeDialog({ open, onOpenChange, onChoose }: AudioModeDialogProps)"
+          "signature": "export function AudioModeDialog({ open, onOpenChange, onChoose, returnFocusRef }: AudioModeDialogProps)"
         },
         {
           "kind": "InterfaceDeclaration",
           "name": "AudioModeDialogProps",
-          "signature": "export interface AudioModeDialogProps { open: boolean; onOpenChange: (open: boolean) => void; onChoose: (mode: AudioMode) => void; }"
+          "signature": "export interface AudioModeDialogProps { open: boolean; onOpenChange: (open: boolean) => void; onChoose: (mode: AudioMode) => void; returnFocusRef?: RefObject<HTMLElement | null>; }"
         }
       ]
     },
@@ -21984,12 +22014,12 @@
         {
           "kind": "function",
           "name": "AudioSection",
-          "signature": "export function AudioSection({ cid, followUpSeqs, modeOpen, onModeOpenChange, reportQuery, onRequestGenerate, }: AudioSectionProps)"
+          "signature": "export function AudioSection({ cid, followUpSeqs, modeOpen, onModeOpenChange, reportQuery, onRequestGenerate, returnFocusRef, }: AudioSectionProps)"
         },
         {
           "kind": "InterfaceDeclaration",
           "name": "AudioSectionProps",
-          "signature": "export interface AudioSectionProps { cid: string; /** Selected follow-up seqs to include in the audio (WALK-20). */ followUpSeqs?: number[]; /** Controlled: whether the mode-pick dialog is open (parent drives this * when it needs to insert the include-follow-ups step first). */ modeOpen: boolean; onModeOpenChange: (open: boolean) => void; /** B4: report title/query for a meaningful download filename. */ reportQuery: string; /** Open the mode picker (via the include-follow-ups step when the report has * follow-ups). Owned by the parent because that step is the parent's. */ onRequestGenerate: () => void; }"
+          "signature": "export interface AudioSectionProps { cid: string; /** Selected follow-up seqs to include in the audio (WALK-20). */ followUpSeqs?: number[]; /** Controlled: whether the mode-pick dialog is open (parent drives this * when it needs to insert the include-follow-ups step first). */ modeOpen: boolean; onModeOpenChange: (open: boolean) => void; /** B4: report title/query for a meaningful download filename. */ reportQuery: string; /** Open the mode picker (via the include-follow-ups step when the report has * follow-ups). Owned by the parent because that step is the parent's. */ onRequestGenerate: () => void; returnFocusRef?: RefObject<HTMLElement | null>; }"
         }
       ]
     },
@@ -24024,6 +24054,16 @@
       ]
     },
     {
+      "path": "frontend/src/hooks/useDialogRestoreFocus.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "useDialogRestoreFocus",
+          "signature": "export function useDialogRestoreFocus( returnFocusRef?: RefObject<HTMLElement | null>, skipRestoreRef?: RefObject<boolean>, )"
+        }
+      ]
+    },
+    {
       "path": "frontend/src/hooks/useDriverModels.ts",
       "public_declarations": [
         {
@@ -24280,6 +24320,26 @@
           "kind": "function",
           "name": "useNowMs",
           "signature": "export function useNowMs(active: boolean, intervalMs = 1000): number"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/hooks/usePreviewAccess.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "usePreviewAccess",
+          "signature": "export function usePreviewAccess(leaseDeadline: number | undefined)"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/hooks/usePreviewSelectionAccess.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "usePreviewSelectionAccess",
+          "signature": "export function usePreviewSelectionAccess(disarm: () => void)"
         }
       ]
     },
@@ -28270,14 +28330,6 @@
     {
       "surface": "frontend",
       "path": "frontend/src/components/build/agentCanvas/useLiveBrowserSession.ts",
-      "public_name": "LiveBrowserSession",
-      "target_sha256": "3ebcb408341c7e722e582b61d1ac83fb9fff951df264c48e14a929ced8dcd96a",
-      "owner_package": "PKG-12-FE-BUILD",
-      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
-    },
-    {
-      "surface": "frontend",
-      "path": "frontend/src/components/build/agentCanvas/useLiveBrowserSession.ts",
       "public_name": "LiveStartFailure",
       "target_sha256": "b4604506755d9bcd5a3359509ed1386d98f271810c969b99dc60e58675f6cf04",
       "owner_package": "PKG-12-FE-BUILD",
@@ -29069,14 +29121,6 @@
     },
     {
       "surface": "frontend",
-      "path": "frontend/src/components/build/canvas/previewPaneParts/PreviewToolbar.tsx",
-      "public_name": "PreviewToolbar",
-      "target_sha256": "be44c2df0d1bf97b854fd4a25f5a5519be6389e596a9b7f372434b34a3185c0e",
-      "owner_package": "PKG-12-FE-PREVIEW",
-      "reason": "Epic 12-C (PKG-12-FE-PREVIEW): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
-    },
-    {
-      "surface": "frontend",
       "path": "frontend/src/components/build/canvas/previewPaneParts/PreviewUnavailable.tsx",
       "public_name": "PreviewUnavailable",
       "target_sha256": "7ed28778f5b89f2249b6e72cdf6603b459e3eb9a3a49481c64edf016ac39d7b0",
@@ -29416,22 +29460,6 @@
       "path": "frontend/src/components/research/deepResearchSurfaceParts/useDeepResearchSurfaceState.ts",
       "public_name": "useDeepResearchSurfaceState",
       "target_sha256": "78112dcb37b1f32a1575ccfddba5ec8ee296f135cf2301f80879279b3ae34f55",
-      "owner_package": "PKG-12-FE-RESEARCH",
-      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
-    },
-    {
-      "surface": "frontend",
-      "path": "frontend/src/components/research/needMoreCardParts/AudioModeDialog.tsx",
-      "public_name": "AudioModeDialog",
-      "target_sha256": "051a59af3bf01ee6501114dd14915f83fca7f82b0724358e6d3007beb1d32199",
-      "owner_package": "PKG-12-FE-RESEARCH",
-      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
-    },
-    {
-      "surface": "frontend",
-      "path": "frontend/src/components/research/needMoreCardParts/AudioModeDialog.tsx",
-      "public_name": "AudioModeDialogProps",
-      "target_sha256": "76a8f5e6451427bc3a73676315fc1959597401b337fa1a5ed290e6d09c795ba6",
       "owner_package": "PKG-12-FE-RESEARCH",
       "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
     },
@@ -31861,19 +31889,155 @@
     },
     {
       "surface": "frontend",
-      "path": "frontend/src/components/build/canvas/previewPaneParts/PreviewStage.tsx",
-      "public_name": "PreviewStage",
-      "target_sha256": "9faeecf4f2bfa534b751ac83bba1c053cb924418f4bac4f60587772f257cc2b2",
-      "owner_package": "PKG-24-UI-PREVIEW-FOLLOWUP",
-      "reason": "Explicit host onArmInspect callback replaces direct arm call so Inspect and Point modes are mutually exclusive; only caller updated."
-    },
-    {
-      "surface": "frontend",
       "path": "frontend/src/lib/reportQualifications.ts",
       "public_name": "qualificationMarkdown",
       "target_sha256": "06ca235af21e6ea5efa06e24ef66130d8ffb8d714cd1774278685666b5fcd7ca",
       "owner_package": "PKG-25-RESEARCH-CI",
       "reason": "Provider-neutral request controls, recoverable research activity, review reserves, and retained export qualifications."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/client.ts",
+      "public_name": "PreviewLaunch",
+      "target_sha256": "6ccdae6f47c1ac1e356819022e002e6b1efb97986541651aa616fc8883151ef2",
+      "owner_package": "PKG-25-UI-READER-PREVIEW-FOCUS",
+      "reason": "Optional browser deadline derived from actual server lease expiry; existing url/intent callers remain valid."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/PreviewAccessBoundary.tsx",
+      "public_name": "PreviewAccessBoundary",
+      "target_sha256": "a11eb163cc3b745a66a1a6d325aa6c804af2635d2196b6f8bd746fe449b1885b",
+      "owner_package": "PKG-25-UI-READER-PREVIEW-FOCUS",
+      "reason": "Retain iframe contents across expiry, warn, block expired input, and require confirmed explicit reload."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/PreviewLaunchFrame.tsx",
+      "public_name": "PreviewLaunchFrame",
+      "target_sha256": "306d836b81ac8904df6e9ed3a67a69ff18faec9ef3abe205166c36d588c0224c",
+      "owner_package": "PKG-25-UI-READER-PREVIEW-FOCUS",
+      "reason": "Optional reload/expiry callbacks around the keyed existing iframe; trusted bootstrap metadata is source/origin bound and latched."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/agentCanvas/ArtifactPreview.tsx",
+      "public_name": "ArtifactPreview",
+      "target_sha256": "963c1d094242a4d4c5322e7fcba37d7571818d3ea74be52c7c802af41a90a478",
+      "owner_package": "PKG-25-UI-READER-PREVIEW-FOCUS",
+      "reason": "Extract existing artifact preview frame and selection integration to stay within unchanged architecture limits."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/agentCanvas/useLiveBrowserSession.ts",
+      "public_name": "LiveBrowserSession",
+      "target_sha256": "1f1d320426594c5d65fe88347eba7248e220ff0800ca9716521e68ff5a3bb377",
+      "owner_package": "PKG-25-UI-READER-PREVIEW-FOCUS",
+      "reason": "Explicit guarded reload callback for the existing noVNC session, without restarting that session."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/canvas/previewPaneParts/PreviewStage.tsx",
+      "public_name": "PreviewStage",
+      "target_sha256": "0802b2b69686aaff13502749c4e6d0471ba483c2536d76de9f3a11ff95d7fc5e",
+      "owner_package": "PKG-25-UI-READER-PREVIEW-FOCUS",
+      "reason": "Thread access expiry and confirmed reload into the existing preview/selection stage."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/canvas/previewPaneParts/PreviewToolbar.tsx",
+      "public_name": "PreviewToolbar",
+      "target_sha256": "00f9da542c080333a4d902263097e998cb06b49f6daeb62ffd137cb4b0569f9d",
+      "owner_package": "PKG-25-UI-READER-PREVIEW-FOCUS",
+      "reason": "Disable the existing Refresh button during expiry so confirmed recovery cannot be bypassed."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/canvas/previewPaneParts/usePreviewLaunch.ts",
+      "public_name": "PreviewLaunchState",
+      "target_sha256": "c6824ae88a7b310f1f82a4707e7f10edfea420de697f4136ae9fdc3a7afb36a9",
+      "owner_package": "PKG-25-UI-READER-PREVIEW-FOCUS",
+      "reason": "Explicit asynchronous guarded mint for confirmed reload; preserve current launch on failed/stale replies."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/canvas/previewPaneParts/usePreviewOpenError.ts",
+      "public_name": "usePreviewOpenError",
+      "target_sha256": "9d99f2267a9fef0548bf98bdd4c95a22f88dc78bf73d50c81ca614e5af98b713",
+      "owner_package": "PKG-25-UI-READER-PREVIEW-FOCUS",
+      "reason": "Extract existing open-in-new-tab error mapping to preserve architecture limits."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/IncludeFollowUpsModal.tsx",
+      "public_name": "IncludeFollowUpsModal",
+      "target_sha256": "34ac8f755864652005a4557b76340b519707d08b7b7f9f2cbcb381e987aa721f",
+      "owner_package": "PKG-25-UI-READER-PREVIEW-FOCUS",
+      "reason": "Optional invoker reference and explicit successor-dialog flag; restore cancelled/standalone focus without stealing focus during handoff."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/IncludeFollowUpsModal.tsx",
+      "public_name": "IncludeFollowUpsModalProps",
+      "target_sha256": "7fb7af22232d073687dc48b6ac7c7ed03c17fcaae693ce0609114a926c48cffa",
+      "owner_package": "PKG-25-UI-READER-PREVIEW-FOCUS",
+      "reason": "Optional returnFocusRef and confirmOpensDialog preserve existing callers and describe focus handoff."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/needMoreCardParts/AudioModeDialog.tsx",
+      "public_name": "AudioModeDialog",
+      "target_sha256": "b9c37907aa3257e66c4cebde5662a801158c5c41d48afff3e5b9b48c0c2db40f",
+      "owner_package": "PKG-25-UI-READER-PREVIEW-FOCUS",
+      "reason": "Optional invoker reference restores the original control when a controlled chooser closes."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/needMoreCardParts/AudioModeDialog.tsx",
+      "public_name": "AudioModeDialogProps",
+      "target_sha256": "16e08e7968dcb1a1e62fb83f0ba9e609f2b991e48896c154aad8d1f01ce86805",
+      "owner_package": "PKG-25-UI-READER-PREVIEW-FOCUS",
+      "reason": "Optional returnFocusRef supports the original topbar or footer invoker across a chooser sequence."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/needMoreCardParts/AudioSection.tsx",
+      "public_name": "AudioSection",
+      "target_sha256": "ee0f4a7e80aebfcc8ed18d67fd85cb226d63a436d6ac9b03302736d57324d338",
+      "owner_package": "PKG-25-UI-READER-PREVIEW-FOCUS",
+      "reason": "Thread the optional original invoker reference into the persistent audio chooser."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/needMoreCardParts/AudioSection.tsx",
+      "public_name": "AudioSectionProps",
+      "target_sha256": "220a1b51babaaf3cac730cc22e96cc120dac452aea0be19c1d0cbcb3b8828c97",
+      "owner_package": "PKG-25-UI-READER-PREVIEW-FOCUS",
+      "reason": "Optional returnFocusRef leaves existing callers valid."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/hooks/useDialogRestoreFocus.ts",
+      "public_name": "useDialogRestoreFocus",
+      "target_sha256": "42780d39c8f87948c4c34dce012d3d194882a4827aa4f9c2eec1a21469c79ede",
+      "owner_package": "PKG-25-UI-READER-PREVIEW-FOCUS",
+      "reason": "Capture the actual invoker before autofocus; restore only connected, enabled, non-inert controls and support explicit handoff suppression."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/hooks/usePreviewAccess.ts",
+      "public_name": "usePreviewAccess",
+      "target_sha256": "aed34d3572d64b5cce54ad329831de10f38055a9a54b0280368d23450a2b07af",
+      "owner_package": "PKG-25-UI-READER-PREVIEW-FOCUS",
+      "reason": "Track conservative lease/cookie deadline with warning, focus/visibility recovery, and irreversible expiry."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/hooks/usePreviewSelectionAccess.ts",
+      "public_name": "usePreviewSelectionAccess",
+      "target_sha256": "9f1aec8860d439b17e3af103ed0f322d002e25235a7dd68fbb72064fdcef8caf",
+      "owner_package": "PKG-25-UI-READER-PREVIEW-FOCUS",
+      "reason": "Disarm selection on expiry and expose its current state to preview consumers."
     },
     {
       "surface": "frontend",
@@ -33069,14 +33233,6 @@
     },
     {
       "surface": "frontend",
-      "path": "frontend/src/components/build/canvas/previewPaneParts/usePreviewLaunch.ts",
-      "public_name": "PreviewLaunchState",
-      "target_sha256": "a6b15b79a70f9e8a4dd854d8ee8f64de3e99a5845707cc8b8af15456e4995cc1",
-      "owner_package": "PKG-38-UI-FIXES-V51",
-      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
-    },
-    {
-      "surface": "frontend",
       "path": "frontend/src/components/buildSurface/BuildDeliverableSection.tsx",
       "public_name": "BuildDeliverableSection",
       "target_sha256": "f713873129e1bb896233878e71a446edb0f797db28946730db1bb16dd3866114",
@@ -33152,22 +33308,6 @@
       "path": "frontend/src/components/research/deepResearchSurfaceParts/DeepResearchTopBar.tsx",
       "public_name": "DeepResearchTopBar",
       "target_sha256": "fe2f566c76b4b69d00c253dd7c6f3e3793a2bd32df4ee1dba4294c10bd276e4a",
-      "owner_package": "PKG-38-UI-FIXES-V51",
-      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
-    },
-    {
-      "surface": "frontend",
-      "path": "frontend/src/components/research/needMoreCardParts/AudioSection.tsx",
-      "public_name": "AudioSection",
-      "target_sha256": "a925c86d901b94a36bcddf877e9f72d9e3d8f04d2da898418c8f1851f2d6aa25",
-      "owner_package": "PKG-38-UI-FIXES-V51",
-      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
-    },
-    {
-      "surface": "frontend",
-      "path": "frontend/src/components/research/needMoreCardParts/AudioSection.tsx",
-      "public_name": "AudioSectionProps",
-      "target_sha256": "6ae7808b6a549a990d1a98c823d00abde1c17dfecd84f5b477f932f933a5536e",
       "owner_package": "PKG-38-UI-FIXES-V51",
       "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
     },
@@ -34833,6 +34973,162 @@
     },
     {
       "surface": "frontend",
+      "path": "frontend/src/components/research/needMoreCardParts/AudioModeDialog.tsx",
+      "public_name": "AudioModeDialogProps",
+      "owner_package": "PKG-25-UI-READER-PREVIEW-FOCUS",
+      "accepting_commit": "1ff5647f870eaa8f5cd67ea9d1ad41708b3d50a2",
+      "accepting_receipt": "development/notes/ui-reader-preview-focus-20260925.md",
+      "declaration_kind": "InterfaceDeclaration",
+      "old_signature": "export interface AudioModeDialogProps { open: boolean; onOpenChange: (open: boolean) => void; onChoose: (mode: AudioMode) => void; }",
+      "new_signature": "export interface AudioModeDialogProps { open: boolean; onOpenChange: (open: boolean) => void; onChoose: (mode: AudioMode) => void; returnFocusRef?: RefObject<HTMLElement | null>; }",
+      "old_target_sha256": "76a8f5e6451427bc3a73676315fc1959597401b337fa1a5ed290e6d09c795ba6",
+      "new_target_sha256": "16e08e7968dcb1a1e62fb83f0ba9e609f2b991e48896c154aad8d1f01ce86805"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/needMoreCardParts/AudioSection.tsx",
+      "public_name": "AudioSectionProps",
+      "owner_package": "PKG-25-UI-READER-PREVIEW-FOCUS",
+      "accepting_commit": "1ff5647f870eaa8f5cd67ea9d1ad41708b3d50a2",
+      "accepting_receipt": "development/notes/ui-reader-preview-focus-20260925.md",
+      "declaration_kind": "InterfaceDeclaration",
+      "old_signature": "export interface AudioSectionProps { cid: string; /** Selected follow-up seqs to include in the audio (WALK-20). */ followUpSeqs?: number[]; /** Controlled: whether the mode-pick dialog is open (parent drives this * when it needs to insert the include-follow-ups step first). */ modeOpen: boolean; onModeOpenChange: (open: boolean) => void; /** B4: report title/query for a meaningful download filename. */ reportQuery: string; /** Open the mode picker (via the include-follow-ups step when the report has * follow-ups). Owned by the parent because that step is the parent's. */ onRequestGenerate: () => void; }",
+      "new_signature": "export interface AudioSectionProps { cid: string; /** Selected follow-up seqs to include in the audio (WALK-20). */ followUpSeqs?: number[]; /** Controlled: whether the mode-pick dialog is open (parent drives this * when it needs to insert the include-follow-ups step first). */ modeOpen: boolean; onModeOpenChange: (open: boolean) => void; /** B4: report title/query for a meaningful download filename. */ reportQuery: string; /** Open the mode picker (via the include-follow-ups step when the report has * follow-ups). Owned by the parent because that step is the parent's. */ onRequestGenerate: () => void; returnFocusRef?: RefObject<HTMLElement | null>; }",
+      "old_target_sha256": "6ae7808b6a549a990d1a98c823d00abde1c17dfecd84f5b477f932f933a5536e",
+      "new_target_sha256": "220a1b51babaaf3cac730cc22e96cc120dac452aea0be19c1d0cbcb3b8828c97"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/IncludeFollowUpsModal.tsx",
+      "public_name": "IncludeFollowUpsModalProps",
+      "owner_package": "PKG-25-UI-READER-PREVIEW-FOCUS",
+      "accepting_commit": "1ff5647f870eaa8f5cd67ea9d1ad41708b3d50a2",
+      "accepting_receipt": "development/notes/ui-reader-preview-focus-20260925.md",
+      "declaration_kind": "InterfaceDeclaration",
+      "old_signature": "export interface IncludeFollowUpsModalProps { open: boolean; onOpenChange: (open: boolean) => void; /** All post-report follow-up MessageEvents (user + assistant, in order). */ followUps: MessageEvent[]; /** Called when the user confirms their selection. * ``selectedSeqs`` are the seq values of the selected USER messages. * An empty array means \"none selected \u2192 export without follow-ups\". */ onConfirm: (selectedSeqs: number[]) => void; /** Label for the action (e.g. \"Export\" or \"Generate audio\"). */ actionLabel?: string; }",
+      "new_signature": "export interface IncludeFollowUpsModalProps { open: boolean; onOpenChange: (open: boolean) => void; /** All post-report follow-up MessageEvents (user + assistant, in order). */ followUps: MessageEvent[]; /** Called when the user confirms their selection. * ``selectedSeqs`` are the seq values of the selected USER messages. * An empty array means \"none selected \u2192 export without follow-ups\". */ onConfirm: (selectedSeqs: number[]) => void; /** Label for the action (e.g. \"Export\" or \"Generate audio\"). */ actionLabel?: string; returnFocusRef?: RefObject<HTMLElement | null>; /** Confirmation hands focus to a successor dialog instead of the invoker. */ confirmOpensDialog?: boolean; }",
+      "old_target_sha256": "8127761c0f20afbc3ff68caa13092355e26e0b0c90fbe96161d3347107a2b6b3",
+      "new_target_sha256": "7fb7af22232d073687dc48b6ac7c7ed03c17fcaae693ce0609114a926c48cffa"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/agentCanvas/useLiveBrowserSession.ts",
+      "public_name": "LiveBrowserSession",
+      "owner_package": "PKG-25-UI-READER-PREVIEW-FOCUS",
+      "accepting_commit": "1ff5647f870eaa8f5cd67ea9d1ad41708b3d50a2",
+      "accepting_receipt": "development/notes/ui-reader-preview-focus-20260925.md",
+      "declaration_kind": "InterfaceDeclaration",
+      "old_signature": "export interface LiveBrowserSession { liveView: { launch: PreviewLaunch; ownerCid: string } | null; liveReady: boolean; iframeConnected: boolean; setIframeConnected: (connected: boolean) => void; liveStartFailure: LiveStartFailure; /** The HONEST \"actually streaming\" signal: the stack started, the noVNC iframe * has loaded, AND the backend still confirms the stack is running. */ streaming: boolean; }",
+      "new_signature": "export interface LiveBrowserSession { liveView: { launch: PreviewLaunch; ownerCid: string } | null; liveReady: boolean; iframeConnected: boolean; setIframeConnected: (connected: boolean) => void; liveStartFailure: LiveStartFailure; /** The HONEST \"actually streaming\" signal: the stack started, the noVNC iframe * has loaded, AND the backend still confirms the stack is running. */ streaming: boolean; reloadPreview: () => Promise<void>; }",
+      "old_target_sha256": "3ebcb408341c7e722e582b61d1ac83fb9fff951df264c48e14a929ced8dcd96a",
+      "new_target_sha256": "1f1d320426594c5d65fe88347eba7248e220ff0800ca9716521e68ff5a3bb377"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/canvas/previewPaneParts/usePreviewLaunch.ts",
+      "public_name": "PreviewLaunchState",
+      "owner_package": "PKG-25-UI-READER-PREVIEW-FOCUS",
+      "accepting_commit": "1ff5647f870eaa8f5cd67ea9d1ad41708b3d50a2",
+      "accepting_receipt": "development/notes/ui-reader-preview-focus-20260925.md",
+      "declaration_kind": "InterfaceDeclaration",
+      "old_signature": "export interface PreviewLaunchState { launch: PreviewLaunch | null; launchKey: string; launchVersionSeq: number | null; minting: boolean; launchFailure: string | null; /** Reason code for a launch that MINTED FINE but whose frame never handed * back its bootstrap handshake. Separate from `launchFailure` on purpose \u2014 * see `computeVisibleFailure`. */ bootstrapFailure: string | null; /** Hand to `PreviewLaunchFrame` as `onBootstrapReady` to disarm the watchdog. */ onBootstrapReady: () => void; frameReady: boolean; setFrameReady: (ready: boolean) => void; }",
+      "new_signature": "export interface PreviewLaunchState { launch: PreviewLaunch | null; launchKey: string; launchVersionSeq: number | null; minting: boolean; reloadPreview: () => Promise<void>; launchFailure: string | null; /** Reason code for a launch that MINTED FINE but whose frame never handed * back its bootstrap handshake. Separate from `launchFailure` on purpose \u2014 * see `computeVisibleFailure`. */ bootstrapFailure: string | null; /** Hand to `PreviewLaunchFrame` as `onBootstrapReady` to disarm the watchdog. */ onBootstrapReady: () => void; frameReady: boolean; setFrameReady: (ready: boolean) => void; }",
+      "old_target_sha256": "a6b15b79a70f9e8a4dd854d8ee8f64de3e99a5845707cc8b8af15456e4995cc1",
+      "new_target_sha256": "c6824ae88a7b310f1f82a4707e7f10edfea420de697f4136ae9fdc3a7afb36a9"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/client.ts",
+      "public_name": "PreviewLaunch",
+      "owner_package": "PKG-25-UI-READER-PREVIEW-FOCUS",
+      "accepting_commit": "1ff5647f870eaa8f5cd67ea9d1ad41708b3d50a2",
+      "accepting_receipt": "development/notes/ui-reader-preview-focus-20260925.md",
+      "declaration_kind": "TypeAliasDeclaration",
+      "old_signature": "export type PreviewLaunch = { url: string; intent: string };",
+      "new_signature": "export type PreviewLaunch = { url: string; intent: string; /** Local browser deadline derived from the server's actual origin lease. */ accessDeadline?: number; };",
+      "old_target_sha256": "c37d0268243248f91292ea5b998eb4af7bc6bd2cd92f7d09f6f576ab82be2094",
+      "new_target_sha256": "6ccdae6f47c1ac1e356819022e002e6b1efb97986541651aa616fc8883151ef2"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/needMoreCardParts/AudioModeDialog.tsx",
+      "public_name": "AudioModeDialog",
+      "owner_package": "PKG-25-UI-READER-PREVIEW-FOCUS",
+      "accepting_commit": "1ff5647f870eaa8f5cd67ea9d1ad41708b3d50a2",
+      "accepting_receipt": "development/notes/ui-reader-preview-focus-20260925.md",
+      "declaration_kind": "function",
+      "old_signature": "export function AudioModeDialog({ open, onOpenChange, onChoose }: AudioModeDialogProps)",
+      "new_signature": "export function AudioModeDialog({ open, onOpenChange, onChoose, returnFocusRef }: AudioModeDialogProps)",
+      "old_target_sha256": "051a59af3bf01ee6501114dd14915f83fca7f82b0724358e6d3007beb1d32199",
+      "new_target_sha256": "b9c37907aa3257e66c4cebde5662a801158c5c41d48afff3e5b9b48c0c2db40f"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/needMoreCardParts/AudioSection.tsx",
+      "public_name": "AudioSection",
+      "owner_package": "PKG-25-UI-READER-PREVIEW-FOCUS",
+      "accepting_commit": "1ff5647f870eaa8f5cd67ea9d1ad41708b3d50a2",
+      "accepting_receipt": "development/notes/ui-reader-preview-focus-20260925.md",
+      "declaration_kind": "function",
+      "old_signature": "export function AudioSection({ cid, followUpSeqs, modeOpen, onModeOpenChange, reportQuery, onRequestGenerate, }: AudioSectionProps)",
+      "new_signature": "export function AudioSection({ cid, followUpSeqs, modeOpen, onModeOpenChange, reportQuery, onRequestGenerate, returnFocusRef, }: AudioSectionProps)",
+      "old_target_sha256": "a925c86d901b94a36bcddf877e9f72d9e3d8f04d2da898418c8f1851f2d6aa25",
+      "new_target_sha256": "ee0f4a7e80aebfcc8ed18d67fd85cb226d63a436d6ac9b03302736d57324d338"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/IncludeFollowUpsModal.tsx",
+      "public_name": "IncludeFollowUpsModal",
+      "owner_package": "PKG-25-UI-READER-PREVIEW-FOCUS",
+      "accepting_commit": "1ff5647f870eaa8f5cd67ea9d1ad41708b3d50a2",
+      "accepting_receipt": "development/notes/ui-reader-preview-focus-20260925.md",
+      "declaration_kind": "function",
+      "old_signature": "export function IncludeFollowUpsModal({ open, onOpenChange, followUps, onConfirm, actionLabel = \"Export\", }: IncludeFollowUpsModalProps)",
+      "new_signature": "export function IncludeFollowUpsModal({ open, onOpenChange, followUps, onConfirm, actionLabel = \"Export\", returnFocusRef, confirmOpensDialog = false, }: IncludeFollowUpsModalProps)",
+      "old_target_sha256": "4a15927a1c31d49ec50e4ba97bb0dc90018fa4ef59822c18fa09254e708613b1",
+      "new_target_sha256": "34ac8f755864652005a4557b76340b519707d08b7b7f9f2cbcb381e987aa721f"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/canvas/previewPaneParts/PreviewStage.tsx",
+      "public_name": "PreviewStage",
+      "owner_package": "PKG-25-UI-READER-PREVIEW-FOCUS",
+      "accepting_commit": "1ff5647f870eaa8f5cd67ea9d1ad41708b3d50a2",
+      "accepting_receipt": "development/notes/ui-reader-preview-focus-20260925.md",
+      "declaration_kind": "function",
+      "old_signature": "export function PreviewStage({ frameRef, launch, onFrameLoad, onBootstrapReady, visibleFailure, dataReason, minting, runtimeUnavailable, frameReady, editMode, untrusted, selection, onSteer, onArmInspect, onDisarmEdit, onApplyEdit, onRefresh, onDownloadSource, downloadPending, }: { frameRef: MutableRefObject<HTMLIFrameElement | null>; launch: PreviewLaunch | null; onFrameLoad: () => void; onBootstrapReady: () => void; visibleFailure: string | null; dataReason: string | undefined; minting: boolean; runtimeUnavailable: boolean; frameReady: boolean; editMode: boolean; untrusted: boolean; selection: ElementSelectState; onSteer?: (text: string) => void; onArmInspect: () => void; onDisarmEdit: () => void; onApplyEdit: (instruction: string) => void; onRefresh: () => void; /** Null when there is no conversation to download (the static run view). */ onDownloadSource: (() => void) | null; downloadPending: boolean; })",
+      "new_signature": "export function PreviewStage({ frameRef, launch, onFrameLoad, onBootstrapReady, visibleFailure, dataReason, minting, runtimeUnavailable, frameReady, editMode, untrusted, selection, onSteer, onArmInspect, onDisarmEdit, onApplyEdit, onReloadAccess, accessExpired, onExpiredChange, onRefresh, onDownloadSource, downloadPending, }: { frameRef: MutableRefObject<HTMLIFrameElement | null>; launch: PreviewLaunch | null; onFrameLoad: () => void; onBootstrapReady: () => void; visibleFailure: string | null; dataReason: string | undefined; minting: boolean; runtimeUnavailable: boolean; frameReady: boolean; editMode: boolean; untrusted: boolean; selection: ElementSelectState; onSteer?: (text: string) => void; onArmInspect: () => void; onDisarmEdit: () => void; onApplyEdit: (instruction: string) => void; onReloadAccess: () => void | Promise<void>; accessExpired: boolean; onExpiredChange: (expired: boolean) => void; onRefresh: () => void; /** Null when there is no conversation to download (the static run view). */ onDownloadSource: (() => void) | null; downloadPending: boolean; })",
+      "old_target_sha256": "9faeecf4f2bfa534b751ac83bba1c053cb924418f4bac4f60587772f257cc2b2",
+      "new_target_sha256": "0802b2b69686aaff13502749c4e6d0471ba483c2536d76de9f3a11ff95d7fc5e"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/canvas/previewPaneParts/PreviewToolbar.tsx",
+      "public_name": "PreviewToolbar",
+      "owner_package": "PKG-25-UI-READER-PREVIEW-FOCUS",
+      "accepting_commit": "1ff5647f870eaa8f5cd67ea9d1ad41708b3d50a2",
+      "accepting_receipt": "development/notes/ui-reader-preview-focus-20260925.md",
+      "declaration_kind": "function",
+      "old_signature": "export function PreviewToolbar({ versions, selectedVersionSeq, onSelectVersion, onRefresh, restarting, cid, showPointButton, mentionArmed, onArmMention, onDisarmMention, canEdit, editMode, onToggleEdit, onOpenPreview, }: { versions: WorkspaceVersion[]; selectedVersionSeq: number | null; onSelectVersion: (seq: number | null) => void; onRefresh: () => void; restarting: boolean; cid: string | null; showPointButton: boolean; mentionArmed: boolean; onArmMention: () => void; onDisarmMention: () => void; canEdit: boolean; editMode: boolean; onToggleEdit: () => void; onOpenPreview: () => void; })",
+      "new_signature": "export function PreviewToolbar({ versions, selectedVersionSeq, onSelectVersion, onRefresh, restarting, accessExpired = false, cid, showPointButton, mentionArmed, onArmMention, onDisarmMention, canEdit, editMode, onToggleEdit, onOpenPreview, }: { versions: WorkspaceVersion[]; selectedVersionSeq: number | null; onSelectVersion: (seq: number | null) => void; onRefresh: () => void; restarting: boolean; accessExpired?: boolean; cid: string | null; showPointButton: boolean; mentionArmed: boolean; onArmMention: () => void; onDisarmMention: () => void; canEdit: boolean; editMode: boolean; onToggleEdit: () => void; onOpenPreview: () => void; })",
+      "old_target_sha256": "be44c2df0d1bf97b854fd4a25f5a5519be6389e596a9b7f372434b34a3185c0e",
+      "new_target_sha256": "00f9da542c080333a4d902263097e998cb06b49f6daeb62ffd137cb4b0569f9d"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/PreviewLaunchFrame.tsx",
+      "public_name": "PreviewLaunchFrame",
+      "owner_package": "PKG-25-UI-READER-PREVIEW-FOCUS",
+      "accepting_commit": "1ff5647f870eaa8f5cd67ea9d1ad41708b3d50a2",
+      "accepting_receipt": "development/notes/ui-reader-preview-focus-20260925.md",
+      "declaration_kind": "variable",
+      "old_signature": "export const PreviewLaunchFrame = forwardRef<HTMLIFrameElement, PreviewLaunchFrameProps>( function PreviewLaunchFrame(props, forwardedRef) { // The one-time handoff message is intentionally bearer-free. A keyed child // gives every exact launch a fresh browsing context and fresh load gate, so // a late message/load from launch A cannot arm launch B. const launchKey = `${props.launch.url}\\0${props.launch.intent}`; const identityRef = useRef({ launchKey: \"\", identity: \"\" }); if (identityRef.current.launchKey !== launchKey) { frameLaunchCounter = (frameLaunchCounter + 1) % Number.MAX_SAFE_INTEGER; identityRef.current = { launchKey, identity: `preview-launch-${frameLaunchCounter}`, }; } return ( <PreviewLaunchFrameInstance key={identityRef.current.identity} {...props} launchIdentity={identityRef.current.identity} ref={forwardedRef} /> ); }, );",
+      "new_signature": "export const PreviewLaunchFrame = forwardRef<HTMLIFrameElement, PreviewLaunchFrameProps>( function PreviewLaunchFrame(props, forwardedRef) { // The one-time handoff message is intentionally bearer-free. A keyed child // gives every exact launch a fresh browsing context and fresh load gate, so // a late message/load from launch A cannot arm launch B. const launchKey = `${props.launch.url}\\0${props.launch.intent}`; const identityRef = useRef({ launchKey: \"\", identity: \"\" }); if (identityRef.current.launchKey !== launchKey) { frameLaunchCounter = (frameLaunchCounter + 1) % Number.MAX_SAFE_INTEGER; identityRef.current = { launchKey, identity: `preview-launch-${frameLaunchCounter}`, }; } const { onReload, onExpiredChange, ...frameProps } = props; return ( <PreviewAccessBoundary key={identityRef.current.identity} launch={props.launch} onReload={onReload} onExpiredChange={onExpiredChange}> {(accept) => <PreviewLaunchFrameInstance {...frameProps} launchIdentity={identityRef.current.identity} onAccessDeadline={accept} ref={forwardedRef} />} </PreviewAccessBoundary> ); }, );",
+      "old_target_sha256": "beef41adb66b2b3e237a5f9b0f02fad45f1d4c0e9cedab8397be1b835be71e55",
+      "new_target_sha256": "306d836b81ac8904df6e9ed3a67a69ff18faec9ef3abe205166c36d588c0224c"
+    },
+    {
+      "surface": "frontend",
       "path": "frontend/src/types/grounded.ts",
       "public_name": "Passage",
       "declaration_kind": "InterfaceDeclaration",
@@ -34882,19 +35178,6 @@
       "owner_package": "PKG-19-V30-INTEGRATION",
       "accepting_commit": "41cecbab85195f473ac8c4f773f5106efadeab83",
       "accepting_receipt": "2026-07-28/STATUS.md"
-    },
-    {
-      "surface": "frontend",
-      "path": "frontend/src/components/build/canvas/previewPaneParts/PreviewStage.tsx",
-      "public_name": "PreviewStage",
-      "owner_package": "PKG-24-UI-PREVIEW-FOLLOWUP",
-      "accepting_commit": "48784fb6749b23c54f8a24a8fa5895c21e9fec86",
-      "accepting_receipt": "development/notes/ui-preview-live-transport-20260925.md",
-      "declaration_kind": "function",
-      "old_signature": "export function PreviewStage({ frameRef, launch, onFrameLoad, onBootstrapReady, visibleFailure, dataReason, minting, runtimeUnavailable, frameReady, editMode, untrusted, selection, onSteer, onDisarmEdit, onApplyEdit, onRefresh, onDownloadSource, downloadPending, }: { frameRef: MutableRefObject<HTMLIFrameElement | null>; launch: PreviewLaunch | null; onFrameLoad: () => void; onBootstrapReady: () => void; visibleFailure: string | null; dataReason: string | undefined; minting: boolean; runtimeUnavailable: boolean; frameReady: boolean; editMode: boolean; untrusted: boolean; selection: ElementSelectState; onSteer?: (text: string) => void; onDisarmEdit: () => void; onApplyEdit: (instruction: string) => void; onRefresh: () => void; /** Null when there is no conversation to download (the static run view). */ onDownloadSource: (() => void) | null; downloadPending: boolean; })",
-      "new_signature": "export function PreviewStage({ frameRef, launch, onFrameLoad, onBootstrapReady, visibleFailure, dataReason, minting, runtimeUnavailable, frameReady, editMode, untrusted, selection, onSteer, onArmInspect, onDisarmEdit, onApplyEdit, onRefresh, onDownloadSource, downloadPending, }: { frameRef: MutableRefObject<HTMLIFrameElement | null>; launch: PreviewLaunch | null; onFrameLoad: () => void; onBootstrapReady: () => void; visibleFailure: string | null; dataReason: string | undefined; minting: boolean; runtimeUnavailable: boolean; frameReady: boolean; editMode: boolean; untrusted: boolean; selection: ElementSelectState; onSteer?: (text: string) => void; onArmInspect: () => void; onDisarmEdit: () => void; onApplyEdit: (instruction: string) => void; onRefresh: () => void; /** Null when there is no conversation to download (the static run view). */ onDownloadSource: (() => void) | null; downloadPending: boolean; })",
-      "old_target_sha256": "01b0238a5696961f49116d2cf4e5b882f52ecffb1b5fbd7c133c53432bced88c",
-      "new_target_sha256": "9faeecf4f2bfa534b751ac83bba1c053cb924418f4bac4f60587772f257cc2b2"
     },
     {
       "surface": "frontend",
@@ -35028,19 +35311,6 @@
     },
     {
       "surface": "frontend",
-      "path": "frontend/src/components/research/needMoreCardParts/AudioSection.tsx",
-      "public_name": "AudioSectionProps",
-      "owner_package": "PKG-38-UI-FIXES-V51",
-      "accepting_commit": "731f1c29b44c5654df33486fcfe4382ce6de841b",
-      "accepting_receipt": "PKG-38-UI-FIXES-V51: exact source-backed declaration migration",
-      "declaration_kind": "InterfaceDeclaration",
-      "old_signature": "export interface AudioSectionProps { cid: string; /** Selected follow-up seqs to include in the audio (WALK-20). */ followUpSeqs?: number[]; /** Controlled: whether the mode-pick dialog is open (parent drives this * when it needs to insert the include-follow-ups step first). */ modeOpen: boolean; onModeOpenChange: (open: boolean) => void; /** B4: report title/query for a meaningful download filename. */ reportQuery: string; }",
-      "new_signature": "export interface AudioSectionProps { cid: string; /** Selected follow-up seqs to include in the audio (WALK-20). */ followUpSeqs?: number[]; /** Controlled: whether the mode-pick dialog is open (parent drives this * when it needs to insert the include-follow-ups step first). */ modeOpen: boolean; onModeOpenChange: (open: boolean) => void; /** B4: report title/query for a meaningful download filename. */ reportQuery: string; /** Open the mode picker (via the include-follow-ups step when the report has * follow-ups). Owned by the parent because that step is the parent's. */ onRequestGenerate: () => void; }",
-      "old_target_sha256": "c5dfb76da036500c831f5b33c0db99a0283b278db3dd8d2c7d8de01e56b4c8f4",
-      "new_target_sha256": "6ae7808b6a549a990d1a98c823d00abde1c17dfecd84f5b477f932f933a5536e"
-    },
-    {
-      "surface": "frontend",
       "path": "frontend/src/api/deepResearch.ts",
       "public_name": "AudioStreamEvent",
       "owner_package": "PKG-38-UI-FIXES-V51",
@@ -35077,19 +35347,6 @@
       "new_signature": "export interface NeedMoreCardProps { /** The finished report (for client-side MD export + audio). */ report: ReportEvent; /** Conversation ID (for server-side PDF export + future audio endpoint). */ cid: string; /** Callback to submit a follow-up question. */ onFollowUp: (question: string) => void; /** True while a follow-up is being submitted. */ followUpBusy: boolean; /** Post-report follow-up Q&A MessageEvents (WALK-20). When non-empty an * \"Include follow-ups?\" modal is shown before Export / Audio so the user can * choose which pairs to include. Empty list = skip the modal. */ followUps?: MessageEvent[]; /** A press of the same action from the top bar. */ requestedAction?: ReportAction | null; }",
       "old_target_sha256": "b4844db3f4e6ce42f86bb000d762d53abbeebe0e0942c0230e0be5b8bebc5281",
       "new_target_sha256": "bcf506006e93875d19acb0b9d3ce40b027fcc31a75c67333bc8887890fcb0dd2"
-    },
-    {
-      "surface": "frontend",
-      "path": "frontend/src/components/build/canvas/previewPaneParts/usePreviewLaunch.ts",
-      "public_name": "PreviewLaunchState",
-      "owner_package": "PKG-38-UI-FIXES-V51",
-      "accepting_commit": "731f1c29b44c5654df33486fcfe4382ce6de841b",
-      "accepting_receipt": "PKG-38-UI-FIXES-V51: exact source-backed declaration migration",
-      "declaration_kind": "InterfaceDeclaration",
-      "old_signature": "export interface PreviewLaunchState { launch: PreviewLaunch | null; launchKey: string; launchVersionSeq: number | null; minting: boolean; launchFailure: string | null; frameReady: boolean; setFrameReady: (ready: boolean) => void; }",
-      "new_signature": "export interface PreviewLaunchState { launch: PreviewLaunch | null; launchKey: string; launchVersionSeq: number | null; minting: boolean; launchFailure: string | null; /** Reason code for a launch that MINTED FINE but whose frame never handed * back its bootstrap handshake. Separate from `launchFailure` on purpose \u2014 * see `computeVisibleFailure`. */ bootstrapFailure: string | null; /** Hand to `PreviewLaunchFrame` as `onBootstrapReady` to disarm the watchdog. */ onBootstrapReady: () => void; frameReady: boolean; setFrameReady: (ready: boolean) => void; }",
-      "old_target_sha256": "f0976f67ac781244d28645b3c084999da024d7bd992713130eea56c77b0d778b",
-      "new_target_sha256": "a6b15b79a70f9e8a4dd854d8ee8f64de3e99a5845707cc8b8af15456e4995cc1"
     },
     {
       "surface": "frontend",
@@ -35168,19 +35425,6 @@
       "new_signature": "export async function streamReportAudio( cid: string, mode: string, body: string | undefined, onEvent: (ev: AudioStreamEvent) => boolean, force = false, ): Promise<boolean>",
       "old_target_sha256": "6f937524db7838286cdd6a9050ab1a3d9feeb0804170ca8c5dfd94b3156a9949",
       "new_target_sha256": "3c051771e86c695a6db2d38225249ea1d2601da1d0c03e11356bd2734f254b97"
-    },
-    {
-      "surface": "frontend",
-      "path": "frontend/src/components/research/needMoreCardParts/AudioSection.tsx",
-      "public_name": "AudioSection",
-      "owner_package": "PKG-38-UI-FIXES-V51",
-      "accepting_commit": "731f1c29b44c5654df33486fcfe4382ce6de841b",
-      "accepting_receipt": "PKG-38-UI-FIXES-V51: exact source-backed declaration migration",
-      "declaration_kind": "function",
-      "old_signature": "export function AudioSection({ cid, followUpSeqs, modeOpen, onModeOpenChange, reportQuery, }: AudioSectionProps)",
-      "new_signature": "export function AudioSection({ cid, followUpSeqs, modeOpen, onModeOpenChange, reportQuery, onRequestGenerate, }: AudioSectionProps)",
-      "old_target_sha256": "0edc177e48130978eccca7958aeeac5a8cb568f3ce155d8a42fb85652465428f",
-      "new_target_sha256": "a925c86d901b94a36bcddf877e9f72d9e3d8f04d2da898418c8f1851f2d6aa25"
     },
     {
       "surface": "frontend",
