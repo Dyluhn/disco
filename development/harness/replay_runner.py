@@ -213,8 +213,8 @@ async def _main() -> None:
     from harness.cassette import Cassette
 
     root = Path(__file__).resolve().parent / "cassettes"
-    events_path = root / "loop_demo.events.jsonl"
-    cassette_path = root / "loop_demo.cassette.jsonl"
+    events_path = root / "loop_paris_standard_low_v2.events.jsonl"
+    cassette_path = root / "loop_paris_standard_low_v2.cassette.jsonl"
     if not events_path.exists():
         print(f"missing {events_path} — run 'make capture-loop' first", file=sys.stderr)
         raise SystemExit(2)
@@ -223,8 +223,9 @@ async def _main() -> None:
     recorded = load_events(events_path)
     if is_legacy_plan_fixture(recorded):
         print(
-            "legacy plan-gate loop_demo fixture detected; rerun `make capture-loop` "
-            "to capture the current gateless ReportEvent flow",
+            "legacy plan-gate fixture detected; rerun `make capture-loop` "
+            "to capture the current gateless ReportEvent flow "
+            "(the historical loop_demo pair is retained for evidence only)",
             file=sys.stderr,
         )
         raise SystemExit(2)
@@ -245,6 +246,7 @@ async def _main() -> None:
         for d in diffs:
             print(f"  - {d}")
         raise SystemExit(1)
+    cassette.assert_all_consumed()
     print(f"✓ replay reproduced {len(outputs)} output events identically (no regression)")
 
 

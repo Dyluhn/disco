@@ -139,12 +139,17 @@ def test_legacy_plan_fixture_is_detected() -> None:
 
 # ---- full deterministic replay (gated on the captured fixture) --------------
 
-_FIXTURE = Path(__file__).resolve().parents[1] / "cassettes" / "loop_demo.events.jsonl"
+_FIXTURE = (
+    Path(__file__).resolve().parents[1] / "cassettes" / "loop_paris_standard_low_v2.events.jsonl"
+)
+_LEGACY_FIXTURE = Path(__file__).resolve().parents[1] / "cassettes" / "loop_demo.events.jsonl"
 
 
 def _with_reading_checkpoints(recorded_outputs):
     """Apply the captured host-event migration without weakening replay equality."""
-    migration = json.loads(_FIXTURE.with_name("loop_demo.reading-checkpoints.json").read_text())
+    migration = json.loads(
+        _LEGACY_FIXTURE.with_name("loop_demo.reading-checkpoints.json").read_text()
+    )
     before = {row["before_event_id"]: row["events"] for row in migration["insertions"]}
     expected = []
     for event in recorded_outputs:
@@ -170,8 +175,10 @@ async def test_deterministic_replay_reproduces_recorded_events():
     from harness.replay_runner import load_events, replay_conversation
     from harness.runtime import build_replay_runtime
 
-    cassette = Cassette.load(str(_FIXTURE.with_name("loop_demo.cassette.jsonl")))
+    cassette = Cassette.load(str(_FIXTURE.with_name("loop_paris_standard_low_v2.cassette.jsonl")))
     recorded = load_events(_FIXTURE)
+    assert len(recorded) == 304, "versioned current fixture must stay byte-exact (304 events)"
+    assert len(cassette) == 149, "versioned current fixture must stay byte-exact (149 interactions)"
     assert not any(event.kind == EventKind.PLAN for event in recorded), (
         "checked-in fixture must exercise the current gateless protocol; "
         "recapture with make capture-loop"
@@ -188,7 +195,22 @@ async def test_deterministic_replay_reproduces_recorded_events():
         surface="deep_research",
     )
     _, recorded_outputs = split_io(recorded)
-    assert diff_sequences(_with_reading_checkpoints(recorded_outputs), outputs) == []
+    # Strict: the current capture already contains its writing-stage checkpoint
+    # commits, so NO migration is applied here — any divergence is a regression.
+    assert diff_sequences(recorded_outputs, outputs) == []
+    cassette.assert_all_consumed()
+
+
+def test_historical_loop_demo_migration_still_applies():
+    """The preserved loop_demo pair + its reading-checkpoint migration stay coherent.
+
+    History-only: no runtime, no replay. Guards the legacy evidence the current
+    fixture superseded (see loop_paris_standard_low_v2.provenance.json)."""
+    from harness.replay_runner import load_events, split_io
+
+    recorded = load_events(_LEGACY_FIXTURE)
+    _, recorded_outputs = split_io(recorded)
+    assert _with_reading_checkpoints(recorded_outputs) is not None
 
 
 def test_research_replay_ignores_transport_pulses_but_keeps_checkpoint_work():

@@ -115,6 +115,23 @@ class Cassette:
         self._positions[identity] = position + 1
         return values[position]
 
+    def assert_all_consumed(self) -> None:
+        """Fail if any occurrence-keyed recording was never replayed.
+
+        Audit only — matching (`lookup`/`lookup_next`) is unchanged. Reusable
+        rows are construction-time reads (provider identity, environment
+        schema) or position-keyed environment reads whose own scope already
+        asserts full consumption; occurrence rows advance only when replay
+        serves them, so a leftover means replay skipped recorded calls.
+        """
+        leftover = sorted(
+            f"{seam} key={key} consumed={self._positions.get((seam, key), 0)}/{len(values)}"
+            for (seam, key), values in self._ordered.items()
+            if self._positions.get((seam, key), 0) != len(values)
+        )
+        if leftover:
+            raise CassetteMiss("cassette reads left over: " + "; ".join(leftover))
+
     def save(self, path: str | Path) -> None:
         p = Path(path)
         p.parent.mkdir(parents=True, exist_ok=True)
