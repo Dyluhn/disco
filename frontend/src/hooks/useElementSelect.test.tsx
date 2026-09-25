@@ -31,16 +31,24 @@ function resizeHarness() {
     observe: ReturnType<typeof vi.fn>;
     disconnect: ReturnType<typeof vi.fn>;
   }[] = [];
-  vi.stubGlobal("ResizeObserver", class {
+  vi.stubGlobal("ResizeObserver", class implements ResizeObserver {
     observe = vi.fn();
+    unobserve = vi.fn();
     disconnect = vi.fn();
     constructor(callback: ResizeObserverCallback) {
       observers.push({
         observe: this.observe,
         disconnect: this.disconnect,
-        notify: (target) => callback(
-          [{ target } as ResizeObserverEntry], this as unknown as ResizeObserver,
-        ),
+        notify: (target) => {
+          const size = [{ inlineSize: target.clientWidth, blockSize: target.clientHeight }];
+          callback([{
+            target,
+            contentRect: new DOMRect(0, 0, target.clientWidth, target.clientHeight),
+            borderBoxSize: size,
+            contentBoxSize: size,
+            devicePixelContentBoxSize: size,
+          }], this);
+        },
       });
     }
   });
