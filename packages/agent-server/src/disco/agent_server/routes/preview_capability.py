@@ -43,6 +43,7 @@ from ..preview_paths import (
     safe_capability_target_path as _safe_capability_target_path,
 )
 from ..preview_projection import SealedPreviewRuntimeContract
+from ..preview_status import live_preview_identity
 from ..runtime import ConversationRuntime
 from ..workspace_commit import (
     CommittedWorkspaceView,
@@ -192,7 +193,7 @@ async def _live_preview_authority(
     selected_port: int,
 ) -> str | None:
     try:
-        identity = runtime.preview.live_preview_identity(conversation_id)
+        identity = live_preview_identity(runtime.preview.live_session(conversation_id))
     except Exception:  # noqa: BLE001 — lifecycle authority cannot be guessed
         return None
     if identity is None:

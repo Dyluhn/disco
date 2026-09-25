@@ -14,6 +14,8 @@ from disco.agent_server.live_session_directory import LiveSessionDirectory
 from disco.agent_server.preview_manager import PreviewManager
 from disco.agent_server.preview_models import PreviewSession, PreviewStatus
 from disco.agent_server.preview_service import PreviewService
+from disco.agent_server.preview_status import live_preview_identity
+from disco.agent_server.routes import preview_capability
 from disco.agent_server.routes.preview_capability import _canonical_preview_authority
 from disco.agent_server.run_registry import RunResourceRegistry
 from disco.core import ConversationStatus, DeliverableEvent, StatusEvent
@@ -104,8 +106,10 @@ async def _client(state, monkeypatch):
         "Cookie": f"{PREVIEW_COOKIE}={redeemed[0]}",
         "Origin": "http://p2-aaaaaaaa-8000.localhost",
     }
-    state.identity_reads = Mock(wraps=state.service.live_preview_identity)
-    monkeypatch.setattr(state.service, "live_preview_identity", state.identity_reads)
+    state.session_reads = Mock(wraps=state.service.live_session)
+    monkeypatch.setattr(state.service, "live_session", state.session_reads)
+    state.identity_reads = Mock(wraps=live_preview_identity)
+    monkeypatch.setattr(preview_capability, "live_preview_identity", state.identity_reads)
     state.availability = AsyncMock(side_effect=AssertionError("HTTP must not poll status"))
     monkeypatch.setattr(state.service, "preview", state.availability)
     state.owner_reads = AsyncMock(wraps=state.directory.resolve_owned_cid_prefix)
@@ -136,7 +140,8 @@ async def test_live_http_reads_fresh_identity_twice_without_process_probes(
     async with await _client(state, monkeypatch) as client:
         response = await client.post("/api/items", headers=state.headers, content=b"new item")
     assert response.status_code == 201
-    assert state.identity_reads.call_args_list == [call(state.cid), call(state.cid)]
+    assert state.session_reads.call_args_list == [call(state.cid), call(state.cid)]
+    assert state.identity_reads.call_args_list == [call(state.sandbox), call(state.sandbox)]
     assert state.owner_reads.await_args_list == [
         call("aaaaaaaa", "owner-a"),
         call("aaaaaaaa", "owner-a"),
@@ -174,6 +179,7 @@ async def test_live_identity_changes_during_body_never_dispatch(live_identity, m
 
         response = await client.post("/api/items", headers=state.headers, content=body())
     assert response.status_code == 409
+    assert state.session_reads.call_args_list == [call(state.cid), call(state.cid)]
     assert state.identity_reads.call_count == 2
     state.probe.assert_not_awaited()
     state.inside.assert_not_awaited()
@@ -236,7 +242,7 @@ async def test_identity_matches_previous_status_metadata_without_probing(
         else None
     )
     state.probe.reset_mock()
-    assert state.service.live_preview_identity(state.cid) == expected
+    assert live_preview_identity(state.service.live_session(state.cid)) == expected
     state.probe.assert_not_awaited()
     if condition in {"starting", "crashed", "stopped", "disposed"}:
         assert state.manager.canonical_port() is None

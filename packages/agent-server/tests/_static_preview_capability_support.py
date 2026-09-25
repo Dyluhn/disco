@@ -86,7 +86,7 @@ class _StaticRuntime:
             wake_for_preview=self.wake_for_preview,
             ensure_preview=self.ensure_preview,
             preview=self.preview_metadata,
-            live_preview_identity=self.live_preview_identity,
+            live_session=self._live_preview_session,
             resolve_finished_preview_runtime=self._resolve_finished_preview_runtime,
         )
 
@@ -133,8 +133,15 @@ class _StaticRuntime:
             "port": self._target_port or PREVIEW_PORT,
         }
 
-    def live_preview_identity(self, _conversation_id: str) -> tuple[str, int]:
-        return "pv_static_test", self._target_port or PREVIEW_PORT
+    def _live_preview_session(self, _conversation_id: str) -> SimpleNamespace:
+        lifecycle = SimpleNamespace(
+            to_dict=lambda: {
+                "generation": "pv_static_test",
+                "port": self._target_port or PREVIEW_PORT,
+            }
+        )
+        manager = SimpleNamespace(canonical_lifecycle_session=lambda: lifecycle)
+        return SimpleNamespace(_preview_manager=manager)
 
     @property
     def projects(self) -> SimpleNamespace:
