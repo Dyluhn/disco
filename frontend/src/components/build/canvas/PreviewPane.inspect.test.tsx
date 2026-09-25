@@ -37,7 +37,7 @@ async function setup(editable = false) {
   const frame = await screen.findByTitle("Preview") as HTMLIFrameElement;
   return { user: userEvent.setup(), postMessage: vi.spyOn(frame.contentWindow!, "postMessage") };
 }
-const inspect = () => screen.getByRole("button", { name: "Inspect", exact: true });
+const inspect = () => screen.getByRole("button", { name: "Inspect" });
 const point = () => screen.getByRole("button", { name: "Point at element" });
 const edit = () => screen.getByRole("button", { name: /click-to-edit mode/i });
 function select(nonce: string) {
@@ -113,7 +113,7 @@ it("Edit retains its edit box and switching to Point exits both editing and sele
 it("untrusted artifacts expose no Inspect, Point, or Edit controls", () => {
   mount(true, true);
   expect(screen.getByTitle("Static artifact viewer")).toHaveAttribute("sandbox", "");
-  expect(screen.queryByRole("button", { name: "Inspect", exact: true })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Inspect" })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Point at element" })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: /click-to-edit mode/i })).not.toBeInTheDocument();
 });
