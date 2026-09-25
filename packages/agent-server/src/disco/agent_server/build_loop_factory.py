@@ -708,10 +708,12 @@ class BuildLoopFactory:
         old_executor = self._resources.pop_executor(conversation_id)
         old_sandbox = old_executor.sandbox if old_executor is not None else None
         old_pending = self._resources.pop_pending_session(conversation_id)
-        if old_sandbox is not None:
+        # Contract/model changes can already have parked the executor's session.
+        # Adopt that owner too; dropping it orphans its running sealed Preview.
+        if old_sandbox is not None or old_pending is not None:
             self._resources.set_pending_session(
                 conversation_id,
-                cast(SandboxSession, old_sandbox),
+                cast(SandboxSession, old_sandbox if old_sandbox is not None else old_pending),
             )
         self._contexts.begin_compose(conversation_id, snapshot)
         try:
