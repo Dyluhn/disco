@@ -6,6 +6,7 @@ code and prose disagree, they win:
 
 - [`basis-of-design.md`](./docs/contracts/basis-of-design.md) — the cornerstone design document.
 - [`event-state-contract.md`](./docs/contracts/event-state-contract.md) — the spine's binding contract.
+- [API additions](./docs/api-additions.md) — saved Standard Search answers and workflow schedule management.
 
 Hosted CI runs the deterministic release gates. Before opening a PR, run the
 local equivalents for the area you touched; the `Makefile` remains the fastest
