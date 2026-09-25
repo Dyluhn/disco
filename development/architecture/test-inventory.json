@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "48784fb6749b23c54f8a24a8fa5895c21e9fec86",
+  "source_identity": "65c0cea8e7273371f89118e8bda592a470c81ad8",
   "collected": {
     "counts": {
-      "packages": 13268,
+      "packages": 13274,
       "harness": 1593,
       "integrations": 9,
       "tests": 468
     },
-    "total": 15338,
+    "total": 15344,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -10041,6 +10041,12 @@
         "packages/retrieval/tests/test_review_recovery_contract.py::test_provider_failure_during_feedback_keeps_the_prior_usable_claim_judgment",
         "packages/retrieval/tests/test_review_recovery_contract.py::test_supported_or_explicitly_qualified_claims_do_not_gain_repair_findings[qualified-met]",
         "packages/retrieval/tests/test_review_recovery_contract.py::test_supported_or_explicitly_qualified_claims_do_not_gain_repair_findings[supported-met]",
+        "packages/retrieval/tests/test_review_reserve.py::test_initial_assessment_overflow_preserves_changed_draft_review_across_resume[after_repair]",
+        "packages/retrieval/tests/test_review_reserve.py::test_initial_assessment_overflow_preserves_changed_draft_review_across_resume[before_repair]",
+        "packages/retrieval/tests/test_review_reserve.py::test_initial_assessment_overflow_preserves_changed_draft_review_across_resume[final_reserved]",
+        "packages/retrieval/tests/test_review_reserve.py::test_initial_assessment_overflow_preserves_changed_draft_review_across_resume[legacy_final_check]",
+        "packages/retrieval/tests/test_review_reserve.py::test_legacy_exhausted_reserve_never_creates_unreviewable_repair[final_check]",
+        "packages/retrieval/tests/test_review_reserve.py::test_legacy_exhausted_reserve_never_creates_unreviewable_repair[repair]",
         "packages/retrieval/tests/test_review_signal_handoff.py::test_ignored_false_positive_stays_diagnostic_without_a_reask_or_repair",
         "packages/retrieval/tests/test_review_signal_handoff.py::test_later_verifier_signals_are_not_silently_hidden_after_twelve_claims",
         "packages/retrieval/tests/test_review_signal_handoff.py::test_negative_reviewer_judgment_reaches_scoped_repair_with_no_decisions_left",
@@ -15359,9 +15365,9 @@
     }
   },
   "mapping_static": {
-    "identity": "48784fb6749b23c54f8a24a8fa5895c21e9fec86",
-    "python_test_file_count": 1031,
-    "python_static_test_id_count": 12196,
+    "identity": "65c0cea8e7273371f89118e8bda592a470c81ad8",
+    "python_test_file_count": 1032,
+    "python_static_test_id_count": 12198,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -16154,6 +16160,7 @@
       "packages/retrieval/tests/test_review_evidence_retention.py",
       "packages/retrieval/tests/test_review_output_completion.py",
       "packages/retrieval/tests/test_review_recovery_contract.py",
+      "packages/retrieval/tests/test_review_reserve.py",
       "packages/retrieval/tests/test_review_signal_handoff.py",
       "packages/retrieval/tests/test_review_source_references.py",
       "packages/retrieval/tests/test_search_context_budget.py",
@@ -25528,6 +25535,8 @@
       "packages/retrieval/tests/test_review_recovery_contract.py::test_passing_summary_cannot_drop_negative_assessment_from_scoped_repair",
       "packages/retrieval/tests/test_review_recovery_contract.py::test_provider_failure_during_feedback_keeps_the_prior_usable_claim_judgment",
       "packages/retrieval/tests/test_review_recovery_contract.py::test_supported_or_explicitly_qualified_claims_do_not_gain_repair_findings",
+      "packages/retrieval/tests/test_review_reserve.py::test_initial_assessment_overflow_preserves_changed_draft_review_across_resume",
+      "packages/retrieval/tests/test_review_reserve.py::test_legacy_exhausted_reserve_never_creates_unreviewable_repair",
       "packages/retrieval/tests/test_review_signal_handoff.py::test_ignored_false_positive_stays_diagnostic_without_a_reask_or_repair",
       "packages/retrieval/tests/test_review_signal_handoff.py::test_later_verifier_signals_are_not_silently_hidden_after_twelve_claims",
       "packages/retrieval/tests/test_review_signal_handoff.py::test_negative_reviewer_judgment_reaches_scoped_repair_with_no_decisions_left",
@@ -48076,6 +48085,38 @@
           "packages/core/tests/test_w39_shell_escalation.py::test_notice_still_never_skips_and_stays_advisory",
           "packages/core/tests/test_w39_shell_escalation.py::test_shell_notice_is_repetition_aware",
           "packages/core/tests/test_w39_shell_escalation.py::test_shell_notice_names_the_consequence"
+        ],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-24-RESEARCH-REVIEW-RESERVE",
+      "root": "packages",
+      "source_identity_before": "48784fb6749b23c54f8a24a8fa5895c21e9fec86",
+      "source_identity_after": "65c0cea8e7273371f89118e8bda592a470c81ad8",
+      "collected_roots": {
+        "packages": {
+          "before_count": 13268,
+          "after_count": 13274,
+          "added_ids": [
+            "packages/retrieval/tests/test_review_reserve.py::test_initial_assessment_overflow_preserves_changed_draft_review_across_resume[after_repair]",
+            "packages/retrieval/tests/test_review_reserve.py::test_initial_assessment_overflow_preserves_changed_draft_review_across_resume[before_repair]",
+            "packages/retrieval/tests/test_review_reserve.py::test_initial_assessment_overflow_preserves_changed_draft_review_across_resume[final_reserved]",
+            "packages/retrieval/tests/test_review_reserve.py::test_initial_assessment_overflow_preserves_changed_draft_review_across_resume[legacy_final_check]",
+            "packages/retrieval/tests/test_review_reserve.py::test_legacy_exhausted_reserve_never_creates_unreviewable_repair[final_check]",
+            "packages/retrieval/tests/test_review_reserve.py::test_legacy_exhausted_reserve_never_creates_unreviewable_repair[repair]"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [
+          "packages/retrieval/tests/test_review_reserve.py"
+        ],
+        "python_static_test_ids": [
+          "packages/retrieval/tests/test_review_reserve.py::test_initial_assessment_overflow_preserves_changed_draft_review_across_resume",
+          "packages/retrieval/tests/test_review_reserve.py::test_legacy_exhausted_reserve_never_creates_unreviewable_repair"
         ],
         "typescript_test_files": [],
         "typescript_static_test_ids": [],
