@@ -2,7 +2,7 @@ import { useMemo, useRef, useState, useEffect } from "react";
 import { deriveDeliverable, deriveFiles, deriveSrcDoc } from "@/lib/buildTrace";
 import { mintPathPreviewLaunch, type PreviewLaunch } from "@/api/canvas";
 import { useElementSelect } from "@/hooks/useElementSelect";
-import { SelectionOverlay } from "@/components/build/canvas/SelectionOverlay";
+import { SelectionOverlay, SelectionToolbar } from "@/components/build/canvas/SelectionOverlay";
 import { formatSelectionContext } from "@/lib/resolvers/appResolver";
 import { SELECTION_AGENT_SCRIPT } from "@/lib/selectionAgent";
 import { PreviewLaunchFrame } from "@/components/PreviewLaunchFrame";
@@ -115,6 +115,12 @@ export function ArtifactsPane({
               <span className="font-ui text-text-faint">scripts disabled (untrusted)</span>
             )}
           </div>
+          <SelectionToolbar
+            armed={artifactArmed}
+            untrusted={untrusted}
+            onArm={artifactArm}
+            onDisarm={artifactDisarm}
+          />
           {/* §4.1 C-EDIT-1: relative wrapper for SelectionOverlay positioning. */}
           <div className="relative min-h-0 flex-1">
             {staticPreviewSrc ? (
@@ -137,6 +143,7 @@ export function ArtifactsPane({
               />
             )}
             <SelectionOverlay
+              showToolbar={false}
               armed={artifactArmed}
               untrusted={untrusted}
               selection={artifactSelection}
