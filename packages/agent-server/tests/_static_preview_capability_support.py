@@ -86,6 +86,7 @@ class _StaticRuntime:
             wake_for_preview=self.wake_for_preview,
             ensure_preview=self.ensure_preview,
             preview=self.preview_metadata,
+            live_preview_identity=self.live_preview_identity,
             resolve_finished_preview_runtime=self._resolve_finished_preview_runtime,
         )
 
@@ -131,6 +132,9 @@ class _StaticRuntime:
             "generation": "pv_static_test",
             "port": self._target_port or PREVIEW_PORT,
         }
+
+    def live_preview_identity(self, _conversation_id: str) -> tuple[str, int]:
+        return "pv_static_test", self._target_port or PREVIEW_PORT
 
     @property
     def projects(self) -> SimpleNamespace:

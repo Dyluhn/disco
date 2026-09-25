@@ -192,12 +192,13 @@ async def _live_preview_authority(
     selected_port: int,
 ) -> str | None:
     try:
-        metadata = await runtime.preview.preview(conversation_id)
+        identity = runtime.preview.live_preview_identity(conversation_id)
     except Exception:  # noqa: BLE001 — lifecycle authority cannot be guessed
         return None
-    generation = metadata.get("generation") if isinstance(metadata, dict) else None
-    metadata_port = metadata.get("port") if isinstance(metadata, dict) else None
-    if not isinstance(generation, str) or not generation or metadata_port != selected_port:
+    if identity is None:
+        return None
+    generation, metadata_port = identity
+    if metadata_port != selected_port:
         return None
     entry = _selected_app_entry(events, version=None)
     return _preview_authority_label(

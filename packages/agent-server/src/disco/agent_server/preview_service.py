@@ -123,6 +123,10 @@ class PreviewService:
 
         return self._live_sessions.live_session(conversation_id)
 
+    def live_preview_identity(self, conversation_id: str) -> tuple[str, int] | None:
+        """Read the current managed generation/port, without probing availability."""
+        return self._runtime_projection.live_preview_identity(conversation_id)
+
     def _live_browser_enabled(self) -> bool:
         return self._runtime_projection.live_browser_enabled()
 

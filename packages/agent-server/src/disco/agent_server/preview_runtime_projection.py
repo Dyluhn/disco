@@ -58,6 +58,20 @@ class PreviewRuntimeProjection:
         except Exception:  # noqa: BLE001 — config unavailable ⇒ feature OFF
             return False
 
+    def live_preview_identity(self, conversation_id: str) -> tuple[str, int] | None:
+        """Read current lifecycle identity without the availability/process probe.
+
+        This is not a health verdict. Request dispatch still validates the owned
+        session and exact servable manager generation after collecting the body.
+        """
+        session = self._live_sessions.live_session(conversation_id)
+        manager = getattr(session, "_preview_manager", None) if session is not None else None
+        metadata, _ = managed_preview_metadata(manager)
+        generation, port = metadata["generation"], metadata["port"]
+        if not isinstance(generation, str) or not generation or not isinstance(port, int):
+            return None
+        return generation, port
+
     def preview_target_port(self, conversation_id: str) -> int | None:
         session = self._live_sessions.live_session(conversation_id)
         manager = getattr(session, "_preview_manager", None) if session is not None else None
