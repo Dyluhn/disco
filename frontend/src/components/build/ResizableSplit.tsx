@@ -24,6 +24,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { PanelRightClose, PanelRightOpen, GripVertical, X } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { useMobileInspector } from "./useMobileInspector";
+import { useInspectorKeyboardResize } from "./useInspectorKeyboardResize";
 
 const STORAGE_KEY = "pmx.build.inspectorWidth";
 const COLLAPSED_KEY = "pmx.build.inspectorCollapsed";
@@ -67,6 +68,10 @@ export function ResizableSplit({
   // Mobile-only sheet visibility — deliberately NOT persisted (unlike `collapsed`
   // above): every run/visit starts on the chat pane, the moment-to-moment view.
   const mobile = useMobileInspector(containerRef, collapsed);
+  const keyboardResize = useInspectorKeyboardResize({
+    containerRef, inspectorRef: mobile.inspectorRef, fraction: inspectorFrac,
+    onFractionChange: setInspectorFrac, minChat: MIN_CHAT_PX, minInspector: MIN_INSPECTOR_PX,
+  });
 
   // Persist state changes (debounced naturally — only on commit, not every move).
   useEffect(() => {
@@ -186,6 +191,11 @@ export function ResizableSplit({
           aria-label="Resize inspector pane"
           tabIndex={0}
           onPointerDown={onPointerDown}
+          onKeyDown={keyboardResize.onKeyDown}
+          aria-valuenow={keyboardResize.valueNow}
+          aria-valuemin={keyboardResize.valueMin}
+          aria-valuemax={keyboardResize.valueMax}
+          aria-valuetext={keyboardResize.valueText}
           className={cn(
             "group relative hidden shrink-0 cursor-col-resize bg-hairline transition-colors lg:flex lg:w-px lg:items-center lg:justify-center hover:bg-accent",
             dragging && "bg-accent",

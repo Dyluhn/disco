@@ -228,3 +228,110 @@ describe("ResizableSplit mobile inspector", () => {
     expect(document.body.style.userSelect).toBe("");
   });
 });
+
+describe("ResizableSplit keyboard resizing", () => {
+  function desktopFixture(actualInitialWidth?: number) {
+    desktop = true;
+    let notify = () => {};
+    const observe = vi.fn();
+    const disconnect = vi.fn();
+    vi.stubGlobal("ResizeObserver", class {
+      constructor(callback: () => void) { notify = callback; }
+      observe = observe;
+      disconnect = disconnect;
+    });
+    const view = fixture();
+    const sheet = screen.getByRole("region", { name: "Inspector" });
+    const container = sheet.parentElement!;
+    const initialStyle = sheet.style.getPropertyValue("--ins-w");
+    let total = 1000;
+    const readContainer = vi.spyOn(container, "getBoundingClientRect").mockImplementation(() => ({ width: total, right: total } as DOMRect));
+    vi.spyOn(sheet, "getBoundingClientRect").mockImplementation(() => {
+      const style = sheet.style.getPropertyValue("--ins-w");
+      const width = style === initialStyle && actualInitialWidth !== undefined
+        ? actualInitialWidth
+        : Math.min(Math.max(total * parseFloat(style) / 100, 280), Math.max(total - 320, 280));
+      return { width: total > 0 ? width : 0 } as DOMRect;
+    });
+    act(notify);
+    return {
+      ...view, sheet, container, observe, disconnect, readContainer,
+      handle: screen.getByRole("separator", { name: "Resize inspector pane" }),
+      resizeContainer(width: number, viaWindow = false) {
+        total = width;
+        act(() => { if (viaWindow) window.dispatchEvent(new Event("resize")); else notify(); });
+      },
+    };
+  }
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("uses actual rendered width for arrow keys and exposes current pixel ARIA values", async () => {
+    const user = userEvent.setup();
+    const { handle } = desktopFixture(460); // Saved 58% is not the rendered width.
+    expect(handle).toHaveAttribute("aria-valuenow", "460");
+    expect(handle).toHaveAttribute("aria-valuemin", "280");
+    expect(handle).toHaveAttribute("aria-valuemax", "680");
+    handle.focus();
+    await user.keyboard("{ArrowLeft}{ArrowLeft}{ArrowRight}");
+    expect(handle).toHaveFocus();
+    expect(handle).toHaveAttribute("aria-valuenow", "484");
+    expect(handle).toHaveAttribute("aria-valuetext", "484 pixels inspector width");
+    expect(Number(localStorage.getItem("pmx.build.inspectorWidth"))).toBeCloseTo(0.484);
+  });
+
+  it("clamps Home, End, and repeated arrows to pointer limits and persists across remount", async () => {
+    const user = userEvent.setup();
+    const first = desktopFixture();
+    first.handle.focus();
+    await user.keyboard("{Home}{ArrowRight}{ArrowRight}");
+    expect(first.handle).toHaveAttribute("aria-valuenow", "280");
+    await user.keyboard("{End}{ArrowLeft}{ArrowLeft}");
+    expect(first.handle).toHaveAttribute("aria-valuenow", "680");
+    expect(Number(localStorage.getItem("pmx.build.inspectorWidth"))).toBeCloseTo(0.68);
+    first.unmount();
+    const second = desktopFixture();
+    expect(second.handle).toHaveAttribute("aria-valuenow", "680");
+    expect(parseFloat(second.sheet.style.getPropertyValue("--ins-w"))).toBeCloseTo(68);
+  });
+
+  it("refreshes bounds for container and window resizing and cleans both subscriptions", () => {
+    const view = desktopFixture();
+    expect(view.observe).toHaveBeenCalledWith(view.container);
+    expect(view.observe).toHaveBeenCalledWith(view.sheet);
+    view.resizeContainer(800);
+    expect(view.handle).toHaveAttribute("aria-valuenow", "464");
+    expect(view.handle).toHaveAttribute("aria-valuemax", "480");
+    view.resizeContainer(1200, true);
+    expect(view.handle).toHaveAttribute("aria-valuenow", "696");
+    expect(view.handle).toHaveAttribute("aria-valuemax", "880");
+    view.resizeContainer(500);
+    expect(view.handle).toHaveAttribute("aria-valuenow", "280");
+    expect(view.handle).toHaveAttribute("aria-valuemin", "280");
+    expect(view.handle).toHaveAttribute("aria-valuemax", "280");
+    view.unmount();
+    expect(view.disconnect).toHaveBeenCalledTimes(1);
+    view.readContainer.mockClear();
+    window.dispatchEvent(new Event("resize"));
+    expect(view.readContainer).not.toHaveBeenCalled();
+  });
+
+  it("does not consume unrelated shortcuts or write invalid geometry and restores focus on mobile resize", async () => {
+    const user = userEvent.setup();
+    const view = desktopFixture();
+    view.handle.focus();
+    const original = localStorage.getItem("pmx.build.inspectorWidth");
+    expect(fireEvent.keyDown(view.handle, { key: "ArrowLeft", ctrlKey: true })).toBe(true);
+    expect(fireEvent.keyDown(view.handle, { key: "ArrowDown" })).toBe(true);
+    view.resizeContainer(0);
+    expect(fireEvent.keyDown(view.handle, { key: "End" })).toBe(true);
+    expect(localStorage.getItem("pmx.build.inspectorWidth")).toBe(original);
+    expect(view.handle).not.toHaveAttribute("aria-valuenow");
+    view.resizeContainer(1000);
+    await user.keyboard("{ArrowLeft}");
+    expect(view.handle).toHaveAttribute("aria-valuenow", "604");
+    resize(false);
+    expect(screen.getByRole("button", { name: OPEN })).toHaveFocus();
+    expect(view.sheet).toHaveAttribute("inert");
+  });
+});
