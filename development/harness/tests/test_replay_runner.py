@@ -140,7 +140,7 @@ def test_legacy_plan_fixture_is_detected() -> None:
 # ---- full deterministic replay (gated on the captured fixture) --------------
 
 _FIXTURE = (
-    Path(__file__).resolve().parents[1] / "cassettes" / "loop_paris_standard_low_v3.events.jsonl"
+    Path(__file__).resolve().parents[1] / "cassettes" / "loop_paris_standard_low_v4.events.jsonl"
 )
 _LEGACY_FIXTURE = Path(__file__).resolve().parents[1] / "cassettes" / "loop_demo.events.jsonl"
 
@@ -165,12 +165,12 @@ def _with_reading_checkpoints(recorded_outputs):
     return expected
 
 
-_CASE = "loop_paris_standard_low_v3"
+_CASE = "loop_paris_standard_low_v4"
 _DEPTH = "standard_deep"
 _PROVENANCE = (
     Path(__file__).resolve().parents[1]
     / "cassettes"
-    / ("loop_paris_standard_low_v3.provenance.json")
+    / ("loop_paris_standard_low_v4.provenance.json")
 )
 
 
@@ -196,10 +196,10 @@ async def test_deterministic_replay_reproduces_recorded_events():
     assert provenance["case"] == _CASE and provenance["cid"] == _CASE
     assert provenance["depth"] == _DEPTH
     assert provenance["query"] == "What is the capital of France and roughly its population?"
-    cassette = Cassette.load(str(_FIXTURE.with_name("loop_paris_standard_low_v3.cassette.jsonl")))
+    cassette = Cassette.load(str(_FIXTURE.with_name("loop_paris_standard_low_v4.cassette.jsonl")))
     recorded = load_events(_FIXTURE)
-    assert len(recorded) == 293, "versioned current fixture must stay byte-exact (293 events)"
-    assert len(cassette) == 129, "versioned current fixture must stay byte-exact (129 interactions)"
+    assert len(recorded) == 286, "versioned current fixture must stay byte-exact (286 events)"
+    assert len(cassette) == 131, "versioned current fixture must stay byte-exact (131 interactions)"
     for name, expected in provenance["artifact_sha256"].items():
         actual = _sha256(_FIXTURE.with_name(name))
         assert actual == expected, f"{name} diverged from provenance seal"
@@ -248,6 +248,27 @@ def test_historical_loop_paris_standard_low_v2_integrity():
     assert provenance["case"] == provenance["cid"] == "loop_paris_standard_low_v2"
     assert len(load_events(root / "loop_paris_standard_low_v2.events.jsonl")) == 304
     assert len(Cassette.load(root / "loop_paris_standard_low_v2.cassette.jsonl")) == 149
+    for name, expected in provenance["artifact_sha256"].items():
+        assert _sha256(root / name) == expected
+
+
+def test_historical_loop_paris_standard_low_v3_integrity():
+    """Preserve the genuine pre-selector capture without relabeling its requests."""
+    from harness.cassette import Cassette
+    from harness.replay_runner import load_events
+
+    root = _FIXTURE.parent
+    seals = {
+        "events.jsonl": "82104a3171f690a7f3b474c40334e2753e01ef472bb7c3afc525d08d7c31bed1",
+        "cassette.jsonl": "bb593cd7adfff28c727967c1a76cf6a3e28003d4cd187bb2814e71700aad824b",
+        "provenance.json": "3216cdb25bb2b7028d38fa7ba36f2e9a430acfc93369ecc8c8ff93a77cc08e6c",
+    }
+    for suffix, expected in seals.items():
+        assert _sha256(root / f"loop_paris_standard_low_v3.{suffix}") == expected
+    provenance = json.loads((root / "loop_paris_standard_low_v3.provenance.json").read_text())
+    assert provenance["case"] == provenance["cid"] == "loop_paris_standard_low_v3"
+    assert len(load_events(root / "loop_paris_standard_low_v3.events.jsonl")) == 293
+    assert len(Cassette.load(root / "loop_paris_standard_low_v3.cassette.jsonl")) == 129
     for name, expected in provenance["artifact_sha256"].items():
         assert _sha256(root / name) == expected
 
