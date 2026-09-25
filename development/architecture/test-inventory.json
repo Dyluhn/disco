@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "1ff5647f870eaa8f5cd67ea9d1ad41708b3d50a2",
+  "source_identity": "a61ff2fecfd01432d282c271a53dbc725b228662",
   "collected": {
     "counts": {
-      "packages": 13327,
-      "harness": 1594,
+      "packages": 13335,
+      "harness": 1595,
       "integrations": 9,
       "tests": 468
     },
-    "total": 15398,
+    "total": 15407,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -10471,6 +10471,14 @@
         "packages/retrieval/tests/test_table_caption_grounding.py::test_only_a_standalone_colon_introduction_supplies_table_context[An unrelated fact [[source]].]",
         "packages/retrieval/tests/test_table_caption_grounding.py::test_only_a_standalone_colon_introduction_supplies_table_context[First prose line\\nLast prose line [[source]]:]",
         "packages/retrieval/tests/test_table_caption_grounding.py::test_only_a_standalone_colon_introduction_supplies_table_context[No source supplied:]",
+        "packages/retrieval/tests/test_table_evidence_focus.py::test_captured_population_row_reaches_nli_without_overruling_its_label[contradict-True-contradicted]",
+        "packages/retrieval/tests/test_table_evidence_focus.py::test_captured_population_row_reaches_nli_without_overruling_its_label[entail-True-supported]",
+        "packages/retrieval/tests/test_table_evidence_focus.py::test_captured_population_row_reaches_nli_without_overruling_its_label[neutral-False-unavailable]",
+        "packages/retrieval/tests/test_table_evidence_focus.py::test_captured_population_row_reaches_nli_without_overruling_its_label[neutral-True-unresolved]",
+        "packages/retrieval/tests/test_table_evidence_focus.py::test_each_table_row_keeps_its_own_entity_values_and_citations",
+        "packages/retrieval/tests/test_table_evidence_focus.py::test_empty_cells_do_not_borrow_another_row_or_neighboring_prose",
+        "packages/retrieval/tests/test_table_evidence_focus.py::test_nonempty_source_and_zero_values_remain_searchable",
+        "packages/retrieval/tests/test_table_evidence_focus.py::test_prose_still_selects_using_its_unchanged_hypothesis",
         "packages/retrieval/tests/test_text_match.py::test_a_hyphen_is_never_ignored_because_it_changes_the_number",
         "packages/retrieval/tests/test_text_match.py::test_a_phrase_the_text_does_not_contain_is_not_found",
         "packages/retrieval/tests/test_text_match.py::test_a_soft_hyphen_and_a_typographic_dash_do_not_hide_a_phrase",
@@ -14789,6 +14797,7 @@
         "harness/tests/test_replay_runner.py::test_diff_identical_sequences_is_empty",
         "harness/tests/test_replay_runner.py::test_historical_loop_demo_migration_still_applies",
         "harness/tests/test_replay_runner.py::test_historical_loop_paris_standard_low_v2_integrity",
+        "harness/tests/test_replay_runner.py::test_historical_loop_paris_standard_low_v3_integrity",
         "harness/tests/test_replay_runner.py::test_legacy_plan_fixture_is_detected",
         "harness/tests/test_replay_runner.py::test_normalize_strips_volatile_fields",
         "harness/tests/test_replay_runner.py::test_observation_action_id_is_volatile",
@@ -15419,9 +15428,9 @@
     }
   },
   "mapping_static": {
-    "identity": "1ff5647f870eaa8f5cd67ea9d1ad41708b3d50a2",
-    "python_test_file_count": 1035,
-    "python_static_test_id_count": 12214,
+    "identity": "a61ff2fecfd01432d282c271a53dbc725b228662",
+    "python_test_file_count": 1036,
+    "python_static_test_id_count": 12220,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -16244,6 +16253,7 @@
       "packages/retrieval/tests/test_synthesis_repair.py",
       "packages/retrieval/tests/test_table_blocks.py",
       "packages/retrieval/tests/test_table_caption_grounding.py",
+      "packages/retrieval/tests/test_table_evidence_focus.py",
       "packages/retrieval/tests/test_text_match.py",
       "packages/retrieval/tests/test_think_strip.py",
       "packages/retrieval/tests/test_unread_discovery_context.py",
@@ -17597,6 +17607,7 @@
       "harness/tests/test_replay_runner.py::test_diff_identical_sequences_is_empty",
       "harness/tests/test_replay_runner.py::test_historical_loop_demo_migration_still_applies",
       "harness/tests/test_replay_runner.py::test_historical_loop_paris_standard_low_v2_integrity",
+      "harness/tests/test_replay_runner.py::test_historical_loop_paris_standard_low_v3_integrity",
       "harness/tests/test_replay_runner.py::test_legacy_plan_fixture_is_detected",
       "harness/tests/test_replay_runner.py::test_normalize_strips_volatile_fields",
       "harness/tests/test_replay_runner.py::test_observation_action_id_is_volatile",
@@ -25885,6 +25896,11 @@
       "packages/retrieval/tests/test_table_caption_grounding.py::test_caption_does_not_override_independent_row_verification",
       "packages/retrieval/tests/test_table_caption_grounding.py::test_explicit_row_citation_overrides_caption_and_unknown_caption_stays_unresolved",
       "packages/retrieval/tests/test_table_caption_grounding.py::test_only_a_standalone_colon_introduction_supplies_table_context",
+      "packages/retrieval/tests/test_table_evidence_focus.py::test_captured_population_row_reaches_nli_without_overruling_its_label",
+      "packages/retrieval/tests/test_table_evidence_focus.py::test_each_table_row_keeps_its_own_entity_values_and_citations",
+      "packages/retrieval/tests/test_table_evidence_focus.py::test_empty_cells_do_not_borrow_another_row_or_neighboring_prose",
+      "packages/retrieval/tests/test_table_evidence_focus.py::test_nonempty_source_and_zero_values_remain_searchable",
+      "packages/retrieval/tests/test_table_evidence_focus.py::test_prose_still_selects_using_its_unchanged_hypothesis",
       "packages/retrieval/tests/test_text_match.py::test_a_hyphen_is_never_ignored_because_it_changes_the_number",
       "packages/retrieval/tests/test_text_match.py::test_a_phrase_the_text_does_not_contain_is_not_found",
       "packages/retrieval/tests/test_text_match.py::test_a_soft_hyphen_and_a_typographic_dash_do_not_hide_a_phrase",
@@ -28675,8 +28691,8 @@
       "tests/unbiased_gate/test_authorB_models_imagegen.py::test_w50_slides_degrade_to_image_less_when_image_backend_unconfigured",
       "tests/unbiased_gate/test_authorB_models_imagegen.py::test_w50_unconfigured_image_backend_fails_loudly_instead_of_procedural_fallback"
     ],
-    "typescript_test_file_count": 346,
-    "typescript_static_test_id_count": 1761,
+    "typescript_test_file_count": 347,
+    "typescript_static_test_id_count": 1773,
     "typescript_test_files": [
       "frontend/e2e-full/scenarios/click-provenance.smoke.spec.ts",
       "frontend/e2e-full/scenarios/per-surface.full.spec.ts",
@@ -28841,6 +28857,7 @@
       "frontend/src/components/build/ImportProjectDialog.test.tsx",
       "frontend/src/components/build/PlanPanel.test.tsx",
       "frontend/src/components/build/QuestionsV2Panel.test.tsx",
+      "frontend/src/components/build/ResizableSplit.test.tsx",
       "frontend/src/components/build/SelfHostPanel.test.tsx",
       "frontend/src/components/build/StreamingFile.test.tsx",
       "frontend/src/components/build/TweakPanel.test.tsx",
@@ -29602,6 +29619,18 @@
       "frontend/src/components/build/PlanPanel.test.tsx::toggles and keeps the user's manual choice for the component session",
       "frontend/src/components/build/QuestionsV2Panel.test.tsx::always includes the required fallback options",
       "frontend/src/components/build/QuestionsV2Panel.test.tsx::renders options plus free text and submits both",
+      "frontend/src/components/build/ResizableSplit.test.tsx::clamps Home, End, and repeated arrows to pointer limits and persists across remount",
+      "frontend/src/components/build/ResizableSplit.test.tsx::does not consume unrelated shortcuts or write invalid geometry and restores focus on mobile resize",
+      "frontend/src/components/build/ResizableSplit.test.tsx::does not move shell or chat focus when the viewport changes",
+      "frontend/src/components/build/ResizableSplit.test.tsx::honors persisted desktop collapse when leaving mobile and focuses the surviving expand control",
+      "frontend/src/components/build/ResizableSplit.test.tsx::keeps a still-visible inspector child's focus on desktop and restores mobile chat on return",
+      "frontend/src/components/build/ResizableSplit.test.tsx::keeps one inspector mount and its state across closing and both breakpoints",
+      "frontend/src/components/build/ResizableSplit.test.tsx::moves a mobile-only Close control to the desktop collapse control on resize",
+      "frontend/src/components/build/ResizableSplit.test.tsx::moves keyboard focus into the sheet and makes only covered chat inert",
+      "frontend/src/components/build/ResizableSplit.test.tsx::preserves desktop width clamps, pointer cleanup, and collapse persistence",
+      "frontend/src/components/build/ResizableSplit.test.tsx::refreshes bounds for container and window resizing and cleans both subscriptions",
+      "frontend/src/components/build/ResizableSplit.test.tsx::respects an editor's consumed Escape and removes listeners on unmount",
+      "frontend/src/components/build/ResizableSplit.test.tsx::uses actual rendered width for arrow keys and exposes current pixel ARIA values",
       "frontend/src/components/build/SelfHostPanel.test.tsx::leads with plain language and demotes the detector diagnostic",
       "frontend/src/components/build/SelfHostPanel.test.tsx::offers ONLY the 'Download source' action (no command, no other buttons)",
       "frontend/src/components/build/SelfHostPanel.test.tsx::offers a working 'Download source' trigger",
@@ -32776,8 +32805,8 @@
         ]
       }
     },
-    "vitest_ids": 1813,
-    "vitest_files": 268,
+    "vitest_ids": 1835,
+    "vitest_files": 269,
     "vitest_ids_list": [
       "frontend/src/App.moderesume.test.tsx::A2 \u2014 fresh sessions and resume targets > New preserves the active mode, then a mode chip lands on that mode's splash",
       "frontend/src/App.moderesume.test.tsx::A2 \u2014 fresh sessions and resume targets > does not resume a just-killed conversation id from the mode chip",
@@ -33297,6 +33326,22 @@
       "frontend/src/components/build/PlanPanel.test.tsx::PlanPanel \u2014 no-steps render > toggles and keeps the user's manual choice for the component session",
       "frontend/src/components/build/QuestionsV2Panel.test.tsx::QuestionsV2Panel > always includes the required fallback options",
       "frontend/src/components/build/QuestionsV2Panel.test.tsx::QuestionsV2Panel > renders options plus free text and submits both",
+      "frontend/src/components/build/ResizableSplit.test.tsx::ResizableSplit keyboard resizing > clamps Home, End, and repeated arrows to pointer limits and persists across remount",
+      "frontend/src/components/build/ResizableSplit.test.tsx::ResizableSplit keyboard resizing > does not consume unrelated shortcuts or write invalid geometry and restores focus on mobile resize",
+      "frontend/src/components/build/ResizableSplit.test.tsx::ResizableSplit keyboard resizing > refreshes bounds for container and window resizing and cleans both subscriptions",
+      "frontend/src/components/build/ResizableSplit.test.tsx::ResizableSplit keyboard resizing > uses actual rendered width for arrow keys and exposes current pixel ARIA values",
+      "frontend/src/components/build/ResizableSplit.test.tsx::ResizableSplit mobile inspector > does not move shell or chat focus when the viewport changes",
+      "frontend/src/components/build/ResizableSplit.test.tsx::ResizableSplit mobile inspector > honors persisted desktop collapse when leaving mobile and focuses the surviving expand control",
+      "frontend/src/components/build/ResizableSplit.test.tsx::ResizableSplit mobile inspector > keeps a still-visible inspector child's focus on desktop and restores mobile chat on return",
+      "frontend/src/components/build/ResizableSplit.test.tsx::ResizableSplit mobile inspector > keeps one inspector mount and its state across closing and both breakpoints",
+      "frontend/src/components/build/ResizableSplit.test.tsx::ResizableSplit mobile inspector > lets a nested Radix dialog consume Escape before dismissing the sheet",
+      "frontend/src/components/build/ResizableSplit.test.tsx::ResizableSplit mobile inspector > lets a nested Radix menu consume Escape before dismissing the sheet",
+      "frontend/src/components/build/ResizableSplit.test.tsx::ResizableSplit mobile inspector > moves a mobile-only Close control to the desktop collapse control on resize",
+      "frontend/src/components/build/ResizableSplit.test.tsx::ResizableSplit mobile inspector > moves keyboard focus into the sheet and makes only covered chat inert",
+      "frontend/src/components/build/ResizableSplit.test.tsx::ResizableSplit mobile inspector > preserves desktop width clamps, pointer cleanup, and collapse persistence",
+      "frontend/src/components/build/ResizableSplit.test.tsx::ResizableSplit mobile inspector > respects an editor's consumed Escape and removes listeners on unmount",
+      "frontend/src/components/build/ResizableSplit.test.tsx::ResizableSplit mobile inspector > restores the opener and chat access after Close",
+      "frontend/src/components/build/ResizableSplit.test.tsx::ResizableSplit mobile inspector > restores the opener and chat access after Escape",
       "frontend/src/components/build/SelfHostPanel.test.tsx::SelfHostPanel \u2014 candidate (self-hostable) > leads with plain language and demotes the detector diagnostic",
       "frontend/src/components/build/SelfHostPanel.test.tsx::SelfHostPanel \u2014 candidate (self-hostable) > offers a working 'Download source' trigger",
       "frontend/src/components/build/SelfHostPanel.test.tsx::SelfHostPanel \u2014 candidate (self-hostable) > renders every required env NAME",
@@ -33678,6 +33723,12 @@
       "frontend/src/components/research/NeedMoreCard.test.tsx::NeedMoreCard > renders all three action buttons",
       "frontend/src/components/research/NeedMoreCard.test.tsx::NeedMoreCard > renders staged synthesizing progress from the SSE stream",
       "frontend/src/components/research/NeedMoreCard.test.tsx::NeedMoreCard > renders the 'Need More?' heading",
+      "frontend/src/components/research/NeedMoreCard.test.tsx::NeedMoreCard > restores the original export invoker after Export with 1 follow-up then Close",
+      "frontend/src/components/research/NeedMoreCard.test.tsx::NeedMoreCard > restores the original export invoker after Export with 1 follow-up then Escape",
+      "frontend/src/components/research/NeedMoreCard.test.tsx::NeedMoreCard > restores the original export invoker after Skip then Close",
+      "frontend/src/components/research/NeedMoreCard.test.tsx::NeedMoreCard > restores the original export invoker after Skip then Escape",
+      "frontend/src/components/research/NeedMoreCard.test.tsx::NeedMoreCard > restores the original export invoker after direct then Close",
+      "frontend/src/components/research/NeedMoreCard.test.tsx::NeedMoreCard > restores the original export invoker after direct then Escape",
       "frontend/src/components/research/NeedMoreCard.test.tsx::NeedMoreCard > restores the top bar audio invoker on Escape and recaptures the bottom invoker on reopen",
       "frontend/src/components/research/NeedMoreCard.test.tsx::NeedMoreCard > shows the honest download notice only on the downloading_model stage",
       "frontend/src/components/research/NeedMoreCard.test.tsx::NeedMoreCard > typing and submitting in the follow-up panel calls onFollowUp",
@@ -34681,6 +34732,7 @@
       "frontend/src/components/build/ImportProjectDialog.test.tsx",
       "frontend/src/components/build/PlanPanel.test.tsx",
       "frontend/src/components/build/QuestionsV2Panel.test.tsx",
+      "frontend/src/components/build/ResizableSplit.test.tsx",
       "frontend/src/components/build/SelfHostPanel.test.tsx",
       "frontend/src/components/build/StreamingFile.test.tsx",
       "frontend/src/components/build/TweakPanel.test.tsx",
@@ -41233,6 +41285,66 @@
             "scope": "pytest.fixture"
           }
         ]
+      }
+    },
+    {
+      "package": "PKG-26-UI-TABLE-INSPECTOR-EXPORT",
+      "root": "multiple",
+      "source_identity_before": "1ff5647f870eaa8f5cd67ea9d1ad41708b3d50a2",
+      "source_identity_after": "a61ff2fecfd01432d282c271a53dbc725b228662",
+      "collected_roots": {
+        "packages": {
+          "before_count": 13327,
+          "after_count": 13335,
+          "added_ids": [
+            "packages/retrieval/tests/test_table_evidence_focus.py::test_captured_population_row_reaches_nli_without_overruling_its_label[contradict-True-contradicted]",
+            "packages/retrieval/tests/test_table_evidence_focus.py::test_captured_population_row_reaches_nli_without_overruling_its_label[entail-True-supported]",
+            "packages/retrieval/tests/test_table_evidence_focus.py::test_captured_population_row_reaches_nli_without_overruling_its_label[neutral-False-unavailable]",
+            "packages/retrieval/tests/test_table_evidence_focus.py::test_captured_population_row_reaches_nli_without_overruling_its_label[neutral-True-unresolved]",
+            "packages/retrieval/tests/test_table_evidence_focus.py::test_each_table_row_keeps_its_own_entity_values_and_citations",
+            "packages/retrieval/tests/test_table_evidence_focus.py::test_empty_cells_do_not_borrow_another_row_or_neighboring_prose",
+            "packages/retrieval/tests/test_table_evidence_focus.py::test_nonempty_source_and_zero_values_remain_searchable",
+            "packages/retrieval/tests/test_table_evidence_focus.py::test_prose_still_selects_using_its_unchanged_hypothesis"
+          ]
+        },
+        "harness": {
+          "before_count": 1594,
+          "after_count": 1595,
+          "added_ids": [
+            "harness/tests/test_replay_runner.py::test_historical_loop_paris_standard_low_v3_integrity"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [
+          "packages/retrieval/tests/test_table_evidence_focus.py"
+        ],
+        "python_static_test_ids": [
+          "harness/tests/test_replay_runner.py::test_historical_loop_paris_standard_low_v3_integrity",
+          "packages/retrieval/tests/test_table_evidence_focus.py::test_captured_population_row_reaches_nli_without_overruling_its_label",
+          "packages/retrieval/tests/test_table_evidence_focus.py::test_each_table_row_keeps_its_own_entity_values_and_citations",
+          "packages/retrieval/tests/test_table_evidence_focus.py::test_empty_cells_do_not_borrow_another_row_or_neighboring_prose",
+          "packages/retrieval/tests/test_table_evidence_focus.py::test_nonempty_source_and_zero_values_remain_searchable",
+          "packages/retrieval/tests/test_table_evidence_focus.py::test_prose_still_selects_using_its_unchanged_hypothesis"
+        ],
+        "typescript_test_files": [
+          "frontend/src/components/build/ResizableSplit.test.tsx"
+        ],
+        "typescript_static_test_ids": [
+          "frontend/src/components/build/ResizableSplit.test.tsx::clamps Home, End, and repeated arrows to pointer limits and persists across remount",
+          "frontend/src/components/build/ResizableSplit.test.tsx::does not consume unrelated shortcuts or write invalid geometry and restores focus on mobile resize",
+          "frontend/src/components/build/ResizableSplit.test.tsx::does not move shell or chat focus when the viewport changes",
+          "frontend/src/components/build/ResizableSplit.test.tsx::honors persisted desktop collapse when leaving mobile and focuses the surviving expand control",
+          "frontend/src/components/build/ResizableSplit.test.tsx::keeps a still-visible inspector child's focus on desktop and restores mobile chat on return",
+          "frontend/src/components/build/ResizableSplit.test.tsx::keeps one inspector mount and its state across closing and both breakpoints",
+          "frontend/src/components/build/ResizableSplit.test.tsx::moves a mobile-only Close control to the desktop collapse control on resize",
+          "frontend/src/components/build/ResizableSplit.test.tsx::moves keyboard focus into the sheet and makes only covered chat inert",
+          "frontend/src/components/build/ResizableSplit.test.tsx::preserves desktop width clamps, pointer cleanup, and collapse persistence",
+          "frontend/src/components/build/ResizableSplit.test.tsx::refreshes bounds for container and window resizing and cleans both subscriptions",
+          "frontend/src/components/build/ResizableSplit.test.tsx::respects an editor's consumed Escape and removes listeners on unmount",
+          "frontend/src/components/build/ResizableSplit.test.tsx::uses actual rendered width for arrow keys and exposes current pixel ARIA values"
+        ],
+        "fixtures": []
       }
     },
     {

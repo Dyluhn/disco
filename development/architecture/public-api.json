@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-public-api-v1",
-  "source_identity": "1ff5647f870eaa8f5cd67ea9d1ad41708b3d50a2",
+  "source_identity": "a61ff2fecfd01432d282c271a53dbc725b228662",
   "python_initializers": [
     {
       "path": "packages/agent-server/src/disco/agent_server/__init__.py",
@@ -21384,6 +21384,26 @@
       ]
     },
     {
+      "path": "frontend/src/components/build/useInspectorKeyboardResize.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "useInspectorKeyboardResize",
+          "signature": "export function useInspectorKeyboardResize({ containerRef, inspectorRef, fraction, onFractionChange, minChat, minInspector, }: Options)"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/build/useMobileInspector.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "useMobileInspector",
+          "signature": "export function useMobileInspector(rootRef: RefObject<HTMLDivElement | null>, collapsed: boolean)"
+        }
+      ]
+    },
+    {
       "path": "frontend/src/components/buildSurface/BlockedRunNotice.tsx",
       "public_declarations": [
         {
@@ -22044,12 +22064,12 @@
         {
           "kind": "function",
           "name": "ExportModal",
-          "signature": "export function ExportModal({ open, onOpenChange, report, cid, followUpSeqs }: ExportModalProps)"
+          "signature": "export function ExportModal({ open, onOpenChange, report, cid, followUpSeqs, returnFocusRef }: ExportModalProps)"
         },
         {
           "kind": "InterfaceDeclaration",
           "name": "ExportModalProps",
-          "signature": "export interface ExportModalProps { open: boolean; onOpenChange: (open: boolean) => void; report: ReportEvent; cid: string; /** Selected follow-up user-message seqs to include (WALK-20). */ followUpSeqs?: number[]; }"
+          "signature": "export interface ExportModalProps { open: boolean; onOpenChange: (open: boolean) => void; report: ReportEvent; cid: string; /** Selected follow-up user-message seqs to include (WALK-20). */ followUpSeqs?: number[]; /** Original invoker, retained when the include-follow-ups dialog hands off. */ returnFocusRef?: RefObject<HTMLElement | null>; }"
         }
       ]
     },
@@ -29497,22 +29517,6 @@
     },
     {
       "surface": "frontend",
-      "path": "frontend/src/components/research/needMoreCardParts/ExportModal.tsx",
-      "public_name": "ExportModal",
-      "target_sha256": "f8ca78f2c138dc63ef2ec43e17c3085cc0c74662225ff7acd0811a159947930c",
-      "owner_package": "PKG-12-FE-RESEARCH",
-      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
-    },
-    {
-      "surface": "frontend",
-      "path": "frontend/src/components/research/needMoreCardParts/ExportModal.tsx",
-      "public_name": "ExportModalProps",
-      "target_sha256": "51219e1d03924af62ad552dc892f59df03c16db75ef75b9dda7e8180f02a27b0",
-      "owner_package": "PKG-12-FE-RESEARCH",
-      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
-    },
-    {
-      "surface": "frontend",
       "path": "frontend/src/components/research/needMoreCardParts/ExportPdfButton.tsx",
       "public_name": "ExportPdfButton",
       "target_sha256": "f50d1b7c5bb935c79ee73ecf8835f806d67b963aaca385203a742a079151b731",
@@ -32062,6 +32066,38 @@
       "target_sha256": "8f5069108ed4ae9ef30db6e814b16b4752961bd5fcdab636de391d6fd1b2f4bc",
       "owner_package": "PKG-26-LAUNCH-CLOSEOUT",
       "reason": "WSClientFrame's type Literal gains 'accept_finished': the UI's Mark-done control states stop-intent explicitly on a FINISHED build instead of the ship-it prose heuristic guessing it from free text."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/useInspectorKeyboardResize.ts",
+      "public_name": "useInspectorKeyboardResize",
+      "target_sha256": "d4408b4955be908a3064302636f66fc3209a4de017bb41815105d3b682e8cf86",
+      "owner_package": "PKG-26-UI-TABLE-INSPECTOR-EXPORT",
+      "reason": "Keyboard counterpart to existing pointer resize, actual geometry, existing bounds/persistence and live ARIA values."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/useMobileInspector.ts",
+      "public_name": "useMobileInspector",
+      "target_sha256": "b8620ace29be2583eb98228bf7560f26a5d8141b4e30f62a1135fd01696ef347",
+      "owner_package": "PKG-26-UI-TABLE-INSPECTOR-EXPORT",
+      "reason": "Shared mobile inspector visibility/focus with inert covered chat, nested Escape precedence and breakpoint cleanup; one inspector mount."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/needMoreCardParts/ExportModal.tsx",
+      "public_name": "ExportModal",
+      "target_sha256": "dd137a999c1ce1e577d965c6fd6e788378760ea639242cd1bf327e6fccaeafe6",
+      "owner_package": "PKG-26-UI-TABLE-INSPECTOR-EXPORT",
+      "reason": "Restore original Export invoker through controlled dialog close and Include handoff; optional ref preserves existing callers."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/needMoreCardParts/ExportModal.tsx",
+      "public_name": "ExportModalProps",
+      "target_sha256": "c71962aced52de88c027e2da7a808fbc6fa0b3847e8c28d65ee87a8ff51b5ffd",
+      "owner_package": "PKG-26-UI-TABLE-INSPECTOR-EXPORT",
+      "reason": "Optional original invoker reference for controlled Export focus restoration."
     },
     {
       "surface": "frontend",
@@ -35750,6 +35786,32 @@
       "owner_package": "PKG-19-AGENT-SURFACE",
       "accepting_commit": "94f9a155276ade4df52ee83cf250d0814366d296",
       "accepting_receipt": "2026-07-28/STATUS.md"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/needMoreCardParts/ExportModal.tsx",
+      "public_name": "ExportModalProps",
+      "owner_package": "PKG-26-UI-TABLE-INSPECTOR-EXPORT",
+      "accepting_commit": "a61ff2fecfd01432d282c271a53dbc725b228662",
+      "accepting_receipt": "development/notes/ui-table-inspector-export-20260925.md",
+      "declaration_kind": "InterfaceDeclaration",
+      "old_signature": "export interface ExportModalProps { open: boolean; onOpenChange: (open: boolean) => void; report: ReportEvent; cid: string; /** Selected follow-up user-message seqs to include (WALK-20). */ followUpSeqs?: number[]; }",
+      "new_signature": "export interface ExportModalProps { open: boolean; onOpenChange: (open: boolean) => void; report: ReportEvent; cid: string; /** Selected follow-up user-message seqs to include (WALK-20). */ followUpSeqs?: number[]; /** Original invoker, retained when the include-follow-ups dialog hands off. */ returnFocusRef?: RefObject<HTMLElement | null>; }",
+      "old_target_sha256": "51219e1d03924af62ad552dc892f59df03c16db75ef75b9dda7e8180f02a27b0",
+      "new_target_sha256": "c71962aced52de88c027e2da7a808fbc6fa0b3847e8c28d65ee87a8ff51b5ffd"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/needMoreCardParts/ExportModal.tsx",
+      "public_name": "ExportModal",
+      "owner_package": "PKG-26-UI-TABLE-INSPECTOR-EXPORT",
+      "accepting_commit": "a61ff2fecfd01432d282c271a53dbc725b228662",
+      "accepting_receipt": "development/notes/ui-table-inspector-export-20260925.md",
+      "declaration_kind": "function",
+      "old_signature": "export function ExportModal({ open, onOpenChange, report, cid, followUpSeqs }: ExportModalProps)",
+      "new_signature": "export function ExportModal({ open, onOpenChange, report, cid, followUpSeqs, returnFocusRef }: ExportModalProps)",
+      "old_target_sha256": "f8ca78f2c138dc63ef2ec43e17c3085cc0c74662225ff7acd0811a159947930c",
+      "new_target_sha256": "dd137a999c1ce1e577d965c6fd6e788378760ea639242cd1bf327e6fccaeafe6"
     },
     {
       "surface": "frontend",
