@@ -29,6 +29,7 @@ import { FilesPane } from "./canvas/FilesPane";
 import { TerminalPane } from "./canvas/TerminalPane";
 import { PreviewPane } from "./canvas/PreviewPane";
 import { CockpitPane } from "./canvas/CockpitPane";
+import { useFileActionSnap } from "./useFileActionSnap";
 import { previewActiveStatus } from "./canvas/previewPaneParts/helpers";
 
 type TabId = "files" | "terminal" | "preview" | "cockpit";
@@ -65,6 +66,7 @@ export function ExecutionCanvas({
   status,
   cid,
   streamingFile = null,
+  replayThrough = null,
   untrusted = false,
   onSteer,
   onSelectionEdit,
@@ -75,6 +77,8 @@ export function ExecutionCanvas({
   status: ConversationStatus;
   cid: string | null;
   streamingFile?: StreamingFile | null;
+  /** Socket state-frame boundary; absent for static history-only canvases. */
+  replayThrough?: number | null;
   /** Third-party events (shared/imported run) → harden the preview iframe. */
   untrusted?: boolean;
   /** Steer the agent (free-form) from the preview-pane "Discuss" affordance.
@@ -119,16 +123,13 @@ export function ExecutionCanvas({
     [],
   );
   // Controlled tab so a starting write can pull focus to Files (watch-it-write is
-  // the hero moment). We only force the switch on the streaming RISING edge — once
-  // the user clicks away mid-write, we respect it (no repeated yank per delta).
+  // the hero moment). A partial stream and its durable action count as one write;
+  // once the user clicks away mid-write, respect it (no repeated yank per delta).
   const [tab, setTab] = useState<TabId>(initial);
   const { snapToAction, setSnapToAction } = useSnapToAction();
-  const wasStreaming = useRef(false);
-  useEffect(() => {
-    const now = streamingFile != null;
-    if (snapToAction && now && !wasStreaming.current) setTab("files");
-    wasStreaming.current = now;
-  }, [snapToAction, streamingFile]);
+  useFileActionSnap({
+    events, streamingFile, replayThrough, cid, status, enabled: snapToAction, setTab,
+  });
   // Auto-switch to Preview at the capstone: when the run FINISHES and there's a
   // renderable artifact, pull focus to the result (the deliverable handoff — the
   // user wants to SEE the finished app, not stare at the file tree). Only on the

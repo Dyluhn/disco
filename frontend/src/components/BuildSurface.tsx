@@ -274,6 +274,7 @@ export function BuildSurface({
             status={b.status}
             cid={b.cid}
             streamingFile={b.streamingFile}
+            replayThrough={b.frameSeq}
             // Discuss affordance → free-form steer. Same wire as the steer composer.
             onSteer={steerable ? steerWithMention : undefined}
             // P8 click-to-edit: the preview-pane edit box submits the selected
