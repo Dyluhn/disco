@@ -1,6 +1,6 @@
 # LIVE Preview routing and unobstructed inspector controls
 
-Owner: PKG-24-UI-ACCEPTANCE. This receipt accepts the incremental source and
+Owner: PKG-24-UI-PREVIEW-FOLLOWUP. This receipt accepts the incremental source and
 test inventory changes after the reviewed 9ba7e6de5 authority baseline. It does
 not declare comprehensive UI acceptance or release qualification complete.
 
@@ -30,7 +30,12 @@ space as well. Existing inspector and preview tests passed (49 cases). A ResizeO
 stale selection coordinates after actual viewport size changes while preserving
 Inspect mode; unchanged first observations retain selection. Five added hook
 cases cover size changes, initial observation, queued resize across rerenders,
-and observer cleanup. All six hook cases passed.
+and observer cleanup. All six hook cases passed. Plain Inspect now displays its own Stop inspecting
+state independently of Edit. Switching Inspect and Point disarms the previous
+mode; five new real-hook component cases cover those transitions, stale nonce
+rejection, Edit behavior and the untrusted boundary. The 59 directly affected
+frontend cases passed. The prior full 1,765-case run passed before this small
+follow-up; its result is not relabelled as a full run of the later source.
 
 The reviewed frontend declaration changes are:
 
@@ -38,6 +43,7 @@ The reviewed frontend declaration changes are:
 | --- | --- | --- |
 | frontend/src/components/build/canvas/SelectionOverlay.tsx | SelectionOverlay | Optional `showToolbar` prop defaults to true, preserving existing callers; iframe hosts render controls separately and disable the embedded toolbar. |
 | frontend/src/components/build/canvas/SelectionOverlay.tsx | SelectionToolbar | Extracted controls share the existing arm/disarm callbacks and untrusted restriction without covering app controls. |
+| frontend/src/components/build/canvas/previewPaneParts/PreviewStage.tsx | PreviewStage | Adds the host-owned onArmInspect callback so Inspect and Point are mutually exclusive; all repository callers supply it. |
 
 There are no public Python interface changes, removals, renamed test cases,
 provider/model-specific branches, sandbox permission changes or new CI UI gates.
