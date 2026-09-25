@@ -12,4 +12,8 @@ Four frontend and seven expanded Python regression cases cover names, failure st
 
 The f83 predecessor passed all ten release gates, 245 preview cases, 461 reader/review cases and 25 strict full-encoder replay cases, with exact-tree frontend evidence. Final combined validation, browser retests and publication remain required. The screenshot dispatch path does not occur in the preserved Paris captures; fixture bytes and strict matching remain unchanged.
 
+Real f83 browser testing also found desktop-to-mobile Inspector focus dropping to the document body after CSS hid the focused Console tab. The focus hook now remembers actual focus only across a pending media transition, clears ordinary blur, respects newer chat/shell focus, and rejects disconnected targets. Seven expanded regressions preserve all sixteen existing split cases; two CSS-blur-order cases failed before the fix and all twenty-three pass afterward. Public declarations, one Inspector mount and nested Escape precedence are unchanged. Deployed browser confirmation remains pending.
+
+The complete four-file screenshot Python scope subsequently passed all 53 cases on workstation source 8373, including all five real-renderer cases, without skips or exclusions. This source's screenshot production/test bytes are unchanged. No new browser acceptance or final-source full-suite pass is inferred from that scoped result.
+
 Use unchanged authority tools with this unique owner and accepting commit, preserving membership and prior transitions. The only generated authority updates are the public API and test inventory with their existing seal digests; amend them into this accepting commit. Comprehensive UI acceptance stays outside CI. Publish through the workstation CLI.

@@ -174,6 +174,91 @@ describe("ResizableSplit mobile inspector", () => {
     expect(sheet).toHaveAttribute("inert");
   });
 
+  it("restores the opener when breakpoint CSS blurs an inspector child before media notification", async () => {
+    const mounted = vi.fn();
+    fixture(mounted);
+    const { opener, sheet } = await openInspector();
+    const editor = screen.getByRole("textbox", { name: "Inspector editor" });
+    editor.focus();
+    resize(true);
+    expect(editor).toHaveFocus();
+    act(() => {
+      desktop = false; // CSS already switched before the media change callback.
+      editor.blur();
+      expect(document.body).toHaveFocus();
+      for (const listener of listeners) listener();
+    });
+    expect(opener).toHaveFocus();
+    expect(sheet).toHaveAttribute("inert");
+    expect(mounted).toHaveBeenCalledTimes(1);
+  });
+
+  it("moves a CSS-blurred mobile Close control to the surviving desktop control", async () => {
+    fixture();
+    await openInspector();
+    act(() => {
+      desktop = true;
+      screen.getByRole("button", { name: CLOSE }).blur();
+      expect(document.body).toHaveFocus();
+      for (const listener of listeners) listener();
+    });
+    expect(screen.getByRole("button", { name: COLLAPSE })).toHaveFocus();
+  });
+
+  it.each(["Shell navigation", "Chat input"])("respects newer %s focus after breakpoint CSS blur", async (name) => {
+    fixture();
+    await openInspector();
+    const editor = screen.getByRole("textbox", { name: "Inspector editor" });
+    editor.focus();
+    resize(true);
+    const next = name === "Chat input"
+      ? screen.getByRole("textbox", { name }) : screen.getByRole("button", { name });
+    act(() => {
+      desktop = false;
+      editor.blur();
+      next.focus();
+      for (const listener of listeners) listener();
+    });
+    expect(next).toHaveFocus();
+  });
+
+  it("does not restore stale inspector focus after an ordinary blur before resizing", async () => {
+    fixture();
+    await openInspector();
+    const editor = screen.getByRole("textbox", { name: "Inspector editor" });
+    editor.focus();
+    resize(true);
+    editor.blur(); // Same breakpoint: focus was deliberately released earlier.
+    expect(document.body).toHaveFocus();
+    resize(false);
+    expect(document.body).toHaveFocus();
+  });
+
+  it("ignores a remembered inspector control removed before the breakpoint changes", async () => {
+    fixture();
+    await openInspector();
+    const editor = screen.getByRole("textbox", { name: "Inspector editor" });
+    editor.focus();
+    resize(true);
+    editor.remove();
+    expect(document.body).toHaveFocus();
+    resize(false);
+    expect(document.body).toHaveFocus();
+  });
+
+  it("removes document focus subscriptions when the split unmounts", () => {
+    const add = vi.spyOn(document, "addEventListener");
+    const remove = vi.spyOn(document, "removeEventListener");
+    const view = fixture();
+    const subscriptions = add.mock.calls.filter(([type, , capture]) =>
+      (type === "focusin" || type === "focusout") && capture === true);
+    expect(subscriptions).toHaveLength(2);
+    view.unmount();
+    for (const [type, listener, capture] of subscriptions) {
+      expect(remove).toHaveBeenCalledWith(type, listener, capture);
+    }
+  });
+
   it("honors persisted desktop collapse when leaving mobile and focuses the surviving expand control", async () => {
     localStorage.setItem("pmx.build.inspectorCollapsed", "1");
     fixture();

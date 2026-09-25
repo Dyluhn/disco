@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "a61ff2fecfd01432d282c271a53dbc725b228662",
+  "source_identity": "46693769114a439ad79cf64f730f160d9a9e6d36",
   "collected": {
     "counts": {
-      "packages": 13335,
+      "packages": 13342,
       "harness": 1595,
       "integrations": 9,
       "tests": 468
     },
-    "total": 15407,
+    "total": 15414,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -11195,6 +11195,13 @@
         "packages/tools/tests/test_browser_navigate_failure_freshness.py::test_a_wrong_daemon_identity_is_still_a_protocol_error",
         "packages/tools/tests/test_browser_navigate_failure_freshness.py::test_a_wrong_executor_generation_is_still_a_protocol_error",
         "packages/tools/tests/test_browser_navigate_failure_freshness.py::test_the_failure_is_reported_as_unsynchronized_so_staleness_is_not_swallowed",
+        "packages/tools/tests/test_browser_screenshot_identity.py::test_capture_identity_collision_preserves_the_existing_frame",
+        "packages/tools/tests/test_browser_screenshot_identity.py::test_capture_preserves_workspace_file_permissions_from_umask[18]",
+        "packages/tools/tests/test_browser_screenshot_identity.py::test_capture_preserves_workspace_file_permissions_from_umask[63]",
+        "packages/tools/tests/test_browser_screenshot_identity.py::test_failed_capture_removes_only_its_reserved_file_and_preserves_error[False]",
+        "packages/tools/tests/test_browser_screenshot_identity.py::test_failed_capture_removes_only_its_reserved_file_and_preserves_error[True]",
+        "packages/tools/tests/test_browser_screenshot_identity.py::test_fresh_workspace_capture_does_not_reuse_an_earlier_daemon_relative_path",
+        "packages/tools/tests/test_browser_screenshot_identity.py::test_restarted_browser_daemons_capture_to_distinct_paths_without_overwriting_history",
         "packages/tools/tests/test_browser_spill.py::test_browser_diagnostics_spill_when_over_cap",
         "packages/tools/tests/test_browser_spill.py::test_browser_no_spill_when_under_cap",
         "packages/tools/tests/test_browser_workspace_freshness.py::test_action_failures_have_structured_primary_classification[entry0-not_visible]",
@@ -15428,9 +15435,9 @@
     }
   },
   "mapping_static": {
-    "identity": "a61ff2fecfd01432d282c271a53dbc725b228662",
-    "python_test_file_count": 1036,
-    "python_static_test_id_count": 12220,
+    "identity": "46693769114a439ad79cf64f730f160d9a9e6d36",
+    "python_test_file_count": 1037,
+    "python_static_test_id_count": 12225,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -16301,6 +16308,7 @@
       "packages/tools/tests/test_browser_daemon_integration.py",
       "packages/tools/tests/test_browser_daemon_startup.py",
       "packages/tools/tests/test_browser_navigate_failure_freshness.py",
+      "packages/tools/tests/test_browser_screenshot_identity.py",
       "packages/tools/tests/test_browser_spill.py",
       "packages/tools/tests/test_browser_workspace_freshness.py",
       "packages/tools/tests/test_builtin_extra.py",
@@ -26454,6 +26462,11 @@
       "packages/tools/tests/test_browser_navigate_failure_freshness.py::test_a_wrong_daemon_identity_is_still_a_protocol_error",
       "packages/tools/tests/test_browser_navigate_failure_freshness.py::test_a_wrong_executor_generation_is_still_a_protocol_error",
       "packages/tools/tests/test_browser_navigate_failure_freshness.py::test_the_failure_is_reported_as_unsynchronized_so_staleness_is_not_swallowed",
+      "packages/tools/tests/test_browser_screenshot_identity.py::test_capture_identity_collision_preserves_the_existing_frame",
+      "packages/tools/tests/test_browser_screenshot_identity.py::test_capture_preserves_workspace_file_permissions_from_umask",
+      "packages/tools/tests/test_browser_screenshot_identity.py::test_failed_capture_removes_only_its_reserved_file_and_preserves_error",
+      "packages/tools/tests/test_browser_screenshot_identity.py::test_fresh_workspace_capture_does_not_reuse_an_earlier_daemon_relative_path",
+      "packages/tools/tests/test_browser_screenshot_identity.py::test_restarted_browser_daemons_capture_to_distinct_paths_without_overwriting_history",
       "packages/tools/tests/test_browser_spill.py::test_browser_diagnostics_spill_when_over_cap",
       "packages/tools/tests/test_browser_spill.py::test_browser_no_spill_when_under_cap",
       "packages/tools/tests/test_browser_workspace_freshness.py::test_action_failures_have_structured_primary_classification",
@@ -28691,8 +28704,8 @@
       "tests/unbiased_gate/test_authorB_models_imagegen.py::test_w50_slides_degrade_to_image_less_when_image_backend_unconfigured",
       "tests/unbiased_gate/test_authorB_models_imagegen.py::test_w50_unconfigured_image_backend_fails_loudly_instead_of_procedural_fallback"
     ],
-    "typescript_test_file_count": 347,
-    "typescript_static_test_id_count": 1773,
+    "typescript_test_file_count": 348,
+    "typescript_static_test_id_count": 1782,
     "typescript_test_files": [
       "frontend/e2e-full/scenarios/click-provenance.smoke.spec.ts",
       "frontend/e2e-full/scenarios/per-surface.full.spec.ts",
@@ -28862,6 +28875,7 @@
       "frontend/src/components/build/StreamingFile.test.tsx",
       "frontend/src/components/build/TweakPanel.test.tsx",
       "frontend/src/components/build/agentCanvas/ArtifactsPane.expiry.test.tsx",
+      "frontend/src/components/build/agentCanvas/ScreenshotStrip.test.tsx",
       "frontend/src/components/build/agentCanvas/useLiveBrowserSession.expiry.test.ts",
       "frontend/src/components/build/canvas/EditAffordance.test.tsx",
       "frontend/src/components/build/canvas/FilesPane.current.test.tsx",
@@ -29622,14 +29636,19 @@
       "frontend/src/components/build/ResizableSplit.test.tsx::clamps Home, End, and repeated arrows to pointer limits and persists across remount",
       "frontend/src/components/build/ResizableSplit.test.tsx::does not consume unrelated shortcuts or write invalid geometry and restores focus on mobile resize",
       "frontend/src/components/build/ResizableSplit.test.tsx::does not move shell or chat focus when the viewport changes",
+      "frontend/src/components/build/ResizableSplit.test.tsx::does not restore stale inspector focus after an ordinary blur before resizing",
       "frontend/src/components/build/ResizableSplit.test.tsx::honors persisted desktop collapse when leaving mobile and focuses the surviving expand control",
+      "frontend/src/components/build/ResizableSplit.test.tsx::ignores a remembered inspector control removed before the breakpoint changes",
       "frontend/src/components/build/ResizableSplit.test.tsx::keeps a still-visible inspector child's focus on desktop and restores mobile chat on return",
       "frontend/src/components/build/ResizableSplit.test.tsx::keeps one inspector mount and its state across closing and both breakpoints",
+      "frontend/src/components/build/ResizableSplit.test.tsx::moves a CSS-blurred mobile Close control to the surviving desktop control",
       "frontend/src/components/build/ResizableSplit.test.tsx::moves a mobile-only Close control to the desktop collapse control on resize",
       "frontend/src/components/build/ResizableSplit.test.tsx::moves keyboard focus into the sheet and makes only covered chat inert",
       "frontend/src/components/build/ResizableSplit.test.tsx::preserves desktop width clamps, pointer cleanup, and collapse persistence",
       "frontend/src/components/build/ResizableSplit.test.tsx::refreshes bounds for container and window resizing and cleans both subscriptions",
+      "frontend/src/components/build/ResizableSplit.test.tsx::removes document focus subscriptions when the split unmounts",
       "frontend/src/components/build/ResizableSplit.test.tsx::respects an editor's consumed Escape and removes listeners on unmount",
+      "frontend/src/components/build/ResizableSplit.test.tsx::restores the opener when breakpoint CSS blurs an inspector child before media notification",
       "frontend/src/components/build/ResizableSplit.test.tsx::uses actual rendered width for arrow keys and exposes current pixel ARIA values",
       "frontend/src/components/build/SelfHostPanel.test.tsx::leads with plain language and demotes the detector diagnostic",
       "frontend/src/components/build/SelfHostPanel.test.tsx::offers ONLY the 'Download source' action (no command, no other buttons)",
@@ -29669,6 +29688,10 @@
       "frontend/src/components/build/agentCanvas/ArtifactsPane.expiry.test.tsx::ignores an old artifact reload reply after the selected conversation changes",
       "frontend/src/components/build/agentCanvas/ArtifactsPane.expiry.test.tsx::keeps a confirmed reload when an older navigation mint and later same-generation render settle",
       "frontend/src/components/build/agentCanvas/ArtifactsPane.expiry.test.tsx::preserves the frame on cancelled or failed reload, disarms selection, and keeps StrictMode mint singular",
+      "frontend/src/components/build/agentCanvas/ScreenshotStrip.test.tsx::does not carry another conversation's failed image state into the same relative path",
+      "frontend/src/components/build/agentCanvas/ScreenshotStrip.test.tsx::keeps a failed thumbnail named, visible and focused without fabricating an image",
+      "frontend/src/components/build/agentCanvas/ScreenshotStrip.test.tsx::names each screenshot control, exposes selection and supports keyboard selection",
+      "frontend/src/components/build/agentCanvas/ScreenshotStrip.test.tsx::retains failed historical thumbnails on later observations without automatic retry or path rewriting",
       "frontend/src/components/build/agentCanvas/useLiveBrowserSession.expiry.test.ts::ignores a late old-owner reload when the conversation changes",
       "frontend/src/components/build/agentCanvas/useLiveBrowserSession.expiry.test.ts::mints once without restarting the app and preserves the current launch on failure",
       "frontend/src/components/build/canvas/EditAffordance.test.tsx::cancels via the Cancel button",
@@ -32805,8 +32828,8 @@
         ]
       }
     },
-    "vitest_ids": 1835,
-    "vitest_files": 269,
+    "vitest_ids": 1846,
+    "vitest_files": 270,
     "vitest_ids_list": [
       "frontend/src/App.moderesume.test.tsx::A2 \u2014 fresh sessions and resume targets > New preserves the active mode, then a mode chip lands on that mode's splash",
       "frontend/src/App.moderesume.test.tsx::A2 \u2014 fresh sessions and resume targets > does not resume a just-killed conversation id from the mode chip",
@@ -33331,17 +33354,24 @@
       "frontend/src/components/build/ResizableSplit.test.tsx::ResizableSplit keyboard resizing > refreshes bounds for container and window resizing and cleans both subscriptions",
       "frontend/src/components/build/ResizableSplit.test.tsx::ResizableSplit keyboard resizing > uses actual rendered width for arrow keys and exposes current pixel ARIA values",
       "frontend/src/components/build/ResizableSplit.test.tsx::ResizableSplit mobile inspector > does not move shell or chat focus when the viewport changes",
+      "frontend/src/components/build/ResizableSplit.test.tsx::ResizableSplit mobile inspector > does not restore stale inspector focus after an ordinary blur before resizing",
       "frontend/src/components/build/ResizableSplit.test.tsx::ResizableSplit mobile inspector > honors persisted desktop collapse when leaving mobile and focuses the surviving expand control",
+      "frontend/src/components/build/ResizableSplit.test.tsx::ResizableSplit mobile inspector > ignores a remembered inspector control removed before the breakpoint changes",
       "frontend/src/components/build/ResizableSplit.test.tsx::ResizableSplit mobile inspector > keeps a still-visible inspector child's focus on desktop and restores mobile chat on return",
       "frontend/src/components/build/ResizableSplit.test.tsx::ResizableSplit mobile inspector > keeps one inspector mount and its state across closing and both breakpoints",
       "frontend/src/components/build/ResizableSplit.test.tsx::ResizableSplit mobile inspector > lets a nested Radix dialog consume Escape before dismissing the sheet",
       "frontend/src/components/build/ResizableSplit.test.tsx::ResizableSplit mobile inspector > lets a nested Radix menu consume Escape before dismissing the sheet",
+      "frontend/src/components/build/ResizableSplit.test.tsx::ResizableSplit mobile inspector > moves a CSS-blurred mobile Close control to the surviving desktop control",
       "frontend/src/components/build/ResizableSplit.test.tsx::ResizableSplit mobile inspector > moves a mobile-only Close control to the desktop collapse control on resize",
       "frontend/src/components/build/ResizableSplit.test.tsx::ResizableSplit mobile inspector > moves keyboard focus into the sheet and makes only covered chat inert",
       "frontend/src/components/build/ResizableSplit.test.tsx::ResizableSplit mobile inspector > preserves desktop width clamps, pointer cleanup, and collapse persistence",
+      "frontend/src/components/build/ResizableSplit.test.tsx::ResizableSplit mobile inspector > removes document focus subscriptions when the split unmounts",
       "frontend/src/components/build/ResizableSplit.test.tsx::ResizableSplit mobile inspector > respects an editor's consumed Escape and removes listeners on unmount",
+      "frontend/src/components/build/ResizableSplit.test.tsx::ResizableSplit mobile inspector > respects newer Chat input focus after breakpoint CSS blur",
+      "frontend/src/components/build/ResizableSplit.test.tsx::ResizableSplit mobile inspector > respects newer Shell navigation focus after breakpoint CSS blur",
       "frontend/src/components/build/ResizableSplit.test.tsx::ResizableSplit mobile inspector > restores the opener and chat access after Close",
       "frontend/src/components/build/ResizableSplit.test.tsx::ResizableSplit mobile inspector > restores the opener and chat access after Escape",
+      "frontend/src/components/build/ResizableSplit.test.tsx::ResizableSplit mobile inspector > restores the opener when breakpoint CSS blurs an inspector child before media notification",
       "frontend/src/components/build/SelfHostPanel.test.tsx::SelfHostPanel \u2014 candidate (self-hostable) > leads with plain language and demotes the detector diagnostic",
       "frontend/src/components/build/SelfHostPanel.test.tsx::SelfHostPanel \u2014 candidate (self-hostable) > offers a working 'Download source' trigger",
       "frontend/src/components/build/SelfHostPanel.test.tsx::SelfHostPanel \u2014 candidate (self-hostable) > renders every required env NAME",
@@ -33383,6 +33413,10 @@
       "frontend/src/components/build/agentCanvas/ArtifactsPane.expiry.test.tsx::artifact access expiry > ignores an old artifact reload reply after the selected conversation changes",
       "frontend/src/components/build/agentCanvas/ArtifactsPane.expiry.test.tsx::artifact access expiry > keeps a confirmed reload when an older navigation mint and later same-generation render settle",
       "frontend/src/components/build/agentCanvas/ArtifactsPane.expiry.test.tsx::artifact access expiry > preserves the frame on cancelled or failed reload, disarms selection, and keeps StrictMode mint singular",
+      "frontend/src/components/build/agentCanvas/ScreenshotStrip.test.tsx::ScreenshotStrip > does not carry another conversation's failed image state into the same relative path",
+      "frontend/src/components/build/agentCanvas/ScreenshotStrip.test.tsx::ScreenshotStrip > keeps a failed thumbnail named, visible and focused without fabricating an image",
+      "frontend/src/components/build/agentCanvas/ScreenshotStrip.test.tsx::ScreenshotStrip > names each screenshot control, exposes selection and supports keyboard selection",
+      "frontend/src/components/build/agentCanvas/ScreenshotStrip.test.tsx::ScreenshotStrip > retains failed historical thumbnails on later observations without automatic retry or path rewriting",
       "frontend/src/components/build/agentCanvas/useLiveBrowserSession.expiry.test.ts::noVNC explicit access reload > ignores a late old-owner reload when the conversation changes",
       "frontend/src/components/build/agentCanvas/useLiveBrowserSession.expiry.test.ts::noVNC explicit access reload > mints once without restarting the app and preserves the current launch on failure",
       "frontend/src/components/build/canvas/EditAffordance.test.tsx::EditAffordance > cancels via the Cancel button",
@@ -34737,6 +34771,7 @@
       "frontend/src/components/build/StreamingFile.test.tsx",
       "frontend/src/components/build/TweakPanel.test.tsx",
       "frontend/src/components/build/agentCanvas/ArtifactsPane.expiry.test.tsx",
+      "frontend/src/components/build/agentCanvas/ScreenshotStrip.test.tsx",
       "frontend/src/components/build/agentCanvas/useLiveBrowserSession.expiry.test.ts",
       "frontend/src/components/build/canvas/EditAffordance.test.tsx",
       "frontend/src/components/build/canvas/FilesPane.current.test.tsx",
@@ -48590,6 +48625,54 @@
         ],
         "typescript_test_files": [],
         "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-26-UI-SCREENSHOT-HISTORY",
+      "root": "packages",
+      "source_identity_before": "a61ff2fecfd01432d282c271a53dbc725b228662",
+      "source_identity_after": "46693769114a439ad79cf64f730f160d9a9e6d36",
+      "collected_roots": {
+        "packages": {
+          "before_count": 13335,
+          "after_count": 13342,
+          "added_ids": [
+            "packages/tools/tests/test_browser_screenshot_identity.py::test_capture_identity_collision_preserves_the_existing_frame",
+            "packages/tools/tests/test_browser_screenshot_identity.py::test_capture_preserves_workspace_file_permissions_from_umask[18]",
+            "packages/tools/tests/test_browser_screenshot_identity.py::test_capture_preserves_workspace_file_permissions_from_umask[63]",
+            "packages/tools/tests/test_browser_screenshot_identity.py::test_failed_capture_removes_only_its_reserved_file_and_preserves_error[False]",
+            "packages/tools/tests/test_browser_screenshot_identity.py::test_failed_capture_removes_only_its_reserved_file_and_preserves_error[True]",
+            "packages/tools/tests/test_browser_screenshot_identity.py::test_fresh_workspace_capture_does_not_reuse_an_earlier_daemon_relative_path",
+            "packages/tools/tests/test_browser_screenshot_identity.py::test_restarted_browser_daemons_capture_to_distinct_paths_without_overwriting_history"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [
+          "packages/tools/tests/test_browser_screenshot_identity.py"
+        ],
+        "python_static_test_ids": [
+          "packages/tools/tests/test_browser_screenshot_identity.py::test_capture_identity_collision_preserves_the_existing_frame",
+          "packages/tools/tests/test_browser_screenshot_identity.py::test_capture_preserves_workspace_file_permissions_from_umask",
+          "packages/tools/tests/test_browser_screenshot_identity.py::test_failed_capture_removes_only_its_reserved_file_and_preserves_error",
+          "packages/tools/tests/test_browser_screenshot_identity.py::test_fresh_workspace_capture_does_not_reuse_an_earlier_daemon_relative_path",
+          "packages/tools/tests/test_browser_screenshot_identity.py::test_restarted_browser_daemons_capture_to_distinct_paths_without_overwriting_history"
+        ],
+        "typescript_test_files": [
+          "frontend/src/components/build/agentCanvas/ScreenshotStrip.test.tsx"
+        ],
+        "typescript_static_test_ids": [
+          "frontend/src/components/build/ResizableSplit.test.tsx::does not restore stale inspector focus after an ordinary blur before resizing",
+          "frontend/src/components/build/ResizableSplit.test.tsx::ignores a remembered inspector control removed before the breakpoint changes",
+          "frontend/src/components/build/ResizableSplit.test.tsx::moves a CSS-blurred mobile Close control to the surviving desktop control",
+          "frontend/src/components/build/ResizableSplit.test.tsx::removes document focus subscriptions when the split unmounts",
+          "frontend/src/components/build/ResizableSplit.test.tsx::restores the opener when breakpoint CSS blurs an inspector child before media notification",
+          "frontend/src/components/build/agentCanvas/ScreenshotStrip.test.tsx::does not carry another conversation's failed image state into the same relative path",
+          "frontend/src/components/build/agentCanvas/ScreenshotStrip.test.tsx::keeps a failed thumbnail named, visible and focused without fabricating an image",
+          "frontend/src/components/build/agentCanvas/ScreenshotStrip.test.tsx::names each screenshot control, exposes selection and supports keyboard selection",
+          "frontend/src/components/build/agentCanvas/ScreenshotStrip.test.tsx::retains failed historical thumbnails on later observations without automatic retry or path rewriting"
+        ],
         "fixtures": []
       }
     },

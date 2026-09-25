@@ -11,10 +11,22 @@ export function useMobileInspector(rootRef: RefObject<HTMLDivElement | null>, co
   const collapseRef = useRef<HTMLButtonElement>(null);
   const expandRef = useRef<HTMLButtonElement>(null);
   const previous = useRef({ desktop, open });
+  const lastFocused = useRef<Element | null>(null);
   const active = !desktop && open;
 
   useEffect(() => {
     const media = window.matchMedia("(min-width: 1024px)");
+    const rememberFocus = (event: FocusEvent) => {
+      lastFocused.current = event.target instanceof Element ? event.target : null;
+    };
+    const releaseFocus = () => {
+      // CSS can hide the focused control before the media change callback.
+      // Keep that identity only across the pending breakpoint transition;
+      // ordinary blur must not leave a stale inspector focus to restore later.
+      if (media.matches === previous.current.desktop) lastFocused.current = null;
+    };
+    document.addEventListener("focusin", rememberFocus, true);
+    document.addEventListener("focusout", releaseFocus, true);
     const update = () => {
       setDesktop(media.matches);
       // Returning to mobile starts on chat, not an old overlay.
@@ -22,11 +34,17 @@ export function useMobileInspector(rootRef: RefObject<HTMLDivElement | null>, co
     };
     update();
     media.addEventListener("change", update);
-    return () => media.removeEventListener("change", update);
+    return () => {
+      media.removeEventListener("change", update);
+      document.removeEventListener("focusin", rememberFocus, true);
+      document.removeEventListener("focusout", releaseFocus, true);
+    };
   }, []);
 
   useLayoutEffect(() => {
-    const focused = document.activeElement;
+    const focused = document.activeElement === document.body
+      && lastFocused.current?.isConnected
+      ? lastFocused.current : document.activeElement;
     let target: HTMLElement | null = null;
     if (previous.current.desktop !== desktop) {
       if (desktop) {
