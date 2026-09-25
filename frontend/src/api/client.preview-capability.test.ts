@@ -91,3 +91,31 @@ describe("preview capability ownership", () => {
     expect(new URL(launch!.url).search + new URL(launch!.url).hash).toBe("");
   });
 });
+
+describe("preview lease deadlines", () => {
+  it("projects server clock skew conservatively from request start, not a delayed response", async () => {
+    const client = await importLiveClient();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(10_000);
+    vi.stubGlobal("fetch", vi.fn(async (url: RequestInfo | URL) => {
+      if (String(url).endsWith("/api/auth/session")) {
+        return jsonResponse({ authenticated: true, csrf_token: "csrf" });
+      }
+      clock.mockReturnValue(40_000);
+      return jsonResponse({ bootstrap_url: "http://preview/bootstrap", bootstrap_intent: "one",
+        access_expires_at: 1_800_000_900, server_time: 1_800_000_000.25 });
+    }));
+    try {
+      const launch = await client.canonicalPreviewBootstrapUrl("conv_deadbeef");
+      expect(launch?.accessDeadline).toBe(909_750);
+    } finally { clock.mockRestore(); }
+  });
+
+  it("does not invent a deadline when a legacy server supplies no actual lease", async () => {
+    const client = await importLiveClient();
+    vi.stubGlobal("fetch", vi.fn(async (url: RequestInfo | URL) =>
+      jsonResponse(String(url).endsWith("/api/auth/session")
+        ? { authenticated: true, csrf_token: "csrf" }
+        : { bootstrap_url: "http://preview/bootstrap", bootstrap_intent: "one", access_expires_at: null, server_time: 1000 })));
+    expect(await client.canonicalPreviewBootstrapUrl("conv_deadbeef")).toEqual({url: "http://preview/bootstrap", intent: "one"});
+  });
+});

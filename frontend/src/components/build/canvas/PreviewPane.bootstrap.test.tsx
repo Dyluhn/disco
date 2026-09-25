@@ -12,7 +12,7 @@
  */
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PreviewPane } from "@/components/build/canvas/PreviewPane";
@@ -231,5 +231,36 @@ describe("PreviewPane — the bootstrap handshake watchdog (UI-44)", () => {
     // and `frameReady` is the signal that separates it from UI-44's dead frame.
     expect(container.querySelector("iframe")).not.toBeNull();
     expect(screen.queryByText("Preview unavailable")).toBeNull();
+  });
+});
+
+
+describe("PreviewPane access expiry", () => {
+  it("keeps a loaded expired frame through Cancel and failed reload while blocking the old Refresh bypass", async () => {
+    const { container } = render(withClient(<PreviewPane status="FINISHED" cid="conv_boot"
+      events={[APP, ...finishedWorkspaceEvents("conv_boot")]} />));
+    await settle();
+    const frame = container.querySelector("iframe")!;
+    act(() => window.dispatchEvent(new MessageEvent("message", {
+      source: frame.contentWindow, origin: "http://127.77.0.3:8000",
+      data: { channel: "disco-preview-access", expires_at: 1002, server_time: 1000.5 },
+    })));
+    announceBootstrapReady(frame);
+    fireEvent.load(frame);
+    act(() => vi.advanceTimersByTime(2000));
+    expect(screen.getByText(/Preview access expired/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Refresh or restart Preview" })).toBeDisabled();
+    expect(frame.parentElement).toHaveAttribute("inert");
+    fireEvent.click(screen.getByRole("button", { name: "Reload Preview" }));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(container.querySelector("iframe")).toBe(frame);
+    const callsBefore = canonicalPreviewBootstrapUrlMock.mock.calls.length;
+    canonicalPreviewBootstrapUrlMock.mockRejectedValueOnce(new Error("offline"));
+    fireEvent.click(screen.getByRole("button", { name: "Reload Preview" }));
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Reload Preview" }));
+    await settle();
+    expect(screen.getByText(/Preview could not be reloaded/)).toBeInTheDocument();
+    expect(container.querySelector("iframe")).toBe(frame);
+    expect(canonicalPreviewBootstrapUrlMock).toHaveBeenCalledTimes(callsBefore + 1);
   });
 });

@@ -30,6 +30,9 @@ export function PreviewStage({
   onArmInspect,
   onDisarmEdit,
   onApplyEdit,
+  onReloadAccess,
+  accessExpired,
+  onExpiredChange,
   onRefresh,
   onDownloadSource,
   downloadPending,
@@ -50,6 +53,9 @@ export function PreviewStage({
   onArmInspect: () => void;
   onDisarmEdit: () => void;
   onApplyEdit: (instruction: string) => void;
+  onReloadAccess: () => void | Promise<void>;
+  accessExpired: boolean;
+  onExpiredChange: (expired: boolean) => void;
   onRefresh: () => void;
   /** Null when there is no conversation to download (the static run view). */
   onDownloadSource: (() => void) | null;
@@ -61,18 +67,20 @@ export function PreviewStage({
   const showFrame = shouldRenderPreviewFrame(launch, visibleFailure, frameReady);
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-white">
-      <SelectionToolbar
-        armed={selection.armed}
+      {!accessExpired && <SelectionToolbar
+        armed={!accessExpired && selection.armed}
         untrusted={untrusted}
         onArm={onArmInspect}
         onDisarm={onDisarmEdit}
-      />
+      />}
       <div className="relative min-h-0 flex-1">
         {showFrame && launch ? (
           <PreviewLaunchFrame
             ref={frameRef}
             title="Preview"
             launch={launch}
+            onReload={onReloadAccess}
+            onExpiredChange={onExpiredChange}
             onLoad={onFrameLoad}
             onBootstrapReady={onBootstrapReady}
             sandbox="allow-scripts allow-forms allow-same-origin allow-popups allow-downloads"
@@ -104,9 +112,9 @@ export function PreviewStage({
           )}
         <SelectionOverlay
           showToolbar={false}
-          armed={selection.armed}
+          armed={!accessExpired && selection.armed}
           untrusted={untrusted}
-          selection={selection.selection}
+          selection={accessExpired ? null : selection.selection}
           onArm={onArmInspect}
           onDisarm={onDisarmEdit}
           onWalkUp={selection.walkUp}
@@ -120,7 +128,7 @@ export function PreviewStage({
               : undefined
           }
         />
-        {editMode && selection.selection !== null && (
+        {!accessExpired && editMode && selection.selection !== null && (
           <EditAffordance
             targetLabel={selection.selection.human_label}
             rect={selection.selection.rect}

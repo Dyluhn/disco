@@ -16,6 +16,7 @@ from disco.core.auth import (
     PREVIEW_APP_HTTP_METHODS,
     PREVIEW_BOOTSTRAP_PATH,
     AuthSession,
+    PreviewCapability,
     PreviewCapabilitySigner,
     SessionSigner,
     cookie_header_from_headers,
@@ -59,7 +60,7 @@ from .preview_browser import (
     _preview_bootstrap_url,
 )
 from .preview_finished import refresh_canonical_preview_port
-from .preview_handoff import PreviewCapabilityBody
+from .preview_handoff import PreviewCapabilityBody, _CapabilityLaunch
 from .preview_static import (
     _committed_static_capability_available,
     _sealed_runtime_contract,
@@ -263,7 +264,7 @@ async def _mint_canonical_preview(
     target: str,
     workspace_version: int | None,
     capture_generation: int | None,
-) -> tuple[str, str, str, int | None]:
+) -> _CapabilityLaunch:
     authority_id = await _canonical_preview_authority(
         store,
         runtime,
@@ -276,6 +277,7 @@ async def _mint_canonical_preview(
             status_code=409,
             detail={"reason": "preview_authority_unavailable"},
         )
+    access_expires_at = None
     if _local_preview_request(request) and not disco_env("PREVIEW_ORIGIN_BASE", "").strip():
         now = int(time.time())
         lease = store.acquire_local_preview_lease(
@@ -292,6 +294,7 @@ async def _mint_canonical_preview(
                 status_code=503,
                 detail={"reason": "local_preview_origin_pool_exhausted"},
             )
+        access_expires_at = lease.expires_at
         bootstrap = _local_preview_bootstrap_url(
             request,
             lease.listener_port,
@@ -309,7 +312,7 @@ async def _mint_canonical_preview(
         immutable_version=workspace_version,
         capture_generation=capture_generation,
     )
-    return bootstrap, intent, authority_id, workspace_version
+    return _CapabilityLaunch(bootstrap, intent, authority_id, workspace_version, access_expires_at)
 
 
 def _validate_capability_body(body: PreviewCapabilityBody) -> None:
@@ -477,7 +480,7 @@ async def _capability_intent(
     safe_target: str,
     body: PreviewCapabilityBody,
     capture_generation: int | None,
-) -> tuple[str, str, str | None, int | None]:
+) -> _CapabilityLaunch:
     if body.transport == "canonical":
         return await _mint_canonical_preview(
             store=store,
@@ -516,7 +519,7 @@ async def _capability_intent(
             allow_websocket=body.transport == "path_live",
             capture_generation=capture_generation,
         )
-    return bootstrap, intent, None, None
+    return _CapabilityLaunch(bootstrap, intent)
 
 
 async def _preview_capability_response_unleased(
@@ -543,12 +546,7 @@ async def _preview_capability_response_unleased(
         conversation_id,
         body,
     )
-    (
-        bootstrap,
-        intent,
-        authority_id,
-        immutable_version,
-    ) = await _capability_intent(
+    launch = await _capability_intent(
         store,
         runtime,
         signer,
@@ -565,13 +563,15 @@ async def _preview_capability_response_unleased(
     )
     return JSONResponse(
         {
-            "bootstrap_url": bootstrap,
-            "bootstrap_intent": intent,
+            "bootstrap_url": launch.bootstrap,
+            "bootstrap_intent": launch.intent,
             "target_path": target,
             "port": port,
             "transport": body.transport,
-            "preview_authority": authority_id,
-            "immutable_version": immutable_version,
+            "preview_authority": launch.authority_id,
+            "immutable_version": launch.immutable_version,
+            "access_expires_at": launch.access_expires_at,
+            "server_time": time.time(),
         },
         headers={"Cache-Control": "no-store", "Pragma": "no-cache"},
     )
@@ -610,7 +610,7 @@ async def _redemption_body(request: Request) -> bytes | Response:
 class _RedeemedPathIntent:
     token: str
     target: str
-    capability: object
+    capability: PreviewCapability
     expected_prefix: str
 
 
@@ -676,6 +676,7 @@ def _path_preview_navigation_response(
     document, navigation_headers = preview_navigation_document(
         redeemed.target,
         clear_storage=False,
+        access_expires_at=redeemed.capability.expires_at,
     )
     response = Response(
         document,

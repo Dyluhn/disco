@@ -54,6 +54,7 @@ export interface LiveBrowserSession {
   /** The HONEST "actually streaming" signal: the stack started, the noVNC iframe
    * has loaded, AND the backend still confirms the stack is running. */
   streaming: boolean;
+  reloadPreview: () => Promise<void>;
 }
 
 /** Encapsulates the entire live-browser (noVNC) session lifecycle for
@@ -84,6 +85,12 @@ export function useLiveBrowserSession(cid: string | null): LiveBrowserSession {
 
   // Mirror live state into a ref so the poll/unmount effects read the latest value
   // without re-subscribing on every change.
+  const reloadOwner = useRef(0);
+  useEffect(() => {
+    reloadOwner.current += 1;
+    return () => { reloadOwner.current += 1; };
+  }, [cid, liveBrowserEnabled]);
+  const liveTarget = useRef<{ port: number; path: string } | null>(null);
   const liveViewRef = useRef(liveView);
   liveViewRef.current = liveView;
   // The cid an auto-start is GENUINELY DOOMED for (a hard capability/config error like
@@ -135,6 +142,7 @@ export function useLiveBrowserSession(cid: string | null): LiveBrowserSession {
         startFailuresRef.current = 0;
         setLiveStartFailure(null);
         setIframeConnected(false);
+        liveTarget.current = { port: data.port, path: data.novnc_path };
         setLiveView({ launch: src, ownerCid: cid });
       } catch (e: unknown) {
         // Distinguish DOOMED from TRANSIENT without exposing raw backend errors.
@@ -230,7 +238,19 @@ export function useLiveBrowserSession(cid: string | null): LiveBrowserSession {
     };
   }, []);
 
+  async function reloadPreview() {
+    const view = liveViewRef.current;
+    const target = liveTarget.current;
+    if (!view || !target || view.ownerCid !== cid) return;
+    const owner = reloadOwner.current;
+    const launch = await mintLiveBrowserLaunch(view.ownerCid, target.port, target.path);
+    if (reloadOwner.current !== owner || liveViewRef.current !== view) return;
+    if (!launch) throw new Error("Preview access unavailable");
+    setIframeConnected(false);
+    setLiveView({ ...view, launch });
+  }
+
   const streaming = !!liveView && iframeConnected && liveReady;
 
-  return { liveView, liveReady, iframeConnected, setIframeConnected, liveStartFailure, streaming };
+  return { liveView, liveReady, iframeConnected, setIframeConnected, liveStartFailure, streaming, reloadPreview };
 }

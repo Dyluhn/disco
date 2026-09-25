@@ -157,18 +157,26 @@ export async function apiFetch(pathOrUrl: string, init: RequestInit = {}): Promi
 type PreviewCapabilityResponse = {
   bootstrap_url: string;
   bootstrap_intent: string;
+  access_expires_at?: number | null;
+  server_time?: number;
 };
 
-export type PreviewLaunch = { url: string; intent: string };
+export type PreviewLaunch = {
+  url: string;
+  intent: string;
+  /** Local browser deadline derived from the server's actual origin lease. */
+  accessDeadline?: number;
+};
 
-function mintPreviewCapability(
+async function mintPreviewCapability(
   cid: string,
   port: number | undefined,
   targetPath: string,
   transport: "host" | "path" | "path_live" | "canonical",
   workspaceVersion?: number,
 ) {
-  return agentSend<PreviewCapabilityResponse>(
+  const requestedAt = Date.now();
+  const response = await agentSend<PreviewCapabilityResponse>(
     "POST",
     `/conversations/${encodeURIComponent(cid)}/preview/capability`,
     {
@@ -178,6 +186,12 @@ function mintPreviewCapability(
       transport,
     },
   );
+  const { access_expires_at: expires, server_time: serverTime } = response;
+  const deadline = typeof expires === "number" && Number.isFinite(expires) &&
+    typeof serverTime === "number" && Number.isFinite(serverTime)
+    ? requestedAt + Math.max(0, expires - serverTime) * 1000 : undefined;
+  return { url: response.bootstrap_url, intent: response.bootstrap_intent,
+    ...(deadline === undefined ? {} : { accessDeadline: deadline }) };
 }
 
 /** The one user-facing Build Preview contract. The server selects a DNS-free
@@ -196,7 +210,7 @@ export async function canonicalPreviewBootstrapUrl(
     "canonical",
     workspaceVersion,
   );
-  return { url: result.bootstrap_url, intent: result.bootstrap_intent };
+  return result;
 }
 
 export async function previewBootstrapUrl(
@@ -209,7 +223,7 @@ export async function previewBootstrapUrl(
     return url ? { url, intent: "" } : null;
   }
   const result = await mintPreviewCapability(cid, port, targetPath, "host");
-  return { url: result.bootstrap_url, intent: result.bootstrap_intent };
+  return result;
 }
 
 /** Capability-gated preview-app URL on an origin isolated from the app session.
@@ -221,7 +235,7 @@ export async function pathPreviewBootstrapUrl(
 ): Promise<PreviewLaunch | null> {
   if (!agentLive()) return null;
   const result = await mintPreviewCapability(cid, undefined, targetPath, "path");
-  return { url: result.bootstrap_url, intent: result.bootstrap_intent };
+  return result;
 }
 
 /** Firefox-safe path transport for a live server, with an explicit signed HMR
@@ -232,7 +246,7 @@ export async function livePathPreviewBootstrapUrl(
 ): Promise<PreviewLaunch | null> {
   if (!agentLive()) return null;
   const result = await mintPreviewCapability(cid, undefined, targetPath, "path_live");
-  return { url: result.bootstrap_url, intent: result.bootstrap_intent };
+  return result;
 }
 
 /** An API error that carries the real backend message (surfaced to the UI). */

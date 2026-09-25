@@ -8,6 +8,7 @@ import {
   type ComponentPropsWithoutRef,
 } from "react";
 import type { PreviewLaunch } from "@/api/preview";
+import { PreviewAccessBoundary } from "./PreviewAccessBoundary";
 import { postPreviewLaunch } from "@/lib/previewLaunch";
 
 let frameLaunchCounter = 0;
@@ -17,6 +18,8 @@ type PreviewLaunchFrameProps = Omit<
   "name" | "src"
 > & {
   launch: PreviewLaunch;
+  onReload?: () => void | Promise<void>;
+  onExpiredChange?: (expired: boolean) => void;
   /** Fired when the POST trampoline announces `disco-preview-bootstrap-ready`.
    * Optional: a caller that does not watch the handshake is unaffected. The
    * ABSENCE of this call is the only signal that the preview origin never
@@ -27,6 +30,7 @@ type PreviewLaunchFrameProps = Omit<
 
 type PreviewLaunchFrameInstanceProps = PreviewLaunchFrameProps & {
   launchIdentity: string;
+  onAccessDeadline: (expires: unknown, serverTime: unknown) => void;
 };
 
 const PreviewLaunchFrameInstance = forwardRef<
@@ -34,7 +38,7 @@ const PreviewLaunchFrameInstance = forwardRef<
   PreviewLaunchFrameInstanceProps
 >(
   function PreviewLaunchFrameInstance(
-    { launch, launchIdentity, onLoad, onBootstrapReady, ...props },
+    { launch, launchIdentity, onLoad, onBootstrapReady, onAccessDeadline, ...props },
     forwardedRef,
   ) {
     const { url: launchUrl, intent: launchIntent } = launch;
@@ -46,6 +50,7 @@ const PreviewLaunchFrameInstance = forwardRef<
     const submittedLaunchRef = useRef<string | null>(null);
     const targetLoadArmedRef = useRef(false);
     const bootstrapReadySeenRef = useRef(false);
+    const accessDeadlineClosedRef = useRef(false);
     const setRef = useCallback(
       (node: HTMLIFrameElement | null) => {
         internalRef.current = node;
@@ -71,6 +76,7 @@ const PreviewLaunchFrameInstance = forwardRef<
           // iframe load is the exact signed target selected by the trampoline.
           targetLoadArmedRef.current = true;
           bootstrapReadySeenRef.current = true;
+          accessDeadlineClosedRef.current = true;
           window.removeEventListener("message", handleBootstrapReady);
           onBootstrapReady?.();
         }
@@ -78,6 +84,22 @@ const PreviewLaunchFrameInstance = forwardRef<
       window.addEventListener("message", handleBootstrapReady);
       return () => window.removeEventListener("message", handleBootstrapReady);
     }, [launchIntent, onBootstrapReady]);
+
+    useLayoutEffect(() => {
+      if (!launchIntent) return;
+      const expectedOrigin = new URL(launchUrl, window.location.href).origin;
+      const receiveDeadline = (event: MessageEvent) => {
+        if (accessDeadlineClosedRef.current || event.source !== internalRef.current?.contentWindow ||
+          event.origin !== expectedOrigin || event.data?.channel !== "disco-preview-access") return;
+        const { expires_at: expires, server_time: serverTime } = event.data;
+        if (!Number.isInteger(expires) || typeof serverTime !== "number" || !Number.isFinite(serverTime) || expires < 0 || serverTime < 0) return;
+        accessDeadlineClosedRef.current = true;
+        onAccessDeadline(expires, serverTime);
+        window.removeEventListener("message", receiveDeadline);
+      };
+      window.addEventListener("message", receiveDeadline);
+      return () => window.removeEventListener("message", receiveDeadline);
+    }, [launchIntent, launchUrl, onAccessDeadline]);
 
     useEffect(() => {
       if (!internalRef.current) return;
@@ -93,6 +115,7 @@ const PreviewLaunchFrameInstance = forwardRef<
     const handleLoad = (event: SyntheticEvent<HTMLIFrameElement>) => {
       if (!launchIntent || targetLoadArmedRef.current) {
         targetLoadArmedRef.current = false;
+        accessDeadlineClosedRef.current = true;
         onLoad?.(event);
       }
     };
@@ -123,13 +146,17 @@ export const PreviewLaunchFrame = forwardRef<HTMLIFrameElement, PreviewLaunchFra
         identity: `preview-launch-${frameLaunchCounter}`,
       };
     }
+    const { onReload, onExpiredChange, ...frameProps } = props;
     return (
-      <PreviewLaunchFrameInstance
-        key={identityRef.current.identity}
-        {...props}
-        launchIdentity={identityRef.current.identity}
-        ref={forwardedRef}
-      />
+      <PreviewAccessBoundary key={identityRef.current.identity} launch={props.launch}
+        onReload={onReload} onExpiredChange={onExpiredChange}>
+        {(accept) => <PreviewLaunchFrameInstance
+          {...frameProps}
+          launchIdentity={identityRef.current.identity}
+          onAccessDeadline={accept}
+          ref={forwardedRef}
+        />}
+      </PreviewAccessBoundary>
     );
   },
 );
