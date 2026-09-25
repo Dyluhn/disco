@@ -69,6 +69,7 @@ export function ArtifactsPane({
       staticMintRef.current = null;
       return;
     }
+    const owner = ++reloadOwner.current;
     const key = `${cid}:committed:${committedGeneration}`;
     const promise =
       staticMintRef.current?.key === key
@@ -77,10 +78,10 @@ export function ArtifactsPane({
     staticMintRef.current = { key, promise };
     void promise
       .then((url) => {
-        if (!cancelled) setStaticPreviewSrc(url);
+        if (!cancelled && reloadOwner.current === owner) setStaticPreviewSrc(url);
       })
       .catch(() => {
-        if (!cancelled) setStaticPreviewSrc(null);
+        if (!cancelled && reloadOwner.current === owner) setStaticPreviewSrc(null);
       });
     return () => {
       cancelled = true;
@@ -95,6 +96,7 @@ export function ArtifactsPane({
     const launch = await mintPathPreviewLaunch(cid, "/");
     if (reloadOwner.current !== owner || staticMintRef.current !== owned) return;
     if (!launch) throw new Error("Preview access unavailable");
+    staticMintRef.current = { key: owned.key, promise: Promise.resolve(launch) };
     setStaticPreviewSrc(launch);
   }
 

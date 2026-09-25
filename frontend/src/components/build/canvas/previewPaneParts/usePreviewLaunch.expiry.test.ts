@@ -59,4 +59,18 @@ describe("explicit preview access reload", () => {
     expect(result.current.launch?.intent).toBe("confirmed-reload");
     expect(result.current.minting).toBe(false);
   });
+  it("keeps a confirmed launch and its ready state when the same navigation key is rendered again", async () => {
+    const { result, rerender } = renderHook(({ target }) => usePreviewLaunch("cid", true, "same", target, null),
+      { initialProps: { target: "/" } });
+    await waitFor(() => expect(result.current.launch).toBe(first));
+    mint.mockResolvedValueOnce({ ...first, intent: "confirmed" });
+    await act(async () => { await result.current.reloadPreview(); });
+    act(() => result.current.setFrameReady(true));
+    rerender({ target: "/current-route" });
+    await act(async () => { await Promise.resolve(); });
+    expect(result.current.launch?.intent).toBe("confirmed");
+    expect(result.current.frameReady).toBe(true);
+    expect(mint).toHaveBeenCalledTimes(2);
+  });
+
 });

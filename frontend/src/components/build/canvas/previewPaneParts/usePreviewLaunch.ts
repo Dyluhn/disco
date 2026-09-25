@@ -48,6 +48,7 @@ export function usePreviewLaunch(
   const [launchFailure, setLaunchFailure] = useState<string | null>(null);
   const [frameReady, setFrameReady] = useState(false);
   const [bootstrapFailure, setBootstrapFailure] = useState<string | null>(null);
+  const installedLaunch = useRef<PreviewLaunch | null>(null);
   const mintRef = useRef<OwnedPreviewMint | null>(null);
   const reloadOwner = useRef(0);
   useEffect(() => () => { reloadOwner.current += 1; }, [cid, ownsCanonicalPreview, requestedLaunchKey]);
@@ -98,6 +99,8 @@ export function usePreviewLaunch(
           setLaunchFailure("isolated preview access could not be established");
           return;
         }
+        if (nextLaunch === installedLaunch.current) return;
+        installedLaunch.current = nextLaunch;
         setLaunch(nextLaunch);
         setLaunchKey(requestedLaunchKey);
         setLaunchVersionSeq(selectedVersionSeq);
@@ -125,6 +128,8 @@ export function usePreviewLaunch(
       const next = await previewBootstrapUrl(cid, selectedTarget, selectedVersionSeq);
       if (reloadOwner.current !== owner) return;
       if (!next) throw new Error("Preview access unavailable");
+      installedLaunch.current = next;
+      mintRef.current = { key: requestedLaunchKey, promise: Promise.resolve(next) };
       setLaunch(next);
       setLaunchKey(requestedLaunchKey);
       setLaunchVersionSeq(selectedVersionSeq);
