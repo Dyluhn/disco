@@ -59,6 +59,11 @@ export function useElementSelect(
   // Hold the nonce in a ref so the message listener always sees the latest
   // value without being re-registered on every arm cycle.
   const nonceRef = useRef<string>("");
+  const observedSizeRef = useRef<{
+    iframe: HTMLIFrameElement;
+    width: number;
+    height: number;
+  } | null>(null);
 
   const arm = useCallback(() => {
     const nonce = generateNonce();
@@ -107,6 +112,38 @@ export function useElementSelect(
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
   }, [allowedOrigin]);
+
+  // Selection rectangles use the frame's viewport. A toolbar/pane resize can
+  // reflow its content without another selection message. Keep inspecting, but
+  // discard coordinates measured against the old viewport. Rebind after each
+  // render because a keyed preview can replace the node behind the same ref.
+  useEffect(() => {
+    const iframe = iframeRef.current;
+    if (!armed || !iframe || typeof ResizeObserver === "undefined") {
+      observedSizeRef.current = null;
+      return;
+    }
+    const size = observedSizeRef.current?.iframe === iframe
+      ? observedSizeRef.current
+      : { iframe, width: iframe.clientWidth, height: iframe.clientHeight };
+    observedSizeRef.current = size;
+    let active = true;
+    const observer = new ResizeObserver((entries) => {
+      if (!active || iframeRef.current !== iframe || !entries.some((entry) => entry.target === iframe))
+        return;
+      const nextWidth = iframe.clientWidth;
+      const nextHeight = iframe.clientHeight;
+      if (nextWidth === size.width && nextHeight === size.height) return;
+      size.width = nextWidth;
+      size.height = nextHeight;
+      setSelection(null);
+    });
+    observer.observe(iframe);
+    return () => {
+      active = false;
+      observer.disconnect();
+    };
+  });
 
   // Disarm on unmount to clean up the in-frame handler.
   useEffect(() => {
