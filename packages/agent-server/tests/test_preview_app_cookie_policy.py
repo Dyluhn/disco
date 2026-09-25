@@ -4,6 +4,7 @@ from dataclasses import replace
 
 import httpx
 import pytest
+from disco.agent_server import host_proxy
 from disco.agent_server.host_proxy import HostPreviewProxyMiddleware
 from disco.agent_server.host_proxy_parts._cookies import _rewrite_embedded_app_cookie
 from disco.agent_server.host_proxy_parts._forwarding import (
@@ -150,7 +151,7 @@ def test_shared_response_paths_adapt_repeated_app_cookies_after_reserved_filteri
 
 @pytest.mark.parametrize("embedded", [False, True])
 async def test_canonical_live_bootstrap_carries_cookie_policy_to_later_fetch(
-    upstream_http, embedded
+    upstream_http, embedded, monkeypatch
 ):
     store = SqliteEventStore(":memory:")
     signer = PreviewCapabilitySigner(redemption_store=store)
@@ -172,9 +173,13 @@ async def test_canonical_live_bootstrap_carries_cookie_policy_to_later_fetch(
     )
     try:
         base = "http://p2-aaaaaaaa-8000.localhost"
-        async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url=base
-        ) as client:
+        async with (
+            httpx.AsyncClient() as upstream_client,
+            httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url=base) as client,
+        ):
+            # Own the transport on this test's loop; another test's pooled sockets
+            # may belong to an already closed event loop.
+            monkeypatch.setattr(host_proxy, "_get_client", lambda: upstream_client)
             redeemed = await client.post(
                 PREVIEW_BOOTSTRAP_PATH,
                 headers={
