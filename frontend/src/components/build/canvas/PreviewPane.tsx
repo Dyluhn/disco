@@ -43,6 +43,12 @@ import { usePreviewRouteBridge } from "./previewPaneParts/usePreviewRouteBridge"
 import { useWorkspaceRollback } from "./previewPaneParts/useWorkspaceRollback";
 import { VersionBanner } from "./previewPaneParts/VersionBanner";
 
+function armPreviewInspection(untrusted: boolean, disarmPoint: () => void, armSelection: () => void) {
+  if (untrusted) return;
+  disarmPoint();
+  armSelection();
+}
+
 /**
  * One canonical Build Preview. Owned web builds always use the platform-managed
  * capability proxy; event-derived srcdoc is reserved for the hardened imported /
@@ -210,15 +216,12 @@ export function PreviewPane({
   }
 
   function handleArmMention() {
-    selection.disarm();
-    setEditMode(false);
+    handleDisarmEdit();
     mention.arm();
   }
 
   function handleArmInspect() {
-    if (untrusted) return;
-    mention.disarm();
-    selection.arm();
+    armPreviewInspection(untrusted, mention.disarm, selection.arm);
   }
 
   function handleDisarmEdit() {
