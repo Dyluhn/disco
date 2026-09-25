@@ -26,7 +26,11 @@ Browser testing also found that the floating Inspect button intercepted an
 embedded app's Sign out button. Inspector controls now occupy a separate host
 toolbar above each iframe. Selection rectangles and edit affordances retain
 their iframe-relative positioning. The first-run hint occupies toolbar layout
-space as well. Existing inspector and preview tests passed (49 cases).
+space as well. Existing inspector and preview tests passed (49 cases). A ResizeObserver clears
+stale selection coordinates after actual viewport size changes while preserving
+Inspect mode; unchanged first observations retain selection. Five added hook
+cases cover size changes, initial observation, queued resize across rerenders,
+and observer cleanup. All six hook cases passed.
 
 The reviewed frontend declaration changes are:
 
