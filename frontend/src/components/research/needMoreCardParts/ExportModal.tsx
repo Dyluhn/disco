@@ -4,10 +4,11 @@
  */
 
 import * as Dialog from "@radix-ui/react-dialog";
-import { useState } from "react";
+import { useState, type RefObject } from "react";
 import { X } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { useExportCapabilities } from "@/hooks/useExportCapabilities";
+import { useDialogRestoreFocus } from "@/hooks/useDialogRestoreFocus";
 import { useTemplates } from "@/hooks/useTemplates";
 import type { ReportEvent } from "@/types/agent";
 import { TemplatePicker } from "../TemplatePicker";
@@ -24,9 +25,12 @@ export interface ExportModalProps {
   cid: string;
   /** Selected follow-up user-message seqs to include (WALK-20). */
   followUpSeqs?: number[];
+  /** Original invoker, retained when the include-follow-ups dialog hands off. */
+  returnFocusRef?: RefObject<HTMLElement | null>;
 }
 
-export function ExportModal({ open, onOpenChange, report, cid, followUpSeqs }: ExportModalProps) {
+export function ExportModal({ open, onOpenChange, report, cid, followUpSeqs, returnFocusRef }: ExportModalProps) {
+  const focus = useDialogRestoreFocus(returnFocusRef);
   const exportCaps = useExportCapabilities();
   // Export template — a brand theme spin. Threaded into the POST body as `theme`
   // (registry name) + `mode` (split from the chosen catalogue entry). Default =
@@ -48,6 +52,7 @@ export function ExportModal({ open, onOpenChange, report, cid, followUpSeqs }: E
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-40 bg-black/40 backdrop-blur-md" />
         <Dialog.Content
+          {...focus}
           className={cn(
             "fixed left-1/2 top-1/2 z-50 w-[min(26rem,92vw)]",
             "-translate-x-1/2 -translate-y-1/2",

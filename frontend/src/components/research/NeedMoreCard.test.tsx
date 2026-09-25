@@ -357,6 +357,40 @@ describe("NeedMoreCard", () => {
     expect(screen.getByRole("dialog")).toBeInTheDocument();
   });
 
+  it.each([
+    ["direct", "Escape"],
+    ["direct", "Close"],
+    ["Skip", "Escape"],
+    ["Skip", "Close"],
+    ["Export with 1 follow-up", "Escape"],
+    ["Export with 1 follow-up", "Close"],
+  ])("restores the original export invoker after %s then %s", async (path, dismissal) => {
+    const user = userEvent.setup();
+    renderCard({ followUps: path === "direct" ? [] : [
+      { kind: "message", seq: 10, source: "user", message: { role: "user", content: "More?" } },
+      { kind: "message", seq: 11, source: "agent", message: { role: "assistant", content: "Details." } },
+    ] as MessageEvent[] });
+    const trigger = screen.getByRole("button", { name: /Export as/ });
+    trigger.focus();
+    await user.keyboard("{Enter}");
+    const restore = vi.spyOn(trigger, "focus");
+    if (path !== "direct") {
+      const chooser = await screen.findByRole("dialog", { name: "Include follow-ups?" });
+      await user.click(within(chooser).getByRole("button", { name: path }));
+    }
+    const exporter = await screen.findByRole("dialog", { name: "Export report" });
+    await waitFor(() => expect(within(exporter).getByRole("button", { name: "Close export dialog" })).toHaveFocus());
+    await user.tab();
+    expect(exporter).toContainElement(document.activeElement as HTMLElement);
+    expect(restore).not.toHaveBeenCalled();
+    if (dismissal === "Escape") await user.keyboard("{Escape}");
+    else await user.click(within(exporter).getByRole("button", { name: "Close export dialog" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await waitFor(() => expect(trigger).toHaveFocus());
+    expect(restore).toHaveBeenCalledWith({ preventScroll: true });
+    restore.mockRestore();
+  });
+
   it("gives every report action dialog a Radix-backed accessible name", async () => {
     const user = userEvent.setup();
     const consoleError = vi.spyOn(console, "error");

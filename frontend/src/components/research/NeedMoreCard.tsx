@@ -81,6 +81,7 @@ export function NeedMoreCard({
   // Independent, resettable state per action.
   const [followUpOpen, setFollowUpOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
+  const exportInvoker = useRef<HTMLElement | null>(null);
 
   // WALK-20: include-follow-ups modal state for Export and Audio.
   const [includeForExportOpen, setIncludeForExportOpen] = useState(false);
@@ -143,6 +144,9 @@ export function NeedMoreCard({
 
   // Export button: show include-modal first if follow-ups exist.
   const handleExportClick = useCallback(() => {
+    exportInvoker.current = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
     if (hasFollowUps) {
       setIncludeForExportOpen(true);
     } else {
@@ -277,6 +281,7 @@ export function NeedMoreCard({
         onOpenChange={setIncludeForExportOpen}
         followUps={followUps}
         onConfirm={handleExportIncludeConfirm}
+        returnFocusRef={exportInvoker}
         confirmOpensDialog
         actionLabel="Export"
       />
@@ -295,6 +300,7 @@ export function NeedMoreCard({
       {/* Export modal (Radix Dialog) */}
       <ExportModal
         open={exportOpen}
+        returnFocusRef={exportInvoker}
         onOpenChange={setExportOpen}
         report={report}
         cid={cid}
