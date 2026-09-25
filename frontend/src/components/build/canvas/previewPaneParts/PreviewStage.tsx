@@ -27,6 +27,7 @@ export function PreviewStage({
   untrusted,
   selection,
   onSteer,
+  onArmInspect,
   onDisarmEdit,
   onApplyEdit,
   onRefresh,
@@ -46,6 +47,7 @@ export function PreviewStage({
   untrusted: boolean;
   selection: ElementSelectState;
   onSteer?: (text: string) => void;
+  onArmInspect: () => void;
   onDisarmEdit: () => void;
   onApplyEdit: (instruction: string) => void;
   onRefresh: () => void;
@@ -60,9 +62,9 @@ export function PreviewStage({
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-white">
       <SelectionToolbar
-        armed={editMode && selection.armed}
+        armed={selection.armed}
         untrusted={untrusted}
-        onArm={selection.arm}
+        onArm={onArmInspect}
         onDisarm={onDisarmEdit}
       />
       <div className="relative min-h-0 flex-1">
@@ -102,10 +104,10 @@ export function PreviewStage({
           )}
         <SelectionOverlay
           showToolbar={false}
-          armed={editMode && selection.armed}
+          armed={selection.armed}
           untrusted={untrusted}
           selection={selection.selection}
-          onArm={selection.arm}
+          onArm={onArmInspect}
           onDisarm={onDisarmEdit}
           onWalkUp={selection.walkUp}
           onDiscuss={

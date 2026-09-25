@@ -210,8 +210,15 @@ export function PreviewPane({
   }
 
   function handleArmMention() {
-    if (editMode) toggleEdit();
+    selection.disarm();
+    setEditMode(false);
     mention.arm();
+  }
+
+  function handleArmInspect() {
+    if (untrusted) return;
+    mention.disarm();
+    selection.arm();
   }
 
   function handleDisarmEdit() {
@@ -304,6 +311,7 @@ export function PreviewPane({
         untrusted={untrusted}
         selection={selection}
         onSteer={onSteer}
+        onArmInspect={handleArmInspect}
         onDisarmEdit={handleDisarmEdit}
         onApplyEdit={applyEdit}
         onRefresh={() => void refresh()}
