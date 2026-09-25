@@ -16,6 +16,7 @@ from typing import Literal, NamedTuple, Protocol
 from disco.core import LLMMessage
 from disco.core.llm import CapabilityProfile, CompletionRequest, LLMRouter, ModelRole
 
+from ._grounding_text import _plain_text
 from ._table_citation_context import _table_caption_citations
 from .models import Claim, GroundedAnswer, Passage, RetrievalResult, VerifiedClaim
 from .source_excerpts import relevant_excerpt
@@ -163,7 +164,6 @@ _PERSON_INITIAL = re.compile(r"\b[A-Z]\.$")
 # back to cite text that does not exist (phase-6 run-02: 8 of 11 findings).
 _CASE_V = re.compile(r"\bv\.$")
 _CLUSTER = re.compile(r"(.*?)((?:\[\[[\w-]+\]\]\s*)+)", re.DOTALL)
-_MD = re.compile(r"[*`#_>]+")
 _MD_IMG = re.compile(r"!\[[^\]]*\]\([^)]*\)")
 _MD_LINK = re.compile(r"\[([^\]]*)\]\([^)]*\)")
 _WORDISH = re.compile(r"[A-Za-z][\w'-]*")
@@ -218,14 +218,14 @@ def _split_sentences(text: str) -> list[str]:
 
 def _plain(text: str) -> str:
     """Strip markdown emphasis so the NLI hypothesis is clean prose."""
-    return _MD.sub("", text).strip()
+    return _plain_text(text)
 
 
 def _clean_premise(text: str) -> str:
     """Remove markdown links and images before sentence-level comparison."""
     text = _MD_IMG.sub(" ", text)
     text = _MD_LINK.sub(r"\1", text)
-    return _MD.sub("", text)
+    return _plain_text(text)
 
 
 def _best_entail(passage_text: str, claim: str, nli: _NLILike) -> tuple[str, float]:

@@ -1,0 +1,42 @@
+{
+  "source_commit": "f83eaca907fb3351632cdc121ecaa7265e0def12",
+  "conversation_id": "conv_f001a6a13adf4b288dc37c6f07db3a74",
+  "report_event_id": "evt_5d928784f8f64612ab9b82207c6b4c40",
+  "query": "Using official sqlite.org documentation, compare SQLite rollback-journal and WAL modes for a small self-hosted web application. Cover concurrent readers and writers, durability with synchronous NORMAL versus FULL, checkpoints and long-lived readers, network-filesystem restrictions, backups, and safe switching between modes. Separate documented facts from recommendations. Cite every factual claim and clearly identify unresolved points. Keep the final report concise.",
+  "scope": "Exact claim and official cached source excerpts from the f83 UI run. Regression checks preprocessing only, not NLI accuracy.",
+  "rows": [
+    {
+      "claim_index": 56,
+      "claim": "One more constraint: page_size cannot be changed in WAL mode, including via VACUUM or a backup-API restore, consistent with the VACUUM page's statement that page_size changes via VACUUM apply only outside WAL mode",
+      "source_id": "web_78c10d876dc66fb8f6b094e3",
+      "url": "https://www.sqlite.org/wal.html",
+      "source_sha256": "79d87123a0551ae53b62561d16515ab00545b92b25c5c89c9113b6aa78309b02",
+      "start": 2945,
+      "end": 3945,
+      "source_text": "It is not possible to change the [page_size](https://www.sqlite.org/pragma.html#pragma_page_size) after entering WAL mode, either on an empty database or by using [VACUUM](https://www.sqlite.org/lang_vacuum.html) or by restoring from a backup using the [backup API](https://www.sqlite.org/backup.html). You must be in a rollback journal mode to change the page size. \n  4. ~~It is not possible to open[read-only WAL databases](https://www.sqlite.org/wal.html#readonly). The opening process must have write privileges for \"`-shm`\" [wal-index](https://www.sqlite.org/walformat.html#shm) shared memory file associated with the database, if that file exists, or else write access on the directory containing the database file if the \"`-shm`\" file does not exist.~~ Beginning with [version 3.22.0](https://www.sqlite.org/releaselog/3_22_0.html) (2018-01-22), a read-only WAL-mode database file can be opened if the `-shm` and `-wal` files already exist or those files can be created or the [database is im",
+      "identifier": "page_size"
+    },
+    {
+      "claim_index": 51,
+      "claim": "The corruption page lists three safe live-copy techniques \u2014 sqlite3_rsync (available since 3.47.0, 2024-10-21, copying over SSH), VACUUM INTO, and the backup API \u2014 which the backup and VACUUM pages document in detail",
+      "source_id": "web_d1e166fbe953c664113981a3",
+      "url": "https://www.sqlite.org/howtocorrupt.html",
+      "source_sha256": "d75ffbd42d5c17559ece822e4e74950a6c504022fd6754c9ec611ab6eb222039",
+      "start": 8090,
+      "end": 9090,
+      "source_text": "The [sqlite3_rsync](https://www.sqlite.org/rsync.html) utility program (available beginning with SQLite 3.47.0 (2024-10-21) and later) will make a copy of a live SQLite over SSH using a bandwidth-efficient protocol. \n  2. The [VACUUM INTO _filename_](https://www.sqlite.org/lang_vacuum.html#vacuuminto) command copies out the current state of an SQLite database into a separate file. \n  3. The [backup API](https://www.sqlite.org/backup.html) is a C-language interface that can make a consistent copy of an SQLite database. \n\n\nAny of the above approaches will work even on a live database. It is also safe to make a copy of an SQLite database file as long as there are no transactions in progress while the copy is taking place. If the previous write transaction failed, then it is important that any rollback journal (the `*-journal` file) or write-ahead log (the `*-wal` file) be copied together with the database file itself.\n##  1.3.  Deleting a hot journal\nSQLite normally stores all content in ",
+      "identifier": "sqlite3_rsync"
+    },
+    {
+      "claim_index": 12,
+      "claim": "Checkpoints add their own locking \u2014 every checkpoint call takes an exclusive \"checkpoint\" lock, a concurrent checkpoint returns SQLITE_BUSY without invoking the busy-handler, and FULL/RESTART/TRUNCATE checkpoints also hold the exclusive writer lock, blocking new writers while pending",
+      "source_id": "web_4c1aa2e42a4dca7a29a03e74",
+      "url": "https://www.sqlite.org/c3ref/wal_checkpoint_v2.html",
+      "source_sha256": "3b8136df5c2030ce1c2f4df13c8f6eb1e779f00220a887ef9c7ba395d85318ca",
+      "start": 3650,
+      "end": 4650,
+      "source_text": "The SQLITE_CHECKPOINT_FULL, RESTART and TRUNCATE modes also obtain the exclusive \"writer\" lock on the database file. If the writer lock cannot be obtained immediately, and a busy-handler is configured, it is invoked and the writer lock retried until either the busy-handler returns 0 or the lock is successfully obtained. The busy-handler is also invoked while waiting for database readers as described above. If the busy-handler returns 0 before the writer lock is obtained or while waiting for database readers, the checkpoint operation proceeds from that point in the same way as SQLITE_CHECKPOINT_PASSIVE - checkpointing as many frames as possible without blocking any further. SQLITE_BUSY is returned in this case.\nIf parameter zDb is NULL or points to a zero length string, then the specified operation is attempted on all WAL databases [attached](https://www.sqlite.org/lang_attach.html) to [database connection](https://www.sqlite.org/c3ref/sqlite3.html) db. In this case the values written t",
+      "identifier": "SQLITE_CHECKPOINT_FULL"
+    }
+  ]
+}
