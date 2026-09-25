@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+
 def _cap_scalar_fields(
     owner: object,
     cid: object,
