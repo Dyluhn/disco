@@ -73,16 +73,31 @@
     "test_id": "development/harness/tests/test_replay_runner.py::test_deterministic_replay_reproduces_recorded_events",
     "surface": "deep_research",
     "recorded_events": 304,
-    "recorded_outputs": 303,
     "interactions": 149,
     "migration": "None. The current capture already contains its writing-stage checkpoint commits; strict semantic replay applies no migration, waiver, or weakened diff.",
     "config": "RouterConfig defaults via in-memory ConfigStore/SecretStore (build_replay_runtime defaults); no credential file, no owner keys. ReplayRouter carries the default config; LLM/search/extraction serve from the cassette; encoders run local.",
-    "network": "Unavailable by construction under replay (cassette seams + local encoders); the worker ran no network calls."
+    "network": "Validated in a container with --network=none, full local encoders, and no owner configuration or credentials mounted.",
+    "raw_non_user_events": 303
   },
   "credential_review": {
     "reviewed_by": "fixture worker, 2026-09-25",
     "result": "No credentials or personal data. No email addresses; no credential formats (no sk-/AKIA/private-key/bearer/token strings). Flagged-substring hits are all benign: schema fields (*_tokens, max_tokens), the llm.output_token_limit seam name, and public research content (ISSN citation numbers, wikipedia credit-suisse/passport/homelessness slugs, credit-agricole URL, French article slugs containing 'secret').",
     "known_credential_matches": 0
   },
-  "worker_validation": "PENDING PARENT: full-encoder offline replay not run in this worktree (no venv, no heavy deps by task scope). Parent runs the actual offline test after its serial build/deployment."
+  "worker_validation": "Worker ran syntax/lint and parent ran 22 non-encoder tests. Parent then ran all 23 cassette/replay tests in the production runtime image with network disabled and full local encoders; all passed.",
+  "integration_validation": {
+    "runtime_source": "fd79fbbf4e60f5abf738a2f416bd3127837723bc",
+    "harness_worker_source": "0e7d69fd2d7546bba6fcf143c901041b15e0d6ec",
+    "runtime_image_config_sha256": "6286cda3b7281359f51d8022d7faa3477979327db31ccc4e9132c087752e19e6",
+    "tests": 23,
+    "failures": 0,
+    "skips": 0,
+    "seconds": 95.089661234,
+    "network": "none",
+    "owner_config_or_keys_mounted": false,
+    "full_local_encoders": true,
+    "junit_sha256": "034108c44ab5953c53da5a2be094b108222a4ee345fbf000286242181295c4bb",
+    "warning": "pytest cache could not be written to the read-only source mount; test execution passed",
+    "scope": "Strict semantic equality and all ordered/reusable cassette reads consumed; not a factual report-quality pass."
+  }
 }
