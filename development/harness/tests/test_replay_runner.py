@@ -140,7 +140,7 @@ def test_legacy_plan_fixture_is_detected() -> None:
 # ---- full deterministic replay (gated on the captured fixture) --------------
 
 _FIXTURE = (
-    Path(__file__).resolve().parents[1] / "cassettes" / "loop_paris_standard_low_v2.events.jsonl"
+    Path(__file__).resolve().parents[1] / "cassettes" / "loop_paris_standard_low_v3.events.jsonl"
 )
 _LEGACY_FIXTURE = Path(__file__).resolve().parents[1] / "cassettes" / "loop_demo.events.jsonl"
 
@@ -165,10 +165,12 @@ def _with_reading_checkpoints(recorded_outputs):
     return expected
 
 
-_CASE = "loop_paris_standard_low_v2"
+_CASE = "loop_paris_standard_low_v3"
 _DEPTH = "standard_deep"
-_PROVENANCE = Path(__file__).resolve().parents[1] / "cassettes" / (
-    "loop_paris_standard_low_v2.provenance.json"
+_PROVENANCE = (
+    Path(__file__).resolve().parents[1]
+    / "cassettes"
+    / ("loop_paris_standard_low_v3.provenance.json")
 )
 
 
@@ -194,10 +196,10 @@ async def test_deterministic_replay_reproduces_recorded_events():
     assert provenance["case"] == _CASE and provenance["cid"] == _CASE
     assert provenance["depth"] == _DEPTH
     assert provenance["query"] == "What is the capital of France and roughly its population?"
-    cassette = Cassette.load(str(_FIXTURE.with_name("loop_paris_standard_low_v2.cassette.jsonl")))
+    cassette = Cassette.load(str(_FIXTURE.with_name("loop_paris_standard_low_v3.cassette.jsonl")))
     recorded = load_events(_FIXTURE)
-    assert len(recorded) == 304, "versioned current fixture must stay byte-exact (304 events)"
-    assert len(cassette) == 149, "versioned current fixture must stay byte-exact (149 interactions)"
+    assert len(recorded) == 293, "versioned current fixture must stay byte-exact (293 events)"
+    assert len(cassette) == 129, "versioned current fixture must stay byte-exact (129 interactions)"
     for name, expected in provenance["artifact_sha256"].items():
         actual = _sha256(_FIXTURE.with_name(name))
         assert actual == expected, f"{name} diverged from provenance seal"
@@ -225,6 +227,31 @@ async def test_deterministic_replay_reproduces_recorded_events():
     cassette.assert_all_consumed()
 
 
+def test_historical_loop_paris_standard_low_v2_integrity():
+    """History-only seals: the allocation change needs a new genuine capture.
+
+    These bytes are not relabeled as responses to the new output budget, and
+    this integrity check does not claim v2 replays on the current runtime.
+    """
+    from harness.cassette import Cassette
+    from harness.replay_runner import load_events
+
+    root = _FIXTURE.parent
+    seals = {
+        "events.jsonl": "d59672670031cff5d43cd896e5dc184b5e48b72ce7a44b281111ac0c70b7858d",
+        "cassette.jsonl": "9b49d00a2b2fec9208547fa8be23708f6fee5b274658b442a85b70f618a7fc47",
+        "provenance.json": "04fe50ffd526a6c0adb7b1727c4760caf093864c53589b08fa230d7b2c53280c",
+    }
+    for suffix, expected in seals.items():
+        assert _sha256(root / f"loop_paris_standard_low_v2.{suffix}") == expected
+    provenance = json.loads((root / "loop_paris_standard_low_v2.provenance.json").read_text())
+    assert provenance["case"] == provenance["cid"] == "loop_paris_standard_low_v2"
+    assert len(load_events(root / "loop_paris_standard_low_v2.events.jsonl")) == 304
+    assert len(Cassette.load(root / "loop_paris_standard_low_v2.cassette.jsonl")) == 149
+    for name, expected in provenance["artifact_sha256"].items():
+        assert _sha256(root / name) == expected
+
+
 def test_historical_loop_demo_migration_still_applies():
     """The preserved loop_demo pair + its reading-checkpoint migration stay coherent.
 
@@ -238,9 +265,9 @@ def test_historical_loop_demo_migration_still_applies():
         _LEGACY_FIXTURE.with_name("loop_demo.reading-checkpoints.json").read_text()
     )
     assert len(migration["insertions"]) == 9, "migration must keep its 9 insertion rows"
-    assert (
-        sum(len(row["events"]) for row in migration["insertions"]) == 36
-    ), "migration must insert exactly 36 writing-stage checkpoint commits"
+    assert sum(len(row["events"]) for row in migration["insertions"]) == 36, (
+        "migration must insert exactly 36 writing-stage checkpoint commits"
+    )
     migrated = _with_reading_checkpoints(recorded_outputs)
     assert len(migrated) - len(recorded_outputs) == 36
 
