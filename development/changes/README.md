@@ -67,12 +67,16 @@ GitHub Actions identity is shared with other workflows, not an unspoofable
 independent verifier. Stronger enforcement needs a separately held GitHub App
 identity issuing head-bound status from pinned trusted policy.
 
-Preflight found main unprotected, one owner/admin identity accessible to
-implementation and no independent reviewer/publication identity. Native rules
-should prohibit direct/force/delete pushes, require checks and fresh approval of
-the latest head, and dismiss stale approval. Owner admin power to change those
-rules remains. A subagent on the same account is not an independent boundary.
-Test rejection cases on disposable refs/fixtures before enabling restrictions.
+On 2026-09-28, baseline GitHub protections were enabled: PR required, existing
+required CI from App15368 with strict base checks, admin enforcement, blocked
+force/deletion and conversation resolution. The default Actions token is now
+read-only. Direct-update/deletion rejection was checked on a disposable branch.
+Required review count remains zero until a separate eligible reviewer exists;
+this new scope guard is not yet activated as a required check. One owner/admin
+identity remains accessible to implementation, with no separate publication
+identity. Owner power to change protections remains. A subagent on the same
+account is not an independent boundary. Fresh independent approval and protected
+publication still require those missing identities/authority boundaries.
 
 Manual comprehensive UI acceptance stays **outside CI**. Real controls, workflow
 results, persistence, failures and untested states are release evidence separate
