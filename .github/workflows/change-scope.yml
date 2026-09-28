@@ -1,0 +1,57 @@
+name: Change scope (trusted base)
+
+# This workflow is absent from the bootstrap PR base. It becomes executable
+# only after a separately reviewed main merge; this PR does not activate it.
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, edited, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  scope:
+    name: trusted-base change scope
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out only the immutable trusted base
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+          submodules: false
+          lfs: false
+
+      - name: Read candidate objects without checking out or executing them
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPOSITORY: ${{ github.repository }}
+          SERVER: ${{ github.server_url }}
+        shell: python
+        run: |
+          import os, re, subprocess
+          base, head = os.environ['BASE'], os.environ['HEAD']
+          number, repository = os.environ['PR_NUMBER'], os.environ['REPOSITORY']
+          assert re.fullmatch('[0-9a-f]{40}', base) and re.fullmatch('[0-9a-f]{40}', head)
+          assert re.fullmatch('[1-9][0-9]*', number)
+          assert re.fullmatch('[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repository)
+          assert os.environ['SERVER'] == 'https://github.com'
+          # Public repository; no token, auth header or candidate-controlled URL.
+          remote = 'https://github.com/' + repository + '.git'
+          subprocess.run(['git', '-c', 'core.hooksPath=/dev/null', 'fetch', '--no-tags',
+                          remote, 'refs/pull/' + number + '/head'], check=True, timeout=90)
+          fetched = subprocess.check_output(['git', 'rev-parse', 'FETCH_HEAD'], text=True).strip()
+          assert fetched == head, 'PR changed since event; wait for the new event check'
+          actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+          assert actual == base, 'Never check out candidate source in this job'
+          subprocess.run(['python3', 'development/scripts/check_change_scope.py',
+                          '--repo', '.', '--base', base, '--head', head], check=True, timeout=90)
+
+# No candidate build, dependencies, scripts, actions, UI browser sweep, secrets,
+# approval write, status-write token or publishing authority belongs in this lane.
+# A sensitive delta returns nonzero: this lane cannot approve its own changes.

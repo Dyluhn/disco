@@ -1,21 +1,27 @@
-## What & why
+## Problem and scope
 
-<!-- What does this change, and why? Link an issue if there is one. -->
+Describe the reproduced problem and resulting behavior. Link the issue or owner
+request and the single `development/changes/*.json` record. List intentional
+limits and any required dependency; unrelated discoveries need their own change.
 
-## Checklist
+## Validation and risks
 
-- [ ] The four architecture fitness gates pass for the area touched: size budget, import
-      layering, diagram freshness, and `basedpyright` (zero errors tree-wide). Commands are
-      in [CONTRIBUTING.md](../CONTRIBUTING.md#linting--formatting) and `CLAUDE.md`'s
-      "Running things".
-- [ ] `make test` (or the relevant unit suites) passes.
-- [ ] Touches the TS <-> Python wire/event contract? Ran `make contract`.
-- [ ] Touches a user-visible surface? Attached a screenshot of it working in the real app
-      (see CONTRIBUTING.md's "Verification discipline" — a green test count alone isn't
-      evidence for UI work).
-- [ ] Commit message(s) follow `type(scope): summary` (CONTRIBUTING.md's "Commit & PR
-      conventions").
+Link exact-source test output/artifact hashes. Explain changes to context/source
+limits, budgets, retries, fallback and success criteria, including functionality
+or quality lost. State provider applicability and relevant arbitrary-name,
+capability, missing-metadata/usage and streaming variant evidence.
 
-## Design authority
+Keep implementation tests, actual UI workflow checks, and output-quality review
+separate. Record failures/untested states. Manual comprehensive UI acceptance is
+not a CI requirement; screenshots alone do not prove a workflow or persistence.
 
-<!-- If this reinterprets basis-of-design.md or event-state-contract.md, say so and cite the section. -->
+## Independent review and delivery
+
+Identify changes to checks, exclusions, existing tests, authority inventories,
+replay fixtures or release rules for separate review. Historical fixtures must
+remain immutable; never rekey old responses. Candidate records cannot approve
+their own control changes. Publication remains through the workstation CLI.
+
+Bootstrap only: explicitly state when the new trusted-base workflow does not yet
+exist on main and therefore has not run. Existing checks still apply. Do not call
+shared-account subagent review an independent access-control boundary.
