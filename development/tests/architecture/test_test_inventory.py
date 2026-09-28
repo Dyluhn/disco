@@ -697,8 +697,9 @@ class TestMappingStatic:
             # TypeScript, each one-to-one in a file that still exists — and are
             # recorded in `renamed_test_transitions`; the counts below are net
             # of them, since a rename removes one identity and adds another.
-            "python_test_file_count": 973,
-            "python_static_test_id_count": 11835,
+            # Scoped PR guard: one module and eighteen new IDs; none removed.
+            "python_test_file_count": 974,
+            "python_static_test_id_count": 11853,
             "typescript_test_file_count": 309,
             "typescript_static_test_id_count": 1619,
         }
@@ -1277,11 +1278,12 @@ class TestCollectedCounts:
             # for the two defects the V51 regeneration exposed, and
             # `tests/architecture/test_frontend_relocations.py` (+14 collected
             # against +11 static: one case is parametrized four ways): +28.
-            "tests": 468,
+            # Scoped PR guard adds eighteen collected unittest cases.
+            "tests": 486,
         }
         assert set(collected["roots"]) == set(test_inventory.PYTHON_ROOTS)
         assert collected["counts"] == expected
-        assert collected["total"] == 14510 == sum(expected.values())
+        assert collected["total"] == 14528 == sum(expected.values())
         for root in test_inventory.PYTHON_ROOTS:
             ids = collected["roots"][root]
             assert len(ids) == expected[root]
@@ -1297,7 +1299,7 @@ class TestCollectedCounts:
         problems: list[str] = []
         result = test_inventory._check_collected_ids(baseline, REPO_ROOT, problems)
         assert problems == []
-        assert result == {"collected_total": 14510}
+        assert result == {"collected_total": 14528}
 
         drifted = copy.deepcopy(baseline)
         drifted["collected"]["roots"]["tests"] = list(
@@ -1316,9 +1318,9 @@ class TestBaselineValidation:
         assert result == {
             "ok": True,
             "problems": [],
-            "python_static_ids": 11835,
+            "python_static_ids": 11853,
             "typescript_static_ids": 1619,
-            "collected_total": 14510,
+            "collected_total": 14528,
         }
 
         latest_identity = test_inventory.subprocess.check_output(

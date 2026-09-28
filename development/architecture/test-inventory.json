@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "3c582b54aff73e5cf344cfd5d8c3e603e19d62a8",
+  "source_identity": "75017ac20d1c58a374bfe16258a0e836a81df401",
   "collected": {
     "counts": {
       "packages": 12462,
       "harness": 1571,
       "integrations": 9,
-      "tests": 468
+      "tests": 486
     },
-    "total": 14510,
+    "total": 14528,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -14067,6 +14067,24 @@
         "tests/architecture/test_attestation_binding.py::test_test_files_glob_is_complete",
         "tests/architecture/test_attestation_binding.py::test_the_gate_permits_a_fragment_probe",
         "tests/architecture/test_attestation_binding.py::test_the_gate_refuses_a_recreated_F58_shape",
+        "tests/architecture/test_change_scope.py::ChangeScopeTests::test_body_shape_and_content_remain_untrusted_data",
+        "tests/architecture/test_change_scope.py::ChangeScopeTests::test_candidate_cannot_self_authorize_review",
+        "tests/architecture/test_change_scope.py::ChangeScopeTests::test_candidate_checker_is_data_never_executed",
+        "tests/architecture/test_change_scope.py::ChangeScopeTests::test_changed_base_and_path_traversal_are_rejected",
+        "tests/architecture/test_change_scope.py::ChangeScopeTests::test_changed_checks_require_review_even_when_declared",
+        "tests/architecture/test_change_scope.py::ChangeScopeTests::test_cli_sensitive_delta_cannot_return_success",
+        "tests/architecture/test_change_scope.py::ChangeScopeTests::test_declared_new_source_still_invalidates_old_evidence",
+        "tests/architecture/test_change_scope.py::ChangeScopeTests::test_duplicate_keys_and_multiple_records_fail",
+        "tests/architecture/test_change_scope.py::ChangeScopeTests::test_llm_paths_cannot_opt_out_of_variant_evidence",
+        "tests/architecture/test_change_scope.py::ChangeScopeTests::test_metadata_only_commit_does_not_reuse_tested_parent",
+        "tests/architecture/test_change_scope.py::ChangeScopeTests::test_missing_record_fails",
+        "tests/architecture/test_change_scope.py::ChangeScopeTests::test_out_of_scope_change_is_rejected",
+        "tests/architecture/test_change_scope.py::ChangeScopeTests::test_real_replay_and_frontend_execution_controls_require_review",
+        "tests/architecture/test_change_scope.py::ChangeScopeTests::test_renamed_and_deleted_paths_cannot_hide_from_scope",
+        "tests/architecture/test_change_scope.py::ChangeScopeTests::test_root_conftest_cannot_weaken_selection_without_review",
+        "tests/architecture/test_change_scope.py::ChangeScopeTests::test_test_removal_requires_separate_review",
+        "tests/architecture/test_change_scope.py::ChangeScopeTests::test_valid_pr_body_record_binds_exact_head",
+        "tests/architecture/test_change_scope.py::ChangeScopeTests::test_wrong_evidence_tree_and_failed_check_are_rejected",
         "tests/architecture/test_ci_contract.py::TestBypassDetection::test_clean_command_passes",
         "tests/architecture/test_ci_contract.py::TestBypassDetection::test_comment_line_not_extracted_as_command",
         "tests/architecture/test_ci_contract.py::TestBypassDetection::test_error_suppression_detected",
@@ -14531,9 +14549,9 @@
     }
   },
   "mapping_static": {
-    "identity": "3c582b54aff73e5cf344cfd5d8c3e603e19d62a8",
-    "python_test_file_count": 973,
-    "python_static_test_id_count": 11835,
+    "identity": "75017ac20d1c58a374bfe16258a0e836a81df401",
+    "python_test_file_count": 974,
+    "python_static_test_id_count": 11853,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -15482,6 +15500,7 @@
       "scripts/architecture/test_inventory.py",
       "tests/architecture/_helpers.py",
       "tests/architecture/test_attestation_binding.py",
+      "tests/architecture/test_change_scope.py",
       "tests/architecture/test_ci_contract.py",
       "tests/architecture/test_debt.py",
       "tests/architecture/test_diagram.py",
@@ -26919,6 +26938,24 @@
       "tests/architecture/test_attestation_binding.py::test_test_files_glob_is_complete",
       "tests/architecture/test_attestation_binding.py::test_the_gate_permits_a_fragment_probe",
       "tests/architecture/test_attestation_binding.py::test_the_gate_refuses_a_recreated_F58_shape",
+      "tests/architecture/test_change_scope.py::test_body_shape_and_content_remain_untrusted_data",
+      "tests/architecture/test_change_scope.py::test_candidate_cannot_self_authorize_review",
+      "tests/architecture/test_change_scope.py::test_candidate_checker_is_data_never_executed",
+      "tests/architecture/test_change_scope.py::test_changed_base_and_path_traversal_are_rejected",
+      "tests/architecture/test_change_scope.py::test_changed_checks_require_review_even_when_declared",
+      "tests/architecture/test_change_scope.py::test_cli_sensitive_delta_cannot_return_success",
+      "tests/architecture/test_change_scope.py::test_declared_new_source_still_invalidates_old_evidence",
+      "tests/architecture/test_change_scope.py::test_duplicate_keys_and_multiple_records_fail",
+      "tests/architecture/test_change_scope.py::test_llm_paths_cannot_opt_out_of_variant_evidence",
+      "tests/architecture/test_change_scope.py::test_metadata_only_commit_does_not_reuse_tested_parent",
+      "tests/architecture/test_change_scope.py::test_missing_record_fails",
+      "tests/architecture/test_change_scope.py::test_out_of_scope_change_is_rejected",
+      "tests/architecture/test_change_scope.py::test_real_replay_and_frontend_execution_controls_require_review",
+      "tests/architecture/test_change_scope.py::test_renamed_and_deleted_paths_cannot_hide_from_scope",
+      "tests/architecture/test_change_scope.py::test_root_conftest_cannot_weaken_selection_without_review",
+      "tests/architecture/test_change_scope.py::test_test_removal_requires_separate_review",
+      "tests/architecture/test_change_scope.py::test_valid_pr_body_record_binds_exact_head",
+      "tests/architecture/test_change_scope.py::test_wrong_evidence_tree_and_failed_check_are_rejected",
       "tests/architecture/test_ci_contract.py::test_bypass_pattern_in_ci_fails",
       "tests/architecture/test_ci_contract.py::test_ci_passes",
       "tests/architecture/test_ci_contract.py::test_clean_command_passes",
@@ -44960,6 +44997,66 @@
           "tests/architecture/test_attestation_binding.py::test_allowlist_entries_are_dated_and_explained",
           "tests/architecture/test_attestation_binding.py::test_derived_population_covers_the_historical_family",
           "tests/architecture/test_attestation_binding.py::test_test_files_glob_is_complete"
+        ],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-27-SCOPED-CHANGE-ENFORCEMENT",
+      "root": "tests",
+      "source_identity_before": "3c582b54aff73e5cf344cfd5d8c3e603e19d62a8",
+      "source_identity_after": "75017ac20d1c58a374bfe16258a0e836a81df401",
+      "collected_roots": {
+        "tests": {
+          "before_count": 468,
+          "after_count": 486,
+          "added_ids": [
+            "tests/architecture/test_change_scope.py::ChangeScopeTests::test_body_shape_and_content_remain_untrusted_data",
+            "tests/architecture/test_change_scope.py::ChangeScopeTests::test_candidate_cannot_self_authorize_review",
+            "tests/architecture/test_change_scope.py::ChangeScopeTests::test_candidate_checker_is_data_never_executed",
+            "tests/architecture/test_change_scope.py::ChangeScopeTests::test_changed_base_and_path_traversal_are_rejected",
+            "tests/architecture/test_change_scope.py::ChangeScopeTests::test_changed_checks_require_review_even_when_declared",
+            "tests/architecture/test_change_scope.py::ChangeScopeTests::test_cli_sensitive_delta_cannot_return_success",
+            "tests/architecture/test_change_scope.py::ChangeScopeTests::test_declared_new_source_still_invalidates_old_evidence",
+            "tests/architecture/test_change_scope.py::ChangeScopeTests::test_duplicate_keys_and_multiple_records_fail",
+            "tests/architecture/test_change_scope.py::ChangeScopeTests::test_llm_paths_cannot_opt_out_of_variant_evidence",
+            "tests/architecture/test_change_scope.py::ChangeScopeTests::test_metadata_only_commit_does_not_reuse_tested_parent",
+            "tests/architecture/test_change_scope.py::ChangeScopeTests::test_missing_record_fails",
+            "tests/architecture/test_change_scope.py::ChangeScopeTests::test_out_of_scope_change_is_rejected",
+            "tests/architecture/test_change_scope.py::ChangeScopeTests::test_real_replay_and_frontend_execution_controls_require_review",
+            "tests/architecture/test_change_scope.py::ChangeScopeTests::test_renamed_and_deleted_paths_cannot_hide_from_scope",
+            "tests/architecture/test_change_scope.py::ChangeScopeTests::test_root_conftest_cannot_weaken_selection_without_review",
+            "tests/architecture/test_change_scope.py::ChangeScopeTests::test_test_removal_requires_separate_review",
+            "tests/architecture/test_change_scope.py::ChangeScopeTests::test_valid_pr_body_record_binds_exact_head",
+            "tests/architecture/test_change_scope.py::ChangeScopeTests::test_wrong_evidence_tree_and_failed_check_are_rejected"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [
+          "tests/architecture/test_change_scope.py"
+        ],
+        "python_static_test_ids": [
+          "tests/architecture/test_change_scope.py::test_body_shape_and_content_remain_untrusted_data",
+          "tests/architecture/test_change_scope.py::test_candidate_cannot_self_authorize_review",
+          "tests/architecture/test_change_scope.py::test_candidate_checker_is_data_never_executed",
+          "tests/architecture/test_change_scope.py::test_changed_base_and_path_traversal_are_rejected",
+          "tests/architecture/test_change_scope.py::test_changed_checks_require_review_even_when_declared",
+          "tests/architecture/test_change_scope.py::test_cli_sensitive_delta_cannot_return_success",
+          "tests/architecture/test_change_scope.py::test_declared_new_source_still_invalidates_old_evidence",
+          "tests/architecture/test_change_scope.py::test_duplicate_keys_and_multiple_records_fail",
+          "tests/architecture/test_change_scope.py::test_llm_paths_cannot_opt_out_of_variant_evidence",
+          "tests/architecture/test_change_scope.py::test_metadata_only_commit_does_not_reuse_tested_parent",
+          "tests/architecture/test_change_scope.py::test_missing_record_fails",
+          "tests/architecture/test_change_scope.py::test_out_of_scope_change_is_rejected",
+          "tests/architecture/test_change_scope.py::test_real_replay_and_frontend_execution_controls_require_review",
+          "tests/architecture/test_change_scope.py::test_renamed_and_deleted_paths_cannot_hide_from_scope",
+          "tests/architecture/test_change_scope.py::test_root_conftest_cannot_weaken_selection_without_review",
+          "tests/architecture/test_change_scope.py::test_test_removal_requires_separate_review",
+          "tests/architecture/test_change_scope.py::test_valid_pr_body_record_binds_exact_head",
+          "tests/architecture/test_change_scope.py::test_wrong_evidence_tree_and_failed_check_are_rejected"
         ],
         "typescript_test_files": [],
         "typescript_static_test_ids": [],

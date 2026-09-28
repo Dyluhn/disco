@@ -3,10 +3,10 @@
 import hashlib
 import importlib.util
 import json
-from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts/check_change_scope.py"
 spec = importlib.util.spec_from_file_location("trusted_change_scope", SCRIPT)
@@ -28,21 +28,39 @@ class ChangeScopeTests(unittest.TestCase):
         self.write("app.py", "original = False\n")
         self.tested = self.commit()
         self.record = {
-            "version": 1, "id": "scope-example", "issue": "owner-request:fixture",
-            "purpose": "Demonstrate one change", "reproduction": "Scripted validator fixture",
-            "base": self.base, "paths": ["app.py"],
+            "version": 1,
+            "id": "scope-example",
+            "issue": "owner-request:fixture",
+            "purpose": "Demonstrate one change",
+            "reproduction": "Scripted validator fixture",
+            "base": self.base,
+            "paths": ["app.py"],
             "risks": {k: "No product effect in synthetic fixture" for k in policy.RISK_FIELDS},
-            "provider": {"applicable": False, "reason": "Synthetic non-LLM file", "variant_tests": []},
-            "evidence": {"commit": self.tested, "tree": self.git("rev-parse", self.tested + "^{tree}"),
-                         "checks": [{"command": "fixture-test", "exit": 0,
-                                     "artifact_sha256": hashlib.sha256(b"fixture").hexdigest(), "tests": []}]},
+            "provider": {
+                "applicable": False,
+                "reason": "Synthetic non-LLM file",
+                "variant_tests": [],
+            },
+            "evidence": {
+                "commit": self.tested,
+                "tree": self.git("rev-parse", self.tested + "^{tree}"),
+                "checks": [
+                    {
+                        "command": "fixture-test",
+                        "exit": 0,
+                        "artifact_sha256": hashlib.sha256(b"fixture").hexdigest(),
+                        "tests": [],
+                    }
+                ],
+            },
             "ui": {"status": "not_applicable", "evidence": "No UI behavior"},
             "quality": {"status": "untested", "evidence": "No real output assessed"},
         }
 
     def git(self, *args):
-        return subprocess.check_output(["git", "-C", str(self.repo), *args], text=True,
-                                       stderr=subprocess.DEVNULL).strip()
+        return subprocess.check_output(
+            ["git", "-C", str(self.repo), *args], text=True, stderr=subprocess.DEVNULL
+        ).strip()
 
     def write(self, name, text):
         p = self.repo / name
@@ -65,7 +83,9 @@ class ChangeScopeTests(unittest.TestCase):
 
     def advance_evidence(self):
         tested = self.commit()
-        self.record["evidence"].update(commit=tested, tree=self.git("rev-parse", tested + "^{tree}"))
+        self.record["evidence"].update(
+            commit=tested, tree=self.git("rev-parse", tested + "^{tree}")
+        )
 
     def test_valid_pr_body_record_binds_exact_head(self):
         result = self.run_check(self.final())
@@ -96,10 +116,17 @@ class ChangeScopeTests(unittest.TestCase):
             self.run_check(self.final())
 
     def test_wrong_evidence_tree_and_failed_check_are_rejected(self):
-        for field, value, message in [("tree", "0" * 40, "Evidence tree"), ("exit", 1, "did not pass")]:
+        for field, value, message in [
+            ("tree", "0" * 40, "Evidence tree"),
+            ("exit", 1, "did not pass"),
+        ]:
             with self.subTest(field=field):
                 original = json.loads(json.dumps(self.record))
-                target = self.record["evidence"] if field == "tree" else self.record["evidence"]["checks"][0]
+                target = (
+                    self.record["evidence"]
+                    if field == "tree"
+                    else self.record["evidence"]["checks"][0]
+                )
                 target[field] = value
                 with self.assertRaisesRegex(policy.Invalid, message):
                     self.run_check(self.final())
@@ -139,7 +166,9 @@ class ChangeScopeTests(unittest.TestCase):
         self.advance_evidence()
         with self.assertRaisesRegex(policy.Invalid, "provider applicability"):
             self.run_check(self.final())
-        self.record["provider"].update(applicable=True, variant_tests=["arbitrary-name-equivalence"])
+        self.record["provider"].update(
+            applicable=True, variant_tests=["arbitrary-name-equivalence"]
+        )
         with self.assertRaisesRegex(policy.Invalid, "lack execution evidence"):
             self.run_check(self.final())
         self.record["evidence"]["checks"][0]["tests"] = ["arbitrary-name-equivalence"]
@@ -189,13 +218,22 @@ class ChangeScopeTests(unittest.TestCase):
         self.assertIn("conftest.py", self.run_check(self.final())["requires_independent_review"])
 
     def test_real_replay_and_frontend_execution_controls_require_review(self):
-        names = ["development/harness/cassette.py", "development/harness/replay_runner.py",
-                 "frontend/vite.config.ts", "frontend/src/test/setup.ts",
-                 "frontend/playwright.config.ts", "frontend/playwright.live.config.ts",
-                 "frontend/playwright.security-policy.config.ts",
-                 "frontend/playwright.trace-policy.config.ts",
-                 "frontend/e2e-full/full.config.ts", "frontend/live-smoke.config.ts",
-                 "AGENTS.md", "CLAUDE.md", "packages/core/AGENTS.md", "nested/CLAUDE.md"]
+        names = [
+            "development/harness/cassette.py",
+            "development/harness/replay_runner.py",
+            "frontend/vite.config.ts",
+            "frontend/src/test/setup.ts",
+            "frontend/playwright.config.ts",
+            "frontend/playwright.live.config.ts",
+            "frontend/playwright.security-policy.config.ts",
+            "frontend/playwright.trace-policy.config.ts",
+            "frontend/e2e-full/full.config.ts",
+            "frontend/live-smoke.config.ts",
+            "AGENTS.md",
+            "CLAUDE.md",
+            "packages/core/AGENTS.md",
+            "nested/CLAUDE.md",
+        ]
         for name in names:
             with self.subTest(path=name):
                 self.assertTrue(policy.sensitive(name, existed=True))
@@ -213,9 +251,22 @@ class ChangeScopeTests(unittest.TestCase):
         head = self.final()
         event = self.repo / "event.json"
         event.write_text(json.dumps({"pull_request": {"body": self.body()}}))
-        result = subprocess.run(["python3", str(SCRIPT), "--repo", str(self.repo),
-                                 "--base", self.base, "--head", head, "--event", str(event)],
-                                capture_output=True, text=True)
+        result = subprocess.run(
+            [
+                "python3",
+                str(SCRIPT),
+                "--repo",
+                str(self.repo),
+                "--base",
+                self.base,
+                "--head",
+                head,
+                "--event",
+                str(event),
+            ],
+            capture_output=True,
+            text=True,
+        )
         self.assertEqual(result.returncode, 2)
         self.assertEqual(json.loads(result.stdout)["status"], "requires_independent_review")
 
