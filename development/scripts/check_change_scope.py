@@ -11,7 +11,8 @@ import subprocess
 RECORD_PREFIX = "development/changes/"
 SENSITIVE_PREFIXES = (
     ".github/workflows/", ".github/actions/", ".claude/", "development/scripts/", "development/governance/",
-    "development/architecture/", "development/harness/cassettes/", "deploy/",
+    "development/architecture/", "development/harness/", "deploy/",
+    "frontend/src/test/", "frontend/vite.config.", "frontend/playwright",
 )
 SENSITIVE_FILES = {
     "pyproject.toml", "frontend/package.json", "frontend/package-lock.json", "Makefile",

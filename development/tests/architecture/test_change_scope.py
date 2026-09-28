@@ -179,6 +179,21 @@ class ChangeScopeTests(unittest.TestCase):
         self.advance_evidence()
         self.assertIn("conftest.py", self.run_check(self.final())["requires_independent_review"])
 
+    def test_real_replay_and_frontend_execution_controls_require_review(self):
+        names = ["development/harness/cassette.py", "development/harness/replay_runner.py",
+                 "frontend/vite.config.ts", "frontend/src/test/setup.ts",
+                 "frontend/playwright.config.ts", "frontend/playwright.live.config.ts",
+                 "frontend/playwright.security-policy.config.ts",
+                 "frontend/playwright.trace-policy.config.ts"]
+        for name in names:
+            with self.subTest(path=name):
+                self.assertTrue(policy.sensitive(name, existed=True))
+                self.write(name, "# A candidate could weaken matching or test execution here")
+        self.record["paths"].extend(names)
+        self.advance_evidence()
+        result = self.run_check(self.final())
+        self.assertEqual(result["requires_independent_review"], sorted(names))
+
     def test_cli_sensitive_delta_cannot_return_success(self):
         name = "development/harness/cassettes/record.jsonl"
         self.write(name, "{}")

@@ -20,7 +20,9 @@ not a CI requirement; screenshots alone do not prove a workflow or persistence.
 Identify changes to checks, exclusions, existing tests, authority inventories,
 replay fixtures or release rules for separate review. Historical fixtures must
 remain immutable; never rekey old responses. Candidate records cannot approve
-their own control changes. Publication remains through the workstation CLI.
+their own control changes. All Disco work now runs on blackbox under the owner’s
+2026-09-28 instruction; publication requires separately reviewed authority and
+verified source/artifact provenance.
 
 Bootstrap only: explicitly state when the new trusted-base workflow does not yet
 exist on main and therefore has not run. Existing checks still apply. Do not call

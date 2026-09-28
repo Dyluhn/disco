@@ -75,7 +75,9 @@ workflows, persistence, failures and untested states are release evidence separa
 from implementation tests and output-quality review. This workflow does not add
 a CI browser sweep or claim a scripted test demonstrates real model quality.
 
-Publishing stays on the workstation CLI, with approved source, build recipe,
-artifact digests and public verification. This PR does not change release rules
-or grant publication access. Separating that credential from implementation and
-replacing the existing alternate Actions publishing path need owner review.
+The owner moved all Disco work to blackbox on 2026-09-28; the earlier workstation
+publishing instruction is historical and superseded. Publication still needs
+approved source, build recipe, artifact digests and public verification. This PR
+does not change release rules or grant publication access. Separating that
+credential from implementation and reviewing alternate publishing paths remain
+owner-controlled followups.
