@@ -17,6 +17,7 @@ SENSITIVE_PREFIXES = (
 SENSITIVE_FILES = {
     "pyproject.toml", "frontend/package.json", "frontend/package-lock.json", "Makefile",
     ".github/CODEOWNERS", "CODEOWNERS", ".importlinter", "uv.lock",
+    "frontend/e2e-full/full.config.ts", "frontend/live-smoke.config.ts",
     "pytest.ini", "tox.ini", "setup.cfg", "ruff.toml", ".ruff.toml", ".pre-commit-config.yaml",
 }
 FIELDS = {"version", "id", "issue", "purpose", "reproduction", "base", "paths", "risks",
