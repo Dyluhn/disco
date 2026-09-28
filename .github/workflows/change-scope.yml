@@ -10,6 +10,10 @@ permissions:
   contents: read
   pull-requests: read
 
+concurrency:
+  group: change-scope-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   scope:
     name: trusted-base change scope
@@ -50,7 +54,8 @@ jobs:
           actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
           assert actual == base, 'Never check out candidate source in this job'
           subprocess.run(['python3', 'development/scripts/check_change_scope.py',
-                          '--repo', '.', '--base', base, '--head', head], check=True, timeout=90)
+                          '--repo', '.', '--base', base, '--head', head,
+                          '--event', os.environ['GITHUB_EVENT_PATH']], check=True, timeout=90)
 
 # No candidate build, dependencies, scripts, actions, UI browser sweep, secrets,
 # approval write, status-write token or publishing authority belongs in this lane.

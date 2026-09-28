@@ -4,19 +4,18 @@
 import argparse
 import hashlib
 import json
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 import re
 import subprocess
 
-RECORD_PREFIX = "development/changes/"
 SENSITIVE_PREFIXES = (
     ".github/workflows/", ".github/actions/", ".claude/", "development/scripts/", "development/governance/",
-    "development/architecture/", "development/harness/", "deploy/",
+    "development/architecture/", "development/harness/", "development/changes/", "deploy/",
     "frontend/src/test/", "frontend/vite.config.", "frontend/playwright",
 )
 SENSITIVE_FILES = {
     "pyproject.toml", "frontend/package.json", "frontend/package-lock.json", "Makefile",
-    ".github/CODEOWNERS", "CODEOWNERS", ".importlinter", "uv.lock",
+    ".github/CODEOWNERS", ".github/PULL_REQUEST_TEMPLATE.md", "CODEOWNERS", ".importlinter", "uv.lock",
     "frontend/e2e-full/full.config.ts", "frontend/live-smoke.config.ts",
     "pytest.ini", "tox.ini", "setup.cfg", "ruff.toml", ".ruff.toml", ".pre-commit-config.yaml",
 }
@@ -68,12 +67,25 @@ def fields(value, expected, name):
     require(isinstance(value, dict) and set(value) == expected, f"Invalid {name} fields")
 
 
-def blob(repo, commit, filename):
-    entry = git(repo, "ls-tree", "-z", commit, "--", filename).split(b"\0")[0]
-    require(entry.startswith((b"100644 blob ", b"100755 blob ")), "Expected a regular Git file")
-    data = git(repo, "show", f"{commit}:{filename}")
-    require(len(data) <= 65536, "Change record exceeds 64KiB")
-    return data
+def body_record(body):
+    require(isinstance(body, str) and len(body.encode("utf-8")) <= 65536,
+            "PR body must be bounded text")
+    lines = body.splitlines()
+    starts = [i for i, line in enumerate(lines) if line.strip() == "```disco-change"]
+    require(len(starts) == 1, "Exactly one disco-change JSON block is required")
+    start = starts[0] + 1
+    end = next((i for i in range(start, len(lines)) if lines[i].strip() == "```"), None)
+    require(end is not None, "Unclosed disco-change block")
+    def unique(pairs):
+        result = {}
+        for key, value in pairs:
+            require(key not in result, "Duplicate JSON key")
+            result[key] = value
+        return result
+    try:
+        return json.loads("\n".join(lines[start:end]), object_pairs_hook=unique)
+    except (json.JSONDecodeError, UnicodeError) as error:
+        raise Invalid("Invalid record JSON") from error
 
 
 def changed(repo, before, after):
@@ -93,29 +105,16 @@ def sensitive(filename, existed):
     test = "tests" in parts or filename.endswith((".test.ts", ".test.tsx", ".spec.ts"))
     return (filename.startswith(SENSITIVE_PREFIXES) or filename in SENSITIVE_FILES
             or (existed and test) or "pytest" in filename or "vitest.config" in filename
-            or filename.startswith(RECORD_PREFIX) or PurePosixPath(filename).name == "conftest.py"
+            or PurePosixPath(filename).name == "conftest.py"
             or filename.startswith(("frontend/tsconfig", "frontend/eslint.config")))
 
 
-def validate(repo, base, head, record=None):
+def validate(repo, base, head, body):
     sha(base); sha(head)
     ancestor(repo, base, head)
     delta = changed(repo, base, head)
-    records = {p for p in delta if p.startswith(RECORD_PREFIX) and p.endswith(".json")}
-    require(len(records) == 1, "Exactly one changed JSON change record is required")
-    record = record if record is not None else next(iter(records))
-    path(record)
-    require(records == {record}, "Wrong change record selected")
-    try:
-        def unique(pairs):
-            result = {}
-            for key, value in pairs:
-                require(key not in result, "Duplicate JSON key")
-                result[key] = value
-            return result
-        data = json.loads(blob(repo, head, record), object_pairs_hook=unique)
-    except (json.JSONDecodeError, UnicodeError) as error:
-        raise Invalid("Invalid record JSON") from error
+    require(delta, "Candidate has no changes")
+    data = body_record(body)
     fields(data, FIELDS, "record")
     require(type(data["version"]) is int and data["version"] == 1, "Unsupported record version")
     for key in ("id", "issue", "purpose", "reproduction"):
@@ -146,10 +145,9 @@ def validate(repo, base, head, record=None):
     fields(evidence, {"commit", "tree", "checks"}, "evidence")
     tested = sha(evidence["commit"])
     sha(evidence["tree"])
-    ancestor(repo, base, tested); ancestor(repo, tested, head)
+    require(tested == head, "Stale evidence: tested commit must equal the exact PR head")
     require(git(repo, "rev-parse", tested + "^{tree}").decode().strip() == evidence["tree"],
             "Evidence tree does not match its commit")
-    require(changed(repo, tested, head) <= {record}, "Stale evidence: source changed after tested commit")
     checks = evidence["checks"]
     require(isinstance(checks, list) and checks, "Execution checks are required")
     executed_tests = set()
@@ -170,9 +168,10 @@ def validate(repo, base, head, record=None):
                 "Invalid manual evidence status")
         text(data[field]["evidence"], field + " evidence")
     existing = {p.decode() for p in git(repo, "ls-tree", "-r", "--name-only", "-z", base).split(b"\0") if p}
-    review = sorted(p for p in delta - {record} if sensitive(p, p in existing))
-    return {"base": base, "head": head, "record": record, "changed_paths": sorted(delta),
-            "record_sha256": hashlib.sha256(blob(repo, head, record)).hexdigest(),
+    review = sorted(p for p in delta if sensitive(p, p in existing))
+    return {"base": base, "head": head, "record_source": "pull_request.body",
+            "changed_paths": sorted(delta),
+            "body_sha256": hashlib.sha256(body.encode("utf-8")).hexdigest(),
             "evidence_commit": tested, "requires_independent_review": review,
             "status": "requires_independent_review" if review else "scope_consistent",
             "limitation": "Validates declarations and Git binding, not execution authenticity, review approval or quality."}
@@ -182,11 +181,16 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("repo", "base", "head"):
         parser.add_argument("--" + name, required=True)
-    parser.add_argument("--record")
+    parser.add_argument("--event", required=True, help="Trusted runner event JSON; PR body is data")
     args = parser.parse_args()
     try:
-        result = validate(args.repo, args.base, args.head, args.record)
-    except (Invalid, subprocess.TimeoutExpired, UnicodeError) as error:
+        event_bytes = Path(args.event).read_bytes()
+        require(len(event_bytes) <= 2 * 1024 * 1024, "Event payload exceeds 2MiB")
+        event = json.loads(event_bytes)
+        require(isinstance(event, dict) and isinstance(event.get("pull_request"), dict),
+                "Missing pull_request event")
+        result = validate(args.repo, args.base, args.head, event["pull_request"].get("body"))
+    except (Invalid, subprocess.TimeoutExpired, UnicodeError, OSError, json.JSONDecodeError) as error:
         print(json.dumps({"status": "invalid", "error": str(error)}))
         return 1
     print(json.dumps(result, indent=2))

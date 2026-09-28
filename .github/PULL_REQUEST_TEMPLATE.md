@@ -1,29 +1,53 @@
 ## Problem and scope
 
-Describe the reproduced problem and resulting behavior. Link the issue or owner
-request and the single `development/changes/*.json` record. List intentional
-limits and any required dependency; unrelated discoveries need their own change.
+Describe the reproduced problem and resulting behavior. Fill exactly one JSON
+block below; placeholders fail validation. Link an issue or identified owner
+request. Unrelated discoveries need their own change.
 
-## Validation and risks
+```disco-change
+{
+  "version": 1,
+  "id": "",
+  "issue": "",
+  "purpose": "",
+  "reproduction": "",
+  "base": "<full PR base SHA>",
+  "paths": ["<every exact changed file>"],
+  "risks": {
+    "context_limits": "",
+    "budgets": "",
+    "retries": "",
+    "fallbacks": "",
+    "success_criteria": "",
+    "compatibility": ""
+  },
+  "provider": {"applicable": false, "reason": "", "variant_tests": []},
+  "evidence": {
+    "commit": "<exact tested PR head SHA>",
+    "tree": "<that commit's Git tree SHA>",
+    "checks": [{"command": "", "exit": 0, "artifact_sha256": "<actual log hash>", "tests": []}]
+  },
+  "ui": {"status": "untested", "evidence": ""},
+  "quality": {"status": "untested", "evidence": ""}
+}
+```
 
-Link exact-source test output/artifact hashes. Explain changes to context/source
-limits, budgets, retries, fallback and success criteria, including functionality
-or quality lost. State provider applicability and relevant arbitrary-name,
-capability, missing-metadata/usage and streaming variant evidence.
+## Evidence and independent review
 
-Keep implementation tests, actual UI workflow checks, and output-quality review
-separate. Record failures/untested states. Manual comprehensive UI acceptance is
-not a CI requirement; screenshots alone do not prove a workflow or persistence.
+Retain exact-source execution output and artifact links. Finalize source and
+metadata before testing; then update this body without a self-referential commit.
+Explain functionality/quality lost through limits, budgets, retries, fallbacks or
+success criteria. Provide relevant identifier/capability variant evidence.
 
-## Independent review and delivery
+Keep implementation tests, actual UI workflows and output-quality assessment
+separate. Record failures and untested states. Manual comprehensive UI acceptance
+is outside CI; a screenshot alone does not establish persistence or a workflow.
 
-Identify changes to checks, exclusions, existing tests, authority inventories,
-replay fixtures or release rules for separate review. Historical fixtures must
-remain immutable; never rekey old responses. Candidate records cannot approve
-their own control changes. All Disco work now runs on blackbox under the owner’s
-2026-09-28 instruction; publication requires separately reviewed authority and
-verified source/artifact provenance.
+Flag changed checks, exclusions, existing tests, replay matching/fixtures,
+authority metadata and release rules for independent review. Never rekey old
+responses. This record cannot approve its own control changes.
 
-Bootstrap only: explicitly state when the new trusted-base workflow does not yet
-exist on main and therefore has not run. Existing checks still apply. Do not call
-shared-account subagent review an independent access-control boundary.
+Bootstrap: explicitly say when the trusted-base workflow is not yet on main and
+has not run. Existing checks still apply. Shared-account subagent review is not
+an independent access-control boundary. All Disco work now runs on blackbox per
+the 2026-09-28 instruction; publication needs reviewed authority and provenance.

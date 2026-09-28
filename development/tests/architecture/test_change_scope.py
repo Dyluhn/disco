@@ -3,7 +3,6 @@
 import hashlib
 import importlib.util
 import json
-import os
 from pathlib import Path
 import subprocess
 import tempfile
@@ -13,7 +12,6 @@ SCRIPT = Path(__file__).resolve().parents[2] / "scripts/check_change_scope.py"
 spec = importlib.util.spec_from_file_location("trusted_change_scope", SCRIPT)
 policy = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(policy)
-RECORD = "development/changes/example.json"
 
 
 class ChangeScopeTests(unittest.TestCase):
@@ -32,7 +30,7 @@ class ChangeScopeTests(unittest.TestCase):
         self.record = {
             "version": 1, "id": "scope-example", "issue": "owner-request:fixture",
             "purpose": "Demonstrate one change", "reproduction": "Scripted validator fixture",
-            "base": self.base, "paths": ["app.py", RECORD],
+            "base": self.base, "paths": ["app.py"],
             "risks": {k: "No product effect in synthetic fixture" for k in policy.RISK_FIELDS},
             "provider": {"applicable": False, "reason": "Synthetic non-LLM file", "variant_tests": []},
             "evidence": {"commit": self.tested, "tree": self.git("rev-parse", self.tested + "^{tree}"),
@@ -57,17 +55,19 @@ class ChangeScopeTests(unittest.TestCase):
         return self.git("rev-parse", "HEAD")
 
     def final(self):
-        self.write(RECORD, json.dumps(self.record))
-        return self.commit()
+        return self.commit() if self.git("status", "--porcelain") else self.git("rev-parse", "HEAD")
+
+    def body(self):
+        return "PR explanation\n```disco-change\n" + json.dumps(self.record) + "\n```\n"
 
     def run_check(self, head):
-        return policy.validate(self.repo, self.base, head)
+        return policy.validate(self.repo, self.base, head, self.body())
 
     def advance_evidence(self):
         tested = self.commit()
         self.record["evidence"].update(commit=tested, tree=self.git("rev-parse", tested + "^{tree}"))
 
-    def test_valid_scoped_change_and_metadata_only_finalization(self):
+    def test_valid_pr_body_record_binds_exact_head(self):
         result = self.run_check(self.final())
         self.assertEqual(result["status"], "scope_consistent")
         self.assertEqual(result["evidence_commit"], self.tested)
@@ -75,7 +75,7 @@ class ChangeScopeTests(unittest.TestCase):
 
     def test_missing_record_fails(self):
         with self.assertRaisesRegex(policy.Invalid, "Exactly one"):
-            self.run_check(self.tested)
+            policy.validate(self.repo, self.base, self.tested, "No record provided")
 
     def test_out_of_scope_change_is_rejected(self):
         self.write("other.py", "unexpected=True")
@@ -126,12 +126,11 @@ class ChangeScopeTests(unittest.TestCase):
             self.run_check(self.final())
 
     def test_duplicate_keys_and_multiple_records_fail(self):
-        self.write(RECORD, '{"version":1,"version":1}')
+        body = '```disco-change\n{"version":1,"version":1}\n```'
         with self.assertRaisesRegex(policy.Invalid, "Duplicate JSON key"):
-            self.run_check(self.commit())
-        self.write("development/changes/second.json", "{}")
+            policy.validate(self.repo, self.base, self.tested, body)
         with self.assertRaisesRegex(policy.Invalid, "Exactly one"):
-            self.run_check(self.commit())
+            policy.validate(self.repo, self.base, self.tested, self.body() + self.body())
 
     def test_llm_paths_cannot_opt_out_of_variant_evidence(self):
         name = "packages/core/src/disco/core/llm/example.py"
@@ -146,12 +145,15 @@ class ChangeScopeTests(unittest.TestCase):
         self.record["evidence"]["checks"][0]["tests"] = ["arbitrary-name-equivalence"]
         self.assertEqual(self.run_check(self.final())["status"], "scope_consistent")
 
-    def test_symlink_record_is_not_followed(self):
-        self.write("outside.json", json.dumps(self.record))
-        (self.repo / RECORD).parent.mkdir(parents=True, exist_ok=True)
-        os.symlink("../../outside.json", self.repo / RECORD)
-        with self.assertRaisesRegex(policy.Invalid, "regular Git file"):
-            self.run_check(self.commit())
+    def test_body_shape_and_content_remain_untrusted_data(self):
+        for body in (None, {}, "```disco-change\n{}", "x" * 65537):
+            with self.subTest(body_type=type(body).__name__):
+                with self.assertRaises(policy.Invalid):
+                    policy.validate(self.repo, self.base, self.tested, body)
+        marker = self.repo / "executed"
+        self.record["reproduction"] = f"$(touch {marker}); import os; os.system('false')"
+        self.assertEqual(self.run_check(self.final())["status"], "scope_consistent")
+        self.assertFalse(marker.exists())
 
     def test_candidate_checker_is_data_never_executed(self):
         marker = self.repo / "executed"
@@ -162,6 +164,13 @@ class ChangeScopeTests(unittest.TestCase):
         result = self.run_check(self.final())
         self.assertIn(name, result["requires_independent_review"])
         self.assertFalse(marker.exists())
+
+    def test_metadata_only_commit_does_not_reuse_tested_parent(self):
+        name = "development/governance/PROTECTED.sha256"
+        self.write(name, "# New authority bytes still change the tested head")
+        self.record["paths"].append(name)
+        with self.assertRaisesRegex(policy.Invalid, "exact PR head"):
+            self.run_check(self.final())
 
     def test_changed_base_and_path_traversal_are_rejected(self):
         original = json.loads(json.dumps(self.record))
@@ -201,8 +210,11 @@ class ChangeScopeTests(unittest.TestCase):
         self.record["paths"].append(name)
         self.advance_evidence()
         head = self.final()
+        event = self.repo / "event.json"
+        event.write_text(json.dumps({"pull_request": {"body": self.body()}}))
         result = subprocess.run(["python3", str(SCRIPT), "--repo", str(self.repo),
-                                 "--base", self.base, "--head", head], capture_output=True, text=True)
+                                 "--base", self.base, "--head", head, "--event", str(event)],
+                                capture_output=True, text=True)
         self.assertEqual(result.returncode, 2)
         self.assertEqual(json.loads(result.stdout)["status"], "requires_independent_review")
 
