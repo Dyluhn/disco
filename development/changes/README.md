@@ -64,27 +64,28 @@ be activated as a required gate for those changes; do not add in-record bypasses
 The initial bootstrap uses explicit owner review and existing checks. Merely
 merging a workflow does not protect main or configure a required check. Its
 GitHub Actions identity is shared with other workflows, not an unspoofable
-independent verifier. Stronger enforcement needs a separately held GitHub App
-identity issuing head-bound status from pinned trusted policy.
+independent verifier. `pull_request_target` runs in the base-repository context;
+this read-only workflow emits no explicit candidate-head status/check. Treat its
+native job as a trusted-base diagnostic, not proof that requiring that job name
+binds approval to the PR head. Stronger enforcement needs a separately held
+GitHub App identity issuing head-bound status from pinned trusted policy.
 
 On 2026-09-28, baseline GitHub protections were enabled: PR required, existing
 required CI from App15368 with strict base checks, admin enforcement, blocked
 force/deletion and conversation resolution. The default Actions token is now
 read-only. Direct-update/deletion rejection was checked on a disposable branch.
 Required review count remains zero until a separate eligible reviewer exists;
-this new scope guard is not yet activated as a required check. One owner/admin
-identity remains accessible to implementation, with no separate publication
-identity. Owner power to change protections remains. A subagent on the same
-account is not an independent boundary. Fresh independent approval and protected
-publication still require those missing identities/authority boundaries.
+this new scope guard is not yet activated as a required check. Shared
+administrative authority does not establish independent review or publication
+separation. A subagent on the same account is not an independent boundary.
+Fresh independent approval and protected publication require separately held
+authority.
 
 Manual comprehensive UI acceptance stays **outside CI**. Real controls, workflow
 results, persistence, failures and untested states are release evidence separate
 from implementation tests and output-quality assessment. This check adds no CI
 browser sweep and no claim that scripted tests establish real model quality.
 
-The owner moved all Disco work to blackbox on 2026-09-28; the earlier workstation
-publishing instruction is historical and superseded. Publication still needs
-approved source, build recipe, digests and public verification. This PR does not
-change release rules or grant publication authority. Credential separation and
-review of alternate publishing paths remain owner-controlled followups.
+Publication needs reviewed source, a build recipe, artifact digests and public
+verification. This PR does not change release behavior or grant publication
+authority. Independent publication approval remains a separate boundary.

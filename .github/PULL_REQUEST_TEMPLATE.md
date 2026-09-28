@@ -49,5 +49,5 @@ responses. This record cannot approve its own control changes.
 
 Bootstrap: explicitly say when the trusted-base workflow is not yet on main and
 has not run. Existing checks still apply. Shared-account subagent review is not
-an independent access-control boundary. All Disco work now runs on blackbox per
-the 2026-09-28 instruction; publication needs reviewed authority and provenance.
+an independent access-control boundary. Publication needs independent approval
+and provenance tied to the reviewed source and artifact digests.

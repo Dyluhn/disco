@@ -105,7 +105,7 @@ def sensitive(filename, existed):
     test = "tests" in parts or filename.endswith((".test.ts", ".test.tsx", ".spec.ts"))
     return (filename.startswith(SENSITIVE_PREFIXES) or filename in SENSITIVE_FILES
             or (existed and test) or "pytest" in filename or "vitest.config" in filename
-            or PurePosixPath(filename).name == "conftest.py"
+            or PurePosixPath(filename).name in {"conftest.py", "AGENTS.md", "CLAUDE.md"}
             or filename.startswith(("frontend/tsconfig", "frontend/eslint.config")))
 
 

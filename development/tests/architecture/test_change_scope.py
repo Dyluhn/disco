@@ -194,7 +194,8 @@ class ChangeScopeTests(unittest.TestCase):
                  "frontend/playwright.config.ts", "frontend/playwright.live.config.ts",
                  "frontend/playwright.security-policy.config.ts",
                  "frontend/playwright.trace-policy.config.ts",
-                 "frontend/e2e-full/full.config.ts", "frontend/live-smoke.config.ts"]
+                 "frontend/e2e-full/full.config.ts", "frontend/live-smoke.config.ts",
+                 "AGENTS.md", "CLAUDE.md", "packages/core/AGENTS.md", "nested/CLAUDE.md"]
         for name in names:
             with self.subTest(path=name):
                 self.assertTrue(policy.sensitive(name, existed=True))
