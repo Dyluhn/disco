@@ -703,10 +703,11 @@ class TestMappingStatic:
             # Encoder singleton regressions add one file and eight cases.
             # Research retry adds two frontend files, seven static IDs and nine cases.
             # Reader length recovery adds five Python IDs/cases in an existing file.
+            # Sandbox save feedback adds one frontend file and four cases.
             "python_test_file_count": 977,
             "python_static_test_id_count": 11878,
-            "typescript_test_file_count": 311,
-            "typescript_static_test_id_count": 1626,
+            "typescript_test_file_count": 312,
+            "typescript_static_test_id_count": 1630,
         }
         assert mapping["identity"] == baseline["source_identity"]
         assert {key: mapping[key] for key in expected_counts} == expected_counts
@@ -843,12 +844,12 @@ class TestFrontendCollection:
                 len(frontend["vitest_files_list"]),
             )
             == (frontend["vitest_ids"], frontend["vitest_files"])
-            == (1560, 233)
+            == (1564, 234)
         )
         assert frontend["vitest_ids_list"] == sorted(frontend["vitest_ids_list"])
         assert frontend["vitest_files_list"] == sorted(frontend["vitest_files_list"])
-        assert len(set(frontend["vitest_ids_list"])) == 1560
-        assert len(set(frontend["vitest_files_list"])) == 233
+        assert len(set(frontend["vitest_ids_list"])) == 1564
+        assert len(set(frontend["vitest_files_list"])) == 234
         assert set(frontend["playwright_configs"]) == set(test_inventory.PLAYWRIGHT_CONFIGS)
         for config, authority in frontend["playwright_configs"].items():
             assert len(authority["ids"]) == authority["id_count"]
@@ -1324,7 +1325,7 @@ class TestBaselineValidation:
             "ok": True,
             "problems": [],
             "python_static_ids": 11878,
-            "typescript_static_ids": 1626,
+            "typescript_static_ids": 1630,
             "collected_total": 14613,
         }
 

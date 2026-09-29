@@ -23,7 +23,10 @@ const DEFAULTS: SandboxConfig = {
 
 // save/test mutates invoke their onSuccess so the W-48 preflight cascade (save →
 // probe → surface verdict) is exercised end-to-end in the component.
-const saveMutate = vi.fn((_cfg, opts?: { onSuccess?: () => void }) => opts?.onSuccess?.());
+const saveMutate = vi.fn(
+  (cfg: SandboxConfig, opts?: { onSuccess?: (saved: SandboxConfig) => void }) =>
+    opts?.onSuccess?.(cfg),
+);
 const probeResult = {
   ok: false,
   status: "unreachable",

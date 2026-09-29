@@ -171,10 +171,16 @@ export function SandboxSection() {
   // W-48: preflight on SAVE — persist, then run the real connectivity probe and surface
   // a typed, host-naming reachability verdict (so a misconfigured/unreachable backend is
   // visible up-front, not as a silent failure on the first build).
+  // Adopt the authoritative saved config as draft only when nothing newer was typed or
+  // switched since submit; probe the saved normalized config, not the stale draft.
   const onSave = () => {
     setProbe(null);
-    save.mutate(draft, {
-      onSuccess: () => test.mutate(draft, { onSuccess: setProbe }),
+    const submitted = draft;
+    save.mutate(submitted, {
+      onSuccess: (saved) => {
+        setDraft((current) => (current === submitted ? saved : current));
+        test.mutate(saved, { onSuccess: setProbe });
+      },
     });
   };
   const onTest = () => {

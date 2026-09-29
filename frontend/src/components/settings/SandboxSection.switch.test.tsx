@@ -52,7 +52,10 @@ function makeData(withCleanLocal: boolean): SandboxConfig {
   return base;
 }
 
-const saveMutate = vi.fn((_cfg, opts?: { onSuccess?: () => void }) => opts?.onSuccess?.());
+const saveMutate = vi.fn(
+  (cfg: SandboxConfig, opts?: { onSuccess?: (saved: SandboxConfig) => void }) =>
+    opts?.onSuccess?.(cfg),
+);
 const testMutate = vi.fn((_cfg, opts?: { onSuccess?: (r: unknown) => void }) =>
   opts?.onSuccess?.({ ok: true, status: "ok", detail: "ok" }),
 );
