@@ -197,6 +197,25 @@ def _merge(base: SourceNotes, addition: SourceNotes) -> None:
     base.findings_rejected += addition.findings_rejected
 
 
+
+def _notes_for_chunk(payload: Mapping[str, Any], chunk: str, base: int) -> SourceNotes:
+    """One chunk's reply proved against the text that chunk was shown.
+
+    The quote matcher locates quotes in the shown chunk only, so an unseen
+    occurrence, a repeated sentence's earlier occurrence, or a quote
+    straddling the chunk boundary is dropped and counted. Kept spans are
+    shifted to original Python character offsets into the source.
+    """
+    validated = notes_from_payload(payload, chunk)
+    for finding in validated.findings:
+        finding.start += base
+        finding.end += base
+    for note in validated.contrary:
+        note.start += base
+        note.end += base
+    return validated
+
+
 # ---------------------------------------------------------------------------
 # Reading.
 # ---------------------------------------------------------------------------
@@ -385,7 +404,8 @@ async def _read_one_source(
             notes.ok = False
             notes.error = reply.provider_error or reply.parse_error or "reader returned no notes"
             break
-        _merge(notes, notes_from_payload(reply.payload, passage.text))
+        base = sum(len(part) for part in chunks[: number - 1])
+        _merge(notes, _notes_for_chunk(reply.payload, chunk, base))
         notes.chunks = number
         await _save_note(checkpoint, notes)
     notes.complete = True

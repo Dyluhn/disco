@@ -126,7 +126,10 @@ def test_a_quote_broken_across_lines_still_validates_to_its_exact_offsets() -> N
 async def test_a_source_longer_than_one_chunk_is_read_in_two_and_the_notes_merge() -> None:
     head = "Head marker: capacity reached 12 GW in 2024. "
     tail = "Tail marker: the pilot ran for eleven days only. "
-    text = head + "filler sentence. " * ((CHUNK_CHARS - len(head)) // 17) + tail
+    text = head + "filler sentence. " * ((CHUNK_CHARS - len(head)) // 17)
+    # Each chunk's quote must sit wholly inside its own shown span: pad so the
+    # tail starts just past the first chunk boundary instead of straddling it.
+    text += "p" * (CHUNK_CHARS - len(text) + 10) + tail
     text += "x" * (2 * CHUNK_CHARS - len(text) - 100)
     passage = _source(text)
     assert len(text) > CHUNK_CHARS
@@ -511,6 +514,8 @@ async def test_write_report_reads_a_long_source_and_puts_its_notes_in_the_draft_
     assert "stated condition in the same sentence or table cell" in draft_prompt
     rows = [dict(row) for row in written.trail if row["kind"] == "source_reading"]
     assert rows[0].pop("latency_ms") >= 0
+    # Each scripted read cites a distinct shown occurrence in its own chunk;
+    # preserve all three physical source spans.
     assert rows == [
         {
             "kind": "source_reading",
@@ -520,7 +525,7 @@ async def test_write_report_reads_a_long_source_and_puts_its_notes_in_the_draft_
             "calls": 3,
             "input_tokens": 3,
             "output_tokens": 3,
-            "findings_accepted": 1,
+            "findings_accepted": 3,
             "findings_rejected": 0,
             "ok": True,
             "error": None,
