@@ -185,3 +185,92 @@ async def test_resumed_compact_empty_answer_is_not_repeated_again():
     router = RecordingRouter([("", "length"), _reply([])])
     notes = (await read(router, passage, retained={passage.id: prior}))[passage.id]
     assert router.calls == 1 and notes.calls == 2 and notes.complete and not notes.ok
+
+
+async def test_truncated_visible_length_uses_compact_recovery():
+    quote = "Capacity reached 12 GW in 2024 under the stated fleet scenario."
+    passage = _source(quote * 200)
+    truncated = _reply([_finding("result", quote, "12 GW")])[:64]
+    assert truncated.strip()
+    router = RecordingRouter(
+        [(truncated, "length"), _reply([_finding("result", quote, "12 GW")])]
+    )
+    notes = (await read(router, passage))[passage.id]
+    assert router.calls == 2 and notes.ok and notes.complete
+    assert notes.compact_reading and len(notes.findings) == 1
+    assert "At most 40 findings" in router.prompt(0)
+    assert "At most 8 findings" in router.prompt(1)
+    assert passage.text in router.prompt(1)  # Recovery does not truncate evidence.
+    assert [m.role for m in router.requests[1].messages] == ["system", "user"]
+    assert all(r.enable_thinking is False and r.response_format == "json" for r in router.requests)
+    kept = notes.findings[0]
+    assert passage.text[kept.start : kept.end] == kept.quote
+
+
+async def test_valid_object_with_length_finish_is_accepted_without_recovery():
+    passage = _source("Source evidence. " * 800)
+    router = RecordingRouter([(_reply([]), "length")])
+    notes = (await read(router, passage))[passage.id]
+    assert router.calls == 1 and notes.ok and not notes.compact_reading
+
+
+async def test_truncated_length_recovery_still_rejects_invented_quotes():
+    passage = _source("Source evidence. " * 800)
+    truncated = _reply([_finding("result", "Source evidence.", "none stated")])[:48]
+    router = RecordingRouter(
+        [
+            (truncated, "length"),
+            _reply(
+                [
+                    _finding(
+                        "result",
+                        "This quotation does not occur in the supplied source.",
+                        "invented",
+                    )
+                ]
+            ),
+        ]
+    )
+    notes = (await read(router, passage))[passage.id]
+    assert router.calls == 2 and notes.compact_reading
+    assert [m.role for m in router.requests[1].messages] == ["system", "user"]
+    assert notes.findings == [] and notes.findings_rejected == 1
+
+
+async def test_truncated_length_flags_compact_before_retry_and_resumes_compact():
+    quote = "Capacity reached 12 GW in 2024 under the stated fleet scenario."
+    passage = _source(quote * 200)
+    truncated = _reply([_finding("result", quote, "12 GW")])[:64]
+    saved = {}
+    stopped = False
+
+    async def checkpoint(notes):
+        nonlocal stopped
+        saved.update(
+            {k: SourceNotes.model_validate_json(v.model_dump_json()) for k, v in notes.items()}
+        )
+        stopped = saved[passage.id].compact_reading
+
+    first = RecordingRouter([(truncated, "length"), _reply([])])
+    with pytest.raises(ResearchStopped):
+        await read(first, passage, checkpoint=checkpoint, should_cancel=lambda: stopped)
+    assert first.calls == 1
+    assert saved[passage.id].output_tokens == 1
+    resumed = RecordingRouter([_reply([])])
+    notes = (await read(resumed, passage, retained=saved))[passage.id]
+    assert resumed.calls == 1 and "At most 8 findings" in resumed.prompt(0)
+    assert notes.ok and notes.complete and notes.output_tokens == 2
+    assert notes.calls <= reader.MAX_CALLS_PER_SOURCE
+
+
+async def test_repeated_truncated_length_answers_are_bounded_and_diagnosed():
+    passage = _source("Source evidence. " * 800)
+    first = _reply([_finding("result", "Source evidence.", "none stated")])[:48]
+    second = _reply([_finding("result", "Source evidence.", "none stated")])[:40]
+    router = RecordingRouter([(first, "length"), (second, "length")])
+    notes = (await read(router, passage))[passage.id]
+    assert router.calls == 2 and notes.calls == 2
+    assert notes.complete and not notes.ok and notes.compact_reading
+    assert [m.role for m in router.requests[1].messages] == ["system", "user"]
+    assert "At most 8 findings" in router.prompt(1)
+    assert notes.output_tokens == 2
