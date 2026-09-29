@@ -28,6 +28,10 @@ export interface RequestPolicy {
   default_reasoning?: boolean | null;
   require_user_continuation?: boolean;
   cache_control?: boolean;
+  /** Non-secret static headers (e.g. User-Agent). Never put credentials here. */
+  headers?: Record<string, string>;
+  /** Name of one extra header receiving the stable session identity. */
+  session_header?: string | null;
 }
 
 export interface ModelInfo {

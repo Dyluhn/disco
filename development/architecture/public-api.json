@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-public-api-v1",
-  "source_identity": "3f98e96a642e95dbf99eff0f5938c9bf5a854c5f",
+  "source_identity": "6ff2cb80e3c3eec5facc76318cad5382da59b4ca",
   "python_initializers": [
     {
       "path": "packages/agent-server/src/disco/agent_server/__init__.py",
@@ -26915,7 +26915,7 @@
         {
           "kind": "InterfaceDeclaration",
           "name": "RequestPolicy",
-          "signature": "export interface RequestPolicy { body?: Record<string, unknown>; reasoning_enabled?: Record<string, unknown> | null; reasoning_disabled?: Record<string, unknown> | null; default_reasoning?: boolean | null; require_user_continuation?: boolean; cache_control?: boolean; }"
+          "signature": "export interface RequestPolicy { body?: Record<string, unknown>; reasoning_enabled?: Record<string, unknown> | null; reasoning_disabled?: Record<string, unknown> | null; default_reasoning?: boolean | null; require_user_continuation?: boolean; cache_control?: boolean; /** Non-secret static headers (e.g. User-Agent). Never put credentials here. */ headers?: Record<string, string>; /** Name of one extra header receiving the stable session identity. */ session_header?: string | null; }"
         },
         {
           "kind": "InterfaceDeclaration",
@@ -31122,14 +31122,6 @@
     {
       "surface": "frontend",
       "path": "frontend/src/types/models.ts",
-      "public_name": "RequestPolicy",
-      "target_sha256": "f3297bb95dc715f09d861a2eb6a0f405e2a81963451c127bf0bd4294e1662daa",
-      "owner_package": "PKG-24-RESEARCH-RELIABILITY",
-      "reason": "Provider-neutral request controls, recoverable research activity, review reserves, and retained export qualifications."
-    },
-    {
-      "surface": "frontend",
-      "path": "frontend/src/types/models.ts",
       "public_name": "RoleFallbackConfig",
       "target_sha256": "0cd9ea1b75c66b6be6e0f56a15b9151cdb84d235f02e13efead13fcf2594ecff",
       "owner_package": "PKG-24-RESEARCH-RELIABILITY",
@@ -31230,6 +31222,14 @@
       "target_sha256": "0120aecef6bdd4b9e5b231c8424102c7897bf6416220ee038325ab950bcc6992",
       "owner_package": "PKG-28-COMPOSER-RESOURCE-HOOK",
       "reason": "Panel-focus helper the driver-model notice uses to reveal and focus the real model control inside the expandable options panel."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/models.ts",
+      "public_name": "RequestPolicy",
+      "target_sha256": "79d47002dedad07057b8b15030e6292bdb98836a011665dd022e24ac5ad7bdc0",
+      "owner_package": "PKG-29-EXPLICIT-TRANSPORT-HEADERS",
+      "reason": "Optional explicit static headers and stable session alias; omitted fields preserve existing request policy behavior."
     },
     {
       "surface": "frontend",
@@ -34048,6 +34048,19 @@
       "owner_package": "PKG-20-UX-RELIABILITY",
       "accepting_commit": "6761fd10f0bc21ca96124c5a2dd5ac254894f371",
       "accepting_receipt": "2026-07-28/STATUS.md"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/models.ts",
+      "public_name": "RequestPolicy",
+      "declaration_kind": "InterfaceDeclaration",
+      "old_signature": "export interface RequestPolicy { body?: Record<string, unknown>; reasoning_enabled?: Record<string, unknown> | null; reasoning_disabled?: Record<string, unknown> | null; default_reasoning?: boolean | null; require_user_continuation?: boolean; cache_control?: boolean; }",
+      "new_signature": "export interface RequestPolicy { body?: Record<string, unknown>; reasoning_enabled?: Record<string, unknown> | null; reasoning_disabled?: Record<string, unknown> | null; default_reasoning?: boolean | null; require_user_continuation?: boolean; cache_control?: boolean; /** Non-secret static headers (e.g. User-Agent). Never put credentials here. */ headers?: Record<string, string>; /** Name of one extra header receiving the stable session identity. */ session_header?: string | null; }",
+      "old_target_sha256": "f3297bb95dc715f09d861a2eb6a0f405e2a81963451c127bf0bd4294e1662daa",
+      "new_target_sha256": "79d47002dedad07057b8b15030e6292bdb98836a011665dd022e24ac5ad7bdc0",
+      "owner_package": "PKG-29-EXPLICIT-TRANSPORT-HEADERS",
+      "accepting_commit": "6ff2cb80e3c3eec5facc76318cad5382da59b4ca",
+      "accepting_receipt": "packages/app-server/tests/test_request_policy_roundtrip.py"
     },
     {
       "surface": "frontend",

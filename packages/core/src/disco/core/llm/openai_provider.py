@@ -218,12 +218,18 @@ class OpenAIProvider:
 
     # -- request shaping ------------------------------------------------------
 
-    def _headers(self, req: CompletionRequest | None = None) -> dict[str, str]:
+    def _headers(
+        self, req: CompletionRequest | None = None, model: str | None = None
+    ) -> dict[str, str]:
+        policy = self._request_policy
+        if model is not None:
+            policy = self._model_policies.get(model, policy)
         return _build_headers_impl(
             api_key=self._key,
             req=req,
             conversation_header=_DISCO_CONVERSATION_HEADER,
             fallback_session_id=self._session_id,
+            request_policy=policy,
         )
 
     @staticmethod
@@ -419,7 +425,7 @@ class OpenAIProvider:
             base_url=self._base,
             provider_name=self.name,
             payload=payload,
-            headers=self._headers(req),
+            headers=self._headers(req, model=model),
             req=req,
             model=model,
             client_factory=self._stream_client,
@@ -457,7 +463,7 @@ class OpenAIProvider:
             base_url=self._base,
             provider_name=self.name,
             payload=payload,
-            headers=self._headers(req),
+            headers=self._headers(req, model=model),
             client_factory=self._client,
             raise_typed_fn=rejection_handler(
                 self._raise_typed,

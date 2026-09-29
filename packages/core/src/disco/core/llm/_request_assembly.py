@@ -508,8 +508,17 @@ def build_headers(
     req: CompletionRequest | None,
     conversation_header: str,
     fallback_session_id: str = "",
+    request_policy: RequestPolicy | None = None,
 ) -> dict[str, str]:
-    """Build the HTTP headers for a provider request."""
+    """Build the HTTP headers for a provider request.
+
+    Optional transport headers come only from the effective per-model
+    ``RequestPolicy``. ``headers`` adds non-secret static entries without
+    mutating the configured policy; ``session_header`` names one extra header
+    receiving the same stable session identity as ``X-Disco-Session``
+    (conversation metadata, then request ID, then the fallback identity).
+    Neither endpoint identity nor model-name classification participates.
+    """
     h = {"content-type": "application/json"}
     if api_key:
         h["Authorization"] = f"Bearer {api_key}"
@@ -517,6 +526,7 @@ def build_headers(
     cid = str(raw_cid).strip() if raw_cid is not None else ""
     if cid:
         h[conversation_header] = cid
+    session = ""
     if req is not None:
         request_id = req.request_id or ""
         session = cid or request_id or fallback_session_id
@@ -524,4 +534,8 @@ def build_headers(
             h["X-Disco-Session"] = session
         if request_id:
             h["X-Disco-Request"] = request_id
+    if request_policy is not None:
+        return request_policy.transport_headers(
+            h, session=session, conversation_header=conversation_header
+        )
     return h

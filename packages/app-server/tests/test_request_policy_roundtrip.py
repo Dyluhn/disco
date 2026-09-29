@@ -28,7 +28,11 @@ async def test_save_reload_edit_and_wire_policy_for_an_unknown_endpoint(tmp_path
         secrets=SecretStore(tmp_path / "secrets.json", box=SecretBox("policy-test-secret")),
         skills=SkillStore(tmp_path / "skills"),
     )
-    policy = RequestPolicy(reasoning_disabled={"reasoning_effort": "none"})
+    policy = RequestPolicy(
+        reasoning_disabled={"reasoning_effort": "none"},
+        headers={"User-Agent": "disco-roundtrip/1.0"},
+        session_header="X-Arbitrary-Session",
+    )
     upsert = ModelUpsert(
         id="opaque-model",
         model_id="unknown-build-9000",
@@ -47,12 +51,14 @@ async def test_save_reload_edit_and_wire_policy_for_an_unknown_endpoint(tmp_path
     providers = build_providers(loaded, origin_approved=lambda *_: True)
     provider = providers[entry.provider]
     seen = []
+    seen_headers = []
     capture = (
         Path(__file__).parents[2] / "core/tests/fixtures/ollama-20260922/deepseek-v4.1-flash.sse"
     )
 
     def handler(req):
         seen.append(json.loads(req.content))
+        seen_headers.append(req.headers)
         return httpx.Response(
             200, content=capture.read_bytes(), headers={"content-type": "text/event-stream"}
         )
@@ -62,11 +68,15 @@ async def test_save_reload_edit_and_wire_policy_for_an_unknown_endpoint(tmp_path
         profile=CapabilityProfile(role=ModelRole.RAG_ANSWERER),
         messages=[LLMMessage(role="user", content='Return exactly {"ok": true} as JSON.')],
         enable_thinking=False,
+        metadata={"conversation_id": "persisted-conversation"},
     )
     response = await provider.complete(req, model=entry.model_id)
     assert json.loads(response.text) == {"ok": True}
     assert seen[0]["reasoning_effort"] == "none"
     assert seen[0]["model"] == "unknown-build-9000"
+    assert seen_headers[0]["User-Agent"] == "disco-roundtrip/1.0"
+    assert seen_headers[0]["X-Arbitrary-Session"] == "persisted-conversation"
+    assert "headers" not in seen[0] and "session_header" not in seen[0]
     state.models.update_model(
         upsert.id, upsert.model_copy(update={"request_policy": RequestPolicy()})
     )
