@@ -154,6 +154,8 @@ _RERANK_BATCH = 8
 # Process-wide single load (downloads once, stays resident).
 _embedding_model: Any | None = None
 _cross_encoder: Any | None = None
+_embedding_load_lock = Lock()
+_reranker_load_lock = Lock()
 
 # fastembed 0.8 moved multilingual E5 from the old CLS behavior to mean
 # pooling. Instantiate that implementation explicitly so the behavior cannot
@@ -200,27 +202,31 @@ def _embedding_factory(model_name: str) -> Any:
 
 def _embedding() -> Any:
     global _embedding_model
-    if _embedding_model is None:
-        # Explicit PMX_EMBED_MODEL wins; fall back to tier-aware default.
-        model_name = disco_env("EMBED_MODEL") or _tier_embed_default()
-        # RAM guard: raises EncoderUnavailable instead of letting an OOM kill the process.
-        _require_ram(model_name)
-        _embedding_model = _embedding_factory(model_name)(
-            model_name=model_name, **_arena_session_kwargs()
-        )
+    # Concurrent first use must share one loaded model; inference remains independent.
+    with _embedding_load_lock:
+        if _embedding_model is None:
+            # Explicit PMX_EMBED_MODEL wins; fall back to tier-aware default.
+            model_name = disco_env("EMBED_MODEL") or _tier_embed_default()
+            # RAM guard: raises EncoderUnavailable instead of letting an OOM kill the process.
+            _require_ram(model_name)
+            _embedding_model = _embedding_factory(model_name)(
+                model_name=model_name, **_arena_session_kwargs()
+            )
     return _embedding_model
 
 
 def _reranker() -> Any:
     global _cross_encoder
-    if _cross_encoder is None:
-        from fastembed.rerank.cross_encoder import TextCrossEncoder
+    # Concurrent first use must share one loaded model; inference remains independent.
+    with _reranker_load_lock:
+        if _cross_encoder is None:
+            from fastembed.rerank.cross_encoder import TextCrossEncoder
 
-        # Explicit PMX_RERANK_MODEL wins; fall back to tier-aware default.
-        model_name = disco_env("RERANK_MODEL") or _tier_rerank_default()
-        # RAM guard: raises EncoderUnavailable instead of letting an OOM kill the process.
-        _require_ram(model_name)
-        _cross_encoder = TextCrossEncoder(model_name=model_name, **_arena_session_kwargs())
+            # Explicit PMX_RERANK_MODEL wins; fall back to tier-aware default.
+            model_name = disco_env("RERANK_MODEL") or _tier_rerank_default()
+            # RAM guard: raises EncoderUnavailable instead of letting an OOM kill the process.
+            _require_ram(model_name)
+            _cross_encoder = TextCrossEncoder(model_name=model_name, **_arena_session_kwargs())
     return _cross_encoder
 
 
