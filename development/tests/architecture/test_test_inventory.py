@@ -700,8 +700,9 @@ class TestMappingStatic:
             # Reader-envelope regressions add one file, seven static IDs, and 14 cases.
             # Shown-chunk regressions add one file, nine static IDs, and nine cases.
             # Generic transport-header regressions add one file, 14 IDs, and 67 cases.
-            "python_test_file_count": 976,
-            "python_static_test_id_count": 11865,
+            # Encoder singleton regressions add one file and eight cases.
+            "python_test_file_count": 977,
+            "python_static_test_id_count": 11873,
             "typescript_test_file_count": 309,
             "typescript_static_test_id_count": 1619,
         }
@@ -743,7 +744,8 @@ class TestMappingStatic:
         # V38 isolates the real PDF probe in existing live-retrieval unit fixtures.
         # V51 adds five: the audio tolerance suite, the preview cockpit port
         # probes, the pairing-token CLI and the store title-uniqueness suite.
-        assert len(fixtures) == 207
+        # Concurrent encoder tests reset the two process-wide singleton caches.
+        assert len(fixtures) == 208
         assert fixtures == sorted(fixtures, key=_canonical_row)
         assert len({_canonical_row(row) for row in fixtures}) == len(fixtures)
         assert all(
@@ -1147,7 +1149,7 @@ class TestCollectedCounts:
             # TypeScript, each one-to-one in a file that still exists — and are
             # recorded in `renamed_test_transitions`; the counts below are net
             # of them, since a rename removes one identity and adds another.
-            "packages": 12552,
+            "packages": 12560,
             # 1288 from PKG-03-EDIT-EVIDENCE: +24 in the `harness` root, the
             # edit-evidence producer acceptance. The new ids land here and not
             # under `packages` because the producer is harness code; the
@@ -1284,7 +1286,7 @@ class TestCollectedCounts:
         }
         assert set(collected["roots"]) == set(test_inventory.PYTHON_ROOTS)
         assert collected["counts"] == expected
-        assert collected["total"] == 14600 == sum(expected.values())
+        assert collected["total"] == 14608 == sum(expected.values())
         for root in test_inventory.PYTHON_ROOTS:
             ids = collected["roots"][root]
             assert len(ids) == expected[root]
@@ -1300,7 +1302,7 @@ class TestCollectedCounts:
         problems: list[str] = []
         result = test_inventory._check_collected_ids(baseline, REPO_ROOT, problems)
         assert problems == []
-        assert result == {"collected_total": 14600}
+        assert result == {"collected_total": 14608}
 
         drifted = copy.deepcopy(baseline)
         drifted["collected"]["roots"]["tests"] = list(
@@ -1319,9 +1321,9 @@ class TestBaselineValidation:
         assert result == {
             "ok": True,
             "problems": [],
-            "python_static_ids": 11865,
+            "python_static_ids": 11873,
             "typescript_static_ids": 1619,
-            "collected_total": 14600,
+            "collected_total": 14608,
         }
 
         latest_identity = test_inventory.subprocess.check_output(
