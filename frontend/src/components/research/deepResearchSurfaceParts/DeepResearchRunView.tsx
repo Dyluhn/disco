@@ -67,10 +67,21 @@ function isStopping(r: ReturnType<typeof useDeepResearch>): boolean {
 }
 
 /** The strip is worth showing the moment there is ANY run signal — the brief,
- *  a trace row, a checkpoint or a finished report. Before that the run has
- *  produced nothing, and an empty strip would be chrome around a void. */
+ *  reported research activity, a trace row, a checkpoint or a finished report.
+ *  Before that the run has produced nothing, and an empty strip would be chrome
+ *  around a void. */
 function hasRunSignal(r: ReturnType<typeof useDeepResearch>): boolean {
-  return Boolean(r.brief) || r.trace.length > 0 || Boolean(r.report) || Boolean(r.checkpoint);
+  const reportedActivity = [
+    r.activity.turn,
+    r.activity.modelActivity,
+    r.activity.search,
+    r.activity.observation,
+    r.activity.phase,
+    r.activity.round,
+    r.activity.hold,
+    r.activity.resumed,
+  ].some(Boolean);
+  return reportedActivity || Boolean(r.brief) || r.trace.length > 0 || Boolean(r.report) || Boolean(r.checkpoint);
 }
 
 /**
