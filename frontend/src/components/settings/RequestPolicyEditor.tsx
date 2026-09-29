@@ -9,9 +9,11 @@ export function RequestPolicyEditor({ editor }: { editor: ReturnType<typeof useR
       className="w-full rounded-control border border-hairline bg-surface-1 px-inline py-hair font-mono text-sm text-text"
       onChange={(e) => editor.setText(e.target.value)} spellCheck={false} />
     <p className="text-sm text-text-faint">
-      Optional body, reasoning_enabled, and reasoning_disabled objects use the fields
-      your endpoint accepts. Empty settings leave its defaults unchanged. Names and URLs
-      never select reasoning controls. Do not put credentials here.
+      Optional body, reasoning_enabled, reasoning_disabled, headers, and session_header
+      use the fields your endpoint accepts. Empty settings leave its defaults unchanged.
+      Names and URLs never select controls. headers carries non-secret static headers
+      (e.g. User-Agent); session_header names one extra header receiving the stable
+      session identity. Do not put credentials here.
     </p>
     {editor.error && <p role="alert">{editor.error}</p>}
   </div>;
