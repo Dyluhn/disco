@@ -229,6 +229,7 @@ class _Reply:
     text: str = ""
     parse_error: str | None = None
     provider_error: str | None = None
+    finish_reason: str | None = None
     input_tokens: int = 0
     output_tokens: int = 0
     latency_ms: float = 0.0
@@ -302,6 +303,7 @@ async def _reader_reply(
         payload,
         text=call.text,
         parse_error=error,
+        finish_reason=call.response.finish_reason,
         input_tokens=call.response.usage.input_tokens,
         output_tokens=call.response.usage.output_tokens,
         latency_ms=call.latency_ms,
@@ -333,9 +335,10 @@ async def _read_one_source(
     """Read one source through as many chunks as its allowance covers.
 
     A visible malformed reply is re-asked once, naming the parse error. An
-    empty reply retries with fewer findings from the same full chunk. That
-    recovery mode survives pause/restart without resetting call allowances. A
-    second unusable reply, or a provider failure, ends this source's read with
+    empty reply, or a truncated reply cut short with finish_reason "length",
+    retries with fewer findings from the same full chunk. That recovery mode
+    survives pause/restart without resetting call allowances. A second
+    unusable reply, or a provider failure, ends this source's read with
     whatever earlier chunks proved and ``ok=False``.
     """
     notes = (
@@ -374,7 +377,7 @@ async def _read_one_source(
         notes.output_tokens += reply.output_tokens
         notes.latency_ms += reply.latency_ms
         if calls < calls_allowed and reply.can_retry(compact=notes.compact_reading):
-            if not reply.text.strip():
+            if not reply.text.strip() or reply.finish_reason == "length":
                 notes.compact_reading = True
                 messages = _reader_messages(passage, chunk, query, (number, len(chunks)), notes)
             else:

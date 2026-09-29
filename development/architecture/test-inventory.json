@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "187ff9e4074d22f276f1e5de839f76eb38aba27f",
+  "source_identity": "ae3f4cf3e1dc72280a81b795a134f24a6bcf5e55",
   "collected": {
     "counts": {
-      "packages": 12560,
+      "packages": 12565,
       "harness": 1571,
       "integrations": 9,
       "tests": 468
     },
-    "total": 14608,
+    "total": 14613,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -9691,9 +9691,14 @@
         "packages/retrieval/tests/test_source_reading_empty.py::test_legacy_completed_notes_remain_byte_identical",
         "packages/retrieval/tests/test_source_reading_empty.py::test_provider_failure_during_recovery_retains_accounting",
         "packages/retrieval/tests/test_source_reading_empty.py::test_repeated_empty_answers_are_bounded_and_diagnosed",
+        "packages/retrieval/tests/test_source_reading_empty.py::test_repeated_truncated_length_answers_are_bounded_and_diagnosed",
         "packages/retrieval/tests/test_source_reading_empty.py::test_resumed_compact_empty_answer_is_not_repeated_again",
         "packages/retrieval/tests/test_source_reading_empty.py::test_stop_before_recovery_persists_strategy_and_charged_call",
         "packages/retrieval/tests/test_source_reading_empty.py::test_successful_read_does_not_enter_compact_recovery",
+        "packages/retrieval/tests/test_source_reading_empty.py::test_truncated_length_flags_compact_before_retry_and_resumes_compact",
+        "packages/retrieval/tests/test_source_reading_empty.py::test_truncated_length_recovery_still_rejects_invented_quotes",
+        "packages/retrieval/tests/test_source_reading_empty.py::test_truncated_visible_length_uses_compact_recovery",
+        "packages/retrieval/tests/test_source_reading_empty.py::test_valid_object_with_length_finish_is_accepted_without_recovery",
         "packages/retrieval/tests/test_source_reading_empty.py::test_visible_malformed_answer_keeps_existing_parse_repair[broken JSON]",
         "packages/retrieval/tests/test_source_reading_empty.py::test_visible_malformed_answer_keeps_existing_parse_repair[{\"findings\": []",
         "packages/retrieval/tests/test_source_reading_protocol.py::test_bad_entries_inside_valid_array_stay_valid",
@@ -14629,9 +14634,9 @@
     }
   },
   "mapping_static": {
-    "identity": "187ff9e4074d22f276f1e5de839f76eb38aba27f",
+    "identity": "ae3f4cf3e1dc72280a81b795a134f24a6bcf5e55",
     "python_test_file_count": 977,
-    "python_static_test_id_count": 11873,
+    "python_static_test_id_count": 11878,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -24645,9 +24650,14 @@
       "packages/retrieval/tests/test_source_reading_empty.py::test_legacy_completed_notes_remain_byte_identical",
       "packages/retrieval/tests/test_source_reading_empty.py::test_provider_failure_during_recovery_retains_accounting",
       "packages/retrieval/tests/test_source_reading_empty.py::test_repeated_empty_answers_are_bounded_and_diagnosed",
+      "packages/retrieval/tests/test_source_reading_empty.py::test_repeated_truncated_length_answers_are_bounded_and_diagnosed",
       "packages/retrieval/tests/test_source_reading_empty.py::test_resumed_compact_empty_answer_is_not_repeated_again",
       "packages/retrieval/tests/test_source_reading_empty.py::test_stop_before_recovery_persists_strategy_and_charged_call",
       "packages/retrieval/tests/test_source_reading_empty.py::test_successful_read_does_not_enter_compact_recovery",
+      "packages/retrieval/tests/test_source_reading_empty.py::test_truncated_length_flags_compact_before_retry_and_resumes_compact",
+      "packages/retrieval/tests/test_source_reading_empty.py::test_truncated_length_recovery_still_rejects_invented_quotes",
+      "packages/retrieval/tests/test_source_reading_empty.py::test_truncated_visible_length_uses_compact_recovery",
+      "packages/retrieval/tests/test_source_reading_empty.py::test_valid_object_with_length_finish_is_accepted_without_recovery",
       "packages/retrieval/tests/test_source_reading_empty.py::test_visible_malformed_answer_keeps_existing_parse_repair",
       "packages/retrieval/tests/test_source_reading_protocol.py::test_bad_entries_inside_valid_array_stay_valid",
       "packages/retrieval/tests/test_source_reading_protocol.py::test_checkpoints_charge_attempts_without_advancing_chunks",
@@ -45170,6 +45180,38 @@
             "scope": "pytest.fixture(autouse=True)"
           }
         ]
+      }
+    },
+    {
+      "package": "PKG-30-READER-LENGTH-RECOVERY",
+      "root": "packages",
+      "source_identity_before": "187ff9e4074d22f276f1e5de839f76eb38aba27f",
+      "source_identity_after": "ae3f4cf3e1dc72280a81b795a134f24a6bcf5e55",
+      "collected_roots": {
+        "packages": {
+          "before_count": 12560,
+          "after_count": 12565,
+          "added_ids": [
+            "packages/retrieval/tests/test_source_reading_empty.py::test_repeated_truncated_length_answers_are_bounded_and_diagnosed",
+            "packages/retrieval/tests/test_source_reading_empty.py::test_truncated_length_flags_compact_before_retry_and_resumes_compact",
+            "packages/retrieval/tests/test_source_reading_empty.py::test_truncated_length_recovery_still_rejects_invented_quotes",
+            "packages/retrieval/tests/test_source_reading_empty.py::test_truncated_visible_length_uses_compact_recovery",
+            "packages/retrieval/tests/test_source_reading_empty.py::test_valid_object_with_length_finish_is_accepted_without_recovery"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [],
+        "python_static_test_ids": [
+          "packages/retrieval/tests/test_source_reading_empty.py::test_repeated_truncated_length_answers_are_bounded_and_diagnosed",
+          "packages/retrieval/tests/test_source_reading_empty.py::test_truncated_length_flags_compact_before_retry_and_resumes_compact",
+          "packages/retrieval/tests/test_source_reading_empty.py::test_truncated_length_recovery_still_rejects_invented_quotes",
+          "packages/retrieval/tests/test_source_reading_empty.py::test_truncated_visible_length_uses_compact_recovery",
+          "packages/retrieval/tests/test_source_reading_empty.py::test_valid_object_with_length_finish_is_accepted_without_recovery"
+        ],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
       }
     },
     {
