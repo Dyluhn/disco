@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "bfe6e6df75609f3c959115bd1610ca803e20cd54",
+  "source_identity": "bb0a73f8047dbe6d05bbc58636f3a089b30d76d3",
   "collected": {
     "counts": {
-      "packages": 12613,
+      "packages": 12620,
       "harness": 1571,
       "integrations": 9,
       "tests": 468
     },
-    "total": 14661,
+    "total": 14668,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -7339,6 +7339,13 @@
         "packages/core/tests/test_request_policy.py::test_old_special_case_names_have_no_implicit_effect[qwen3.8-flash-https://openrouter.ai/api/v1]",
         "packages/core/tests/test_request_policy.py::test_old_special_case_names_have_no_implicit_effect[qwen3.8-flash-https://unknown.example/v1]",
         "packages/core/tests/test_request_policy.py::test_responses_controls_are_explicit_and_token_budget_is_exact",
+        "packages/core/tests/test_request_policy_header_whitespace.py::test_empty_header_value_stays_valid",
+        "packages/core/tests/test_request_policy_header_whitespace.py::test_loopback_carries_valid_values_over_real_transport[clean]",
+        "packages/core/tests/test_request_policy_header_whitespace.py::test_loopback_carries_valid_values_over_real_transport[empty]",
+        "packages/core/tests/test_request_policy_header_whitespace.py::test_loopback_carries_valid_values_over_real_transport[internal-space]",
+        "packages/core/tests/test_request_policy_header_whitespace.py::test_surrounding_whitespace_header_value_rejected[leading-space]",
+        "packages/core/tests/test_request_policy_header_whitespace.py::test_surrounding_whitespace_header_value_rejected[single-space]",
+        "packages/core/tests/test_request_policy_header_whitespace.py::test_surrounding_whitespace_header_value_rejected[trailing-space]",
         "packages/core/tests/test_request_policy_headers.py::test_arbitrary_endpoints_and_models_share_one_transport_path[alpha-1-http://localhost:8080/v1]",
         "packages/core/tests/test_request_policy_headers.py::test_arbitrary_endpoints_and_models_share_one_transport_path[alpha-1-https://api.example-one.com/v1]",
         "packages/core/tests/test_request_policy_headers.py::test_arbitrary_endpoints_and_models_share_one_transport_path[alpha-1-https://gateway.example-two.net/v1]",
@@ -14682,9 +14689,9 @@
     }
   },
   "mapping_static": {
-    "identity": "bfe6e6df75609f3c959115bd1610ca803e20cd54",
-    "python_test_file_count": 979,
-    "python_static_test_id_count": 11890,
+    "identity": "bb0a73f8047dbe6d05bbc58636f3a089b30d76d3",
+    "python_test_file_count": 980,
+    "python_static_test_id_count": 11893,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -15279,6 +15286,7 @@
       "packages/core/tests/test_request_budget.py",
       "packages/core/tests/test_request_budget_loop.py",
       "packages/core/tests/test_request_policy.py",
+      "packages/core/tests/test_request_policy_header_whitespace.py",
       "packages/core/tests/test_request_policy_headers.py",
       "packages/core/tests/test_resource_context.py",
       "packages/core/tests/test_restore_authorizes_weakening.py",
@@ -22788,6 +22796,9 @@
       "packages/core/tests/test_request_policy.py::test_models_sharing_an_endpoint_keep_separate_policies",
       "packages/core/tests/test_request_policy.py::test_old_special_case_names_have_no_implicit_effect",
       "packages/core/tests/test_request_policy.py::test_responses_controls_are_explicit_and_token_budget_is_exact",
+      "packages/core/tests/test_request_policy_header_whitespace.py::test_empty_header_value_stays_valid",
+      "packages/core/tests/test_request_policy_header_whitespace.py::test_loopback_carries_valid_values_over_real_transport",
+      "packages/core/tests/test_request_policy_header_whitespace.py::test_surrounding_whitespace_header_value_rejected",
       "packages/core/tests/test_request_policy_headers.py::test_arbitrary_endpoints_and_models_share_one_transport_path",
       "packages/core/tests/test_request_policy_headers.py::test_auth_and_existing_identity_survive_explicit_transport_headers",
       "packages/core/tests/test_request_policy_headers.py::test_defaults_leave_wire_headers_unchanged",
@@ -44812,6 +44823,40 @@
           "packages/core/tests/test_request_budget_loop.py::test_condenser_without_the_seam_condenses_as_before",
           "packages/core/tests/test_request_budget_loop.py::test_hard_pressure_condenses_at_once_when_a_batch_has_aged",
           "packages/core/tests/test_request_budget_loop.py::test_hard_pressure_that_forgetting_cannot_end_is_deferred_until_a_batch"
+        ],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-34-HEADER-WHITESPACE",
+      "root": "packages",
+      "source_identity_before": "bfe6e6df75609f3c959115bd1610ca803e20cd54",
+      "source_identity_after": "bb0a73f8047dbe6d05bbc58636f3a089b30d76d3",
+      "collected_roots": {
+        "packages": {
+          "before_count": 12613,
+          "after_count": 12620,
+          "added_ids": [
+            "packages/core/tests/test_request_policy_header_whitespace.py::test_empty_header_value_stays_valid",
+            "packages/core/tests/test_request_policy_header_whitespace.py::test_loopback_carries_valid_values_over_real_transport[clean]",
+            "packages/core/tests/test_request_policy_header_whitespace.py::test_loopback_carries_valid_values_over_real_transport[empty]",
+            "packages/core/tests/test_request_policy_header_whitespace.py::test_loopback_carries_valid_values_over_real_transport[internal-space]",
+            "packages/core/tests/test_request_policy_header_whitespace.py::test_surrounding_whitespace_header_value_rejected[leading-space]",
+            "packages/core/tests/test_request_policy_header_whitespace.py::test_surrounding_whitespace_header_value_rejected[single-space]",
+            "packages/core/tests/test_request_policy_header_whitespace.py::test_surrounding_whitespace_header_value_rejected[trailing-space]"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [
+          "packages/core/tests/test_request_policy_header_whitespace.py"
+        ],
+        "python_static_test_ids": [
+          "packages/core/tests/test_request_policy_header_whitespace.py::test_empty_header_value_stays_valid",
+          "packages/core/tests/test_request_policy_header_whitespace.py::test_loopback_carries_valid_values_over_real_transport",
+          "packages/core/tests/test_request_policy_header_whitespace.py::test_surrounding_whitespace_header_value_rejected"
         ],
         "typescript_test_files": [],
         "typescript_static_test_ids": [],
