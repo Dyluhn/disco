@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "6ff2cb80e3c3eec5facc76318cad5382da59b4ca",
+  "source_identity": "8dc088ca06af619117af6958f90d1379ee0d8985",
   "collected": {
     "counts": {
-      "packages": 12552,
+      "packages": 12560,
       "harness": 1571,
       "integrations": 9,
       "tests": 468
     },
-    "total": 14600,
+    "total": 14608,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -9000,6 +9000,14 @@
         "packages/retrieval/tests/test_dr_steer.py::test_steer_empty_returns_do_not_change_run",
         "packages/retrieval/tests/test_dr_steer.py::test_ws_client_frame_accepts_inject_source_type",
         "packages/retrieval/tests/test_dr_steer.py::test_ws_client_frame_steer_still_valid",
+        "packages/retrieval/tests/test_encoder_lazy_singleton_race.py::test_embedding_cold_concurrent_builds_once",
+        "packages/retrieval/tests/test_encoder_lazy_singleton_race.py::test_embedding_constructor_failure_does_not_poison_singleton",
+        "packages/retrieval/tests/test_encoder_lazy_singleton_race.py::test_embedding_forwards_model_name_and_arena_options",
+        "packages/retrieval/tests/test_encoder_lazy_singleton_race.py::test_embedding_warmed_concurrent_reuses_singleton",
+        "packages/retrieval/tests/test_encoder_lazy_singleton_race.py::test_reranker_cold_concurrent_builds_once",
+        "packages/retrieval/tests/test_encoder_lazy_singleton_race.py::test_reranker_constructor_failure_does_not_poison_singleton",
+        "packages/retrieval/tests/test_encoder_lazy_singleton_race.py::test_reranker_forwards_model_name_and_arena_options",
+        "packages/retrieval/tests/test_encoder_lazy_singleton_race.py::test_reranker_warmed_concurrent_reuses_singleton",
         "packages/retrieval/tests/test_encoder_oom_guard_B3.py::test_ample_ram_embed_loads_normally",
         "packages/retrieval/tests/test_encoder_oom_guard_B3.py::test_ample_ram_no_encoder_unavailable_raised",
         "packages/retrieval/tests/test_encoder_oom_guard_B3.py::test_ample_ram_reranker_loads_normally",
@@ -14621,9 +14629,9 @@
     }
   },
   "mapping_static": {
-    "identity": "6ff2cb80e3c3eec5facc76318cad5382da59b4ca",
-    "python_test_file_count": 976,
-    "python_static_test_id_count": 11865,
+    "identity": "8dc088ca06af619117af6958f90d1379ee0d8985",
+    "python_test_file_count": 977,
+    "python_static_test_id_count": 11873,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -15329,6 +15337,7 @@
       "packages/retrieval/tests/test_direct_source_acquisition.py",
       "packages/retrieval/tests/test_discovery_only_retrieval.py",
       "packages/retrieval/tests/test_dr_steer.py",
+      "packages/retrieval/tests/test_encoder_lazy_singleton_race.py",
       "packages/retrieval/tests/test_encoder_oom_guard_B3.py",
       "packages/retrieval/tests/test_env_knobs_B1a.py",
       "packages/retrieval/tests/test_env_knobs_B1b.py",
@@ -24045,6 +24054,14 @@
       "packages/retrieval/tests/test_dr_steer.py::test_steer_empty_returns_do_not_change_run",
       "packages/retrieval/tests/test_dr_steer.py::test_ws_client_frame_accepts_inject_source_type",
       "packages/retrieval/tests/test_dr_steer.py::test_ws_client_frame_steer_still_valid",
+      "packages/retrieval/tests/test_encoder_lazy_singleton_race.py::test_embedding_cold_concurrent_builds_once",
+      "packages/retrieval/tests/test_encoder_lazy_singleton_race.py::test_embedding_constructor_failure_does_not_poison_singleton",
+      "packages/retrieval/tests/test_encoder_lazy_singleton_race.py::test_embedding_forwards_model_name_and_arena_options",
+      "packages/retrieval/tests/test_encoder_lazy_singleton_race.py::test_embedding_warmed_concurrent_reuses_singleton",
+      "packages/retrieval/tests/test_encoder_lazy_singleton_race.py::test_reranker_cold_concurrent_builds_once",
+      "packages/retrieval/tests/test_encoder_lazy_singleton_race.py::test_reranker_constructor_failure_does_not_poison_singleton",
+      "packages/retrieval/tests/test_encoder_lazy_singleton_race.py::test_reranker_forwards_model_name_and_arena_options",
+      "packages/retrieval/tests/test_encoder_lazy_singleton_race.py::test_reranker_warmed_concurrent_reuses_singleton",
       "packages/retrieval/tests/test_encoder_oom_guard_B3.py::test_ample_ram_embed_loads_normally",
       "packages/retrieval/tests/test_encoder_oom_guard_B3.py::test_ample_ram_no_encoder_unavailable_raised",
       "packages/retrieval/tests/test_encoder_oom_guard_B3.py::test_ample_ram_reranker_loads_normally",
@@ -29666,6 +29683,12 @@
         "path": "packages/agent-server/tests/test_tts_local.py",
         "line": 36,
         "fixture": "_reset_module_state",
+        "scope": "pytest.fixture(autouse=True)"
+      },
+      {
+        "path": "packages/retrieval/tests/test_encoder_lazy_singleton_race.py",
+        "line": 35,
+        "fixture": "_reset_singletons",
         "scope": "pytest.fixture(autouse=True)"
       },
       {
@@ -45080,6 +45103,53 @@
         "typescript_test_files": [],
         "typescript_static_test_ids": [],
         "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-28-ENCODER-SINGLE-LOAD",
+      "root": "packages",
+      "source_identity_before": "6ff2cb80e3c3eec5facc76318cad5382da59b4ca",
+      "source_identity_after": "8dc088ca06af619117af6958f90d1379ee0d8985",
+      "collected_roots": {
+        "packages": {
+          "before_count": 12552,
+          "after_count": 12560,
+          "added_ids": [
+            "packages/retrieval/tests/test_encoder_lazy_singleton_race.py::test_embedding_cold_concurrent_builds_once",
+            "packages/retrieval/tests/test_encoder_lazy_singleton_race.py::test_embedding_constructor_failure_does_not_poison_singleton",
+            "packages/retrieval/tests/test_encoder_lazy_singleton_race.py::test_embedding_forwards_model_name_and_arena_options",
+            "packages/retrieval/tests/test_encoder_lazy_singleton_race.py::test_embedding_warmed_concurrent_reuses_singleton",
+            "packages/retrieval/tests/test_encoder_lazy_singleton_race.py::test_reranker_cold_concurrent_builds_once",
+            "packages/retrieval/tests/test_encoder_lazy_singleton_race.py::test_reranker_constructor_failure_does_not_poison_singleton",
+            "packages/retrieval/tests/test_encoder_lazy_singleton_race.py::test_reranker_forwards_model_name_and_arena_options",
+            "packages/retrieval/tests/test_encoder_lazy_singleton_race.py::test_reranker_warmed_concurrent_reuses_singleton"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [
+          "packages/retrieval/tests/test_encoder_lazy_singleton_race.py"
+        ],
+        "python_static_test_ids": [
+          "packages/retrieval/tests/test_encoder_lazy_singleton_race.py::test_embedding_cold_concurrent_builds_once",
+          "packages/retrieval/tests/test_encoder_lazy_singleton_race.py::test_embedding_constructor_failure_does_not_poison_singleton",
+          "packages/retrieval/tests/test_encoder_lazy_singleton_race.py::test_embedding_forwards_model_name_and_arena_options",
+          "packages/retrieval/tests/test_encoder_lazy_singleton_race.py::test_embedding_warmed_concurrent_reuses_singleton",
+          "packages/retrieval/tests/test_encoder_lazy_singleton_race.py::test_reranker_cold_concurrent_builds_once",
+          "packages/retrieval/tests/test_encoder_lazy_singleton_race.py::test_reranker_constructor_failure_does_not_poison_singleton",
+          "packages/retrieval/tests/test_encoder_lazy_singleton_race.py::test_reranker_forwards_model_name_and_arena_options",
+          "packages/retrieval/tests/test_encoder_lazy_singleton_race.py::test_reranker_warmed_concurrent_reuses_singleton"
+        ],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": [
+          {
+            "path": "packages/retrieval/tests/test_encoder_lazy_singleton_race.py",
+            "line": 35,
+            "fixture": "_reset_singletons",
+            "scope": "pytest.fixture(autouse=True)"
+          }
+        ]
       }
     },
     {
