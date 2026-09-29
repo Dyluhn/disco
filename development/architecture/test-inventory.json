@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "3c582b54aff73e5cf344cfd5d8c3e603e19d62a8",
+  "source_identity": "5ff4f98048c80c148cb7b0c6f2f8b8a634eac334",
   "collected": {
     "counts": {
-      "packages": 12462,
+      "packages": 12476,
       "harness": 1571,
       "integrations": 9,
       "tests": 468
     },
-    "total": 14510,
+    "total": 14524,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -9621,6 +9621,20 @@
         "packages/retrieval/tests/test_source_reading_empty.py::test_successful_read_does_not_enter_compact_recovery",
         "packages/retrieval/tests/test_source_reading_empty.py::test_visible_malformed_answer_keeps_existing_parse_repair[broken JSON]",
         "packages/retrieval/tests/test_source_reading_empty.py::test_visible_malformed_answer_keeps_existing_parse_repair[{\"findings\": []",
+        "packages/retrieval/tests/test_source_reading_protocol.py::test_bad_entries_inside_valid_array_stay_valid",
+        "packages/retrieval/tests/test_source_reading_protocol.py::test_checkpoints_charge_attempts_without_advancing_chunks",
+        "packages/retrieval/tests/test_source_reading_protocol.py::test_invalid_then_valid_repair_succeeds",
+        "packages/retrieval/tests/test_source_reading_protocol.py::test_malformed_envelope_is_reasked_then_not_ok[contrary-null]",
+        "packages/retrieval/tests/test_source_reading_protocol.py::test_malformed_envelope_is_reasked_then_not_ok[empty-object]",
+        "packages/retrieval/tests/test_source_reading_protocol.py::test_malformed_envelope_is_reasked_then_not_ok[findings-null]",
+        "packages/retrieval/tests/test_source_reading_protocol.py::test_malformed_envelope_is_reasked_then_not_ok[findings-object]",
+        "packages/retrieval/tests/test_source_reading_protocol.py::test_malformed_envelope_is_reasked_then_not_ok[findings-string]",
+        "packages/retrieval/tests/test_source_reading_protocol.py::test_malformed_envelope_is_reasked_then_not_ok[sections-object]",
+        "packages/retrieval/tests/test_source_reading_protocol.py::test_malformed_envelope_is_reasked_then_not_ok[unrelated-object]",
+        "packages/retrieval/tests/test_source_reading_protocol.py::test_no_repair_budget_ends_not_ok_with_one_charged_call",
+        "packages/retrieval/tests/test_source_reading_protocol.py::test_saved_failed_reading_is_not_replayed",
+        "packages/retrieval/tests/test_source_reading_protocol.py::test_valid_empty_findings_stays_successful[full-empty]",
+        "packages/retrieval/tests/test_source_reading_protocol.py::test_valid_empty_findings_stays_successful[minimal]",
         "packages/retrieval/tests/test_source_reading_recovery.py::test_changed_source_hash_forces_reread",
         "packages/retrieval/tests/test_source_reading_recovery.py::test_interrupted_calls_do_not_reset_reader_allowance",
         "packages/retrieval/tests/test_source_reading_recovery.py::test_last_chunk_saved_before_complete_marker_remains_successful",
@@ -14531,9 +14545,9 @@
     }
   },
   "mapping_static": {
-    "identity": "3c582b54aff73e5cf344cfd5d8c3e603e19d62a8",
-    "python_test_file_count": 973,
-    "python_static_test_id_count": 11835,
+    "identity": "5ff4f98048c80c148cb7b0c6f2f8b8a634eac334",
+    "python_test_file_count": 974,
+    "python_static_test_id_count": 11842,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -15296,6 +15310,7 @@
       "packages/retrieval/tests/test_source_ranking.py",
       "packages/retrieval/tests/test_source_reading.py",
       "packages/retrieval/tests/test_source_reading_empty.py",
+      "packages/retrieval/tests/test_source_reading_protocol.py",
       "packages/retrieval/tests/test_source_reading_recovery.py",
       "packages/retrieval/tests/test_source_unavailable.py",
       "packages/retrieval/tests/test_streaming.py",
@@ -24525,6 +24540,13 @@
       "packages/retrieval/tests/test_source_reading_empty.py::test_stop_before_recovery_persists_strategy_and_charged_call",
       "packages/retrieval/tests/test_source_reading_empty.py::test_successful_read_does_not_enter_compact_recovery",
       "packages/retrieval/tests/test_source_reading_empty.py::test_visible_malformed_answer_keeps_existing_parse_repair",
+      "packages/retrieval/tests/test_source_reading_protocol.py::test_bad_entries_inside_valid_array_stay_valid",
+      "packages/retrieval/tests/test_source_reading_protocol.py::test_checkpoints_charge_attempts_without_advancing_chunks",
+      "packages/retrieval/tests/test_source_reading_protocol.py::test_invalid_then_valid_repair_succeeds",
+      "packages/retrieval/tests/test_source_reading_protocol.py::test_malformed_envelope_is_reasked_then_not_ok",
+      "packages/retrieval/tests/test_source_reading_protocol.py::test_no_repair_budget_ends_not_ok_with_one_charged_call",
+      "packages/retrieval/tests/test_source_reading_protocol.py::test_saved_failed_reading_is_not_replayed",
+      "packages/retrieval/tests/test_source_reading_protocol.py::test_valid_empty_findings_stays_successful",
       "packages/retrieval/tests/test_source_reading_recovery.py::test_changed_source_hash_forces_reread",
       "packages/retrieval/tests/test_source_reading_recovery.py::test_interrupted_calls_do_not_reset_reader_allowance",
       "packages/retrieval/tests/test_source_reading_recovery.py::test_last_chunk_saved_before_complete_marker_remains_successful",
@@ -44848,6 +44870,51 @@
           "packages/core/tests/test_w39_shell_escalation.py::test_notice_still_never_skips_and_stays_advisory",
           "packages/core/tests/test_w39_shell_escalation.py::test_shell_notice_is_repetition_aware",
           "packages/core/tests/test_w39_shell_escalation.py::test_shell_notice_names_the_consequence"
+        ],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-27-READER-ENVELOPE",
+      "root": "packages",
+      "source_identity_before": "3c582b54aff73e5cf344cfd5d8c3e603e19d62a8",
+      "source_identity_after": "5ff4f98048c80c148cb7b0c6f2f8b8a634eac334",
+      "collected_roots": {
+        "packages": {
+          "before_count": 12462,
+          "after_count": 12476,
+          "added_ids": [
+            "packages/retrieval/tests/test_source_reading_protocol.py::test_bad_entries_inside_valid_array_stay_valid",
+            "packages/retrieval/tests/test_source_reading_protocol.py::test_checkpoints_charge_attempts_without_advancing_chunks",
+            "packages/retrieval/tests/test_source_reading_protocol.py::test_invalid_then_valid_repair_succeeds",
+            "packages/retrieval/tests/test_source_reading_protocol.py::test_malformed_envelope_is_reasked_then_not_ok[contrary-null]",
+            "packages/retrieval/tests/test_source_reading_protocol.py::test_malformed_envelope_is_reasked_then_not_ok[empty-object]",
+            "packages/retrieval/tests/test_source_reading_protocol.py::test_malformed_envelope_is_reasked_then_not_ok[findings-null]",
+            "packages/retrieval/tests/test_source_reading_protocol.py::test_malformed_envelope_is_reasked_then_not_ok[findings-object]",
+            "packages/retrieval/tests/test_source_reading_protocol.py::test_malformed_envelope_is_reasked_then_not_ok[findings-string]",
+            "packages/retrieval/tests/test_source_reading_protocol.py::test_malformed_envelope_is_reasked_then_not_ok[sections-object]",
+            "packages/retrieval/tests/test_source_reading_protocol.py::test_malformed_envelope_is_reasked_then_not_ok[unrelated-object]",
+            "packages/retrieval/tests/test_source_reading_protocol.py::test_no_repair_budget_ends_not_ok_with_one_charged_call",
+            "packages/retrieval/tests/test_source_reading_protocol.py::test_saved_failed_reading_is_not_replayed",
+            "packages/retrieval/tests/test_source_reading_protocol.py::test_valid_empty_findings_stays_successful[full-empty]",
+            "packages/retrieval/tests/test_source_reading_protocol.py::test_valid_empty_findings_stays_successful[minimal]"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [
+          "packages/retrieval/tests/test_source_reading_protocol.py"
+        ],
+        "python_static_test_ids": [
+          "packages/retrieval/tests/test_source_reading_protocol.py::test_bad_entries_inside_valid_array_stay_valid",
+          "packages/retrieval/tests/test_source_reading_protocol.py::test_checkpoints_charge_attempts_without_advancing_chunks",
+          "packages/retrieval/tests/test_source_reading_protocol.py::test_invalid_then_valid_repair_succeeds",
+          "packages/retrieval/tests/test_source_reading_protocol.py::test_malformed_envelope_is_reasked_then_not_ok",
+          "packages/retrieval/tests/test_source_reading_protocol.py::test_no_repair_budget_ends_not_ok_with_one_charged_call",
+          "packages/retrieval/tests/test_source_reading_protocol.py::test_saved_failed_reading_is_not_replayed",
+          "packages/retrieval/tests/test_source_reading_protocol.py::test_valid_empty_findings_stays_successful"
         ],
         "typescript_test_files": [],
         "typescript_static_test_ids": [],

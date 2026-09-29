@@ -222,6 +222,16 @@ class _Reply:
         )
 
 
+def _envelope_error(payload: dict[str, Any]) -> str | None:
+    """Why a decoded reader object is still unusable notes, if it is."""
+    if not isinstance(payload.get("findings"), list):
+        return "reader notes need a 'findings' list of quoted findings"
+    for key in ("sections", "contrary"):
+        if key in payload and not isinstance(payload[key], list):
+            return f"reader notes '{key}' must be a list when present"
+    return None
+
+
 async def _reader_reply(
     router: LLMRouter,
     messages: list[LLMMessage],
@@ -253,6 +263,10 @@ async def _reader_reply(
     except LLMError as exc:
         return _Reply(None, provider_error=_provider_failure(exc))
     payload, error = decode_review_json(call.text)
+    if payload is not None:
+        envelope_error = _envelope_error(payload)
+        if envelope_error is not None:
+            payload, error = None, envelope_error
     if not call.text.strip():
         error = f"reader returned no visible notes (finish_reason={call.response.finish_reason})"
     _record_writer_io(
