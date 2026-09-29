@@ -99,6 +99,8 @@ def end_attempt(
     try:
         from ..inspect import record_model_attempt
 
+        http_status = getattr(error, "http_status", None) if error is not None else None
+        cause = getattr(error, "__cause__", None) if error is not None else None
         record_model_attempt(
             conversation_id,
             stage=stage,
@@ -109,6 +111,8 @@ def end_attempt(
             call_ordinal=attempt.call_ordinal,
             latency_ms=max(0, int((time.perf_counter() - attempt.started) * 1_000)),
             error_class=error_class or (type(error).__name__ if error is not None else None),
+            http_status=http_status,
+            error_cause_class=type(cause).__name__ if cause is not None else None,
             retry_scheduled=retry_scheduled,
         )
     except Exception:  # noqa: BLE001 — inspect is passive and cannot gate calls

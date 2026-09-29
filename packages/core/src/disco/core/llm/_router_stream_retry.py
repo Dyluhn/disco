@@ -110,7 +110,7 @@ async def handle_stream_transient(
             return fallback
         end_stream_attempt(
             state.attempt, recorded=state.recorded,
-            outcome="error", retry_scheduled=False,
+            outcome="error", error=exc, retry_scheduled=False,
         )
         fail(router, req, entry, route, None)
         raise exc

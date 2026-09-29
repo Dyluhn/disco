@@ -179,6 +179,8 @@ def record_model_attempt(
     latency_ms: int | None = None,
     error_class: str | None = None,
     retry_scheduled: bool | None = None,
+    http_status: int | None = None,
+    error_cause_class: str | None = None,
 ) -> None:
     """Record provider-attempt lifecycle metadata without model content.
 
@@ -186,6 +188,12 @@ def record_model_attempt(
     existing ``model_io`` call metrics.  Callers provide only bounded labels,
     outcome state, error class, and timing; prompts, responses, and exception
     messages are intentionally not accepted by this seam.
+
+    ``http_status`` and ``error_cause_class`` are content-free metadata only:
+    an HTTP status code (exact ``int`` 100..599, ``bool`` rejected) and the
+    chained cause class name (ASCII identifier, length<=128).  Anything else
+    persists as ``None``.  These fields do not read exception messages,
+    provider details, request headers, prompts, or responses.
     """
     if not conversation_id or not inspect_enabled():
         return
@@ -203,6 +211,21 @@ def record_model_attempt(
         ),
         "error_class": (
             str(error_class)[:_MAX_ATTEMPT_TEXT_CHARS] if error_class is not None else None
+        ),
+        "http_status": (
+            http_status
+            if type(http_status) is int and 100 <= http_status <= 599
+            else None
+        ),
+        "error_cause_class": (
+            error_cause_class
+            if (
+                isinstance(error_cause_class, str)
+                and error_cause_class.isascii()
+                and error_cause_class.isidentifier()
+                and len(error_cause_class) <= _MAX_ATTEMPT_TEXT_CHARS
+            )
+            else None
         ),
         "retry_scheduled": retry_scheduled,
     }
