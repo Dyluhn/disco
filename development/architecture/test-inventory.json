@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "8dc088ca06af619117af6958f90d1379ee0d8985",
+  "source_identity": "187ff9e4074d22f276f1e5de839f76eb38aba27f",
   "collected": {
     "counts": {
       "packages": 12560,
@@ -14629,7 +14629,7 @@
     }
   },
   "mapping_static": {
-    "identity": "8dc088ca06af619117af6958f90d1379ee0d8985",
+    "identity": "187ff9e4074d22f276f1e5de839f76eb38aba27f",
     "python_test_file_count": 977,
     "python_static_test_id_count": 11873,
     "python_test_files": [
@@ -27486,8 +27486,8 @@
       "tests/unbiased_gate/test_authorB_models_imagegen.py::test_w50_slides_degrade_to_image_less_when_image_backend_unconfigured",
       "tests/unbiased_gate/test_authorB_models_imagegen.py::test_w50_unconfigured_image_backend_fails_loudly_instead_of_procedural_fallback"
     ],
-    "typescript_test_file_count": 309,
-    "typescript_static_test_id_count": 1619,
+    "typescript_test_file_count": 311,
+    "typescript_static_test_id_count": 1626,
     "typescript_test_files": [
       "frontend/e2e-full/scenarios/click-provenance.smoke.spec.ts",
       "frontend/e2e-full/scenarios/per-surface.full.spec.ts",
@@ -27678,6 +27678,7 @@
       "frontend/src/components/research/DeepResearchSurface.attach.test.tsx",
       "frontend/src/components/research/DeepResearchSurface.hold.test.tsx",
       "frontend/src/components/research/DeepResearchSurface.resumed.test.tsx",
+      "frontend/src/components/research/DeepResearchSurface.retryUrl.test.tsx",
       "frontend/src/components/research/DeepResearchSurface.stopping.test.tsx",
       "frontend/src/components/research/DeepResearchSurface.test.tsx",
       "frontend/src/components/research/DeepResearchSurface.url.test.tsx",
@@ -27727,6 +27728,7 @@
       "frontend/src/hooks/useBuildStream.pause.test.ts",
       "frontend/src/hooks/useBuildStream.suspend.test.ts",
       "frontend/src/hooks/useDeepResearch.lazy.test.tsx",
+      "frontend/src/hooks/useDeepResearch.retry.test.tsx",
       "frontend/src/hooks/useDeepResearchDoneNotification.test.ts",
       "frontend/src/hooks/useDeepResearchStream.test.ts",
       "frontend/src/hooks/useElementMention.test.tsx",
@@ -28584,6 +28586,8 @@
       "frontend/src/components/research/DeepResearchSurface.resumed.test.tsx::renders the replayed report body \u2014 a resumed run is not gated on a plan",
       "frontend/src/components/research/DeepResearchSurface.resumed.test.tsx::shows the real query (from replayed report) in the H1, not '(resumed)'",
       "frontend/src/components/research/DeepResearchSurface.resumed.test.tsx::title is the clean real query on a resumed run (no '(resumed)' suffix)",
+      "frontend/src/components/research/DeepResearchSurface.retryUrl.test.tsx::fast open flushes the queued query before the first persisted NEW event switches the URL (no empty-render wait)",
+      "frontend/src/components/research/DeepResearchSurface.retryUrl.test.tsx::reloading the NEW url replays persisted query/status so heading and phase restore without resending",
       "frontend/src/components/research/DeepResearchSurface.stopping.test.tsx::hands over to the checkpoint controls when the run says it is done",
       "frontend/src/components/research/DeepResearchSurface.stopping.test.tsx::keeps the run on screen, with a wall and no live Stop",
       "frontend/src/components/research/DeepResearchSurface.stopping.test.tsx::puts the checkpoint where the wall was, not below the whole trace",
@@ -28843,6 +28847,11 @@
       "frontend/src/hooks/useDeepResearch.lazy.test.tsx::coalesces submit with an attachment cid creation already in flight",
       "frontend/src/hooks/useDeepResearch.lazy.test.tsx::does not create a conversation on mount",
       "frontend/src/hooks/useDeepResearch.lazy.test.tsx::keeps an upload cid and applies the final controls before kickoff",
+      "frontend/src/hooks/useDeepResearch.retry.test.tsx::changing the route opens the selected conversation read-only, including returning to the first route",
+      "frontend/src/hooks/useDeepResearch.retry.test.tsx::cold-open control: a failed resumed run is a safe read (no kick)",
+      "frontend/src/hooks/useDeepResearch.retry.test.tsx::fresh-submit control: a composer submit kicks exactly once and stays",
+      "frontend/src/hooks/useDeepResearch.retry.test.tsx::retry stays on the fresh cid and sends exactly one query on its own connection",
+      "frontend/src/hooks/useDeepResearch.retry.test.tsx::retry transient under the NEW cid exposes no stale OLD error/activity to the consumer",
       "frontend/src/hooks/useDeepResearchDoneNotification.test.ts::arms notification state and requests browser permission on first toggle",
       "frontend/src/hooks/useDeepResearchDoneNotification.test.ts::fires a toast and browser Notification when an armed run reaches FINISHED",
       "frontend/src/hooks/useDeepResearchStream.test.ts::AWAITING_PLAN_APPROVAL is carried as a plain status with no gate state",
@@ -31348,8 +31357,8 @@
         ]
       }
     },
-    "vitest_ids": 1551,
-    "vitest_files": 231,
+    "vitest_ids": 1560,
+    "vitest_files": 233,
     "vitest_ids_list": [
       "frontend/src/App.moderesume.test.tsx::A2 \u2014 fresh sessions and resume targets > New preserves the active mode, then a mode chip lands on that mode's splash",
       "frontend/src/App.moderesume.test.tsx::A2 \u2014 fresh sessions and resume targets > does not resume a just-killed conversation id from the mode chip",
@@ -32047,6 +32056,10 @@
       "frontend/src/components/research/DeepResearchSurface.resumed.test.tsx::DeepResearchSurface \u2014 resume path > renders the replayed report body \u2014 a resumed run is not gated on a plan",
       "frontend/src/components/research/DeepResearchSurface.resumed.test.tsx::DeepResearchSurface \u2014 resume path > shows the real query (from replayed report) in the H1, not '(resumed)'",
       "frontend/src/components/research/DeepResearchSurface.resumed.test.tsx::DeepResearchSurface \u2014 resume path > title is the clean real query on a resumed run (no '(resumed)' suffix)",
+      "frontend/src/components/research/DeepResearchSurface.retryUrl.test.tsx::retry from history moves the URL only on first new-run event > Retry moves to the new run only after its first event and reloads read-only",
+      "frontend/src/components/research/DeepResearchSurface.retryUrl.test.tsx::retry from history moves the URL only on first new-run event > Try again moves to the new run only after its first event and reloads read-only",
+      "frontend/src/components/research/DeepResearchSurface.retryUrl.test.tsx::retry from history moves the URL only on first new-run event > fast open flushes the queued query before the first persisted NEW event switches the URL (no empty-render wait)",
+      "frontend/src/components/research/DeepResearchSurface.retryUrl.test.tsx::retry from history moves the URL only on first new-run event > reloading the NEW url replays persisted query/status so heading and phase restore without resending",
       "frontend/src/components/research/DeepResearchSurface.stopping.test.tsx::the surface between Stop and the run's own ending > hands over to the checkpoint controls when the run says it is done",
       "frontend/src/components/research/DeepResearchSurface.stopping.test.tsx::the surface between Stop and the run's own ending > keeps the run on screen, with a wall and no live Stop",
       "frontend/src/components/research/DeepResearchSurface.stopping.test.tsx::the surface between Stop and the run's own ending > puts the checkpoint where the wall was, not below the whole trace",
@@ -32306,6 +32319,11 @@
       "frontend/src/hooks/useDeepResearch.lazy.test.tsx::useDeepResearch lazy conversation lifecycle > coalesces submit with an attachment cid creation already in flight",
       "frontend/src/hooks/useDeepResearch.lazy.test.tsx::useDeepResearch lazy conversation lifecycle > does not create a conversation on mount",
       "frontend/src/hooks/useDeepResearch.lazy.test.tsx::useDeepResearch lazy conversation lifecycle > keeps an upload cid and applies the final controls before kickoff",
+      "frontend/src/hooks/useDeepResearch.retry.test.tsx::useDeepResearch retry from a failed resumed run > changing the route opens the selected conversation read-only, including returning to the first route",
+      "frontend/src/hooks/useDeepResearch.retry.test.tsx::useDeepResearch retry from a failed resumed run > cold-open control: a failed resumed run is a safe read (no kick)",
+      "frontend/src/hooks/useDeepResearch.retry.test.tsx::useDeepResearch retry from a failed resumed run > fresh-submit control: a composer submit kicks exactly once and stays",
+      "frontend/src/hooks/useDeepResearch.retry.test.tsx::useDeepResearch retry from a failed resumed run > retry stays on the fresh cid and sends exactly one query on its own connection",
+      "frontend/src/hooks/useDeepResearch.retry.test.tsx::useDeepResearch retry from a failed resumed run > retry transient under the NEW cid exposes no stale OLD error/activity to the consumer",
       "frontend/src/hooks/useDeepResearchDoneNotification.test.ts::useDeepResearchDoneNotification > arms notification state and requests browser permission on first toggle",
       "frontend/src/hooks/useDeepResearchDoneNotification.test.ts::useDeepResearchDoneNotification > fires a toast and browser Notification when an armed run reaches FINISHED",
       "frontend/src/hooks/useDeepResearchStream.test.ts::a late steer refusal cannot turn a healthy writing run into an error",
@@ -33017,6 +33035,7 @@
       "frontend/src/components/research/DeepResearchSurface.attach.test.tsx",
       "frontend/src/components/research/DeepResearchSurface.hold.test.tsx",
       "frontend/src/components/research/DeepResearchSurface.resumed.test.tsx",
+      "frontend/src/components/research/DeepResearchSurface.retryUrl.test.tsx",
       "frontend/src/components/research/DeepResearchSurface.stopping.test.tsx",
       "frontend/src/components/research/DeepResearchSurface.test.tsx",
       "frontend/src/components/research/DeepResearchSurface.url.test.tsx",
@@ -33066,6 +33085,7 @@
       "frontend/src/hooks/useBuildStream.pause.test.ts",
       "frontend/src/hooks/useBuildStream.suspend.test.ts",
       "frontend/src/hooks/useDeepResearch.lazy.test.tsx",
+      "frontend/src/hooks/useDeepResearch.retry.test.tsx",
       "frontend/src/hooks/useDeepResearchDoneNotification.test.ts",
       "frontend/src/hooks/useDeepResearchStream.test.ts",
       "frontend/src/hooks/useElementMention.test.tsx",
@@ -46117,6 +46137,31 @@
           "frontend/src/components/composerRedesign.test.tsx::the depth control exists only under Deep Research, inside the options menu",
           "frontend/src/components/research/DeepResearchSurface.test.tsx::opens the empty state with the depth tier inside the options menu",
           "frontend/src/lib/useVerboseAgentChat.test.ts::defaults to OFF (quiet mode) when unset"
+        ],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-29-RESEARCH-RETRY-ROUTE",
+      "root": "multiple",
+      "source_identity_before": "8dc088ca06af619117af6958f90d1379ee0d8985",
+      "source_identity_after": "187ff9e4074d22f276f1e5de839f76eb38aba27f",
+      "collected_roots": {},
+      "mapping_static_additions": {
+        "python_test_files": [],
+        "python_static_test_ids": [],
+        "typescript_test_files": [
+          "frontend/src/components/research/DeepResearchSurface.retryUrl.test.tsx",
+          "frontend/src/hooks/useDeepResearch.retry.test.tsx"
+        ],
+        "typescript_static_test_ids": [
+          "frontend/src/components/research/DeepResearchSurface.retryUrl.test.tsx::fast open flushes the queued query before the first persisted NEW event switches the URL (no empty-render wait)",
+          "frontend/src/components/research/DeepResearchSurface.retryUrl.test.tsx::reloading the NEW url replays persisted query/status so heading and phase restore without resending",
+          "frontend/src/hooks/useDeepResearch.retry.test.tsx::changing the route opens the selected conversation read-only, including returning to the first route",
+          "frontend/src/hooks/useDeepResearch.retry.test.tsx::cold-open control: a failed resumed run is a safe read (no kick)",
+          "frontend/src/hooks/useDeepResearch.retry.test.tsx::fresh-submit control: a composer submit kicks exactly once and stays",
+          "frontend/src/hooks/useDeepResearch.retry.test.tsx::retry stays on the fresh cid and sends exactly one query on its own connection",
+          "frontend/src/hooks/useDeepResearch.retry.test.tsx::retry transient under the NEW cid exposes no stale OLD error/activity to the consumer"
         ],
         "fixtures": []
       }

@@ -69,11 +69,19 @@ export function useDeepResearchSession(
 
   // Resume path: a /deep/:cid route hands us a cid → open it READ-ONLY (kick is
   // absent, so the stream subscribes + replays but never sends the query).
+  // Ownership: apply exactly once per route cid. Reacting to `session` too
+  // re-forces the old cid over retry's explicit new session (null → NEW),
+  // which is the observed newcid-overwritten-by-oldresumeCid failure.
+  const appliedResumeCidRef = useRef<string | null>(null);
   useEffect(() => {
-    if (resumeCid && (session === null || session.cid !== resumeCid)) {
-      setSession({ cid: resumeCid, query: "(resumed)", depthTier });
+    if (!resumeCid) {
+      appliedResumeCidRef.current = null;
+      return;
     }
-  }, [resumeCid, session, depthTier]);
+    if (appliedResumeCidRef.current === resumeCid) return;
+    appliedResumeCidRef.current = resumeCid;
+    setSession({ cid: resumeCid, query: "(resumed)", depthTier });
+  }, [resumeCid, depthTier]);
 
   const ensurePreCid = useCallback(async () => {
     if (!agentLive()) return null;

@@ -132,12 +132,25 @@ export function DeepResearchSurface({
   const runCid = r.cid;
   const runHasEvents = r.activity.lastEventAt !== null;
   const urlCarriesRun = useRef<string | null>(null);
+  const sawEmptyForCidRef = useRef<string | null>(null);
   useEffect(() => {
-    if (resumeCid) {
+    // Still viewing the resumed run (or the transient null between its
+    // explicit reset and the route leaving): the URL already carries it.
+    if (resumeCid && (runCid === resumeCid || runCid === null)) {
       urlCarriesRun.current = resumeCid;
       return;
     }
-    if (!runCid || !runHasEvents || urlCarriesRun.current === runCid) return;
+    if (!runCid || urlCarriesRun.current === runCid) return;
+    // First-event guard (existing): never navigate on cid creation alone.
+    // Stale guard: the stream resets in effects, so the first render for a
+    // fresh cid may still expose the old run's lastEventAt. Require seeing
+    // this cid empty first, so only a persisted event for the NEW run —
+    // proof the question landed — triggers the handoff.
+    if (!runHasEvents) {
+      sawEmptyForCidRef.current = runCid;
+      return;
+    }
+    if (sawEmptyForCidRef.current !== runCid) return;
     urlCarriesRun.current = runCid;
     navigate(`/deep/${runCid}`, { replace: true });
   }, [resumeCid, runCid, runHasEvents, navigate]);
