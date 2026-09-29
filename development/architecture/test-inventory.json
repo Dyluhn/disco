@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "969d1a59e8a95e12fadc6aaedf53684583eeec50",
+  "source_identity": "14e916c8a310660ab708d46dad852c97ecd1e765",
   "collected": {
     "counts": {
       "packages": 12565,
@@ -14634,7 +14634,7 @@
     }
   },
   "mapping_static": {
-    "identity": "969d1a59e8a95e12fadc6aaedf53684583eeec50",
+    "identity": "14e916c8a310660ab708d46dad852c97ecd1e765",
     "python_test_file_count": 977,
     "python_static_test_id_count": 11878,
     "python_test_files": [
@@ -27497,7 +27497,7 @@
       "tests/unbiased_gate/test_authorB_models_imagegen.py::test_w50_unconfigured_image_backend_fails_loudly_instead_of_procedural_fallback"
     ],
     "typescript_test_file_count": 312,
-    "typescript_static_test_id_count": 1630,
+    "typescript_static_test_id_count": 1633,
     "typescript_test_files": [
       "frontend/e2e-full/scenarios/click-provenance.smoke.spec.ts",
       "frontend/e2e-full/scenarios/per-surface.full.spec.ts",
@@ -28692,7 +28692,10 @@
       "frontend/src/components/research/deepResearchSurfaceParts/DeepResearchReportView.test.tsx::locks follow-up submission for exactly the active follow-up phase",
       "frontend/src/components/research/deepResearchSurfaceParts/DeepResearchReportView.test.tsx::shows the server's tally under an answer, in words",
       "frontend/src/components/research/deepResearchSurfaceParts/DeepResearchRunView.starting.test.tsx::closes steering when writing starts while keeping the run visible",
+      "frontend/src/components/research/deepResearchSurfaceParts/DeepResearchRunView.starting.test.tsx::does not mistake a status timestamp for reported research activity",
       "frontend/src/components/research/deepResearchSurfaceParts/DeepResearchRunView.starting.test.tsx::names the silence, how long it has lasted, and what the user can do",
+      "frontend/src/components/research/deepResearchSurfaceParts/DeepResearchRunView.starting.test.tsx::renders the actual first research-turn heartbeat before a brief or trace exists",
+      "frontend/src/components/research/deepResearchSurfaceParts/DeepResearchRunView.starting.test.tsx::shows a reported waiting model call even without a turn event",
       "frontend/src/components/research/deepResearchSurfaceParts/DeepResearchRunView.starting.test.tsx::shows no hold panel when the engine reported no hold",
       "frontend/src/components/research/deepResearchSurfaceParts/DeepResearchRunView.starting.test.tsx::starts live and says what it is waiting for, without a spinner",
       "frontend/src/components/research/deepResearchSurfaceParts/DeepResearchTopBar.test.tsx::hands the press to the card that owns the action",
@@ -31372,7 +31375,7 @@
         ]
       }
     },
-    "vitest_ids": 1564,
+    "vitest_ids": 1567,
     "vitest_files": 234,
     "vitest_ids_list": [
       "frontend/src/App.moderesume.test.tsx::A2 \u2014 fresh sessions and resume targets > New preserves the active mode, then a mode chip lands on that mode's splash",
@@ -32167,6 +32170,9 @@
       "frontend/src/components/research/deepResearchSurfaceParts/DeepResearchReportView.test.tsx::DeepResearchReportView \u2014 follow-up grounding ledger > draws a refused follow-up as a wall, with the server's text unchanged",
       "frontend/src/components/research/deepResearchSurfaceParts/DeepResearchReportView.test.tsx::DeepResearchReportView \u2014 follow-up grounding ledger > gives each answer in a thread its own ledger, not the newest one",
       "frontend/src/components/research/deepResearchSurfaceParts/DeepResearchReportView.test.tsx::DeepResearchReportView \u2014 follow-up grounding ledger > shows the server's tally under an answer, in words",
+      "frontend/src/components/research/deepResearchSurfaceParts/DeepResearchRunView.starting.test.tsx::DeepResearchRunView \u2014 activity before the first brief > does not mistake a status timestamp for reported research activity",
+      "frontend/src/components/research/deepResearchSurfaceParts/DeepResearchRunView.starting.test.tsx::DeepResearchRunView \u2014 activity before the first brief > renders the actual first research-turn heartbeat before a brief or trace exists",
+      "frontend/src/components/research/deepResearchSurfaceParts/DeepResearchRunView.starting.test.tsx::DeepResearchRunView \u2014 activity before the first brief > shows a reported waiting model call even without a turn event",
       "frontend/src/components/research/deepResearchSurfaceParts/DeepResearchRunView.starting.test.tsx::DeepResearchRunView \u2014 the start-up state does not pretend > closes steering when writing starts while keeping the run visible",
       "frontend/src/components/research/deepResearchSurfaceParts/DeepResearchRunView.starting.test.tsx::DeepResearchRunView \u2014 the start-up state does not pretend > names the silence, how long it has lasted, and what the user can do",
       "frontend/src/components/research/deepResearchSurfaceParts/DeepResearchRunView.starting.test.tsx::DeepResearchRunView \u2014 the start-up state does not pretend > shows no hold panel when the engine reported no hold",
@@ -46231,6 +46237,24 @@
         "typescript_static_test_ids": [
           "frontend/src/components/research/DeepResearchSurface.test.tsx::keeps the trigger minimal \u2014 one depth token, no recency/source echo",
           "frontend/src/components/states.test.tsx::empty state carries the brand + Latin entry, with NO duplicate mode chips"
+        ],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-32-RESEARCH-EARLY-PROGRESS",
+      "root": "multiple",
+      "source_identity_before": "969d1a59e8a95e12fadc6aaedf53684583eeec50",
+      "source_identity_after": "14e916c8a310660ab708d46dad852c97ecd1e765",
+      "collected_roots": {},
+      "mapping_static_additions": {
+        "python_test_files": [],
+        "python_static_test_ids": [],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [
+          "frontend/src/components/research/deepResearchSurfaceParts/DeepResearchRunView.starting.test.tsx::does not mistake a status timestamp for reported research activity",
+          "frontend/src/components/research/deepResearchSurfaceParts/DeepResearchRunView.starting.test.tsx::renders the actual first research-turn heartbeat before a brief or trace exists",
+          "frontend/src/components/research/deepResearchSurfaceParts/DeepResearchRunView.starting.test.tsx::shows a reported waiting model call even without a turn event"
         ],
         "fixtures": []
       }
