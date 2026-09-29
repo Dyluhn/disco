@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "5ff4f98048c80c148cb7b0c6f2f8b8a634eac334",
+  "source_identity": "3f98e96a642e95dbf99eff0f5938c9bf5a854c5f",
   "collected": {
     "counts": {
-      "packages": 12476,
+      "packages": 12485,
       "harness": 1571,
       "integrations": 9,
       "tests": 468
     },
-    "total": 14524,
+    "total": 14533,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -9642,6 +9642,15 @@
         "packages/retrieval/tests/test_source_reading_recovery.py::test_reading_checkpoint_roundtrips_through_the_event_commit_owner",
         "packages/retrieval/tests/test_source_reading_recovery.py::test_stop_after_first_chunk_resumes_at_second_chunk",
         "packages/retrieval/tests/test_source_reading_recovery.py::test_writer_commits_reading_before_any_draft_and_roundtrips",
+        "packages/retrieval/tests/test_source_reading_spans.py::test_compact_retry_accepts_within_span_quote_with_original_offsets",
+        "packages/retrieval/tests/test_source_reading_spans.py::test_identical_quotes_in_distinct_chunks_keep_distinct_conditions",
+        "packages/retrieval/tests/test_source_reading_spans.py::test_initial_finding_outside_shown_chunk_is_rejected",
+        "packages/retrieval/tests/test_source_reading_spans.py::test_quote_crossing_chunk_boundary_is_rejected",
+        "packages/retrieval/tests/test_source_reading_spans.py::test_quotes_touching_either_side_of_chunk_boundary_are_valid",
+        "packages/retrieval/tests/test_source_reading_spans.py::test_repair_contrary_outside_shown_chunk_is_rejected",
+        "packages/retrieval/tests/test_source_reading_spans.py::test_repeated_quote_resolves_to_shown_occurrence_with_unicode_prefix",
+        "packages/retrieval/tests/test_source_reading_spans.py::test_resume_keeps_prior_offsets_and_shifts_new_finding_and_contrary",
+        "packages/retrieval/tests/test_source_reading_spans.py::test_whitespace_normalized_quote_within_span_keeps_original_offsets",
         "packages/retrieval/tests/test_source_unavailable.py::test_empty_extraction_results_keep_existing_infrastructure_behavior",
         "packages/retrieval/tests/test_source_unavailable.py::test_mixed_settled_and_transient_failures_keep_infrastructure_queue_behavior[statuses0]",
         "packages/retrieval/tests/test_source_unavailable.py::test_mixed_settled_and_transient_failures_keep_infrastructure_queue_behavior[statuses1]",
@@ -14545,9 +14554,9 @@
     }
   },
   "mapping_static": {
-    "identity": "5ff4f98048c80c148cb7b0c6f2f8b8a634eac334",
-    "python_test_file_count": 974,
-    "python_static_test_id_count": 11842,
+    "identity": "3f98e96a642e95dbf99eff0f5938c9bf5a854c5f",
+    "python_test_file_count": 975,
+    "python_static_test_id_count": 11851,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -15312,6 +15321,7 @@
       "packages/retrieval/tests/test_source_reading_empty.py",
       "packages/retrieval/tests/test_source_reading_protocol.py",
       "packages/retrieval/tests/test_source_reading_recovery.py",
+      "packages/retrieval/tests/test_source_reading_spans.py",
       "packages/retrieval/tests/test_source_unavailable.py",
       "packages/retrieval/tests/test_streaming.py",
       "packages/retrieval/tests/test_streaming_keep_searching.py",
@@ -24554,6 +24564,15 @@
       "packages/retrieval/tests/test_source_reading_recovery.py::test_reading_checkpoint_roundtrips_through_the_event_commit_owner",
       "packages/retrieval/tests/test_source_reading_recovery.py::test_stop_after_first_chunk_resumes_at_second_chunk",
       "packages/retrieval/tests/test_source_reading_recovery.py::test_writer_commits_reading_before_any_draft_and_roundtrips",
+      "packages/retrieval/tests/test_source_reading_spans.py::test_compact_retry_accepts_within_span_quote_with_original_offsets",
+      "packages/retrieval/tests/test_source_reading_spans.py::test_identical_quotes_in_distinct_chunks_keep_distinct_conditions",
+      "packages/retrieval/tests/test_source_reading_spans.py::test_initial_finding_outside_shown_chunk_is_rejected",
+      "packages/retrieval/tests/test_source_reading_spans.py::test_quote_crossing_chunk_boundary_is_rejected",
+      "packages/retrieval/tests/test_source_reading_spans.py::test_quotes_touching_either_side_of_chunk_boundary_are_valid",
+      "packages/retrieval/tests/test_source_reading_spans.py::test_repair_contrary_outside_shown_chunk_is_rejected",
+      "packages/retrieval/tests/test_source_reading_spans.py::test_repeated_quote_resolves_to_shown_occurrence_with_unicode_prefix",
+      "packages/retrieval/tests/test_source_reading_spans.py::test_resume_keeps_prior_offsets_and_shifts_new_finding_and_contrary",
+      "packages/retrieval/tests/test_source_reading_spans.py::test_whitespace_normalized_quote_within_span_keeps_original_offsets",
       "packages/retrieval/tests/test_source_unavailable.py::test_empty_extraction_results_keep_existing_infrastructure_behavior",
       "packages/retrieval/tests/test_source_unavailable.py::test_mixed_settled_and_transient_failures_keep_infrastructure_queue_behavior",
       "packages/retrieval/tests/test_source_unavailable.py::test_settled_unavailable_sources_count_as_work_and_skip_reissue_queue",
@@ -44915,6 +44934,48 @@
           "packages/retrieval/tests/test_source_reading_protocol.py::test_no_repair_budget_ends_not_ok_with_one_charged_call",
           "packages/retrieval/tests/test_source_reading_protocol.py::test_saved_failed_reading_is_not_replayed",
           "packages/retrieval/tests/test_source_reading_protocol.py::test_valid_empty_findings_stays_successful"
+        ],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-28-READER-SHOWN-SPANS",
+      "root": "packages",
+      "source_identity_before": "5ff4f98048c80c148cb7b0c6f2f8b8a634eac334",
+      "source_identity_after": "3f98e96a642e95dbf99eff0f5938c9bf5a854c5f",
+      "collected_roots": {
+        "packages": {
+          "before_count": 12476,
+          "after_count": 12485,
+          "added_ids": [
+            "packages/retrieval/tests/test_source_reading_spans.py::test_compact_retry_accepts_within_span_quote_with_original_offsets",
+            "packages/retrieval/tests/test_source_reading_spans.py::test_identical_quotes_in_distinct_chunks_keep_distinct_conditions",
+            "packages/retrieval/tests/test_source_reading_spans.py::test_initial_finding_outside_shown_chunk_is_rejected",
+            "packages/retrieval/tests/test_source_reading_spans.py::test_quote_crossing_chunk_boundary_is_rejected",
+            "packages/retrieval/tests/test_source_reading_spans.py::test_quotes_touching_either_side_of_chunk_boundary_are_valid",
+            "packages/retrieval/tests/test_source_reading_spans.py::test_repair_contrary_outside_shown_chunk_is_rejected",
+            "packages/retrieval/tests/test_source_reading_spans.py::test_repeated_quote_resolves_to_shown_occurrence_with_unicode_prefix",
+            "packages/retrieval/tests/test_source_reading_spans.py::test_resume_keeps_prior_offsets_and_shifts_new_finding_and_contrary",
+            "packages/retrieval/tests/test_source_reading_spans.py::test_whitespace_normalized_quote_within_span_keeps_original_offsets"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [
+          "packages/retrieval/tests/test_source_reading_spans.py"
+        ],
+        "python_static_test_ids": [
+          "packages/retrieval/tests/test_source_reading_spans.py::test_compact_retry_accepts_within_span_quote_with_original_offsets",
+          "packages/retrieval/tests/test_source_reading_spans.py::test_identical_quotes_in_distinct_chunks_keep_distinct_conditions",
+          "packages/retrieval/tests/test_source_reading_spans.py::test_initial_finding_outside_shown_chunk_is_rejected",
+          "packages/retrieval/tests/test_source_reading_spans.py::test_quote_crossing_chunk_boundary_is_rejected",
+          "packages/retrieval/tests/test_source_reading_spans.py::test_quotes_touching_either_side_of_chunk_boundary_are_valid",
+          "packages/retrieval/tests/test_source_reading_spans.py::test_repair_contrary_outside_shown_chunk_is_rejected",
+          "packages/retrieval/tests/test_source_reading_spans.py::test_repeated_quote_resolves_to_shown_occurrence_with_unicode_prefix",
+          "packages/retrieval/tests/test_source_reading_spans.py::test_resume_keeps_prior_offsets_and_shifts_new_finding_and_contrary",
+          "packages/retrieval/tests/test_source_reading_spans.py::test_whitespace_normalized_quote_within_span_keeps_original_offsets"
         ],
         "typescript_test_files": [],
         "typescript_static_test_ids": [],
