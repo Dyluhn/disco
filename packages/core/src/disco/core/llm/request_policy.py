@@ -67,6 +67,10 @@ def _check_header_value(value: object, *, name: str) -> str:
     for char in value:
         if not 32 <= ord(char) <= 126:
             raise ValueError(f"header value for {name!r} must contain printable ASCII characters")
+    if value != value.strip():
+        raise ValueError(
+            f"header value for {name!r} must not contain leading or trailing whitespace"
+        )
     return value
 
 
