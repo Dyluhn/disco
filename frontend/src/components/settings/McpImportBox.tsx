@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/cn";
 import { isApiFailure } from "@/api/errors";
 import { useImportMcpConfig } from "@/hooks/useConfig";
@@ -69,6 +69,10 @@ function ServerPreviewRow({ server }: { server: McpImportServer }) {
 
 export function McpImportBox({ onClose }: { onClose: () => void }) {
   const importConfig = useImportMcpConfig();
+  const firstFieldRef = useRef<HTMLTextAreaElement | null>(null);
+  useEffect(() => {
+    firstFieldRef.current?.focus();
+  }, []);
   const [text, setText] = useState("");
   const [preview, setPreview] = useState<McpImportResult | null>(null);
 
@@ -96,6 +100,7 @@ export function McpImportBox({ onClose }: { onClose: () => void }) {
         secrets, never in the config.
       </p>
       <textarea
+        ref={firstFieldRef}
         value={text}
         onChange={(e) => {
           setText(e.target.value);
