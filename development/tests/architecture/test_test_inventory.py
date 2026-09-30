@@ -708,7 +708,7 @@ class TestMappingStatic:
             # Attempt diagnostics add two Python files, 12 static IDs and 48 cases.
             "python_test_file_count": 983,
             "python_static_test_id_count": 11922,
-            "typescript_test_file_count": 312,
+            "typescript_test_file_count": 313,
             "typescript_static_test_id_count": 1633,
         }
         assert mapping["identity"] == baseline["source_identity"]
@@ -847,12 +847,12 @@ class TestFrontendCollection:
                 len(frontend["vitest_files_list"]),
             )
             == (frontend["vitest_ids"], frontend["vitest_files"])
-            == (1567, 234)
+            == (1575, 235)
         )
         assert frontend["vitest_ids_list"] == sorted(frontend["vitest_ids_list"])
         assert frontend["vitest_files_list"] == sorted(frontend["vitest_files_list"])
-        assert len(set(frontend["vitest_ids_list"])) == 1567
-        assert len(set(frontend["vitest_files_list"])) == 234
+        assert len(set(frontend["vitest_ids_list"])) == 1575
+        assert len(set(frontend["vitest_files_list"])) == 235
         assert set(frontend["playwright_configs"]) == set(test_inventory.PLAYWRIGHT_CONFIGS)
         for config, authority in frontend["playwright_configs"].items():
             assert len(authority["ids"]) == authority["id_count"]

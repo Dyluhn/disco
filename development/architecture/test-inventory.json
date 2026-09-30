@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "8fbbbdadaf0241a7d2405183be614bb5cb28dc54",
+  "source_identity": "18ce0f7483de865854e5707abc50c43af71a7feb",
   "collected": {
     "counts": {
       "packages": 12682,
@@ -14751,7 +14751,7 @@
     }
   },
   "mapping_static": {
-    "identity": "8fbbbdadaf0241a7d2405183be614bb5cb28dc54",
+    "identity": "18ce0f7483de865854e5707abc50c43af71a7feb",
     "python_test_file_count": 983,
     "python_static_test_id_count": 11922,
     "python_test_files": [
@@ -27663,7 +27663,7 @@
       "tests/unbiased_gate/test_authorB_models_imagegen.py::test_w50_slides_degrade_to_image_less_when_image_backend_unconfigured",
       "tests/unbiased_gate/test_authorB_models_imagegen.py::test_w50_unconfigured_image_backend_fails_loudly_instead_of_procedural_fallback"
     ],
-    "typescript_test_file_count": 312,
+    "typescript_test_file_count": 313,
     "typescript_static_test_id_count": 1633,
     "typescript_test_files": [
       "frontend/e2e-full/scenarios/click-provenance.smoke.spec.ts",
@@ -27874,6 +27874,7 @@
       "frontend/src/components/settings/DataSourcesSection.test.tsx",
       "frontend/src/components/settings/DiagnosticsSection.test.tsx",
       "frontend/src/components/settings/ImageGenSection.test.tsx",
+      "frontend/src/components/settings/InlineEditor.focus.test.tsx",
       "frontend/src/components/settings/LiveBrowserSection.test.tsx",
       "frontend/src/components/settings/McpImportBox.test.tsx",
       "frontend/src/components/settings/McpSection.approval.test.tsx",
@@ -31548,8 +31549,8 @@
         ]
       }
     },
-    "vitest_ids": 1567,
-    "vitest_files": 234,
+    "vitest_ids": 1575,
+    "vitest_files": 235,
     "vitest_ids_list": [
       "frontend/src/App.moderesume.test.tsx::A2 \u2014 fresh sessions and resume targets > New preserves the active mode, then a mode chip lands on that mode's splash",
       "frontend/src/App.moderesume.test.tsx::A2 \u2014 fresh sessions and resume targets > does not resume a just-killed conversation id from the mode chip",
@@ -32378,6 +32379,14 @@
       "frontend/src/components/settings/ImageGenSection.test.tsx::ImageGenSection \u2014 A3 image-gen provider settings > says an unconfigured tier is optional and not set up, in a neutral tone (W-50, UI-2)",
       "frontend/src/components/settings/ImageGenSection.test.tsx::ImageGenSection \u2014 A3 image-gen provider settings > shows the ComfyUI custom-workflow textarea and PUTs workflow_json on save",
       "frontend/src/components/settings/ImageGenSection.test.tsx::ImageGenSection \u2014 OpenRouter priced image-model picker > shows a priced picker of image-output models and PUTs the chosen model",
+      "frontend/src/components/settings/InlineEditor.focus.test.tsx::Inline settings editor keyboard focus > opens 'connection' at the first field and Cancel restores the opener",
+      "frontend/src/components/settings/InlineEditor.focus.test.tsx::Inline settings editor keyboard focus > opens 'edit' at the first field and Cancel restores the opener",
+      "frontend/src/components/settings/InlineEditor.focus.test.tsx::Inline settings editor keyboard focus > opens 'import' at the first field and Cancel restores the opener",
+      "frontend/src/components/settings/InlineEditor.focus.test.tsx::Inline settings editor keyboard focus > opens 'new' at the first field and Cancel restores the opener",
+      "frontend/src/components/settings/InlineEditor.focus.test.tsx::Inline settings editor keyboard focus > successful 'connection' save restores its own opener",
+      "frontend/src/components/settings/InlineEditor.focus.test.tsx::Inline settings editor keyboard focus > successful 'edit' save restores its own opener",
+      "frontend/src/components/settings/InlineEditor.focus.test.tsx::Inline settings editor keyboard focus > successful 'import' save restores its own opener",
+      "frontend/src/components/settings/InlineEditor.focus.test.tsx::Inline settings editor keyboard focus > successful 'new' save restores its own opener",
       "frontend/src/components/settings/LiveBrowserSection.test.tsx::LiveBrowserSection \u2014 backend-gated noVNC toggle > (a) local backend \u2192 toggle locked off with explanatory note, screenshots only",
       "frontend/src/components/settings/LiveBrowserSection.test.tsx::LiveBrowserSection \u2014 backend-gated noVNC toggle > (b) local backend \u2192 clicking On FLAGS the error and never saves",
       "frontend/src/components/settings/LiveBrowserSection.test.tsx::LiveBrowserSection \u2014 backend-gated noVNC toggle > (c) gVisor backend \u2192 toggle enableable; clicking On saves enabled=true",
@@ -33252,6 +33261,7 @@
       "frontend/src/components/settings/DataSourcesSection.test.tsx",
       "frontend/src/components/settings/DiagnosticsSection.test.tsx",
       "frontend/src/components/settings/ImageGenSection.test.tsx",
+      "frontend/src/components/settings/InlineEditor.focus.test.tsx",
       "frontend/src/components/settings/LiveBrowserSection.test.tsx",
       "frontend/src/components/settings/McpImportBox.test.tsx",
       "frontend/src/components/settings/McpSection.approval.test.tsx",
@@ -46780,6 +46790,22 @@
           "sota-scan/test/report.test.mjs::reportDomain slugifies the first declared domain",
           "sota-scan/test/report.test.mjs::summary reflects coverage and edge tallies"
         ],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-38-SETTINGS-FOCUS",
+      "root": "multiple",
+      "source_identity_before": "8fbbbdadaf0241a7d2405183be614bb5cb28dc54",
+      "source_identity_after": "18ce0f7483de865854e5707abc50c43af71a7feb",
+      "collected_roots": {},
+      "mapping_static_additions": {
+        "python_test_files": [],
+        "python_static_test_ids": [],
+        "typescript_test_files": [
+          "frontend/src/components/settings/InlineEditor.focus.test.tsx"
+        ],
+        "typescript_static_test_ids": [],
         "fixtures": []
       }
     },
