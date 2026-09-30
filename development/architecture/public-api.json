@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-public-api-v1",
-  "source_identity": "70bb4c76d1f9c82236b5bbdfd793c647b474aad5",
+  "source_identity": "b8dc5ecd908c96c3963c675b62b59dac18c3d154",
   "python_initializers": [
     {
       "path": "packages/agent-server/src/disco/agent_server/__init__.py",
@@ -21916,12 +21916,12 @@
         {
           "kind": "function",
           "name": "ExportModal",
-          "signature": "export function ExportModal({ open, onOpenChange, report, cid, followUpSeqs }: ExportModalProps)"
+          "signature": "export function ExportModal({ open, onOpenChange, report, cid, followUpSeqs, triggerRef }: ExportModalProps)"
         },
         {
           "kind": "InterfaceDeclaration",
           "name": "ExportModalProps",
-          "signature": "export interface ExportModalProps { open: boolean; onOpenChange: (open: boolean) => void; report: ReportEvent; cid: string; /** Selected follow-up user-message seqs to include (WALK-20). */ followUpSeqs?: number[]; }"
+          "signature": "export interface ExportModalProps { open: boolean; onOpenChange: (open: boolean) => void; report: ReportEvent; cid: string; /** Selected follow-up user-message seqs to include (WALK-20). */ followUpSeqs?: number[]; /** Exact activated Export opener to return focus to on close. Optional: * existing callers without a ref keep default Radix behavior. */ triggerRef?: { current: HTMLButtonElement | null }; }"
         }
       ]
     },
@@ -29295,22 +29295,6 @@
     },
     {
       "surface": "frontend",
-      "path": "frontend/src/components/research/needMoreCardParts/ExportModal.tsx",
-      "public_name": "ExportModal",
-      "target_sha256": "f8ca78f2c138dc63ef2ec43e17c3085cc0c74662225ff7acd0811a159947930c",
-      "owner_package": "PKG-12-FE-RESEARCH",
-      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
-    },
-    {
-      "surface": "frontend",
-      "path": "frontend/src/components/research/needMoreCardParts/ExportModal.tsx",
-      "public_name": "ExportModalProps",
-      "target_sha256": "51219e1d03924af62ad552dc892f59df03c16db75ef75b9dda7e8180f02a27b0",
-      "owner_package": "PKG-12-FE-RESEARCH",
-      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
-    },
-    {
-      "surface": "frontend",
       "path": "frontend/src/components/research/needMoreCardParts/ExportPdfButton.tsx",
       "public_name": "ExportPdfButton",
       "target_sha256": "f50d1b7c5bb935c79ee73ecf8835f806d67b963aaca385203a742a079151b731",
@@ -32831,6 +32815,22 @@
     },
     {
       "surface": "frontend",
+      "path": "frontend/src/components/research/needMoreCardParts/ExportModal.tsx",
+      "public_name": "ExportModal",
+      "target_sha256": "f3210fa7f01a0c23b5d4162750b347023a42bf32113a396d17cbbed73a5231b6",
+      "owner_package": "PKG-41-EXPORT-FOCUS",
+      "reason": "Optional connected export-opener reference preserves existing callers and returns keyboard focus to the initiating report card after Export closes."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/needMoreCardParts/ExportModal.tsx",
+      "public_name": "ExportModalProps",
+      "target_sha256": "4ea1e131f8dc5d56d55ae25ff8755f384c1a3020b038a636b389c01089abc7d5",
+      "owner_package": "PKG-41-EXPORT-FOCUS",
+      "reason": "Optional connected export-opener reference preserves existing callers and returns keyboard focus to the initiating report card after Export closes."
+    },
+    {
+      "surface": "frontend",
       "path": "frontend/src/api/agent.ts",
       "public_name": "createBuildConversation",
       "target_sha256": "e54ae52cf1e410a16e6490690b4a8bd774dc30c3ea026e64aaee19ec51cb450d",
@@ -34669,6 +34669,32 @@
       "owner_package": "PKG-12-FE-SHELL",
       "accepting_commit": "b330cba4bf607bf0c06974d68e2de0f7491d942f",
       "accepting_receipt": "2026-08-02/EPIC12A-BOUNDARY/EPIC-12A-ACCEPTANCE-RECEIPT.md"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/needMoreCardParts/ExportModal.tsx",
+      "public_name": "ExportModalProps",
+      "declaration_kind": "InterfaceDeclaration",
+      "old_signature": "export interface ExportModalProps { open: boolean; onOpenChange: (open: boolean) => void; report: ReportEvent; cid: string; /** Selected follow-up user-message seqs to include (WALK-20). */ followUpSeqs?: number[]; }",
+      "new_signature": "export interface ExportModalProps { open: boolean; onOpenChange: (open: boolean) => void; report: ReportEvent; cid: string; /** Selected follow-up user-message seqs to include (WALK-20). */ followUpSeqs?: number[]; /** Exact activated Export opener to return focus to on close. Optional: * existing callers without a ref keep default Radix behavior. */ triggerRef?: { current: HTMLButtonElement | null }; }",
+      "old_target_sha256": "51219e1d03924af62ad552dc892f59df03c16db75ef75b9dda7e8180f02a27b0",
+      "new_target_sha256": "4ea1e131f8dc5d56d55ae25ff8755f384c1a3020b038a636b389c01089abc7d5",
+      "owner_package": "PKG-41-EXPORT-FOCUS",
+      "accepting_commit": "b8dc5ecd908c96c3963c675b62b59dac18c3d154",
+      "accepting_receipt": "frontend/src/components/research/ExportFocus.test.tsx"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/needMoreCardParts/ExportModal.tsx",
+      "public_name": "ExportModal",
+      "declaration_kind": "function",
+      "old_signature": "export function ExportModal({ open, onOpenChange, report, cid, followUpSeqs }: ExportModalProps)",
+      "new_signature": "export function ExportModal({ open, onOpenChange, report, cid, followUpSeqs, triggerRef }: ExportModalProps)",
+      "old_target_sha256": "f8ca78f2c138dc63ef2ec43e17c3085cc0c74662225ff7acd0811a159947930c",
+      "new_target_sha256": "f3210fa7f01a0c23b5d4162750b347023a42bf32113a396d17cbbed73a5231b6",
+      "owner_package": "PKG-41-EXPORT-FOCUS",
+      "accepting_commit": "b8dc5ecd908c96c3963c675b62b59dac18c3d154",
+      "accepting_receipt": "frontend/src/components/research/ExportFocus.test.tsx"
     },
     {
       "surface": "frontend",
