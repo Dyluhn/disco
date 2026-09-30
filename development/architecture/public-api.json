@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-public-api-v1",
-  "source_identity": "4d9b64930c42db8919db87acd8d09ada842d5f48",
+  "source_identity": "70bb4c76d1f9c82236b5bbdfd793c647b474aad5",
   "python_initializers": [
     {
       "path": "packages/agent-server/src/disco/agent_server/__init__.py",
@@ -24321,6 +24321,16 @@
       ]
     },
     {
+      "path": "frontend/src/hooks/useRowRemovalFocus.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "useRowRemovalFocus",
+          "signature": "export function useRowRemovalFocus( ids: readonly string[], fallback: RefObject<HTMLButtonElement | null>, )"
+        }
+      ]
+    },
+    {
       "path": "frontend/src/hooks/useScrollFade.ts",
       "public_declarations": [
         {
@@ -32810,6 +32820,14 @@
       "target_sha256": "15c512be6a3d8208ffc7b2dfe76d4a46967c2582b7e5ebe9575243b531354327",
       "owner_package": "PKG-38-UI-FIXES-V51",
       "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/hooks/useRowRemovalFocus.ts",
+      "public_name": "useRowRemovalFocus",
+      "target_sha256": "e6c5de74efafa65d4df82139f17643bfa7f036e6f0c914891537f85116cf465b",
+      "owner_package": "PKG-40-ROW-REMOVAL-FOCUS",
+      "reason": "Share success/row-disappearance focus ownership between Skills Delete and MCP Remove without stealing focus moved during a pending request."
     },
     {
       "surface": "frontend",
