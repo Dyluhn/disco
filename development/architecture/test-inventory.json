@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "1ac35837b53b00f308d69e258793cb9c937b14d0",
+  "source_identity": "8fbbbdadaf0241a7d2405183be614bb5cb28dc54",
   "collected": {
     "counts": {
-      "packages": 12671,
+      "packages": 12682,
       "harness": 1571,
       "integrations": 9,
       "tests": 468
     },
-    "total": 14719,
+    "total": 14730,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -9691,6 +9691,17 @@
         "packages/retrieval/tests/test_search_rate_limits.py::test_the_slowdown_stops_at_its_floor",
         "packages/retrieval/tests/test_search_rate_limits.py::test_transient_degradation_keeps_its_retries_unchanged",
         "packages/retrieval/tests/test_search_rate_limits.py::test_transient_outage_message_is_unchanged",
+        "packages/retrieval/tests/test_semantic_deletion_retention.py::test_deleted_block_keeps_each_citable_passage_marked",
+        "packages/retrieval/tests/test_semantic_deletion_retention.py::test_deleted_text_blank_lines_keep_each_passage_marked",
+        "packages/retrieval/tests/test_semantic_deletion_retention.py::test_deletion_inside_skipped_noise_leaves_no_markers",
+        "packages/retrieval/tests/test_semantic_deletion_retention.py::test_empty_deleted_content_does_not_add_visible_markers",
+        "packages/retrieval/tests/test_semantic_deletion_retention.py::test_link_inside_deletion_preserved",
+        "packages/retrieval/tests/test_semantic_deletion_retention.py::test_literal_newline_escapes_remain_one_deleted_span",
+        "packages/retrieval/tests/test_semantic_deletion_retention.py::test_nested_deletion_emits_single_strikethrough",
+        "packages/retrieval/tests/test_semantic_deletion_retention.py::test_ordinary_guidance_and_link_remain_unchanged",
+        "packages/retrieval/tests/test_semantic_deletion_retention.py::test_semantic_deleted_guidance_stays_distinct_from_current_text[del]",
+        "packages/retrieval/tests/test_semantic_deletion_retention.py::test_semantic_deleted_guidance_stays_distinct_from_current_text[s]",
+        "packages/retrieval/tests/test_semantic_deletion_retention.py::test_semantic_deleted_guidance_stays_distinct_from_current_text[strike]",
         "packages/retrieval/tests/test_source_adapters.py::test_arxiv_follows_redirects_before_parsing_atom_hits",
         "packages/retrieval/tests/test_source_adapters.py::test_arxiv_malformed_xml_degrades_to_empty",
         "packages/retrieval/tests/test_source_adapters.py::test_arxiv_maps_atom_hits_and_satisfies_protocol",
@@ -14740,9 +14751,9 @@
     }
   },
   "mapping_static": {
-    "identity": "1ac35837b53b00f308d69e258793cb9c937b14d0",
-    "python_test_file_count": 982,
-    "python_static_test_id_count": 11913,
+    "identity": "8fbbbdadaf0241a7d2405183be614bb5cb28dc54",
+    "python_test_file_count": 983,
+    "python_static_test_id_count": 11922,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -15504,6 +15515,7 @@
       "packages/retrieval/tests/test_review_signal_handoff.py",
       "packages/retrieval/tests/test_review_source_references.py",
       "packages/retrieval/tests/test_search_rate_limits.py",
+      "packages/retrieval/tests/test_semantic_deletion_retention.py",
       "packages/retrieval/tests/test_source_adapters.py",
       "packages/retrieval/tests/test_source_admission.py",
       "packages/retrieval/tests/test_source_excerpt_navigation.py",
@@ -24711,6 +24723,15 @@
       "packages/retrieval/tests/test_search_rate_limits.py::test_the_slowdown_stops_at_its_floor",
       "packages/retrieval/tests/test_search_rate_limits.py::test_transient_degradation_keeps_its_retries_unchanged",
       "packages/retrieval/tests/test_search_rate_limits.py::test_transient_outage_message_is_unchanged",
+      "packages/retrieval/tests/test_semantic_deletion_retention.py::test_deleted_block_keeps_each_citable_passage_marked",
+      "packages/retrieval/tests/test_semantic_deletion_retention.py::test_deleted_text_blank_lines_keep_each_passage_marked",
+      "packages/retrieval/tests/test_semantic_deletion_retention.py::test_deletion_inside_skipped_noise_leaves_no_markers",
+      "packages/retrieval/tests/test_semantic_deletion_retention.py::test_empty_deleted_content_does_not_add_visible_markers",
+      "packages/retrieval/tests/test_semantic_deletion_retention.py::test_link_inside_deletion_preserved",
+      "packages/retrieval/tests/test_semantic_deletion_retention.py::test_literal_newline_escapes_remain_one_deleted_span",
+      "packages/retrieval/tests/test_semantic_deletion_retention.py::test_nested_deletion_emits_single_strikethrough",
+      "packages/retrieval/tests/test_semantic_deletion_retention.py::test_ordinary_guidance_and_link_remain_unchanged",
+      "packages/retrieval/tests/test_semantic_deletion_retention.py::test_semantic_deleted_guidance_stays_distinct_from_current_text",
       "packages/retrieval/tests/test_source_adapters.py::test_arxiv_follows_redirects_before_parsing_atom_hits",
       "packages/retrieval/tests/test_source_adapters.py::test_arxiv_malformed_xml_degrades_to_empty",
       "packages/retrieval/tests/test_source_adapters.py::test_arxiv_maps_atom_hits_and_satisfies_protocol",
@@ -45593,6 +45614,50 @@
             "scope": "pytest.fixture(autouse=True)"
           }
         ]
+      }
+    },
+    {
+      "package": "PKG-37-SEMANTIC-DELETION",
+      "root": "packages",
+      "source_identity_before": "1ac35837b53b00f308d69e258793cb9c937b14d0",
+      "source_identity_after": "8fbbbdadaf0241a7d2405183be614bb5cb28dc54",
+      "collected_roots": {
+        "packages": {
+          "before_count": 12671,
+          "after_count": 12682,
+          "added_ids": [
+            "packages/retrieval/tests/test_semantic_deletion_retention.py::test_deleted_block_keeps_each_citable_passage_marked",
+            "packages/retrieval/tests/test_semantic_deletion_retention.py::test_deleted_text_blank_lines_keep_each_passage_marked",
+            "packages/retrieval/tests/test_semantic_deletion_retention.py::test_deletion_inside_skipped_noise_leaves_no_markers",
+            "packages/retrieval/tests/test_semantic_deletion_retention.py::test_empty_deleted_content_does_not_add_visible_markers",
+            "packages/retrieval/tests/test_semantic_deletion_retention.py::test_link_inside_deletion_preserved",
+            "packages/retrieval/tests/test_semantic_deletion_retention.py::test_literal_newline_escapes_remain_one_deleted_span",
+            "packages/retrieval/tests/test_semantic_deletion_retention.py::test_nested_deletion_emits_single_strikethrough",
+            "packages/retrieval/tests/test_semantic_deletion_retention.py::test_ordinary_guidance_and_link_remain_unchanged",
+            "packages/retrieval/tests/test_semantic_deletion_retention.py::test_semantic_deleted_guidance_stays_distinct_from_current_text[del]",
+            "packages/retrieval/tests/test_semantic_deletion_retention.py::test_semantic_deleted_guidance_stays_distinct_from_current_text[s]",
+            "packages/retrieval/tests/test_semantic_deletion_retention.py::test_semantic_deleted_guidance_stays_distinct_from_current_text[strike]"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [
+          "packages/retrieval/tests/test_semantic_deletion_retention.py"
+        ],
+        "python_static_test_ids": [
+          "packages/retrieval/tests/test_semantic_deletion_retention.py::test_deleted_block_keeps_each_citable_passage_marked",
+          "packages/retrieval/tests/test_semantic_deletion_retention.py::test_deleted_text_blank_lines_keep_each_passage_marked",
+          "packages/retrieval/tests/test_semantic_deletion_retention.py::test_deletion_inside_skipped_noise_leaves_no_markers",
+          "packages/retrieval/tests/test_semantic_deletion_retention.py::test_empty_deleted_content_does_not_add_visible_markers",
+          "packages/retrieval/tests/test_semantic_deletion_retention.py::test_link_inside_deletion_preserved",
+          "packages/retrieval/tests/test_semantic_deletion_retention.py::test_literal_newline_escapes_remain_one_deleted_span",
+          "packages/retrieval/tests/test_semantic_deletion_retention.py::test_nested_deletion_emits_single_strikethrough",
+          "packages/retrieval/tests/test_semantic_deletion_retention.py::test_ordinary_guidance_and_link_remain_unchanged",
+          "packages/retrieval/tests/test_semantic_deletion_retention.py::test_semantic_deleted_guidance_stays_distinct_from_current_text"
+        ],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
       }
     },
     {
