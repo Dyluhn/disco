@@ -74,6 +74,7 @@ _MODEL_SECRET_VALUE = re.compile(
     r"bearer\s+[A-Za-z0-9][A-Za-z0-9._-]{15,}"
     r")"
 )
+_USAGE_COUNT_KEYS = frozenset({"input_tokens", "output_tokens", "cached_tokens"})
 
 
 def inspect_enabled() -> bool:
@@ -141,6 +142,20 @@ def record_model_io(
     """
     if not conversation_id or not model_io_enabled():
         return
+    if usage is None:
+        sanitized_usage: Any = None
+    elif isinstance(usage, dict):
+        # Direct usage counts only: exact keys with plain nonnegative ints.
+        sanitized_usage = {
+            str(k): (
+                v
+                if k in _USAGE_COUNT_KEYS and type(v) is int and v >= 0
+                else _bounded_model_value(v, key=str(k))
+            )
+            for k, v in usage.items()
+        }
+    else:
+        sanitized_usage = _bounded_model_value(usage, key="usage")
     request_hash = hashlib.sha256(
         json.dumps(request or {}, ensure_ascii=False, sort_keys=True, default=str).encode()
     ).hexdigest()
@@ -160,11 +175,13 @@ def record_model_io(
         "response_hash": response_hash,
         "declared_decision": declared_decision,
         "latency_ms": latency_ms,
-        "usage": usage,
+        "usage": None,
         "finish_reason": finish_reason,
         "parse_error": parse_error,
     }
-    registry().add(conversation_id, "model_io", _bounded_model_value(payload))
+    bounded_payload = _bounded_model_value(payload)
+    bounded_payload["usage"] = sanitized_usage
+    registry().add(conversation_id, "model_io", bounded_payload)
 
 
 def record_model_attempt(
