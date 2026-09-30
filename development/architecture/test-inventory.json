@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "18ce0f7483de865854e5707abc50c43af71a7feb",
+  "source_identity": "4d9b64930c42db8919db87acd8d09ada842d5f48",
   "collected": {
     "counts": {
       "packages": 12682,
@@ -14751,7 +14751,7 @@
     }
   },
   "mapping_static": {
-    "identity": "18ce0f7483de865854e5707abc50c43af71a7feb",
+    "identity": "4d9b64930c42db8919db87acd8d09ada842d5f48",
     "python_test_file_count": 983,
     "python_static_test_id_count": 11922,
     "python_test_files": [
@@ -27664,7 +27664,7 @@
       "tests/unbiased_gate/test_authorB_models_imagegen.py::test_w50_unconfigured_image_backend_fails_loudly_instead_of_procedural_fallback"
     ],
     "typescript_test_file_count": 313,
-    "typescript_static_test_id_count": 1633,
+    "typescript_static_test_id_count": 1645,
     "typescript_test_files": [
       "frontend/e2e-full/scenarios/click-provenance.smoke.spec.ts",
       "frontend/e2e-full/scenarios/per-surface.full.spec.ts",
@@ -29524,11 +29524,23 @@
       "frontend/src/runtimeEnvHtml.test.ts::ships a safe Vite bootstrap that production replaces with runtime config",
       "frontend/src/shell/NavRail.test.tsx::does not touch the mode when a non-New item is clicked",
       "frontend/src/shell/NavRail.test.tsx::marks a fresh session without changing the current mode when 'New' is clicked",
+      "frontend/src/shell/Shell.test.tsx::Tab while closed reaches background mode controls (no trap when shut)",
+      "frontend/src/shell/Shell.test.tsx::closes the drawer and restores focus to the opener on drawer collapse",
+      "frontend/src/shell/Shell.test.tsx::closes the drawer on Escape while focus is inside",
+      "frontend/src/shell/Shell.test.tsx::closes the overlay on mobile->desktop crossing and moves focus to desktop nav",
       "frontend/src/shell/Shell.test.tsx::collapses and expands the rail",
+      "frontend/src/shell/Shell.test.tsx::has no effect on Escape while closed",
+      "frontend/src/shell/Shell.test.tsx::keeps Shift+Tab inside the drawer from the first control",
+      "frontend/src/shell/Shell.test.tsx::keeps forward Tab inside the drawer from the final Collapse control",
+      "frontend/src/shell/Shell.test.tsx::navigates via a drawer link and closes the drawer",
       "frontend/src/shell/Shell.test.tsx::opens and closes the mobile drawer without squeezing content",
       "frontend/src/shell/Shell.test.tsx::renders the nav rail, mode indicator, and theme toggle in the chrome",
+      "frontend/src/shell/Shell.test.tsx::resize while closed stays closed",
+      "frontend/src/shell/Shell.test.tsx::restores focus to the opener on Escape from inside",
+      "frontend/src/shell/Shell.test.tsx::restores focus to the opener on backdrop close",
       "frontend/src/shell/Shell.test.tsx::routes between views via the rail",
       "frontend/src/shell/Shell.test.tsx::shows Spaces as a live route",
+      "frontend/src/shell/Shell.test.tsx::transfers focus to the first drawer link on open",
       "frontend/src/shell/Shell.test.tsx::uses a Search/Build slider as the sole mode control (no separate indicator, no Deep Research at top)",
       "frontend/src/shell/mode.test.ts::SCOPE_OPTIONS is total over Mode (no missing key)",
       "frontend/src/shell/mode.test.ts::agent is a live (non-dormant) top-level mode",
@@ -31549,7 +31561,7 @@
         ]
       }
     },
-    "vitest_ids": 1575,
+    "vitest_ids": 1587,
     "vitest_files": 235,
     "vitest_ids_list": [
       "frontend/src/App.moderesume.test.tsx::A2 \u2014 fresh sessions and resume targets > New preserves the active mode, then a mode chip lands on that mode's splash",
@@ -33062,6 +33074,18 @@
       "frontend/src/shell/Shell.test.tsx::Application shell > routes between views via the rail",
       "frontend/src/shell/Shell.test.tsx::Application shell > shows Spaces as a live route",
       "frontend/src/shell/Shell.test.tsx::Application shell > uses a Search/Build slider as the sole mode control (no separate indicator, no Deep Research at top)",
+      "frontend/src/shell/Shell.test.tsx::mobile drawer focus management > closes the drawer and restores focus to the opener on drawer collapse",
+      "frontend/src/shell/Shell.test.tsx::mobile drawer focus management > closes the drawer on Escape while focus is inside",
+      "frontend/src/shell/Shell.test.tsx::mobile drawer focus management > has no effect on Escape while closed",
+      "frontend/src/shell/Shell.test.tsx::mobile drawer focus management > navigates via a drawer link and closes the drawer",
+      "frontend/src/shell/Shell.test.tsx::mobile drawer focus management > restores focus to the opener on Escape from inside",
+      "frontend/src/shell/Shell.test.tsx::mobile drawer focus management > restores focus to the opener on backdrop close",
+      "frontend/src/shell/Shell.test.tsx::mobile drawer focus management > transfers focus to the first drawer link on open",
+      "frontend/src/shell/Shell.test.tsx::mobile drawer keyboard boundaries and responsive closure (jsdom-bounded) > Tab while closed reaches background mode controls (no trap when shut)",
+      "frontend/src/shell/Shell.test.tsx::mobile drawer keyboard boundaries and responsive closure (jsdom-bounded) > closes the overlay on mobile->desktop crossing and moves focus to desktop nav",
+      "frontend/src/shell/Shell.test.tsx::mobile drawer keyboard boundaries and responsive closure (jsdom-bounded) > keeps Shift+Tab inside the drawer from the first control",
+      "frontend/src/shell/Shell.test.tsx::mobile drawer keyboard boundaries and responsive closure (jsdom-bounded) > keeps forward Tab inside the drawer from the final Collapse control",
+      "frontend/src/shell/Shell.test.tsx::mobile drawer keyboard boundaries and responsive closure (jsdom-bounded) > resize while closed stays closed",
       "frontend/src/shell/mode.test.ts::mode model \u2014 agent surface > SCOPE_OPTIONS is total over Mode (no missing key)",
       "frontend/src/shell/mode.test.ts::mode model \u2014 agent surface > agent is a live (non-dormant) top-level mode",
       "frontend/src/shell/mode.test.ts::mode model \u2014 agent surface > agent's default scope is the single Standard option",
@@ -46748,6 +46772,33 @@
           "frontend/src/components/settings/SandboxSection.save.test.tsx::failed save retains input and remains retryable",
           "frontend/src/components/settings/SandboxSection.save.test.tsx::successful save becomes Saved disabled without reload; probe uses normalized values",
           "frontend/src/components/settings/SandboxSection.save.test.tsx::switching backend retains its OWN saved connection fields"
+        ],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-39-MOBILE-NAVIGATION",
+      "root": "multiple",
+      "source_identity_before": "18ce0f7483de865854e5707abc50c43af71a7feb",
+      "source_identity_after": "4d9b64930c42db8919db87acd8d09ada842d5f48",
+      "collected_roots": {},
+      "mapping_static_additions": {
+        "python_test_files": [],
+        "python_static_test_ids": [],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [
+          "frontend/src/shell/Shell.test.tsx::Tab while closed reaches background mode controls (no trap when shut)",
+          "frontend/src/shell/Shell.test.tsx::closes the drawer and restores focus to the opener on drawer collapse",
+          "frontend/src/shell/Shell.test.tsx::closes the drawer on Escape while focus is inside",
+          "frontend/src/shell/Shell.test.tsx::closes the overlay on mobile->desktop crossing and moves focus to desktop nav",
+          "frontend/src/shell/Shell.test.tsx::has no effect on Escape while closed",
+          "frontend/src/shell/Shell.test.tsx::keeps Shift+Tab inside the drawer from the first control",
+          "frontend/src/shell/Shell.test.tsx::keeps forward Tab inside the drawer from the final Collapse control",
+          "frontend/src/shell/Shell.test.tsx::navigates via a drawer link and closes the drawer",
+          "frontend/src/shell/Shell.test.tsx::resize while closed stays closed",
+          "frontend/src/shell/Shell.test.tsx::restores focus to the opener on Escape from inside",
+          "frontend/src/shell/Shell.test.tsx::restores focus to the opener on backdrop close",
+          "frontend/src/shell/Shell.test.tsx::transfers focus to the first drawer link on open"
         ],
         "fixtures": []
       }
