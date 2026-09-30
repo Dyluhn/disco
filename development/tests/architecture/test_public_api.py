@@ -879,7 +879,7 @@ class TestFrontendPublicApi:
         # their oversized parents. All additive at the module level; the four
         # moved public targets carry frontend target relocations.
         # MCP connection form extraction adds one module; existing declarations remain unchanged.
-        assert len(live["frontend_modules"]) == 446
+        assert len(live["frontend_modules"]) == 447
         assert len(authority["contract_files"]) == 2
         assert all(set(row) == {"path", "sha256", "bytes"} for row in authority["contract_files"])
         assert module == {

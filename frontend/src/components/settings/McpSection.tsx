@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type RefObject } from "react";
 import { ClipboardPaste, Plus, ShieldOff, Trash2 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { TAP_TARGET_ICON } from "@/lib/tapTarget";
+import { useRowRemovalFocus } from "@/hooks/useRowRemovalFocus";
 import { agentIsLive } from "@/api/liveness";
 import { isApiFailure } from "@/api/errors";
 import { testMcpConnection } from "@/api/config";
@@ -209,6 +210,7 @@ export function McpSection() {
   const [creating, setCreating] = useState(false);
   const [importing, setImporting] = useState(false);
   const addButtonRef = useRef<HTMLButtonElement | null>(null);
+  const removeFocus = useRowRemovalFocus((connections ?? []).map((row) => row.id), addButtonRef);
   const importButtonRef = useRef<HTMLButtonElement | null>(null);
   const wasCreatingRef = useRef(false);
   const wasImportingRef = useRef(false);
@@ -402,7 +404,15 @@ export function McpSection() {
                   <button
                     type="button"
                     data-disco-control="settings.mcp-remove"
-                    onClick={() => remove.mutate(c.id)}
+                    ref={(node) => removeFocus.register(c.id, node)}
+                  onBlur={(event) => removeFocus.leave(c.id, event.currentTarget)}
+                  onClick={(event) => {
+                    removeFocus.begin(c.id, event.currentTarget);
+                    remove.mutate(c.id, {
+                      onSuccess: () => removeFocus.succeed(c.id),
+                      onError: () => removeFocus.cancel(c.id),
+                    });
+                  }}
                     aria-label={`Remove ${c.name}`}
                     className={cn(
                       "rounded-control text-text-faint transition-colors hover:text-unsupported",

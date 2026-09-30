@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Pencil, Plus, Trash2 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { TAP_TARGET_ICON } from "@/lib/tapTarget";
+import { useRowRemovalFocus } from "@/hooks/useRowRemovalFocus";
 import {
   useCreateSkill,
   useDeleteSkill,
@@ -212,6 +213,7 @@ export function SkillsSection() {
   const [creating, setCreating] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const newSkillButtonRef = useRef<HTMLButtonElement | null>(null);
+  const removeFocus = useRowRemovalFocus((skills ?? []).map((row) => row.id), newSkillButtonRef);
   const editButtonRefs = useRef(new Map<string, HTMLButtonElement>());
   const wasCreatingRef = useRef(false);
   const wasEditingIdRef = useRef<string | null>(null);
@@ -389,7 +391,15 @@ export function SkillsSection() {
                 <button
                   type="button"
                   data-disco-control="settings.skill-delete"
-                  onClick={() => remove.mutate(s.id)}
+                  ref={(node) => removeFocus.register(s.id, node)}
+                  onBlur={(event) => removeFocus.leave(s.id, event.currentTarget)}
+                  onClick={(event) => {
+                    removeFocus.begin(s.id, event.currentTarget);
+                    remove.mutate(s.id, {
+                      onSuccess: () => removeFocus.succeed(s.id),
+                      onError: () => removeFocus.cancel(s.id),
+                    });
+                  }}
                   aria-label={`Delete ${s.name}`}
                   className={cn(
                     "text-text-faint transition-colors hover:text-unsupported",

@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "4d9b64930c42db8919db87acd8d09ada842d5f48",
+  "source_identity": "70bb4c76d1f9c82236b5bbdfd793c647b474aad5",
   "collected": {
     "counts": {
       "packages": 12682,
@@ -14751,7 +14751,7 @@
     }
   },
   "mapping_static": {
-    "identity": "4d9b64930c42db8919db87acd8d09ada842d5f48",
+    "identity": "70bb4c76d1f9c82236b5bbdfd793c647b474aad5",
     "python_test_file_count": 983,
     "python_static_test_id_count": 11922,
     "python_test_files": [
@@ -27663,8 +27663,8 @@
       "tests/unbiased_gate/test_authorB_models_imagegen.py::test_w50_slides_degrade_to_image_less_when_image_backend_unconfigured",
       "tests/unbiased_gate/test_authorB_models_imagegen.py::test_w50_unconfigured_image_backend_fails_loudly_instead_of_procedural_fallback"
     ],
-    "typescript_test_file_count": 313,
-    "typescript_static_test_id_count": 1645,
+    "typescript_test_file_count": 314,
+    "typescript_static_test_id_count": 1661,
     "typescript_test_files": [
       "frontend/e2e-full/scenarios/click-provenance.smoke.spec.ts",
       "frontend/e2e-full/scenarios/per-surface.full.spec.ts",
@@ -27872,6 +27872,7 @@
       "frontend/src/components/research/needMoreCardParts/AudioSection.test.tsx",
       "frontend/src/components/research/needMoreCardParts/audioProgress.test.ts",
       "frontend/src/components/settings/DataSourcesSection.test.tsx",
+      "frontend/src/components/settings/DeleteFocus.test.tsx",
       "frontend/src/components/settings/DiagnosticsSection.test.tsx",
       "frontend/src/components/settings/ImageGenSection.test.tsx",
       "frontend/src/components/settings/InlineEditor.focus.test.tsx",
@@ -28885,6 +28886,22 @@
       "frontend/src/components/settings/DataSourcesSection.test.tsx::persists Brave with a selected stored credential name",
       "frontend/src/components/settings/DataSourcesSection.test.tsx::shows the bundled keyless composite and never a trademark name",
       "frontend/src/components/settings/DataSourcesSection.test.tsx::states the keyless tier's real capacity where the tier is chosen",
+      "frontend/src/components/settings/DeleteFocus.test.tsx::mcp: failed removal keeps the row and its focus",
+      "frontend/src/components/settings/DeleteFocus.test.tsx::mcp: focus moved elsewhere while pending is not stolen",
+      "frontend/src/components/settings/DeleteFocus.test.tsx::mcp: removing the first row focuses the next row's Remove",
+      "frontend/src/components/settings/DeleteFocus.test.tsx::mcp: removing the last row focuses the previous row's Remove",
+      "frontend/src/components/settings/DeleteFocus.test.tsx::mcp: removing the middle row focuses the next row's Remove",
+      "frontend/src/components/settings/DeleteFocus.test.tsx::mcp: removing the only row focuses Add connection",
+      "frontend/src/components/settings/DeleteFocus.test.tsx::mcp: row and focus stay put while removal is pending",
+      "frontend/src/components/settings/DeleteFocus.test.tsx::mcp: unrelated source update while pending still removes only the target",
+      "frontend/src/components/settings/DeleteFocus.test.tsx::skills: deleting the first row focuses the next row's Delete",
+      "frontend/src/components/settings/DeleteFocus.test.tsx::skills: deleting the last row focuses the previous row's Delete",
+      "frontend/src/components/settings/DeleteFocus.test.tsx::skills: deleting the middle row focuses the next row's Delete",
+      "frontend/src/components/settings/DeleteFocus.test.tsx::skills: deleting the only row focuses New skill",
+      "frontend/src/components/settings/DeleteFocus.test.tsx::skills: failed deletion keeps the row and its focus",
+      "frontend/src/components/settings/DeleteFocus.test.tsx::skills: focus moved elsewhere while pending is not stolen",
+      "frontend/src/components/settings/DeleteFocus.test.tsx::skills: row and focus stay put while deletion is pending",
+      "frontend/src/components/settings/DeleteFocus.test.tsx::skills: unrelated source update while pending still removes only the target",
       "frontend/src/components/settings/DiagnosticsSection.test.tsx::copies the payload as JSON",
       "frontend/src/components/settings/DiagnosticsSection.test.tsx::names the doctor command for the bundle",
       "frontend/src/components/settings/DiagnosticsSection.test.tsx::shows a fetch failure instead of inventing a green",
@@ -31561,8 +31578,8 @@
         ]
       }
     },
-    "vitest_ids": 1587,
-    "vitest_files": 235,
+    "vitest_ids": 1607,
+    "vitest_files": 236,
     "vitest_ids_list": [
       "frontend/src/App.moderesume.test.tsx::A2 \u2014 fresh sessions and resume targets > New preserves the active mode, then a mode chip lands on that mode's splash",
       "frontend/src/App.moderesume.test.tsx::A2 \u2014 fresh sessions and resume targets > does not resume a just-killed conversation id from the mode chip",
@@ -32382,6 +32399,26 @@
       "frontend/src/components/settings/DataSourcesSection.test.tsx::DataSourcesSection \u2014 search provider surface > persists Brave with a selected stored credential name",
       "frontend/src/components/settings/DataSourcesSection.test.tsx::DataSourcesSection \u2014 search provider surface > shows the bundled keyless composite and never a trademark name",
       "frontend/src/components/settings/DataSourcesSection.test.tsx::DataSourcesSection \u2014 search provider surface > states the keyless tier's real capacity where the tier is chosen",
+      "frontend/src/components/settings/DeleteFocus.test.tsx::delete/remove row focus restoration > mcp: failed removal keeps the row and its focus",
+      "frontend/src/components/settings/DeleteFocus.test.tsx::delete/remove row focus restoration > mcp: focus moved elsewhere while pending is not stolen",
+      "frontend/src/components/settings/DeleteFocus.test.tsx::delete/remove row focus restoration > mcp: removing the first row focuses the next row's Remove",
+      "frontend/src/components/settings/DeleteFocus.test.tsx::delete/remove row focus restoration > mcp: removing the last row focuses the previous row's Remove",
+      "frontend/src/components/settings/DeleteFocus.test.tsx::delete/remove row focus restoration > mcp: removing the middle row focuses the next row's Remove",
+      "frontend/src/components/settings/DeleteFocus.test.tsx::delete/remove row focus restoration > mcp: removing the only row focuses Add connection",
+      "frontend/src/components/settings/DeleteFocus.test.tsx::delete/remove row focus restoration > mcp: row and focus stay put while removal is pending",
+      "frontend/src/components/settings/DeleteFocus.test.tsx::delete/remove row focus restoration > mcp: unrelated source update while pending still removes only the target",
+      "frontend/src/components/settings/DeleteFocus.test.tsx::delete/remove row focus restoration > skills: deleting the first row focuses the next row's Delete",
+      "frontend/src/components/settings/DeleteFocus.test.tsx::delete/remove row focus restoration > skills: deleting the last row focuses the previous row's Delete",
+      "frontend/src/components/settings/DeleteFocus.test.tsx::delete/remove row focus restoration > skills: deleting the middle row focuses the next row's Delete",
+      "frontend/src/components/settings/DeleteFocus.test.tsx::delete/remove row focus restoration > skills: deleting the only row focuses New skill",
+      "frontend/src/components/settings/DeleteFocus.test.tsx::delete/remove row focus restoration > skills: failed deletion keeps the row and its focus",
+      "frontend/src/components/settings/DeleteFocus.test.tsx::delete/remove row focus restoration > skills: focus moved elsewhere while pending is not stolen",
+      "frontend/src/components/settings/DeleteFocus.test.tsx::delete/remove row focus restoration > skills: row and focus stay put while deletion is pending",
+      "frontend/src/components/settings/DeleteFocus.test.tsx::delete/remove row focus restoration > skills: unrelated source update while pending still removes only the target",
+      "frontend/src/components/settings/DeleteFocus.test.tsx::removal focus ownership > 'mcp': blur to the body while pending relinquishes focus",
+      "frontend/src/components/settings/DeleteFocus.test.tsx::removal focus ownership > 'mcp': unrelated removal while this request is pending does not restore focus",
+      "frontend/src/components/settings/DeleteFocus.test.tsx::removal focus ownership > 'skills': blur to the body while pending relinquishes focus",
+      "frontend/src/components/settings/DeleteFocus.test.tsx::removal focus ownership > 'skills': unrelated removal while this request is pending does not restore focus",
       "frontend/src/components/settings/DiagnosticsSection.test.tsx::DiagnosticsSection > copies the payload as JSON",
       "frontend/src/components/settings/DiagnosticsSection.test.tsx::DiagnosticsSection > names the doctor command for the bundle",
       "frontend/src/components/settings/DiagnosticsSection.test.tsx::DiagnosticsSection > shows a fetch failure instead of inventing a green",
@@ -33283,6 +33320,7 @@
       "frontend/src/components/research/needMoreCardParts/AudioSection.test.tsx",
       "frontend/src/components/research/needMoreCardParts/audioProgress.test.ts",
       "frontend/src/components/settings/DataSourcesSection.test.tsx",
+      "frontend/src/components/settings/DeleteFocus.test.tsx",
       "frontend/src/components/settings/DiagnosticsSection.test.tsx",
       "frontend/src/components/settings/ImageGenSection.test.tsx",
       "frontend/src/components/settings/InlineEditor.focus.test.tsx",
@@ -46751,6 +46789,39 @@
           "frontend/src/components/research/deepResearchSurfaceParts/DeepResearchRunView.starting.test.tsx::does not mistake a status timestamp for reported research activity",
           "frontend/src/components/research/deepResearchSurfaceParts/DeepResearchRunView.starting.test.tsx::renders the actual first research-turn heartbeat before a brief or trace exists",
           "frontend/src/components/research/deepResearchSurfaceParts/DeepResearchRunView.starting.test.tsx::shows a reported waiting model call even without a turn event"
+        ],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-40-ROW-REMOVAL-FOCUS",
+      "root": "multiple",
+      "source_identity_before": "4d9b64930c42db8919db87acd8d09ada842d5f48",
+      "source_identity_after": "70bb4c76d1f9c82236b5bbdfd793c647b474aad5",
+      "collected_roots": {},
+      "mapping_static_additions": {
+        "python_test_files": [],
+        "python_static_test_ids": [],
+        "typescript_test_files": [
+          "frontend/src/components/settings/DeleteFocus.test.tsx"
+        ],
+        "typescript_static_test_ids": [
+          "frontend/src/components/settings/DeleteFocus.test.tsx::mcp: failed removal keeps the row and its focus",
+          "frontend/src/components/settings/DeleteFocus.test.tsx::mcp: focus moved elsewhere while pending is not stolen",
+          "frontend/src/components/settings/DeleteFocus.test.tsx::mcp: removing the first row focuses the next row's Remove",
+          "frontend/src/components/settings/DeleteFocus.test.tsx::mcp: removing the last row focuses the previous row's Remove",
+          "frontend/src/components/settings/DeleteFocus.test.tsx::mcp: removing the middle row focuses the next row's Remove",
+          "frontend/src/components/settings/DeleteFocus.test.tsx::mcp: removing the only row focuses Add connection",
+          "frontend/src/components/settings/DeleteFocus.test.tsx::mcp: row and focus stay put while removal is pending",
+          "frontend/src/components/settings/DeleteFocus.test.tsx::mcp: unrelated source update while pending still removes only the target",
+          "frontend/src/components/settings/DeleteFocus.test.tsx::skills: deleting the first row focuses the next row's Delete",
+          "frontend/src/components/settings/DeleteFocus.test.tsx::skills: deleting the last row focuses the previous row's Delete",
+          "frontend/src/components/settings/DeleteFocus.test.tsx::skills: deleting the middle row focuses the next row's Delete",
+          "frontend/src/components/settings/DeleteFocus.test.tsx::skills: deleting the only row focuses New skill",
+          "frontend/src/components/settings/DeleteFocus.test.tsx::skills: failed deletion keeps the row and its focus",
+          "frontend/src/components/settings/DeleteFocus.test.tsx::skills: focus moved elsewhere while pending is not stolen",
+          "frontend/src/components/settings/DeleteFocus.test.tsx::skills: row and focus stay put while deletion is pending",
+          "frontend/src/components/settings/DeleteFocus.test.tsx::skills: unrelated source update while pending still removes only the target"
         ],
         "fixtures": []
       }
