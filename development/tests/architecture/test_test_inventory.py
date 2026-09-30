@@ -709,7 +709,7 @@ class TestMappingStatic:
             "python_test_file_count": 983,
             "python_static_test_id_count": 11922,
             "typescript_test_file_count": 313,
-            "typescript_static_test_id_count": 1633,
+            "typescript_static_test_id_count": 1645,
         }
         assert mapping["identity"] == baseline["source_identity"]
         assert {key: mapping[key] for key in expected_counts} == expected_counts
@@ -847,11 +847,11 @@ class TestFrontendCollection:
                 len(frontend["vitest_files_list"]),
             )
             == (frontend["vitest_ids"], frontend["vitest_files"])
-            == (1575, 235)
+            == (1587, 235)
         )
         assert frontend["vitest_ids_list"] == sorted(frontend["vitest_ids_list"])
         assert frontend["vitest_files_list"] == sorted(frontend["vitest_files_list"])
-        assert len(set(frontend["vitest_ids_list"])) == 1575
+        assert len(set(frontend["vitest_ids_list"])) == 1587
         assert len(set(frontend["vitest_files_list"])) == 235
         assert set(frontend["playwright_configs"]) == set(test_inventory.PLAYWRIGHT_CONFIGS)
         for config, authority in frontend["playwright_configs"].items():
@@ -1328,7 +1328,7 @@ class TestBaselineValidation:
             "ok": True,
             "problems": [],
             "python_static_ids": 11922,
-            "typescript_static_ids": 1633,
+            "typescript_static_ids": 1645,
             "collected_total": 14730,
         }
 
