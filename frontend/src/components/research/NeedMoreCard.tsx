@@ -146,6 +146,13 @@ export function NeedMoreCard({
   // returns focus to it (guarded: connected/enabled/visible only).
   const exportOpenerRef = useRef<HTMLButtonElement | null>(null);
 
+  // Audio opener for focus-return: the controlled audio selector + mode
+  // dialogs have no registered Radix Trigger, so cancel would leave BODY.
+  // Per-card ref; direct MouseEvent currentTarget only, never globals or
+  // document.activeElement inference. No-event (programmatic) calls clear
+  // any stale opener so a later cancel never returns to an unrelated target.
+  const audioOpenerRef = useRef<HTMLButtonElement | null>(null);
+
   // Export button: show include-modal first if follow-ups exist.
   const handleExportClick = useCallback(
     (event?: React.MouseEvent<HTMLButtonElement>) => {
@@ -168,13 +175,24 @@ export function NeedMoreCard({
   }, []);
 
   // Audio button: show include-modal first if follow-ups exist.
-  const handleAudioClick = useCallback(() => {
-    if (hasFollowUps) {
-      setIncludeForAudioOpen(true);
-    } else {
-      setAudioModeOpen(true);
-    }
-  }, [hasFollowUps]);
+  // Direct presses carry a MouseEvent origin; programmatic requestedAction
+  // calls have no DOM origin today, so clear any stale opener (keep
+  // opens/nonce behavior, never restore to a previously activated target).
+  const handleAudioClick = useCallback(
+    (event?: React.MouseEvent<HTMLButtonElement>) => {
+      if (event?.currentTarget) {
+        audioOpenerRef.current = event.currentTarget;
+      } else {
+        audioOpenerRef.current = null;
+      }
+      if (hasFollowUps) {
+        setIncludeForAudioOpen(true);
+      } else {
+        setAudioModeOpen(true);
+      }
+    },
+    [hasFollowUps],
+  );
 
   const handleAudioIncludeConfirm = useCallback((seqs: number[]) => {
     setAudioFollowUpSeqs(seqs);
@@ -247,6 +265,7 @@ export function NeedMoreCard({
           onModeOpenChange={setAudioModeOpen}
           reportQuery={report.query}
           onRequestGenerate={handleAudioClick}
+          triggerRef={audioOpenerRef}
         />
 
         {/* 4. Build a deck — autonomous handoff: turn this report into slides */}
@@ -285,6 +304,7 @@ export function NeedMoreCard({
         followUps={followUps}
         onConfirm={handleExportIncludeConfirm}
         actionLabel="Export"
+        triggerRef={exportOpenerRef}
       />
 
       {/* WALK-20: include-follow-ups modal for Audio */}
@@ -294,6 +314,7 @@ export function NeedMoreCard({
         followUps={followUps}
         onConfirm={handleAudioIncludeConfirm}
         actionLabel="Generate audio"
+        triggerRef={audioOpenerRef}
       />
 
       {/* Export modal (Radix Dialog) */}
