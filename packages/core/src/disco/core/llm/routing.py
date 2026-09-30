@@ -495,6 +495,8 @@ class DefaultLLMRouter:
         requirements = set(req.profile.requirements)
         if any(getattr(message, "images", None) for message in req.messages):
             requirements.add(Requirement.VISION)
+        if req.tools:
+            requirements.add(Requirement.TOOL_CALLING)
         return frozenset(requirements)
 
     def _role_fallback_target(

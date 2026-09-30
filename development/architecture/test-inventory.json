@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "a09773b97da26389ee55e54e013c49e9e1c53932",
+  "source_identity": "1ac35837b53b00f308d69e258793cb9c937b14d0",
   "collected": {
     "counts": {
-      "packages": 12663,
+      "packages": 12671,
       "harness": 1571,
       "integrations": 9,
       "tests": 468
     },
-    "total": 14711,
+    "total": 14719,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -7528,6 +7528,14 @@
         "packages/core/tests/test_role_fallback.py::test_stream_aux_role_falls_back_before_any_chunk_is_yielded",
         "packages/core/tests/test_role_fallback.py::test_stream_midstream_transient_is_not_replayed_with_fallback",
         "packages/core/tests/test_role_fallback.py::test_vision_verifier_never_falls_back_to_json_only_auxiliary_model",
+        "packages/core/tests/test_role_fallback_tools.py::test_complete_actual_tools_absent_requirements_blocks_fallback",
+        "packages/core/tests/test_role_fallback_tools.py::test_complete_actual_tools_json_only_requirements_blocks_fallback",
+        "packages/core/tests/test_role_fallback_tools.py::test_complete_tool_bearing_primary_success_not_refused",
+        "packages/core/tests/test_role_fallback_tools.py::test_complete_toolfree_control_still_falls_back",
+        "packages/core/tests/test_role_fallback_tools.py::test_stream_actual_tools_absent_requirements_blocks_fallback",
+        "packages/core/tests/test_role_fallback_tools.py::test_stream_actual_tools_json_only_requirements_blocks_fallback",
+        "packages/core/tests/test_role_fallback_tools.py::test_stream_tool_bearing_primary_success_not_refused",
+        "packages/core/tests/test_role_fallback_tools.py::test_stream_toolfree_control_still_falls_back",
         "packages/core/tests/test_route_b_driven_composition.py::test_route_b_halt_landing_MUTATION_CONTROL",
         "packages/core/tests/test_route_b_driven_composition.py::test_route_b_halt_landing_fires_twice_in_one_run_and_does_not_repeat",
         "packages/core/tests/test_route_b_driven_composition.py::test_route_b_halt_landing_preserves_the_authored_fact_on_both_fires",
@@ -14732,9 +14740,9 @@
     }
   },
   "mapping_static": {
-    "identity": "a09773b97da26389ee55e54e013c49e9e1c53932",
-    "python_test_file_count": 981,
-    "python_static_test_id_count": 11905,
+    "identity": "1ac35837b53b00f308d69e258793cb9c937b14d0",
+    "python_test_file_count": 982,
+    "python_static_test_id_count": 11913,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -15336,6 +15344,7 @@
       "packages/core/tests/test_restore_authorizes_weakening.py",
       "packages/core/tests/test_revision_force_submit.py",
       "packages/core/tests/test_role_fallback.py",
+      "packages/core/tests/test_role_fallback_tools.py",
       "packages/core/tests/test_route_b_driven_composition.py",
       "packages/core/tests/test_router_conversation_header.py",
       "packages/core/tests/test_router_empty_completion.py",
@@ -22941,6 +22950,14 @@
       "packages/core/tests/test_role_fallback.py::test_stream_aux_role_falls_back_before_any_chunk_is_yielded",
       "packages/core/tests/test_role_fallback.py::test_stream_midstream_transient_is_not_replayed_with_fallback",
       "packages/core/tests/test_role_fallback.py::test_vision_verifier_never_falls_back_to_json_only_auxiliary_model",
+      "packages/core/tests/test_role_fallback_tools.py::test_complete_actual_tools_absent_requirements_blocks_fallback",
+      "packages/core/tests/test_role_fallback_tools.py::test_complete_actual_tools_json_only_requirements_blocks_fallback",
+      "packages/core/tests/test_role_fallback_tools.py::test_complete_tool_bearing_primary_success_not_refused",
+      "packages/core/tests/test_role_fallback_tools.py::test_complete_toolfree_control_still_falls_back",
+      "packages/core/tests/test_role_fallback_tools.py::test_stream_actual_tools_absent_requirements_blocks_fallback",
+      "packages/core/tests/test_role_fallback_tools.py::test_stream_actual_tools_json_only_requirements_blocks_fallback",
+      "packages/core/tests/test_role_fallback_tools.py::test_stream_tool_bearing_primary_success_not_refused",
+      "packages/core/tests/test_role_fallback_tools.py::test_stream_toolfree_control_still_falls_back",
       "packages/core/tests/test_route_b_driven_composition.py::test_route_b_halt_landing_MUTATION_CONTROL",
       "packages/core/tests/test_route_b_driven_composition.py::test_route_b_halt_landing_fires_twice_in_one_run_and_does_not_repeat",
       "packages/core/tests/test_route_b_driven_composition.py::test_route_b_halt_landing_preserves_the_authored_fact_on_both_fires",
@@ -45134,6 +45151,46 @@
         "python_test_files": [],
         "python_static_test_ids": [
           "packages/core/tests/test_resource_context.py::test_reference_packs_and_context_files_are_read_inputs_not_working_set"
+        ],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-36-ACTUAL-TOOLS-FALLBACK",
+      "root": "packages",
+      "source_identity_before": "a09773b97da26389ee55e54e013c49e9e1c53932",
+      "source_identity_after": "1ac35837b53b00f308d69e258793cb9c937b14d0",
+      "collected_roots": {
+        "packages": {
+          "before_count": 12663,
+          "after_count": 12671,
+          "added_ids": [
+            "packages/core/tests/test_role_fallback_tools.py::test_complete_actual_tools_absent_requirements_blocks_fallback",
+            "packages/core/tests/test_role_fallback_tools.py::test_complete_actual_tools_json_only_requirements_blocks_fallback",
+            "packages/core/tests/test_role_fallback_tools.py::test_complete_tool_bearing_primary_success_not_refused",
+            "packages/core/tests/test_role_fallback_tools.py::test_complete_toolfree_control_still_falls_back",
+            "packages/core/tests/test_role_fallback_tools.py::test_stream_actual_tools_absent_requirements_blocks_fallback",
+            "packages/core/tests/test_role_fallback_tools.py::test_stream_actual_tools_json_only_requirements_blocks_fallback",
+            "packages/core/tests/test_role_fallback_tools.py::test_stream_tool_bearing_primary_success_not_refused",
+            "packages/core/tests/test_role_fallback_tools.py::test_stream_toolfree_control_still_falls_back"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [
+          "packages/core/tests/test_role_fallback_tools.py"
+        ],
+        "python_static_test_ids": [
+          "packages/core/tests/test_role_fallback_tools.py::test_complete_actual_tools_absent_requirements_blocks_fallback",
+          "packages/core/tests/test_role_fallback_tools.py::test_complete_actual_tools_json_only_requirements_blocks_fallback",
+          "packages/core/tests/test_role_fallback_tools.py::test_complete_tool_bearing_primary_success_not_refused",
+          "packages/core/tests/test_role_fallback_tools.py::test_complete_toolfree_control_still_falls_back",
+          "packages/core/tests/test_role_fallback_tools.py::test_stream_actual_tools_absent_requirements_blocks_fallback",
+          "packages/core/tests/test_role_fallback_tools.py::test_stream_actual_tools_json_only_requirements_blocks_fallback",
+          "packages/core/tests/test_role_fallback_tools.py::test_stream_tool_bearing_primary_success_not_refused",
+          "packages/core/tests/test_role_fallback_tools.py::test_stream_toolfree_control_still_falls_back"
         ],
         "typescript_test_files": [],
         "typescript_static_test_ids": [],
