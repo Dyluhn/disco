@@ -140,14 +140,26 @@ export function NeedMoreCard({
     }
   }, [building, report, navigate, setMode]);
 
+  // Export opener for focus-return: the controlled Export Dialog has no
+  // registered Radix Trigger, so Close/Escape would otherwise leave focus on
+  // BODY. Preserve the exact activated Export button per card; ExportModal
+  // returns focus to it (guarded: connected/enabled/visible only).
+  const exportOpenerRef = useRef<HTMLButtonElement | null>(null);
+
   // Export button: show include-modal first if follow-ups exist.
-  const handleExportClick = useCallback(() => {
-    if (hasFollowUps) {
-      setIncludeForExportOpen(true);
-    } else {
-      setExportOpen(true);
-    }
-  }, [hasFollowUps]);
+  const handleExportClick = useCallback(
+    (event?: React.MouseEvent<HTMLButtonElement>) => {
+      if (event?.currentTarget) {
+        exportOpenerRef.current = event.currentTarget;
+      }
+      if (hasFollowUps) {
+        setIncludeForExportOpen(true);
+      } else {
+        setExportOpen(true);
+      }
+    },
+    [hasFollowUps],
+  );
 
   const handleExportIncludeConfirm = useCallback((seqs: number[]) => {
     setExportFollowUpSeqs(seqs);
@@ -291,6 +303,7 @@ export function NeedMoreCard({
         report={report}
         cid={cid}
         followUpSeqs={exportFollowUpSeqs.length > 0 ? exportFollowUpSeqs : undefined}
+        triggerRef={exportOpenerRef}
       />
     </section>
   );

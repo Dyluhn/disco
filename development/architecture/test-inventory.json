@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "70bb4c76d1f9c82236b5bbdfd793c647b474aad5",
+  "source_identity": "b8dc5ecd908c96c3963c675b62b59dac18c3d154",
   "collected": {
     "counts": {
       "packages": 12682,
@@ -14751,7 +14751,7 @@
     }
   },
   "mapping_static": {
-    "identity": "70bb4c76d1f9c82236b5bbdfd793c647b474aad5",
+    "identity": "b8dc5ecd908c96c3963c675b62b59dac18c3d154",
     "python_test_file_count": 983,
     "python_static_test_id_count": 11922,
     "python_test_files": [
@@ -27663,8 +27663,8 @@
       "tests/unbiased_gate/test_authorB_models_imagegen.py::test_w50_slides_degrade_to_image_less_when_image_backend_unconfigured",
       "tests/unbiased_gate/test_authorB_models_imagegen.py::test_w50_unconfigured_image_backend_fails_loudly_instead_of_procedural_fallback"
     ],
-    "typescript_test_file_count": 314,
-    "typescript_static_test_id_count": 1661,
+    "typescript_test_file_count": 315,
+    "typescript_static_test_id_count": 1674,
     "typescript_test_files": [
       "frontend/e2e-full/scenarios/click-provenance.smoke.spec.ts",
       "frontend/e2e-full/scenarios/per-surface.full.spec.ts",
@@ -27860,6 +27860,7 @@
       "frontend/src/components/research/DeepResearchSurface.test.tsx",
       "frontend/src/components/research/DeepResearchSurface.url.test.tsx",
       "frontend/src/components/research/DeepSteerInput.test.tsx",
+      "frontend/src/components/research/ExportFocus.test.tsx",
       "frontend/src/components/research/FollowUpStatus.test.tsx",
       "frontend/src/components/research/IncludeFollowUpsModal.test.tsx",
       "frontend/src/components/research/NeedMoreCard.test.tsx",
@@ -28794,6 +28795,19 @@
       "frontend/src/components/research/DeepSteerInput.test.tsx::is inert while disabled",
       "frontend/src/components/research/DeepSteerInput.test.tsx::never sends empty or whitespace-only guidance",
       "frontend/src/components/research/DeepSteerInput.test.tsx::sends trimmed steer text and clears the box",
+      "frontend/src/components/research/ExportFocus.test.tsx::Close returns focus to the keyboard-activated Export opener",
+      "frontend/src/components/research/ExportFocus.test.tsx::Escape returns focus to the keyboard-activated Export opener",
+      "frontend/src/components/research/ExportFocus.test.tsx::PDF capability on keeps template picker and opener return",
+      "frontend/src/components/research/ExportFocus.test.tsx::closing Export never focuses an unrelated element",
+      "frontend/src/components/research/ExportFocus.test.tsx::contains focus while open and returns focus on repeated sessions",
+      "frontend/src/components/research/ExportFocus.test.tsx::disabled opener takes no focus on Close",
+      "frontend/src/components/research/ExportFocus.test.tsx::disconnected opener takes no focus and steals none from another card",
+      "frontend/src/components/research/ExportFocus.test.tsx::export download error still shown and Close focus remains correct",
+      "frontend/src/components/research/ExportFocus.test.tsx::hidden opener takes no focus on Close",
+      "frontend/src/components/research/ExportFocus.test.tsx::include-cancel opens no Export and steals focus to no unrelated element",
+      "frontend/src/components/research/ExportFocus.test.tsx::include-followups handoff lands in Export and Close returns to the Export opener",
+      "frontend/src/components/research/ExportFocus.test.tsx::keyboard-opened Export preserves capabilities and error semantics",
+      "frontend/src/components/research/ExportFocus.test.tsx::with two cards, Close returns to the connected opener only",
       "frontend/src/components/research/FollowUpStatus.test.tsx::counts the grounding pass down through a full follow-up sequence",
       "frontend/src/components/research/FollowUpStatus.test.tsx::does not let an older phase speak once a newer one has landed",
       "frontend/src/components/research/FollowUpStatus.test.tsx::hands the strip back to the grounding pass when the call closes",
@@ -31578,8 +31592,8 @@
         ]
       }
     },
-    "vitest_ids": 1607,
-    "vitest_files": 236,
+    "vitest_ids": 1622,
+    "vitest_files": 237,
     "vitest_ids_list": [
       "frontend/src/App.moderesume.test.tsx::A2 \u2014 fresh sessions and resume targets > New preserves the active mode, then a mode chip lands on that mode's splash",
       "frontend/src/App.moderesume.test.tsx::A2 \u2014 fresh sessions and resume targets > does not resume a just-killed conversation id from the mode chip",
@@ -32307,6 +32321,21 @@
       "frontend/src/components/research/DeepSteerInput.test.tsx::DeepSteerInput > is inert while disabled",
       "frontend/src/components/research/DeepSteerInput.test.tsx::DeepSteerInput > never sends empty or whitespace-only guidance",
       "frontend/src/components/research/DeepSteerInput.test.tsx::DeepSteerInput > sends trimmed steer text and clears the box",
+      "frontend/src/components/research/ExportFocus.test.tsx::ExportFocus > Close returns focus to the keyboard-activated Export opener",
+      "frontend/src/components/research/ExportFocus.test.tsx::ExportFocus > Escape returns focus to the keyboard-activated Export opener",
+      "frontend/src/components/research/ExportFocus.test.tsx::ExportFocus > PDF capability on keeps template picker and opener return",
+      "frontend/src/components/research/ExportFocus.test.tsx::ExportFocus > closing Export never focuses an unrelated element",
+      "frontend/src/components/research/ExportFocus.test.tsx::ExportFocus > contains focus while open and returns focus on repeated sessions",
+      "frontend/src/components/research/ExportFocus.test.tsx::ExportFocus > disabled opener takes no focus on Close",
+      "frontend/src/components/research/ExportFocus.test.tsx::ExportFocus > disconnected opener takes no focus and steals none from another card",
+      "frontend/src/components/research/ExportFocus.test.tsx::ExportFocus > export download error still shown and Close focus remains correct",
+      "frontend/src/components/research/ExportFocus.test.tsx::ExportFocus > hidden opener takes no focus on Close",
+      "frontend/src/components/research/ExportFocus.test.tsx::ExportFocus > include-cancel opens no Export and steals focus to no unrelated element",
+      "frontend/src/components/research/ExportFocus.test.tsx::ExportFocus > include-followups handoff lands in Export and Close returns to the Export opener",
+      "frontend/src/components/research/ExportFocus.test.tsx::ExportFocus > keyboard-opened Export preserves capabilities and error semantics",
+      "frontend/src/components/research/ExportFocus.test.tsx::ExportFocus > opener under a hidden ancestor cannot take focus on Close",
+      "frontend/src/components/research/ExportFocus.test.tsx::ExportFocus > opener under a inert ancestor cannot take focus on Close",
+      "frontend/src/components/research/ExportFocus.test.tsx::ExportFocus > with two cards, Close returns to the connected opener only",
       "frontend/src/components/research/FollowUpStatus.test.tsx::FollowUpStatus > counts the grounding pass down through a full follow-up sequence",
       "frontend/src/components/research/FollowUpStatus.test.tsx::FollowUpStatus > does not let an older phase speak once a newer one has landed",
       "frontend/src/components/research/FollowUpStatus.test.tsx::FollowUpStatus > hands the strip back to the grounding pass when the call closes",
@@ -33308,6 +33337,7 @@
       "frontend/src/components/research/DeepResearchSurface.test.tsx",
       "frontend/src/components/research/DeepResearchSurface.url.test.tsx",
       "frontend/src/components/research/DeepSteerInput.test.tsx",
+      "frontend/src/components/research/ExportFocus.test.tsx",
       "frontend/src/components/research/FollowUpStatus.test.tsx",
       "frontend/src/components/research/IncludeFollowUpsModal.test.tsx",
       "frontend/src/components/research/NeedMoreCard.test.tsx",
@@ -46771,6 +46801,36 @@
         "typescript_static_test_ids": [
           "frontend/src/components/research/DeepResearchSurface.test.tsx::keeps the trigger minimal \u2014 one depth token, no recency/source echo",
           "frontend/src/components/states.test.tsx::empty state carries the brand + Latin entry, with NO duplicate mode chips"
+        ],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-41-EXPORT-FOCUS",
+      "root": "multiple",
+      "source_identity_before": "70bb4c76d1f9c82236b5bbdfd793c647b474aad5",
+      "source_identity_after": "b8dc5ecd908c96c3963c675b62b59dac18c3d154",
+      "collected_roots": {},
+      "mapping_static_additions": {
+        "python_test_files": [],
+        "python_static_test_ids": [],
+        "typescript_test_files": [
+          "frontend/src/components/research/ExportFocus.test.tsx"
+        ],
+        "typescript_static_test_ids": [
+          "frontend/src/components/research/ExportFocus.test.tsx::Close returns focus to the keyboard-activated Export opener",
+          "frontend/src/components/research/ExportFocus.test.tsx::Escape returns focus to the keyboard-activated Export opener",
+          "frontend/src/components/research/ExportFocus.test.tsx::PDF capability on keeps template picker and opener return",
+          "frontend/src/components/research/ExportFocus.test.tsx::closing Export never focuses an unrelated element",
+          "frontend/src/components/research/ExportFocus.test.tsx::contains focus while open and returns focus on repeated sessions",
+          "frontend/src/components/research/ExportFocus.test.tsx::disabled opener takes no focus on Close",
+          "frontend/src/components/research/ExportFocus.test.tsx::disconnected opener takes no focus and steals none from another card",
+          "frontend/src/components/research/ExportFocus.test.tsx::export download error still shown and Close focus remains correct",
+          "frontend/src/components/research/ExportFocus.test.tsx::hidden opener takes no focus on Close",
+          "frontend/src/components/research/ExportFocus.test.tsx::include-cancel opens no Export and steals focus to no unrelated element",
+          "frontend/src/components/research/ExportFocus.test.tsx::include-followups handoff lands in Export and Close returns to the Export opener",
+          "frontend/src/components/research/ExportFocus.test.tsx::keyboard-opened Export preserves capabilities and error semantics",
+          "frontend/src/components/research/ExportFocus.test.tsx::with two cards, Close returns to the connected opener only"
         ],
         "fixtures": []
       }
