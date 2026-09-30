@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-public-api-v1",
-  "source_identity": "8fbbbdadaf0241a7d2405183be614bb5cb28dc54",
+  "source_identity": "18ce0f7483de865854e5707abc50c43af71a7feb",
   "python_initializers": [
     {
       "path": "packages/agent-server/src/disco/agent_server/__init__.py",
@@ -22176,6 +22176,26 @@
       ]
     },
     {
+      "path": "frontend/src/components/settings/McpConnectionForm.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "ConnectionForm",
+          "signature": "export function ConnectionForm({ initial, busy, onSave, onCancel, }: { initial: DraftState; busy: boolean; onSave: (draft: DraftState) => void; onCancel: () => void; })"
+        },
+        {
+          "kind": "InterfaceDeclaration",
+          "name": "DraftState",
+          "signature": "export interface DraftState { name: string; url: string; transport: string; risk_tier: string; }"
+        },
+        {
+          "kind": "variable",
+          "name": "EMPTY_DRAFT",
+          "signature": "export const EMPTY_DRAFT: DraftState = { name: \"\", url: \"\", transport: \"streamable_http\", risk_tier: \"medium\", };"
+        }
+      ]
+    },
+    {
       "path": "frontend/src/components/settings/McpImportBox.tsx",
       "public_declarations": [
         {
@@ -32246,6 +32266,30 @@
       "target_sha256": "4e3bae695c59ea45e310e33fd8721d4a1b6928fd8c4692b70f4226eab221d6c2",
       "owner_package": "PKG-37-UI-FIXES-V50",
       "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/McpConnectionForm.tsx",
+      "public_name": "ConnectionForm",
+      "target_sha256": "08731c8f56a16fde856ee5f46904c1b3f4a5939055ddae12d93315fc4a6045c5",
+      "owner_package": "PKG-38-SETTINGS-FOCUS",
+      "reason": "PKG-38-SETTINGS-FOCUS: extract existing MCP draft/form implementation to preserve the module size budget while adding keyboard focus; exact additive exports only, existing public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/McpConnectionForm.tsx",
+      "public_name": "DraftState",
+      "target_sha256": "85c9531d9ec0bb81bc3391879fb1d40d5fc681ee9f3750115da7b9c4a11fc927",
+      "owner_package": "PKG-38-SETTINGS-FOCUS",
+      "reason": "PKG-38-SETTINGS-FOCUS: extract existing MCP draft/form implementation to preserve the module size budget while adding keyboard focus; exact additive exports only, existing public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/McpConnectionForm.tsx",
+      "public_name": "EMPTY_DRAFT",
+      "target_sha256": "00687751d2e31192da9fecf30202d7074cd815ef9177957df17082c470849e48",
+      "owner_package": "PKG-38-SETTINGS-FOCUS",
+      "reason": "PKG-38-SETTINGS-FOCUS: extract existing MCP draft/form implementation to preserve the module size budget while adding keyboard focus; exact additive exports only, existing public declarations unchanged."
     },
     {
       "surface": "frontend",

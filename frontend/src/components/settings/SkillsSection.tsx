@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Pencil, Plus, Trash2 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { TAP_TARGET_ICON } from "@/lib/tapTarget";
@@ -115,10 +115,15 @@ function SkillEditor({
   onCancel: () => void;
 }) {
   const [draft, setDraft] = useState<DraftState>(initial);
+  const firstFieldRef = useRef<HTMLInputElement | null>(null);
+  useEffect(() => {
+    firstFieldRef.current?.focus();
+  }, []);
   const canSave = draft.name.trim().length > 0 && draft.body.trim().length > 0;
   return (
     <div className="flex flex-col gap-inline rounded-card border border-accent/40 bg-surface-1 p-body">
       <input
+        ref={firstFieldRef}
         value={draft.name}
         onChange={(e) => setDraft({ ...draft, name: e.target.value })}
         placeholder="Skill name (e.g. Yahoo Finance API)"
@@ -206,11 +211,32 @@ export function SkillsSection() {
   const remove = useDeleteSkill();
   const [creating, setCreating] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const newSkillButtonRef = useRef<HTMLButtonElement | null>(null);
+  const editButtonRefs = useRef(new Map<string, HTMLButtonElement>());
+  const wasCreatingRef = useRef(false);
+  const wasEditingIdRef = useRef<string | null>(null);
 
   const closeEditors = () => {
     setCreating(false);
     setEditingId(null);
   };
+
+  useEffect(() => {
+    if (wasCreatingRef.current && !creating) {
+      const node = newSkillButtonRef.current;
+      if (node && node.isConnected) node.focus();
+    }
+    wasCreatingRef.current = creating;
+  }, [creating]);
+
+  useEffect(() => {
+    const prev = wasEditingIdRef.current;
+    if (prev !== null && editingId === null) {
+      const node = editButtonRefs.current.get(prev);
+      if (node && node.isConnected) node.focus();
+    }
+    wasEditingIdRef.current = editingId;
+  }, [editingId]);
 
   return (
     <section
@@ -227,6 +253,7 @@ export function SkillsSection() {
         {!creating && editingId === null && (
           <button
             type="button"
+            ref={newSkillButtonRef}
             data-disco-control="settings.skill-new"
             onClick={() => setCreating(true)}
             className="flex min-h-11 items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:border-accent hover:text-text lg:min-h-0"
@@ -345,6 +372,10 @@ export function SkillsSection() {
               <div className="flex shrink-0 items-center gap-inline">
                 <button
                   type="button"
+                  ref={(node) => {
+                    if (node) editButtonRefs.current.set(s.id, node);
+                    else editButtonRefs.current.delete(s.id);
+                  }}
                   data-disco-control="settings.skill-edit"
                   onClick={() => setEditingId(s.id)}
                   aria-label={`Edit ${s.name}`}
