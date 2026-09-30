@@ -365,14 +365,80 @@ class _MarkdownExtractor(HTMLParser):
     # want; its script/style children are skipped on their own.
     _SKIP = {"script", "style", "noscript", "nav", "footer", "svg"}
     _BLOCK = {"p", "div", "section", "article", "br", "li", "tr"}
+    _DEL = {"s", "del", "strike"}
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self.out: list[str] = []
         self.title = ""
         self._skip_depth = 0
+        self._del_depth = 0
+        self._del_open = False
+        self._del_pending = False
         self._in_title = False
         self._href: str | None = None
+        self._a_mark = -1
+
+    def _del_armable(self) -> bool:
+        return not self._skip_depth and not self._in_title and self._del_depth == 0
+
+    def _del_open_visible(self) -> bool:
+        return bool(
+            self._del_depth and not self._skip_depth and not self._in_title and self._del_open
+        )
+
+    def _del_pending_visible(self) -> bool:
+        return bool(
+            self._del_depth
+            and not self._skip_depth
+            and not self._in_title
+            and self._del_pending
+            and not self._del_open
+        )
+
+    def _close_del_at_boundary(self) -> None:
+        if self._del_open_visible():
+            self.out.append("~~")
+            self._del_open = False
+            self._del_pending = True
+
+    def _open_del_span(self) -> None:
+        if self._del_pending_visible():
+            self.out.append("~~")
+            self._del_pending = False
+            self._del_open = True
+
+    def _finish_del_tag(self) -> None:
+        self._del_depth -= 1
+        if self._del_depth == 0:
+            if not self._skip_depth and not self._in_title and self._del_open:
+                self.out.append("~~")
+            self._del_open = False
+            self._del_pending = False
+
+    def _should_revert_anchor_del(self) -> bool:
+        return bool(
+            self._del_depth
+            and self._del_open
+            and not self._skip_depth
+            and not self._in_title
+            and self.out
+            and self.out[-1] == "~~"
+        )
+
+    def _finish_anchor(self) -> None:
+        href = self._href or ""
+        inner = "".join(self.out[self._a_mark + 1 :]).strip()
+        if inner:
+            self.out.append(f"]({href})" if href else "]")
+        else:
+            # empty-anchor link (nav icon / menu) → drop it entirely, no `[](url)`
+            del self.out[self._a_mark :]
+            if self._should_revert_anchor_del():
+                self.out.pop()
+                self._del_open = False
+                self._del_pending = True
+        self._href = None
         self._a_mark = -1
 
     def handle_starttag(self, tag, attrs):
@@ -380,13 +446,22 @@ class _MarkdownExtractor(HTMLParser):
             self._skip_depth += 1
         elif tag == "title":
             self._in_title = True
+        elif tag in self._DEL:
+            if self._del_armable():
+                self._del_pending = True
+                self._del_open = False
+            self._del_depth += 1
         elif tag in {"h1", "h2", "h3", "h4", "h5", "h6"}:
+            self._close_del_at_boundary()
             self.out.append("\n\n" + "#" * int(tag[1]) + " ")
         elif tag == "li":
+            self._close_del_at_boundary()
             self.out.append("\n- ")
         elif tag in self._BLOCK:
+            self._close_del_at_boundary()
             self.out.append("\n")
         elif tag == "a":
+            self._open_del_span()
             self._href = dict(attrs).get("href")
             self._a_mark = len(self.out)  # remember where this anchor began
             self.out.append("[")
@@ -396,17 +471,12 @@ class _MarkdownExtractor(HTMLParser):
             self._skip_depth -= 1
         elif tag == "title":
             self._in_title = False
+        elif tag in self._DEL and self._del_depth:
+            self._finish_del_tag()
         elif tag == "a":
-            href = self._href or ""
-            inner = "".join(self.out[self._a_mark + 1 :]).strip()
-            if inner:
-                self.out.append(f"]({href})" if href else "]")
-            else:
-                # empty-anchor link (nav icon / menu) → drop it entirely, no `[](url)`
-                del self.out[self._a_mark :]
-            self._href = None
-            self._a_mark = -1
+            self._finish_anchor()
         elif tag in {"h1", "h2", "h3", "h4", "h5", "h6"}:
+            self._close_del_at_boundary()
             self.out.append("\n")
 
     def handle_data(self, data):
@@ -416,8 +486,24 @@ class _MarkdownExtractor(HTMLParser):
             self.title += data.strip() + " "
             return
         text = data.replace("\xa0", " ")
-        if text.strip() or text == " ":
+        if not (text.strip() or text == " "):
+            return
+        if not (self._del_depth and not self._skip_depth and not self._in_title):
             self.out.append(text)
+            return
+        # Inside deletion: close/reopen ~~ across paragraph boundaries from
+        # text nodes so split passages stay individually marked. Verbatim.
+        for part in re.split(r"(\r?\n[ \t]*\r?\n(?:[ \t]*\r?\n)*)", text):
+            if not part:
+                continue
+            if re.fullmatch(r"\r?\n[ \t]*\r?\n(?:[ \t]*\r?\n)*", part):
+                self._close_del_at_boundary()
+                self.out.append(part)
+            elif part.strip():
+                self._open_del_span()
+                self.out.append(part)
+            else:
+                self.out.append(part)
 
     def markdown(self) -> str:
         raw = "".join(self.out)
