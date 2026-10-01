@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "8ef01295dd1d7f4782aa35395af17df119fb5623",
+  "source_identity": "5536ec9277e4bb18ef6bd824a0f88b88c8d837fd",
   "collected": {
     "counts": {
-      "packages": 12767,
+      "packages": 12772,
       "harness": 1571,
       "integrations": 9,
       "tests": 468
     },
-    "total": 14815,
+    "total": 14820,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -3269,6 +3269,8 @@
         "packages/app-server/tests/test_probe_routes.py::test_data_source_selfhost_without_url_is_misconfigured",
         "packages/app-server/tests/test_probe_routes.py::test_data_source_unknown_kind_is_error_not_500",
         "packages/app-server/tests/test_probe_routes.py::test_data_sources_config_reports_configured_sources",
+        "packages/app-server/tests/test_probe_routes.py::test_hyphenated_key_probe_uses_replacement_and_preserves_outcome[False-unauthorized]",
+        "packages/app-server/tests/test_probe_routes.py::test_hyphenated_key_probe_uses_replacement_and_preserves_outcome[True-ok]",
         "packages/app-server/tests/test_probe_routes.py::test_key_test_no_endpoint_is_misconfigured",
         "packages/app-server/tests/test_probe_routes.py::test_key_test_no_value_stored_is_misconfigured",
         "packages/app-server/tests/test_probe_routes.py::test_key_test_ok_when_provider_answers",
@@ -3333,12 +3335,15 @@
         "packages/app-server/tests/test_sandbox_probe_route.py::test_sandbox_test_route_typed_named_error_when_unreachable",
         "packages/app-server/tests/test_secrets_routes.py::test_blank_value_rejected",
         "packages/app-server/tests/test_secrets_routes.py::test_cannot_store_without_app_secret",
+        "packages/app-server/tests/test_secrets_routes.py::test_hyphenated_generated_reference_round_trip",
+        "packages/app-server/tests/test_secrets_routes.py::test_hyphenated_reference_replacement_never_exposes_plaintext",
         "packages/app-server/tests/test_secrets_routes.py::test_invalid_name_rejected",
         "packages/app-server/tests/test_secrets_routes.py::test_locked_names_name_the_undecryptable_keys",
         "packages/app-server/tests/test_secrets_routes.py::test_openrouter_key_excluded_from_generic_list",
         "packages/app-server/tests/test_secrets_routes.py::test_openrouter_name_is_reserved",
         "packages/app-server/tests/test_secrets_routes.py::test_set_get_list_delete_round_trip",
         "packages/app-server/tests/test_secrets_routes.py::test_stripe_name_is_reserved_for_rk_only_configuration",
+        "packages/app-server/tests/test_secrets_routes.py::test_test_route_rejects_invalid_names_without_provider_call",
         "packages/app-server/tests/test_seed_config.py::test_fresh_seed_disables_vision_escalation",
         "packages/app-server/tests/test_seed_config.py::test_fresh_seed_ships_only_the_unconfigured_driver",
         "packages/app-server/tests/test_seed_config.py::test_placeholder_driver_retires_once_a_real_model_leads",
@@ -14836,9 +14841,9 @@
     }
   },
   "mapping_static": {
-    "identity": "8ef01295dd1d7f4782aa35395af17df119fb5623",
+    "identity": "5536ec9277e4bb18ef6bd824a0f88b88c8d837fd",
     "python_test_file_count": 988,
-    "python_static_test_id_count": 11967,
+    "python_static_test_id_count": 11971,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -19726,6 +19731,7 @@
       "packages/app-server/tests/test_probe_routes.py::test_data_source_selfhost_without_url_is_misconfigured",
       "packages/app-server/tests/test_probe_routes.py::test_data_source_unknown_kind_is_error_not_500",
       "packages/app-server/tests/test_probe_routes.py::test_data_sources_config_reports_configured_sources",
+      "packages/app-server/tests/test_probe_routes.py::test_hyphenated_key_probe_uses_replacement_and_preserves_outcome",
       "packages/app-server/tests/test_probe_routes.py::test_key_test_no_endpoint_is_misconfigured",
       "packages/app-server/tests/test_probe_routes.py::test_key_test_no_value_stored_is_misconfigured",
       "packages/app-server/tests/test_probe_routes.py::test_key_test_ok_when_provider_answers",
@@ -19778,12 +19784,15 @@
       "packages/app-server/tests/test_sandbox_probe_route.py::test_sandbox_test_route_typed_named_error_when_unreachable",
       "packages/app-server/tests/test_secrets_routes.py::test_blank_value_rejected",
       "packages/app-server/tests/test_secrets_routes.py::test_cannot_store_without_app_secret",
+      "packages/app-server/tests/test_secrets_routes.py::test_hyphenated_generated_reference_round_trip",
+      "packages/app-server/tests/test_secrets_routes.py::test_hyphenated_reference_replacement_never_exposes_plaintext",
       "packages/app-server/tests/test_secrets_routes.py::test_invalid_name_rejected",
       "packages/app-server/tests/test_secrets_routes.py::test_locked_names_name_the_undecryptable_keys",
       "packages/app-server/tests/test_secrets_routes.py::test_openrouter_key_excluded_from_generic_list",
       "packages/app-server/tests/test_secrets_routes.py::test_openrouter_name_is_reserved",
       "packages/app-server/tests/test_secrets_routes.py::test_set_get_list_delete_round_trip",
       "packages/app-server/tests/test_secrets_routes.py::test_stripe_name_is_reserved_for_rk_only_configuration",
+      "packages/app-server/tests/test_secrets_routes.py::test_test_route_rejects_invalid_names_without_provider_call",
       "packages/app-server/tests/test_seed_config.py::test_fresh_seed_disables_vision_escalation",
       "packages/app-server/tests/test_seed_config.py::test_fresh_seed_ships_only_the_unconfigured_driver",
       "packages/app-server/tests/test_seed_config.py::test_placeholder_driver_retires_once_a_real_model_leads",
@@ -27799,7 +27808,7 @@
       "tests/unbiased_gate/test_authorB_models_imagegen.py::test_w50_unconfigured_image_backend_fails_loudly_instead_of_procedural_fallback"
     ],
     "typescript_test_file_count": 317,
-    "typescript_static_test_id_count": 1704,
+    "typescript_static_test_id_count": 1707,
     "typescript_test_files": [
       "frontend/e2e-full/scenarios/click-provenance.smoke.spec.ts",
       "frontend/e2e-full/scenarios/per-surface.full.spec.ts",
@@ -29125,14 +29134,17 @@
       "frontend/src/components/settings/ProbeButton.test.tsx::idle \u2192 testing \u2192 ok renders a green, honest result from the probe",
       "frontend/src/components/settings/ProjectStorageSection.test.tsx::renders the configured path WITHOUT the '(default)' marker when projects_root is set",
       "frontend/src/components/settings/ProjectStorageSection.test.tsx::renders the effective default path + '(default)' marker when projects_root is empty",
+      "frontend/src/components/settings/ProviderKeysSection.test.tsx::PUTs a hyphenated generated-style reference via the normal handler",
       "frontend/src/components/settings/ProviderKeysSection.test.tsx::PUTs a new key by name and shows it in the stored list",
       "frontend/src/components/settings/ProviderKeysSection.test.tsx::T4.1: 'Test key' POSTs to the probe endpoint and renders the live result",
       "frontend/src/components/settings/ProviderKeysSection.test.tsx::clears a stored key via DELETE",
+      "frontend/src/components/settings/ProviderKeysSection.test.tsx::edits a stored hyphenated reference in place via its own URL",
       "frontend/src/components/settings/ProviderKeysSection.test.tsx::edits a stored key in place (PUT with the new value)",
       "frontend/src/components/settings/ProviderKeysSection.test.tsx::excludes the reserved OpenRouter env from the cross-reference",
       "frontend/src/components/settings/ProviderKeysSection.test.tsx::flags a provider-referenced key that isn't stored, and prefills it",
       "frontend/src/components/settings/ProviderKeysSection.test.tsx::includes an enabled resilience credential in the missing-key check",
       "frontend/src/components/settings/ProviderKeysSection.test.tsx::names the SPECIFIC keys that can't be decrypted (not 'one or more')",
+      "frontend/src/components/settings/ProviderKeysSection.test.tsx::rejects a dotted name inline without hitting the network",
       "frontend/src/components/settings/ProviderKeysSection.test.tsx::rejects an invalid key name inline without hitting the network",
       "frontend/src/components/settings/ProvidersSection.test.tsx::adds Ollama without inventing a key and exposes the Compose-safe URL",
       "frontend/src/components/settings/ProvidersSection.test.tsx::adds a provider, opens browse, and toggles a model into the catalogue",
@@ -30308,7 +30320,7 @@
       },
       {
         "path": "packages/app-server/tests/test_secrets_routes.py",
-        "line": 18,
+        "line": 20,
         "fixture": "client",
         "scope": "pytest.fixture"
       },
@@ -31765,7 +31777,7 @@
         ]
       }
     },
-    "vitest_ids": 1652,
+    "vitest_ids": 1655,
     "vitest_files": 239,
     "vitest_ids_list": [
       "frontend/src/App.moderesume.test.tsx::A2 \u2014 fresh sessions and resume targets > New preserves the active mode, then a mode chip lands on that mode's splash",
@@ -32701,14 +32713,17 @@
       "frontend/src/components/settings/ProbeButton.test.tsx::ProbeButton > idle \u2192 testing \u2192 ok renders a green, honest result from the probe",
       "frontend/src/components/settings/ProjectStorageSection.test.tsx::ProjectStorageSection \u2014 surfaces the resolved default path (e4ux) > renders the configured path WITHOUT the '(default)' marker when projects_root is set",
       "frontend/src/components/settings/ProjectStorageSection.test.tsx::ProjectStorageSection \u2014 surfaces the resolved default path (e4ux) > renders the effective default path + '(default)' marker when projects_root is empty",
+      "frontend/src/components/settings/ProviderKeysSection.test.tsx::ProviderKeysSection \u2014 store any provider key encrypted by name > PUTs a hyphenated generated-style reference via the normal handler",
       "frontend/src/components/settings/ProviderKeysSection.test.tsx::ProviderKeysSection \u2014 store any provider key encrypted by name > PUTs a new key by name and shows it in the stored list",
       "frontend/src/components/settings/ProviderKeysSection.test.tsx::ProviderKeysSection \u2014 store any provider key encrypted by name > T4.1: 'Test key' POSTs to the probe endpoint and renders the live result",
       "frontend/src/components/settings/ProviderKeysSection.test.tsx::ProviderKeysSection \u2014 store any provider key encrypted by name > clears a stored key via DELETE",
+      "frontend/src/components/settings/ProviderKeysSection.test.tsx::ProviderKeysSection \u2014 store any provider key encrypted by name > edits a stored hyphenated reference in place via its own URL",
       "frontend/src/components/settings/ProviderKeysSection.test.tsx::ProviderKeysSection \u2014 store any provider key encrypted by name > edits a stored key in place (PUT with the new value)",
       "frontend/src/components/settings/ProviderKeysSection.test.tsx::ProviderKeysSection \u2014 store any provider key encrypted by name > excludes the reserved OpenRouter env from the cross-reference",
       "frontend/src/components/settings/ProviderKeysSection.test.tsx::ProviderKeysSection \u2014 store any provider key encrypted by name > flags a provider-referenced key that isn't stored, and prefills it",
       "frontend/src/components/settings/ProviderKeysSection.test.tsx::ProviderKeysSection \u2014 store any provider key encrypted by name > includes an enabled resilience credential in the missing-key check",
       "frontend/src/components/settings/ProviderKeysSection.test.tsx::ProviderKeysSection \u2014 store any provider key encrypted by name > names the SPECIFIC keys that can't be decrypted (not 'one or more')",
+      "frontend/src/components/settings/ProviderKeysSection.test.tsx::ProviderKeysSection \u2014 store any provider key encrypted by name > rejects a dotted name inline without hitting the network",
       "frontend/src/components/settings/ProviderKeysSection.test.tsx::ProviderKeysSection \u2014 store any provider key encrypted by name > rejects an invalid key name inline without hitting the network",
       "frontend/src/components/settings/ProvidersSection.test.tsx::ProvidersSection \u2014 generic provider objects > adds Ollama without inventing a key and exposes the Compose-safe URL",
       "frontend/src/components/settings/ProvidersSection.test.tsx::ProvidersSection \u2014 generic provider objects > adds a provider, opens browse, and toggles a model into the catalogue",
@@ -43484,6 +43499,41 @@
         ],
         "typescript_test_files": [],
         "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-47-PROVIDER-KEYS",
+      "root": "packages",
+      "source_identity_before": "8ef01295dd1d7f4782aa35395af17df119fb5623",
+      "source_identity_after": "5536ec9277e4bb18ef6bd824a0f88b88c8d837fd",
+      "collected_roots": {
+        "packages": {
+          "before_count": 12767,
+          "after_count": 12772,
+          "added_ids": [
+            "packages/app-server/tests/test_probe_routes.py::test_hyphenated_key_probe_uses_replacement_and_preserves_outcome[False-unauthorized]",
+            "packages/app-server/tests/test_probe_routes.py::test_hyphenated_key_probe_uses_replacement_and_preserves_outcome[True-ok]",
+            "packages/app-server/tests/test_secrets_routes.py::test_hyphenated_generated_reference_round_trip",
+            "packages/app-server/tests/test_secrets_routes.py::test_hyphenated_reference_replacement_never_exposes_plaintext",
+            "packages/app-server/tests/test_secrets_routes.py::test_test_route_rejects_invalid_names_without_provider_call"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [],
+        "python_static_test_ids": [
+          "packages/app-server/tests/test_probe_routes.py::test_hyphenated_key_probe_uses_replacement_and_preserves_outcome",
+          "packages/app-server/tests/test_secrets_routes.py::test_hyphenated_generated_reference_round_trip",
+          "packages/app-server/tests/test_secrets_routes.py::test_hyphenated_reference_replacement_never_exposes_plaintext",
+          "packages/app-server/tests/test_secrets_routes.py::test_test_route_rejects_invalid_names_without_provider_call"
+        ],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [
+          "frontend/src/components/settings/ProviderKeysSection.test.tsx::PUTs a hyphenated generated-style reference via the normal handler",
+          "frontend/src/components/settings/ProviderKeysSection.test.tsx::edits a stored hyphenated reference in place via its own URL",
+          "frontend/src/components/settings/ProviderKeysSection.test.tsx::rejects a dotted name inline without hitting the network"
+        ],
         "fixtures": []
       }
     },

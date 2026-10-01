@@ -242,6 +242,87 @@ describe("ProviderKeysSection — store any provider key encrypted by name", () 
     });
   });
 
+  it("PUTs a hyphenated generated-style reference via the normal handler", async () => {
+    // regression: provider-generated references are hyphenated arbitrary
+    // identifiers; the advanced key form must not reject them as non-identifiers.
+    render(createElement(ProviderKeysSection), { wrapper: makeWrapper() });
+    await screen.findByText("Provider API keys");
+
+    fireEvent.change(screen.getByLabelText("Provider key name"), {
+      target: { value: "acceptance_river-lab_20260929" },
+    });
+    fireEvent.change(screen.getByLabelText("Provider key value"), {
+      target: { value: "dummy-provider-value" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /add key/i }));
+
+    await waitFor(() =>
+      expect(
+        fetchStub.mock.calls.some(
+          ([u, i]) =>
+            (i?.method ?? "GET").toUpperCase() === "PUT" &&
+            u === "/api/secrets/acceptance_river-lab_20260929",
+        ),
+      ).toBe(true),
+    );
+    const putCall = fetchStub.mock.calls.find(
+      ([u, i]) =>
+        (i?.method ?? "GET").toUpperCase() === "PUT" &&
+        u === "/api/secrets/acceptance_river-lab_20260929",
+    );
+    expect(String(putCall?.[1]?.body)).toContain("dummy-provider-value");
+    expect(
+      await screen.findByText("acceptance_river-lab_20260929"),
+    ).toBeInTheDocument();
+  });
+
+  it("edits a stored hyphenated reference in place via its own URL", async () => {
+    names = ["acceptance_river-lab_20260929"];
+    render(createElement(ProviderKeysSection), { wrapper: makeWrapper() });
+    expect(
+      await screen.findByText("acceptance_river-lab_20260929"),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /edit/i }));
+    fireEvent.change(
+      screen.getByLabelText("New value for acceptance_river-lab_20260929"),
+      { target: { value: "dummy-provider-value" } },
+    );
+    fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+
+    await waitFor(() => {
+      const put = fetchStub.mock.calls.find(
+        ([u, i]) =>
+          (i?.method ?? "GET").toUpperCase() === "PUT" &&
+          u === "/api/secrets/acceptance_river-lab_20260929",
+      );
+      expect(put).toBeTruthy();
+      expect(String(put?.[1]?.body)).toContain("dummy-provider-value");
+    });
+  });
+
+  it("rejects a dotted name inline without hitting the network", async () => {
+    render(createElement(ProviderKeysSection), { wrapper: makeWrapper() });
+    await screen.findByText("Provider API keys");
+
+    fireEvent.change(screen.getByLabelText("Provider key name"), {
+      target: { value: "has.dot" },
+    });
+    fireEvent.change(screen.getByLabelText("Provider key value"), {
+      target: { value: "x" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /add key/i }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /provider key name/i,
+    );
+    expect(
+      fetchStub.mock.calls.some(
+        ([, i]) => (i?.method ?? "GET").toUpperCase() === "PUT",
+      ),
+    ).toBe(false);
+  });
+
   it("names the SPECIFIC keys that can't be decrypted (not 'one or more')", async () => {
     lockedFlag = true;
     names = ["OPENAI_API_KEY", "TAVILY_API_KEY"];
