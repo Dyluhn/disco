@@ -148,8 +148,13 @@ def migrate_legacy_secret_ref(
 ) -> str:
     """Map one legacy env-name ref to a secret-ref id or quarantine it.
 
-    Only the explicit per-slot allowlist may import from process env. Every other
-    env-shaped name is rejected so a poisoned config cannot legitimize host env.
+    Control refs are rejected first, even when stored. Allowlisted legacy names
+    still map to their canonical slot; only the explicit per-slot allowlist may
+    import a value from process env. After those checks, an env-shaped name with
+    a record in the supplied SecretStore is retained as-is. The has_secret check
+    reads record presence only, without decrypting or importing process env.
+    Other unbacked env-shaped names are rejected so poisoned config cannot
+    legitimize host env.
     """
     name = (ref or "").strip()
     if not name:
@@ -181,6 +186,8 @@ def migrate_legacy_secret_ref(
         )
         return name
     if is_legacy_env_name(name):
+        if store.has_secret(name):
+            return name
         diagnostics.append(
             f"Quarantined legacy secret ref {name!r} for {slot}: not on the allowlist"
         )
