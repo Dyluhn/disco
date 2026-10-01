@@ -7,6 +7,7 @@ from typing import Any
 from .preview_models import (
     NoPreviewPortAvailableError,
     PreviewCommandError,
+    PreviewHandoffError,
     PreviewReloadStrategy,
     PreviewSession,
     PreviewStatus,
@@ -83,12 +84,17 @@ class _PreviewManagerReadFacade:
 
 class _PreviewManagerStopFacade:
     _resource: PreviewResource
+    _retired_managers: list[PreviewManager]
 
     async def stop(self, name: str | None = None) -> list[str]:
         return await self._resource.stop(name)
 
     async def aclose(self) -> None:
         await self._resource.aclose()
+        for retired in self._retired_managers[:]:
+            await retired.aclose()
+            if retired in self._retired_managers:
+                self._retired_managers.remove(retired)
 
 
 class PreviewManager(
@@ -110,6 +116,7 @@ class PreviewManager(
         supervise_interval_s: float = 4.0,
         owns_sandbox: bool = False,
     ) -> None:
+        self._retired_managers: list[PreviewManager] = []
         selected_pool = port_pool if port_pool is not None else _default_port_pool(sandbox)
         self._resource = PreviewResource(
             sandbox,
@@ -158,9 +165,41 @@ class PreviewManager(
         await self._resource._supervise_once()
 
 
+async def start_live_preview(
+    sandbox: Any,
+    *,
+    serve_dir: str | None = None,
+    command: str | None = None,
+    framework: str | None = None,
+    cwd: str | None = None,
+    name: str | None = None,
+    supervise: bool = True,
+) -> PreviewSession:
+    """Health-prove an explicit host launch before replacing an isolated owner.
+
+    Facade exposure of the single shared implementation in
+    ``preview_live_handoff``. Same-package delegation via an explicit
+    function-local import keeps module initialization acyclic: this module
+    never imports the handoff helper at top level, while the helper owns the
+    sealed-routing implementation.
+    """
+    from .preview_live_handoff import start_live_preview as _start_live_preview
+
+    return await _start_live_preview(
+        sandbox,
+        serve_dir=serve_dir,
+        command=command,
+        framework=framework,
+        cwd=cwd,
+        name=name,
+        supervise=supervise,
+    )
+
+
 __all__ = [
     "NoPreviewPortAvailableError",
     "PreviewCommandError",
+    "PreviewHandoffError",
     "PreviewManager",
     "PreviewReloadStrategy",
     "PreviewSession",
@@ -168,4 +207,5 @@ __all__ = [
     "_default_port_pool",
     "preview_projection_digest",
     "preview_requires_node_dependencies",
+    "start_live_preview",
 ]

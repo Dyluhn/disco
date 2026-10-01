@@ -49,6 +49,20 @@ def managed_preview_metadata(manager: Any) -> tuple[dict[str, Any], str]:
     return metadata, detail if isinstance(detail, str) else ""
 
 
+def live_preview_identity(session: Any) -> tuple[str, int] | None:
+    """Project current lifecycle identity from an already-owned session, without probes.
+
+    This is not a health verdict. Request dispatch still validates the owned
+    session and exact servable manager generation after collecting the body.
+    """
+    manager = getattr(session, "_preview_manager", None) if session is not None else None
+    metadata, _ = managed_preview_metadata(manager)
+    generation, port = metadata["generation"], metadata["port"]
+    if not isinstance(generation, str) or not generation or not isinstance(port, int):
+        return None
+    return generation, port
+
+
 def managed_unavailable_reason(status: str | None, detail: str) -> str | None:
     if status == "starting":
         return "Preparing preview: the managed runtime is starting."
