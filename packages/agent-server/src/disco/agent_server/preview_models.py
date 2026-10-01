@@ -235,6 +235,10 @@ class PreviewCommandError(ValueError):
     literal `{port}` placeholder. Surfaced to the model as a recoverable tool failure."""
 
 
+class PreviewHandoffError(RuntimeError):
+    """A mutable launch failed; the previous Preview remains selected."""
+
+
 def _adapt_framework_command_port(tokens: list[str], *, framework: str | None) -> list[str]:
     """Apply configured runtime binding to a caller-selected start script."""
 

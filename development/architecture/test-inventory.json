@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "2ffd74abc1b46e7678751b49eb64f20732e25fb8",
+  "source_identity": "a9bb16cce696b31e3f71e864f037862892aafbce",
   "collected": {
     "counts": {
-      "packages": 12708,
+      "packages": 12732,
       "harness": 1571,
       "integrations": 9,
       "tests": 468
     },
-    "total": 14756,
+    "total": 14780,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -1928,6 +1928,21 @@
         "packages/agent-server/tests/test_preview_lease_lifecycle.py::test_delete_releases_preview_origin_without_erasing_origin_reset_state",
         "packages/agent-server/tests/test_preview_lease_lifecycle.py::test_successful_kill_releases_preview_origin_after_runtime_teardown",
         "packages/agent-server/tests/test_preview_lease_lifecycle.py::test_superseded_kill_does_not_release_newer_running_preview_origin",
+        "packages/agent-server/tests/test_preview_live_handoff.py::test_already_closing_owner_does_not_launch_candidate",
+        "packages/agent-server/tests/test_preview_live_handoff.py::test_appkit_sync_uses_same_host_workspace_or_preserves_sealed_owner[]",
+        "packages/agent-server/tests/test_preview_live_handoff.py::test_appkit_sync_uses_same_host_workspace_or_preserves_sealed_owner[dependency install failed]",
+        "packages/agent-server/tests/test_preview_live_handoff.py::test_explicit_launch_serves_current_and_future_host_bytes_with_new_authority",
+        "packages/agent-server/tests/test_preview_live_handoff.py::test_failed_candidate_cleanup_retains_owner_and_original_error",
+        "packages/agent-server/tests/test_preview_live_handoff.py::test_failed_handoff_keeps_previous_owner_and_reports_old_bytes[cancelled]",
+        "packages/agent-server/tests/test_preview_live_handoff.py::test_failed_handoff_keeps_previous_owner_and_reports_old_bytes[generation_changed]",
+        "packages/agent-server/tests/test_preview_live_handoff.py::test_failed_handoff_keeps_previous_owner_and_reports_old_bytes[owner_changed]",
+        "packages/agent-server/tests/test_preview_live_handoff.py::test_failed_handoff_keeps_previous_owner_and_reports_old_bytes[unhealthy]",
+        "packages/agent-server/tests/test_preview_live_handoff.py::test_handoff_cleanup_can_overlap_current_owner_teardown",
+        "packages/agent-server/tests/test_preview_live_handoff.py::test_health_proven_inside_only_host_runtime_can_replace_sealed_owner",
+        "packages/agent-server/tests/test_preview_live_handoff.py::test_old_owner_remains_routable_until_replacement_health_answers",
+        "packages/agent-server/tests/test_preview_live_handoff.py::test_parent_close_during_candidate_health_drains_both_owned_managers",
+        "packages/agent-server/tests/test_preview_live_handoff.py::test_readonly_status_does_not_replace_sealed_owner",
+        "packages/agent-server/tests/test_preview_live_handoff.py::test_retired_cleanup_failure_remains_owned_for_teardown_retry",
         "packages/agent-server/tests/test_preview_manager.py::test_active_projection_is_revoked_by_automatic_process_restart",
         "packages/agent-server/tests/test_preview_manager.py::test_active_projection_matches_only_the_original_live_generation",
         "packages/agent-server/tests/test_preview_manager.py::test_allocation_accepts_port_with_only_time_wait_ghosts",
@@ -2045,6 +2060,13 @@
         "packages/agent-server/tests/test_preview_manifest_target.py::test_later_revision_and_historical_version_keep_their_own_entries",
         "packages/agent-server/tests/test_preview_manifest_target.py::test_missing_selected_entry_never_falls_back_and_traversal_stays_closed",
         "packages/agent-server/tests/test_preview_manifest_target.py::test_unchanged_finish_reuses_version_but_commits_latest_app_entry",
+        "packages/agent-server/tests/test_preview_mutable_handoff_outcomes.py::test_appkit_sync_uses_mutable_host_or_preserves_old_on_preparation_failure[preparation-failure]",
+        "packages/agent-server/tests/test_preview_mutable_handoff_outcomes.py::test_appkit_sync_uses_mutable_host_or_preserves_old_on_preparation_failure[prepared-host]",
+        "packages/agent-server/tests/test_preview_mutable_handoff_outcomes.py::test_existing_nonisolated_host_launch_keeps_host_ownership",
+        "packages/agent-server/tests/test_preview_mutable_handoff_outcomes.py::test_explicit_start_serves_host_and_future_edits_after_sealed_restore",
+        "packages/agent-server/tests/test_preview_mutable_handoff_outcomes.py::test_failed_mutable_health_keeps_old_sealed_preview_routable",
+        "packages/agent-server/tests/test_preview_mutable_handoff_outcomes.py::test_no_intent_and_explicit_port_guards_remain_closed",
+        "packages/agent-server/tests/test_preview_mutable_handoff_outcomes.py::test_readonly_status_keeps_restored_sealed_manager_selected",
         "packages/agent-server/tests/test_preview_resource_contract.py::test_failed_owned_sandbox_destroy_keeps_resource_and_lease_owned",
         "packages/agent-server/tests/test_preview_resource_contract.py::test_failed_process_termination_keeps_resource_owned_and_port_leased",
         "packages/agent-server/tests/test_preview_resource_contract.py::test_finished_restore_reuses_exact_live_generation_before_destructive_rebind",
@@ -11699,9 +11721,11 @@
         "packages/tools/tests/test_preview_session.py::test_preview_session_lifecycle_process_backend",
         "packages/tools/tests/test_preview_session.py::test_static_preview_shell_serializes_model_authored_serve_dir",
         "packages/tools/tests/test_preview_tools.py::test_all_preview_arg_models_forbid_extra_keys",
+        "packages/tools/tests/test_preview_tools.py::test_preview_handoff_failure_stays_distinct_from_invalid_command",
         "packages/tools/tests/test_preview_tools.py::test_preview_start_args_forbid_extra_keys",
         "packages/tools/tests/test_preview_tools.py::test_preview_start_args_have_no_port_field",
         "packages/tools/tests/test_preview_tools.py::test_preview_start_description_distinguishes_startup_from_runtime_recovery",
+        "packages/tools/tests/test_preview_tools.py::test_preview_start_dispatches_through_manager_facade",
         "packages/tools/tests/test_preview_tools.py::test_preview_start_rejects_hardcoded_port_command",
         "packages/tools/tests/test_preview_tools.py::test_preview_start_requires_intent",
         "packages/tools/tests/test_preview_tools.py::test_preview_start_returns_platform_url",
@@ -14777,9 +14801,9 @@
     }
   },
   "mapping_static": {
-    "identity": "2ffd74abc1b46e7678751b49eb64f20732e25fb8",
-    "python_test_file_count": 983,
-    "python_static_test_id_count": 11933,
+    "identity": "a9bb16cce696b31e3f71e864f037862892aafbce",
+    "python_test_file_count": 985,
+    "python_static_test_id_count": 11952,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -15006,8 +15030,10 @@
       "packages/agent-server/tests/test_preview_fetch_inside.py",
       "packages/agent-server/tests/test_preview_hmr_ws.py",
       "packages/agent-server/tests/test_preview_lease_lifecycle.py",
+      "packages/agent-server/tests/test_preview_live_handoff.py",
       "packages/agent-server/tests/test_preview_manager.py",
       "packages/agent-server/tests/test_preview_manifest_target.py",
+      "packages/agent-server/tests/test_preview_mutable_handoff_outcomes.py",
       "packages/agent-server/tests/test_preview_resource_contract.py",
       "packages/agent-server/tests/test_preview_stale_live_port.py",
       "packages/agent-server/tests/test_preview_wake.py",
@@ -18517,6 +18543,17 @@
       "packages/agent-server/tests/test_preview_lease_lifecycle.py::test_delete_releases_preview_origin_without_erasing_origin_reset_state",
       "packages/agent-server/tests/test_preview_lease_lifecycle.py::test_successful_kill_releases_preview_origin_after_runtime_teardown",
       "packages/agent-server/tests/test_preview_lease_lifecycle.py::test_superseded_kill_does_not_release_newer_running_preview_origin",
+      "packages/agent-server/tests/test_preview_live_handoff.py::test_already_closing_owner_does_not_launch_candidate",
+      "packages/agent-server/tests/test_preview_live_handoff.py::test_appkit_sync_uses_same_host_workspace_or_preserves_sealed_owner",
+      "packages/agent-server/tests/test_preview_live_handoff.py::test_explicit_launch_serves_current_and_future_host_bytes_with_new_authority",
+      "packages/agent-server/tests/test_preview_live_handoff.py::test_failed_candidate_cleanup_retains_owner_and_original_error",
+      "packages/agent-server/tests/test_preview_live_handoff.py::test_failed_handoff_keeps_previous_owner_and_reports_old_bytes",
+      "packages/agent-server/tests/test_preview_live_handoff.py::test_handoff_cleanup_can_overlap_current_owner_teardown",
+      "packages/agent-server/tests/test_preview_live_handoff.py::test_health_proven_inside_only_host_runtime_can_replace_sealed_owner",
+      "packages/agent-server/tests/test_preview_live_handoff.py::test_old_owner_remains_routable_until_replacement_health_answers",
+      "packages/agent-server/tests/test_preview_live_handoff.py::test_parent_close_during_candidate_health_drains_both_owned_managers",
+      "packages/agent-server/tests/test_preview_live_handoff.py::test_readonly_status_does_not_replace_sealed_owner",
+      "packages/agent-server/tests/test_preview_live_handoff.py::test_retired_cleanup_failure_remains_owned_for_teardown_retry",
       "packages/agent-server/tests/test_preview_manager.py::test_active_projection_is_revoked_by_automatic_process_restart",
       "packages/agent-server/tests/test_preview_manager.py::test_active_projection_matches_only_the_original_live_generation",
       "packages/agent-server/tests/test_preview_manager.py::test_allocation_accepts_port_with_only_time_wait_ghosts",
@@ -18597,6 +18634,12 @@
       "packages/agent-server/tests/test_preview_manifest_target.py::test_later_revision_and_historical_version_keep_their_own_entries",
       "packages/agent-server/tests/test_preview_manifest_target.py::test_missing_selected_entry_never_falls_back_and_traversal_stays_closed",
       "packages/agent-server/tests/test_preview_manifest_target.py::test_unchanged_finish_reuses_version_but_commits_latest_app_entry",
+      "packages/agent-server/tests/test_preview_mutable_handoff_outcomes.py::test_appkit_sync_uses_mutable_host_or_preserves_old_on_preparation_failure",
+      "packages/agent-server/tests/test_preview_mutable_handoff_outcomes.py::test_existing_nonisolated_host_launch_keeps_host_ownership",
+      "packages/agent-server/tests/test_preview_mutable_handoff_outcomes.py::test_explicit_start_serves_host_and_future_edits_after_sealed_restore",
+      "packages/agent-server/tests/test_preview_mutable_handoff_outcomes.py::test_failed_mutable_health_keeps_old_sealed_preview_routable",
+      "packages/agent-server/tests/test_preview_mutable_handoff_outcomes.py::test_no_intent_and_explicit_port_guards_remain_closed",
+      "packages/agent-server/tests/test_preview_mutable_handoff_outcomes.py::test_readonly_status_keeps_restored_sealed_manager_selected",
       "packages/agent-server/tests/test_preview_resource_contract.py::test_failed_owned_sandbox_destroy_keeps_resource_and_lease_owned",
       "packages/agent-server/tests/test_preview_resource_contract.py::test_failed_process_termination_keeps_resource_owned_and_port_leased",
       "packages/agent-server/tests/test_preview_resource_contract.py::test_finished_restore_reuses_exact_live_generation_before_destructive_rebind",
@@ -26440,9 +26483,11 @@
       "packages/tools/tests/test_preview_session.py::test_preview_session_lifecycle_process_backend",
       "packages/tools/tests/test_preview_session.py::test_static_preview_shell_serializes_model_authored_serve_dir",
       "packages/tools/tests/test_preview_tools.py::test_all_preview_arg_models_forbid_extra_keys",
+      "packages/tools/tests/test_preview_tools.py::test_preview_handoff_failure_stays_distinct_from_invalid_command",
       "packages/tools/tests/test_preview_tools.py::test_preview_start_args_forbid_extra_keys",
       "packages/tools/tests/test_preview_tools.py::test_preview_start_args_have_no_port_field",
       "packages/tools/tests/test_preview_tools.py::test_preview_start_description_distinguishes_startup_from_runtime_recovery",
+      "packages/tools/tests/test_preview_tools.py::test_preview_start_dispatches_through_manager_facade",
       "packages/tools/tests/test_preview_tools.py::test_preview_start_rejects_hardcoded_port_command",
       "packages/tools/tests/test_preview_tools.py::test_preview_start_requires_intent",
       "packages/tools/tests/test_preview_tools.py::test_preview_start_returns_platform_url",
@@ -30548,6 +30593,12 @@
         "path": "packages/core/tests/test_inspect_token_usage.py",
         "line": 23,
         "fixture": "fresh_registry",
+        "scope": "pytest.fixture"
+      },
+      {
+        "path": "packages/agent-server/tests/test_preview_live_handoff.py",
+        "line": 51,
+        "fixture": "handoff",
         "scope": "pytest.fixture"
       },
       {
@@ -42362,6 +42413,81 @@
             "path": "packages/agent-server/tests/test_report_audio_resilience.py",
             "line": 58,
             "fixture": "store",
+            "scope": "pytest.fixture"
+          }
+        ]
+      }
+    },
+    {
+      "package": "PKG-45-PREVIEW-MUTABLE-HANDOFF",
+      "root": "packages",
+      "source_identity_before": "2ffd74abc1b46e7678751b49eb64f20732e25fb8",
+      "source_identity_after": "a9bb16cce696b31e3f71e864f037862892aafbce",
+      "collected_roots": {
+        "packages": {
+          "before_count": 12708,
+          "after_count": 12732,
+          "added_ids": [
+            "packages/agent-server/tests/test_preview_live_handoff.py::test_already_closing_owner_does_not_launch_candidate",
+            "packages/agent-server/tests/test_preview_live_handoff.py::test_appkit_sync_uses_same_host_workspace_or_preserves_sealed_owner[]",
+            "packages/agent-server/tests/test_preview_live_handoff.py::test_appkit_sync_uses_same_host_workspace_or_preserves_sealed_owner[dependency install failed]",
+            "packages/agent-server/tests/test_preview_live_handoff.py::test_explicit_launch_serves_current_and_future_host_bytes_with_new_authority",
+            "packages/agent-server/tests/test_preview_live_handoff.py::test_failed_candidate_cleanup_retains_owner_and_original_error",
+            "packages/agent-server/tests/test_preview_live_handoff.py::test_failed_handoff_keeps_previous_owner_and_reports_old_bytes[cancelled]",
+            "packages/agent-server/tests/test_preview_live_handoff.py::test_failed_handoff_keeps_previous_owner_and_reports_old_bytes[generation_changed]",
+            "packages/agent-server/tests/test_preview_live_handoff.py::test_failed_handoff_keeps_previous_owner_and_reports_old_bytes[owner_changed]",
+            "packages/agent-server/tests/test_preview_live_handoff.py::test_failed_handoff_keeps_previous_owner_and_reports_old_bytes[unhealthy]",
+            "packages/agent-server/tests/test_preview_live_handoff.py::test_handoff_cleanup_can_overlap_current_owner_teardown",
+            "packages/agent-server/tests/test_preview_live_handoff.py::test_health_proven_inside_only_host_runtime_can_replace_sealed_owner",
+            "packages/agent-server/tests/test_preview_live_handoff.py::test_old_owner_remains_routable_until_replacement_health_answers",
+            "packages/agent-server/tests/test_preview_live_handoff.py::test_parent_close_during_candidate_health_drains_both_owned_managers",
+            "packages/agent-server/tests/test_preview_live_handoff.py::test_readonly_status_does_not_replace_sealed_owner",
+            "packages/agent-server/tests/test_preview_live_handoff.py::test_retired_cleanup_failure_remains_owned_for_teardown_retry",
+            "packages/agent-server/tests/test_preview_mutable_handoff_outcomes.py::test_appkit_sync_uses_mutable_host_or_preserves_old_on_preparation_failure[preparation-failure]",
+            "packages/agent-server/tests/test_preview_mutable_handoff_outcomes.py::test_appkit_sync_uses_mutable_host_or_preserves_old_on_preparation_failure[prepared-host]",
+            "packages/agent-server/tests/test_preview_mutable_handoff_outcomes.py::test_existing_nonisolated_host_launch_keeps_host_ownership",
+            "packages/agent-server/tests/test_preview_mutable_handoff_outcomes.py::test_explicit_start_serves_host_and_future_edits_after_sealed_restore",
+            "packages/agent-server/tests/test_preview_mutable_handoff_outcomes.py::test_failed_mutable_health_keeps_old_sealed_preview_routable",
+            "packages/agent-server/tests/test_preview_mutable_handoff_outcomes.py::test_no_intent_and_explicit_port_guards_remain_closed",
+            "packages/agent-server/tests/test_preview_mutable_handoff_outcomes.py::test_readonly_status_keeps_restored_sealed_manager_selected",
+            "packages/tools/tests/test_preview_tools.py::test_preview_handoff_failure_stays_distinct_from_invalid_command",
+            "packages/tools/tests/test_preview_tools.py::test_preview_start_dispatches_through_manager_facade"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [
+          "packages/agent-server/tests/test_preview_live_handoff.py",
+          "packages/agent-server/tests/test_preview_mutable_handoff_outcomes.py"
+        ],
+        "python_static_test_ids": [
+          "packages/agent-server/tests/test_preview_live_handoff.py::test_already_closing_owner_does_not_launch_candidate",
+          "packages/agent-server/tests/test_preview_live_handoff.py::test_appkit_sync_uses_same_host_workspace_or_preserves_sealed_owner",
+          "packages/agent-server/tests/test_preview_live_handoff.py::test_explicit_launch_serves_current_and_future_host_bytes_with_new_authority",
+          "packages/agent-server/tests/test_preview_live_handoff.py::test_failed_candidate_cleanup_retains_owner_and_original_error",
+          "packages/agent-server/tests/test_preview_live_handoff.py::test_failed_handoff_keeps_previous_owner_and_reports_old_bytes",
+          "packages/agent-server/tests/test_preview_live_handoff.py::test_handoff_cleanup_can_overlap_current_owner_teardown",
+          "packages/agent-server/tests/test_preview_live_handoff.py::test_health_proven_inside_only_host_runtime_can_replace_sealed_owner",
+          "packages/agent-server/tests/test_preview_live_handoff.py::test_old_owner_remains_routable_until_replacement_health_answers",
+          "packages/agent-server/tests/test_preview_live_handoff.py::test_parent_close_during_candidate_health_drains_both_owned_managers",
+          "packages/agent-server/tests/test_preview_live_handoff.py::test_readonly_status_does_not_replace_sealed_owner",
+          "packages/agent-server/tests/test_preview_live_handoff.py::test_retired_cleanup_failure_remains_owned_for_teardown_retry",
+          "packages/agent-server/tests/test_preview_mutable_handoff_outcomes.py::test_appkit_sync_uses_mutable_host_or_preserves_old_on_preparation_failure",
+          "packages/agent-server/tests/test_preview_mutable_handoff_outcomes.py::test_existing_nonisolated_host_launch_keeps_host_ownership",
+          "packages/agent-server/tests/test_preview_mutable_handoff_outcomes.py::test_explicit_start_serves_host_and_future_edits_after_sealed_restore",
+          "packages/agent-server/tests/test_preview_mutable_handoff_outcomes.py::test_failed_mutable_health_keeps_old_sealed_preview_routable",
+          "packages/agent-server/tests/test_preview_mutable_handoff_outcomes.py::test_no_intent_and_explicit_port_guards_remain_closed",
+          "packages/agent-server/tests/test_preview_mutable_handoff_outcomes.py::test_readonly_status_keeps_restored_sealed_manager_selected",
+          "packages/tools/tests/test_preview_tools.py::test_preview_handoff_failure_stays_distinct_from_invalid_command",
+          "packages/tools/tests/test_preview_tools.py::test_preview_start_dispatches_through_manager_facade"
+        ],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": [
+          {
+            "path": "packages/agent-server/tests/test_preview_live_handoff.py",
+            "line": 51,
+            "fixture": "handoff",
             "scope": "pytest.fixture"
           }
         ]
