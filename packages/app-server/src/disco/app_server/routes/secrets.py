@@ -19,16 +19,17 @@ from fastapi import APIRouter, HTTPException
 from ..config.dtos import ProbeResult, SecretBody, SecretsListDTO, SecretStatus
 from ..config_state import ConfigState
 
-# Provider keys are referenced by their env-var name; constrain the path param to
-# a valid env-var identifier (also blocks path-traversal / odd characters).
-_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+# Provider keys are referenced by a generic ASCII secret reference; constrain
+# the path param to that syntax (also blocks path-traversal / odd characters).
+# This is a secret reference, not a shell environment-variable name.
+_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_-]*")
 
 
 def _validate(name: str) -> str:
     if not _NAME_RE.fullmatch(name):
         raise HTTPException(
             status_code=400,
-            detail="secret name must be an env-var identifier ([A-Za-z_][A-Za-z0-9_]*)",
+            detail="secret reference must match [A-Za-z_][A-Za-z0-9_-]*",
         )
     return name
 

@@ -14,9 +14,10 @@ import { ProbeButton } from "./ProbeButton";
 const field =
   "min-h-11 w-full rounded-control border border-hairline bg-surface-1 px-inline py-hair font-ui text-[0.84rem] text-text outline-none focus:border-hairline-strong lg:min-h-0";
 
-// An env-var-style name (matches the server's validation). Shown inline so the
-// user knows WHY a name was rejected before the request round-trips.
-const NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+// A generic ASCII secret-reference name (matches the server's validation).
+// A reference, not a shell env-var name. Shown inline so the user knows WHY
+// a name was rejected before the request round-trips.
+const NAME_RE = /^[A-Za-z_][A-Za-z0-9_-]*$/;
 
 /** One stored key: name + Edit (replace value in place) + Clear (delete). Edit
  * reveals a value input — values are write-only (we never read a key back), so
@@ -189,7 +190,7 @@ export function ProviderKeysSection() {
     const n = name.trim();
     if (!NAME_RE.test(n)) {
       setNameError(
-        "Use a provider key name, e.g. OPENAI_API_KEY or TAVILY_API_KEY.",
+        "Use a provider key name starting with a letter or _, followed by letters, digits, _ or -.",
       );
       return;
     }

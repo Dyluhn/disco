@@ -121,6 +121,50 @@ def test_key_test_unauthorized_is_not_a_500(client, state, monkeypatch):
     assert body["ok"] is False and body["status"] == "unauthorized"
 
 
+@pytest.mark.parametrize(
+    ("ok", "status"),
+    [(True, "ok"), (False, "unauthorized")],
+)
+def test_hyphenated_key_probe_uses_replacement_and_preserves_outcome(
+    client, state, monkeypatch, ok, status
+):
+    name = "provider_arbitrary-lab"
+    endpoint = "https://arbitrary-model.example.invalid/v1"
+    model_id = "arbitrary-model-q"
+    cfg = state._store.load()
+    template = next(iter(cfg.models.values()))
+    cfg.models["arbitrary-probe-entry"] = template.model_copy(
+        update={"base_url": endpoint, "model_id": model_id, "api_key_env": name}
+    )
+    state._store.save(cfg)
+    _approve_secret_model_origin(state, name)
+
+    for value in ("dummy-original-value", "dummy-replacement-value"):
+        response = client.put(f"/api/secrets/{name}", json={"value": value})
+        assert response.status_code == 200, response.text
+
+    captured = []
+
+    async def fake_probe(base_url, api_key, requested_model):
+        captured.append((base_url, api_key, requested_model))
+        return ok, status, "synthetic provider outcome"
+
+    import disco.app_server.probe_clients as pc
+
+    monkeypatch.setattr(pc, "probe_openai_auth", fake_probe)
+    response = client.post(f"/api/secrets/{name}/test")
+    assert response.status_code == 200, response.text
+    assert response.json()["ok"] is ok
+    assert response.json()["status"] == status
+    assert captured == [(endpoint, "dummy-replacement-value", model_id)]
+    saved_status = client.get(f"/api/secrets/{name}")
+    assert saved_status.status_code == 200
+    assert saved_status.json()["configured"] is True
+    assert "dummy-original-value" not in saved_status.text
+    assert "dummy-replacement-value" not in saved_status.text
+    assert "value" not in saved_status.json()
+
+
 # ---- T4.2 data-source probe --------------------------------------------------
 
 
