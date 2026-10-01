@@ -14,7 +14,7 @@ import ipaddress
 import json
 import secrets
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Literal, Protocol
 from urllib.parse import urlsplit, urlunsplit
@@ -67,6 +67,10 @@ from .auth_parts.preview_origin import (
     validated_canonical_preview_url,
     validated_isolated_path_preview_url,
 )
+from .auth_parts.preview_payload import (
+    _cap_scalar_fields,
+    _partitioned_cookies_from_payload,
+)
 from .auth_parts.secret_strength import _warn_if_weak_auth_secret
 from .env import disco_env
 from .store.sqlite import DEFAULT_OWNER_ID
@@ -110,6 +114,7 @@ class PreviewCapability:
     authority_id: str | None = None
     immutable_version: int | None = None
     capture_generation: int | None = None
+    partitioned_cookies: bool = False
 
 
 class PreviewIntentRedemptionStore(Protocol):
@@ -358,32 +363,6 @@ def _check_immutable_preview_version(value: int | None) -> None:
         raise ValueError("invalid immutable preview version")
 
 
-def _cap_scalar_fields(
-    owner: object,
-    cid: object,
-    prefix: object,
-    port: object,
-    exp: object,
-    allow_websocket: object,
-) -> tuple[str, str, str, int, int, bool] | None:
-    """The capability's scalar payload fields, or None if any is the wrong type.
-
-    Returns the values rather than a bool so the caller keeps the narrowing the
-    inline isinstance chain used to give it. A bool-returning predicate erases
-    it, and PreviewCapability's constructor then receives ``Any | None``.
-    """
-    if (
-        isinstance(owner, str)
-        and isinstance(cid, str)
-        and isinstance(prefix, str)
-        and isinstance(port, int)
-        and isinstance(exp, int)
-        and isinstance(allow_websocket, bool)
-    ):
-        return owner, cid, prefix, port, exp, allow_websocket
-    return None
-
-
 def _cap_authority_invalid(authority_id: object) -> bool:
     return authority_id is not None and (
         not isinstance(authority_id, str) or not authority_id or len(authority_id) > 256
@@ -547,6 +526,7 @@ class PreviewCapabilitySigner:
         expected_conversation_id: str | None = None,
         expected_owner_id: str | None = None,
         expected_authority_id: str | None = None,
+        partitioned_cookies: bool = False,
     ) -> tuple[str, str] | None:
         """Validate an endpoint-specific intent, then atomically exchange it once.
 
@@ -555,6 +535,8 @@ class PreviewCapabilitySigner:
         exchange prevents a wrong-host handoff from burning the correct launch.
         """
 
+        if not isinstance(partitioned_cookies, bool):
+            return None
         intent_payload = self._codec.unsign(intent)
         if intent_payload is None or intent_payload.get("kind") != "preview_intent":
             return None
@@ -590,6 +572,7 @@ class PreviewCapabilitySigner:
             return None
         if not self._consume_intent(intent_payload):
             return None
+        cap = replace(cap, partitioned_cookies=partitioned_cookies)
         return self._mint_cookie(cap, target)
 
     def _consume_intent(self, payload: dict[str, Any]) -> bool:
@@ -613,6 +596,7 @@ class PreviewCapabilitySigner:
                 "authority": cap.authority_id,
                 "version": cap.immutable_version,
                 "capture_generation": cap.capture_generation,
+                "partitioned_cookies": cap.partitioned_cookies,
                 "exp": int(time.time()) + preview_ttl_s(),
             }
         )
@@ -691,7 +675,9 @@ class PreviewCapabilitySigner:
             or not self._consume_intent(payload)
         ):
             return None
-        token, verified_target = self._mint_cookie(cap, target)
+        token, verified_target = self._mint_cookie(
+            replace(cap, partitioned_cookies=partitioned), target
+        )
         return token, verified_target, partitioned
 
     def verify(
@@ -766,6 +752,9 @@ class PreviewCapabilitySigner:
         normalized_methods = _normalize_cap_methods(payload, methods)
         if normalized_methods is None:
             return None
+        partitioned_cookies = _partitioned_cookies_from_payload(payload)
+        if partitioned_cookies is None:
+            return None
         return PreviewCapability(
             owner,
             cid,
@@ -777,6 +766,7 @@ class PreviewCapabilitySigner:
             authority_id=authority_id,
             immutable_version=immutable_version,
             capture_generation=capture_generation,
+            partitioned_cookies=partitioned_cookies,
         )
 
 
