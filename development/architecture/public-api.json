@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-public-api-v1",
-  "source_identity": "b933bc3efdd0b1fa90f8ff375a923ec4b2a69997",
+  "source_identity": "2ffd74abc1b46e7678751b49eb64f20732e25fb8",
   "python_initializers": [
     {
       "path": "packages/agent-server/src/disco/agent_server/__init__.py",
@@ -22226,6 +22226,26 @@
       ]
     },
     {
+      "path": "frontend/src/components/settings/ModelCatalogueForm.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "FormDialog",
+          "signature": "export function FormDialog({ open, onOpenChange, mode, initial, trigger, addButtonRef, }: { open: boolean; onOpenChange: (o: boolean) => void; mode: \"add\" | \"edit\"; initial: ModelUpsert; trigger: HTMLButtonElement | null; addButtonRef: { current: HTMLButtonElement | null }; })"
+        },
+        {
+          "kind": "function",
+          "name": "toUpsert",
+          "signature": "export function toUpsert(m: ModelInfo): ModelUpsert"
+        },
+        {
+          "kind": "variable",
+          "name": "BLANK",
+          "signature": "export const BLANK: ModelUpsert = { id: \"\", model_id: \"\", base_url: \"\", api_key_env: \"\", context_window: 8192, max_output_tokens: null, quantization: \"\", capabilities: [], vision: null, price_in_per_m: 0, price_out_per_m: 0, pricing_mode: \"metered\", };"
+        }
+      ]
+    },
+    {
       "path": "frontend/src/components/settings/ModelMatrix.tsx",
       "public_declarations": [
         {
@@ -32844,6 +32864,30 @@
       "target_sha256": "771cb068984c2e82a886b9008f3cd8395362a3dc4d6b0aa608404842c93c438a",
       "owner_package": "PKG-42-AUX-DIALOG-FOCUS",
       "reason": "Optional per-card opener references and optional click-event callback preserve existing callers while returning selector/audio-mode cancellation focus to the activated report card; Confirm/Skip handoff preserves next-dialog focus."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/ModelCatalogueForm.tsx",
+      "public_name": "BLANK",
+      "target_sha256": "299cf5d093a3ef508cacce31b9b63e0e4ffbbb019f0125ba7ca37bbbc743fb25",
+      "owner_package": "PKG-44-MODEL-CATALOGUE-FOCUS",
+      "reason": "Extract the existing catalogue form into a bounded module while preserving its payload and dialog behavior; existing public declarations remain unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/ModelCatalogueForm.tsx",
+      "public_name": "FormDialog",
+      "target_sha256": "428ca17486c55625bae63d53bf5761193f7c54955ebace70d47d9bea7a57ead4",
+      "owner_package": "PKG-44-MODEL-CATALOGUE-FOCUS",
+      "reason": "Extract the existing catalogue form into a bounded module while preserving its payload and dialog behavior; existing public declarations remain unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/ModelCatalogueForm.tsx",
+      "public_name": "toUpsert",
+      "target_sha256": "e59b469f98c424e0c2e8f556ee6ea675f43b1edb9d29c60eafbd2087051422a4",
+      "owner_package": "PKG-44-MODEL-CATALOGUE-FOCUS",
+      "reason": "Extract the existing catalogue form into a bounded module while preserving its payload and dialog behavior; existing public declarations remain unchanged."
     },
     {
       "surface": "frontend",

@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "b933bc3efdd0b1fa90f8ff375a923ec4b2a69997",
+  "source_identity": "2ffd74abc1b46e7678751b49eb64f20732e25fb8",
   "collected": {
     "counts": {
       "packages": 12708,
@@ -14777,7 +14777,7 @@
     }
   },
   "mapping_static": {
-    "identity": "b933bc3efdd0b1fa90f8ff375a923ec4b2a69997",
+    "identity": "2ffd74abc1b46e7678751b49eb64f20732e25fb8",
     "python_test_file_count": 983,
     "python_static_test_id_count": 11933,
     "python_test_files": [
@@ -27700,8 +27700,8 @@
       "tests/unbiased_gate/test_authorB_models_imagegen.py::test_w50_slides_degrade_to_image_less_when_image_backend_unconfigured",
       "tests/unbiased_gate/test_authorB_models_imagegen.py::test_w50_unconfigured_image_backend_fails_loudly_instead_of_procedural_fallback"
     ],
-    "typescript_test_file_count": 316,
-    "typescript_static_test_id_count": 1691,
+    "typescript_test_file_count": 317,
+    "typescript_static_test_id_count": 1704,
     "typescript_test_files": [
       "frontend/e2e-full/scenarios/click-provenance.smoke.spec.ts",
       "frontend/e2e-full/scenarios/per-surface.full.spec.ts",
@@ -27919,6 +27919,7 @@
       "frontend/src/components/settings/McpImportBox.test.tsx",
       "frontend/src/components/settings/McpSection.approval.test.tsx",
       "frontend/src/components/settings/McpSection.live.test.tsx",
+      "frontend/src/components/settings/ModelCatalogue.focus.test.tsx",
       "frontend/src/components/settings/ModelCatalogue.subscription.test.tsx",
       "frontend/src/components/settings/ModelMatrix.vision.test.tsx",
       "frontend/src/components/settings/ProbeButton.test.tsx",
@@ -29001,6 +29002,19 @@
       "frontend/src/components/settings/McpSection.live.test.tsx::revokes approvals without removing the configured server",
       "frontend/src/components/settings/McpSection.live.test.tsx::shows the Review control and SHA-256 fingerprint for pending approvals",
       "frontend/src/components/settings/McpSection.live.test.tsx::toggles enabled via a real PATCH /api/mcp/servers/{name}",
+      "frontend/src/components/settings/ModelCatalogue.focus.test.tsx::Add Cancel restores the Add opener",
+      "frontend/src/components/settings/ModelCatalogue.focus.test.tsx::Add Escape restores the Add opener",
+      "frontend/src/components/settings/ModelCatalogue.focus.test.tsx::Add dialog initially focuses Catalogue id",
+      "frontend/src/components/settings/ModelCatalogue.focus.test.tsx::Edit Cancel restores each exact row opener",
+      "frontend/src/components/settings/ModelCatalogue.focus.test.tsx::Edit Escape restores the exact row opener",
+      "frontend/src/components/settings/ModelCatalogue.focus.test.tsx::Edit dialog initially focuses first editable Model id",
+      "frontend/src/components/settings/ModelCatalogue.focus.test.tsx::Remove confirmation Cancel restores the trash opener and preserves the model",
+      "frontend/src/components/settings/ModelCatalogue.focus.test.tsx::Remove confirmation Escape restores the trash opener",
+      "frontend/src/components/settings/ModelCatalogue.focus.test.tsx::pending save does not prematurely close the dialog",
+      "frontend/src/components/settings/ModelCatalogue.focus.test.tsx::successful Add save restores the Add opener",
+      "frontend/src/components/settings/ModelCatalogue.focus.test.tsx::successful Edit save restores the Edit opener",
+      "frontend/src/components/settings/ModelCatalogue.focus.test.tsx::unsuccessful Edit save retains dialog, draft, and focus",
+      "frontend/src/components/settings/ModelCatalogue.focus.test.tsx::vanished row opener falls back to the stable Add button",
       "frontend/src/components/settings/ModelCatalogue.subscription.test.tsx::hides the per-token price fields and shows 'Subscription' when Pricing is subscription",
       "frontend/src/components/settings/ModelMatrix.vision.test.tsx::does not invent a text-only warning before a runnable primary exists",
       "frontend/src/components/settings/ModelMatrix.vision.test.tsx::honors a manual vision pin even when provider capabilities are stale",
@@ -31647,8 +31661,8 @@
         ]
       }
     },
-    "vitest_ids": 1639,
-    "vitest_files": 238,
+    "vitest_ids": 1652,
+    "vitest_files": 239,
     "vitest_ids_list": [
       "frontend/src/App.moderesume.test.tsx::A2 \u2014 fresh sessions and resume targets > New preserves the active mode, then a mode chip lands on that mode's splash",
       "frontend/src/App.moderesume.test.tsx::A2 \u2014 fresh sessions and resume targets > does not resume a just-killed conversation id from the mode chip",
@@ -32558,6 +32572,19 @@
       "frontend/src/components/settings/McpSection.live.test.tsx::McpSection \u2014 live CRUD over the real fetch path > revokes approvals without removing the configured server",
       "frontend/src/components/settings/McpSection.live.test.tsx::McpSection \u2014 live CRUD over the real fetch path > shows the Review control and SHA-256 fingerprint for pending approvals",
       "frontend/src/components/settings/McpSection.live.test.tsx::McpSection \u2014 live CRUD over the real fetch path > toggles enabled via a real PATCH /api/mcp/servers/{name}",
+      "frontend/src/components/settings/ModelCatalogue.focus.test.tsx::ModelCatalogue focus > Add Cancel restores the Add opener",
+      "frontend/src/components/settings/ModelCatalogue.focus.test.tsx::ModelCatalogue focus > Add Escape restores the Add opener",
+      "frontend/src/components/settings/ModelCatalogue.focus.test.tsx::ModelCatalogue focus > Add dialog initially focuses Catalogue id",
+      "frontend/src/components/settings/ModelCatalogue.focus.test.tsx::ModelCatalogue focus > Edit Cancel restores each exact row opener",
+      "frontend/src/components/settings/ModelCatalogue.focus.test.tsx::ModelCatalogue focus > Edit Escape restores the exact row opener",
+      "frontend/src/components/settings/ModelCatalogue.focus.test.tsx::ModelCatalogue focus > Edit dialog initially focuses first editable Model id",
+      "frontend/src/components/settings/ModelCatalogue.focus.test.tsx::ModelCatalogue focus > Remove confirmation Cancel restores the trash opener and preserves the model",
+      "frontend/src/components/settings/ModelCatalogue.focus.test.tsx::ModelCatalogue focus > Remove confirmation Escape restores the trash opener",
+      "frontend/src/components/settings/ModelCatalogue.focus.test.tsx::ModelCatalogue focus > pending save does not prematurely close the dialog",
+      "frontend/src/components/settings/ModelCatalogue.focus.test.tsx::ModelCatalogue focus > successful Add save restores the Add opener",
+      "frontend/src/components/settings/ModelCatalogue.focus.test.tsx::ModelCatalogue focus > successful Edit save restores the Edit opener",
+      "frontend/src/components/settings/ModelCatalogue.focus.test.tsx::ModelCatalogue focus > unsuccessful Edit save retains dialog, draft, and focus",
+      "frontend/src/components/settings/ModelCatalogue.focus.test.tsx::ModelCatalogue focus > vanished row opener falls back to the stable Add button",
       "frontend/src/components/settings/ModelCatalogue.subscription.test.tsx::ModelCatalogue subscription pricing > hides the per-token price fields and shows 'Subscription' when Pricing is subscription",
       "frontend/src/components/settings/ModelMatrix.vision.test.tsx::ModelMatrix \u2014 honest vision guidance > does not invent a text-only warning before a runnable primary exists",
       "frontend/src/components/settings/ModelMatrix.vision.test.tsx::ModelMatrix \u2014 honest vision guidance > honors a manual vision pin even when provider capabilities are stale",
@@ -33431,6 +33458,7 @@
       "frontend/src/components/settings/McpImportBox.test.tsx",
       "frontend/src/components/settings/McpSection.approval.test.tsx",
       "frontend/src/components/settings/McpSection.live.test.tsx",
+      "frontend/src/components/settings/ModelCatalogue.focus.test.tsx",
       "frontend/src/components/settings/ModelCatalogue.subscription.test.tsx",
       "frontend/src/components/settings/ModelMatrix.vision.test.tsx",
       "frontend/src/components/settings/ProbeButton.test.tsx",
@@ -47048,6 +47076,36 @@
           "frontend/src/components/settings/DeleteFocus.test.tsx::skills: focus moved elsewhere while pending is not stolen",
           "frontend/src/components/settings/DeleteFocus.test.tsx::skills: row and focus stay put while deletion is pending",
           "frontend/src/components/settings/DeleteFocus.test.tsx::skills: unrelated source update while pending still removes only the target"
+        ],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-44-MODEL-CATALOGUE-FOCUS",
+      "root": "multiple",
+      "source_identity_before": "b933bc3efdd0b1fa90f8ff375a923ec4b2a69997",
+      "source_identity_after": "2ffd74abc1b46e7678751b49eb64f20732e25fb8",
+      "collected_roots": {},
+      "mapping_static_additions": {
+        "python_test_files": [],
+        "python_static_test_ids": [],
+        "typescript_test_files": [
+          "frontend/src/components/settings/ModelCatalogue.focus.test.tsx"
+        ],
+        "typescript_static_test_ids": [
+          "frontend/src/components/settings/ModelCatalogue.focus.test.tsx::Add Cancel restores the Add opener",
+          "frontend/src/components/settings/ModelCatalogue.focus.test.tsx::Add Escape restores the Add opener",
+          "frontend/src/components/settings/ModelCatalogue.focus.test.tsx::Add dialog initially focuses Catalogue id",
+          "frontend/src/components/settings/ModelCatalogue.focus.test.tsx::Edit Cancel restores each exact row opener",
+          "frontend/src/components/settings/ModelCatalogue.focus.test.tsx::Edit Escape restores the exact row opener",
+          "frontend/src/components/settings/ModelCatalogue.focus.test.tsx::Edit dialog initially focuses first editable Model id",
+          "frontend/src/components/settings/ModelCatalogue.focus.test.tsx::Remove confirmation Cancel restores the trash opener and preserves the model",
+          "frontend/src/components/settings/ModelCatalogue.focus.test.tsx::Remove confirmation Escape restores the trash opener",
+          "frontend/src/components/settings/ModelCatalogue.focus.test.tsx::pending save does not prematurely close the dialog",
+          "frontend/src/components/settings/ModelCatalogue.focus.test.tsx::successful Add save restores the Add opener",
+          "frontend/src/components/settings/ModelCatalogue.focus.test.tsx::successful Edit save restores the Edit opener",
+          "frontend/src/components/settings/ModelCatalogue.focus.test.tsx::unsuccessful Edit save retains dialog, draft, and focus",
+          "frontend/src/components/settings/ModelCatalogue.focus.test.tsx::vanished row opener falls back to the stable Add button"
         ],
         "fixtures": []
       }
