@@ -23,18 +23,37 @@ def _v1(base_url: str, suffix: str) -> str:
     return f"{root}{suffix}" if root.endswith("/v1") else f"{root}/v1{suffix}"
 
 
+def _is_chat_completion_envelope(payload: object) -> bool:
+    """Recognizable chat-completion message envelope (transport check only).
+
+    True only when ``payload`` is a dict with a non-empty ``choices`` list
+    whose first entry holds a ``message`` dict. Content may be missing, None,
+    or empty — one-token reasoning-only/length truncations and empty answers
+    still count as transport success, not answer quality. No identifier-based
+    routing: model, key, or host never influence this check.
+    """
+    if not isinstance(payload, dict):
+        return False
+    choices = payload.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return False
+    first = choices[0]
+    if not isinstance(first, dict):
+        return False
+    return isinstance(first.get("message"), dict)
+
+
 async def probe_openai_auth(
     base_url: str, api_key: str | None, model_id: str
 ) -> tuple[bool, str, str]:
-    """The REAL "is this key live?" probe: a minimal 1-token chat completion via
-    ``POST {base}/v1/chat/completions`` with the model this key is configured for.
+    """Minimal 1-token chat completion probe via ``POST {base}/v1/chat/completions``.
 
-    Why not ``GET /models``? Live-verified: some providers (OpenRouter) serve
-    ``/models`` UNAUTHENTICATED — a bogus key still returns 200, so a models-list
-    green would be a FALSE green. A completion genuinely exercises the Bearer key:
-    a bad key returns 401/403, a good key returns 200. ``max_tokens=1`` keeps it
-    ~free. A 400/404 means the credential was ACCEPTED but the model id/route was
-    rejected — reachable + authorized, surfaced honestly (not a clean ok).
+    Makes ONE configured call with the configured model id and classifies the
+    outcome without inferring key validity from rejections. 401/403 is
+    access-denied (authorization/permissions may fail) — not universal
+    invalid-key proof. Other non-200 statuses are protocol failures, not auth
+    proof. 200 is success only with a recognizable chat-completion message
+    envelope; transport success is not answer-quality or key-validity proof.
     """
     url = _v1(base_url, "/chat/completions")
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
@@ -61,41 +80,36 @@ async def probe_openai_auth(
         return (
             False,
             "unauthorized",
-            (f"{root} answered {resp.status_code} — the key was rejected. Check the stored value."),
+            (
+                f"{root} answered {resp.status_code} — access denied. "
+                "Authorization/permissions may fail; check the configured credential "
+                "and its permissions."
+            ),
         )
     if resp.status_code == 200:
+        try:
+            body = resp.json()
+        except ValueError:
+            return (
+                False,
+                "error",
+                (f"{root} answered 200 without a recognizable chat completion message envelope."),
+            )
+        if _is_chat_completion_envelope(body):
+            return (
+                True,
+                "ok",
+                (f"{root} completion answered with model ‘{model_id}’."),
+            )
         return (
-            True,
-            "ok",
-            (
-                f"{root} accepted an authenticated completion with model "
-                f"‘{model_id}’ — the key works."
-            ),
-        )
-    if resp.status_code in (400, 404, 422):
-        # The key passed auth but the model/route was rejected — still proves the
-        # credential is valid against this endpoint; flag the model issue honestly.
-        return (
-            True,
-            "ok",
-            (
-                f"{root} authenticated the key (answered {resp.status_code} on a probe "
-                f"with model ‘{model_id}’ — the model id may need updating, but the key works)."
-            ),
-        )
-    if resp.status_code == 429:
-        return (
-            True,
-            "ok",
-            (
-                f"{root} answered 429 (rate-limited) — the key authenticated; you're "
-                "just over a rate limit right now."
-            ),
+            False,
+            "error",
+            (f"{root} answered 200 without a recognizable chat completion message envelope."),
         )
     return (
         False,
         "error",
-        (f"{root} answered {resp.status_code} on an authenticated completion probe."),
+        (f"{root} answered {resp.status_code} on a completion probe with model ‘{model_id}’."),
     )
 
 
@@ -149,10 +163,9 @@ def _classify_vendor_probe(resp: httpx.Response, root: str, action: str) -> tupl
         return True, "ok", f"{root} answered {action} — the key works."
     if resp.status_code == 429:
         return (
-            True,
-            "ok",
-            f"{root} answered 429 (rate-limited) on {action} — the key authenticated; "
-            "you're just over a rate limit right now.",
+            False,
+            "error",
+            f"{root} answered 429 (rate-limited) on {action}.",
         )
     return False, "error", f"{root} answered {resp.status_code} on {action}."
 
