@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "e966bb3319e7c1ecfb0e7f1bc2226fdfadc9ec38",
+  "source_identity": "abbd857cef1ae6a2a51c636de303360af97ed9f0",
   "collected": {
     "counts": {
       "packages": 12786,
@@ -14855,7 +14855,7 @@
     }
   },
   "mapping_static": {
-    "identity": "e966bb3319e7c1ecfb0e7f1bc2226fdfadc9ec38",
+    "identity": "abbd857cef1ae6a2a51c636de303360af97ed9f0",
     "python_test_file_count": 990,
     "python_static_test_id_count": 11983,
     "python_test_files": [
@@ -40006,6 +40006,41 @@
         "packages": {
           "before_count": 12462,
           "after_count": 12462,
+          "added_ids": []
+        },
+        "harness": {
+          "before_count": 1571,
+          "after_count": 1571,
+          "added_ids": []
+        },
+        "integrations": {
+          "before_count": 9,
+          "after_count": 9,
+          "added_ids": []
+        },
+        "tests": {
+          "before_count": 468,
+          "after_count": 468,
+          "added_ids": []
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [],
+        "python_static_test_ids": [],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-50-PREFLIGHT-COPY",
+      "root": "multiple",
+      "source_identity_before": "e966bb3319e7c1ecfb0e7f1bc2226fdfadc9ec38",
+      "source_identity_after": "abbd857cef1ae6a2a51c636de303360af97ed9f0",
+      "collected_roots": {
+        "packages": {
+          "before_count": 12786,
+          "after_count": 12786,
           "added_ids": []
         },
         "harness": {
