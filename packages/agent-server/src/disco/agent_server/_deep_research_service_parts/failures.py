@@ -18,9 +18,8 @@ So the class comes from the code path that RAISED, never from the message:
 * anything else is ``internal_error`` — honestly unclassified rather than
   guessed at, which is what keeps the set closed and the counts meaningful.
 
-The prose is unchanged: ``detail`` still carries the same sentence it always
-did, and for the research walls that sentence is now rendered FROM these fields
-so the two cannot disagree.
+The reason text remains in ``detail``. For research walls, that sentence is
+rendered from these fields so the two cannot disagree.
 """
 
 from __future__ import annotations
@@ -98,8 +97,8 @@ def preflight_failure(reason: str) -> RunFailure:
         failure_class="preflight",
         why=reason,
         state=(
-            "nothing ran: the run was refused before any search or model call, so "
-            "no budget and no quota were spent"
+            "the research did not start; dependency checks may have contacted "
+            "configured services"
         ),
         next="fix what the reason above names, then ask this question again",
         allowed=_ALLOWED,
