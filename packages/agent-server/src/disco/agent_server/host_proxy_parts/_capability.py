@@ -174,6 +174,7 @@ async def _apply_canonical_routing(
         return False
     if await _authority_changed(self, scope, send, cap):
         return True
+    scope["state"] = {**(scope.get("state") or {}), "canonical_preview_capability": cap}
     safe_path = safe_capability_target_path(path)
     if safe_path is None or is_runtime_secret_path(safe_path):
         if scope["type"] == "http":
