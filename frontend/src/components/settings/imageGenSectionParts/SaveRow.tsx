@@ -4,22 +4,25 @@ import { cn } from "@/lib/cn";
 export function SaveRow({
   fieldsDirty,
   savePending,
+  invalid,
   onSave,
 }: {
   fieldsDirty: boolean;
   savePending: boolean;
+  invalid?: boolean;
   onSave: () => void;
 }) {
+  const saveDisabled = !fieldsDirty || savePending || invalid;
   return (
     <div className="flex items-center gap-inline">
       <button
         type="button"
         data-disco-control="settings.imagegen-save"
-        disabled={!fieldsDirty || savePending}
+        disabled={saveDisabled}
         onClick={onSave}
         className={cn(
           "flex min-h-11 items-center gap-hair self-start rounded-control border px-inline py-hair font-ui text-[0.8rem] transition-colors lg:min-h-0",
-          fieldsDirty && !savePending
+          !saveDisabled
             ? "border-accent/50 bg-accent/10 text-text hover:bg-accent/20"
             : "border-hairline text-text-faint",
         )}
@@ -31,7 +34,7 @@ export function SaveRow({
         )}
         Save
       </button>
-      {!fieldsDirty && !savePending && (
+      {!fieldsDirty && !savePending && !invalid && (
         <span className="font-ui text-[0.76rem] text-text-faint">Saved</span>
       )}
     </div>

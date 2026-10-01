@@ -25,6 +25,7 @@ export function ContextualFieldsPanel({
   orModelsLoading,
   fieldsDirty,
   savePending,
+  saveBlockedByWorkflow,
   onSave,
 }: {
   provider: Provider;
@@ -41,6 +42,7 @@ export function ContextualFieldsPanel({
   orModelsLoading: boolean;
   fieldsDirty: boolean;
   savePending: boolean;
+  saveBlockedByWorkflow?: boolean;
   onSave: () => void;
 }) {
   const showOpenRouter = provider === "openrouter";
@@ -103,7 +105,12 @@ export function ContextualFieldsPanel({
       {showPaid && (
         <StoredKeyField apiKeyEnv={apiKeyEnv} setApiKeyEnv={setApiKeyEnv} />
       )}
-      <SaveRow fieldsDirty={fieldsDirty} savePending={savePending} onSave={onSave} />
+      <SaveRow
+        fieldsDirty={fieldsDirty}
+        savePending={savePending}
+        invalid={saveBlockedByWorkflow}
+        onSave={onSave}
+      />
     </div>
   );
 }
