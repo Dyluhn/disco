@@ -83,8 +83,12 @@ export function ImageGenSection() {
     workflowJson,
   );
 
+  const workflowJsonError = getWorkflowJsonError(workflowJson);
+  const activeWorkflowInvalid =
+    data?.provider === "comfyui" && workflowJsonError !== null;
+
   const saveFields = () => {
-    if (!data) return;
+    if (!data || activeWorkflowInvalid) return;
     save.mutate({
       provider: data.provider,
       base_url: baseUrl,
@@ -94,7 +98,6 @@ export function ImageGenSection() {
     });
   };
 
-  const workflowJsonError = getWorkflowJsonError(workflowJson);
   const setupNote = getSetupNote(data, orKey.data);
 
   return (
@@ -160,11 +163,13 @@ export function ImageGenSection() {
                 control="settings.imagegen-test"
                 idleLabel="Test image"
                 run={testImageGen}
-                disabled={!agentIsLive() || fieldsDirty}
+                disabled={!agentIsLive() || fieldsDirty || activeWorkflowInvalid}
                 disabledHint={
-                  fieldsDirty
-                    ? "unsaved changes — click Save first, then Test"
-                    : "agent server offline — start it to test"
+                  activeWorkflowInvalid
+                    ? "Correct or clear the custom workflow before testing."
+                    : fieldsDirty
+                      ? "unsaved changes — click Save first, then Test"
+                      : "agent server offline — start it to test"
                 }
               />
 
@@ -183,6 +188,7 @@ export function ImageGenSection() {
                 orModelsLoading={orModels.isLoading}
                 fieldsDirty={fieldsDirty}
                 savePending={save.isPending}
+                saveBlockedByWorkflow={activeWorkflowInvalid}
                 onSave={saveFields}
               />
               {save.error && (

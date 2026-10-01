@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-public-api-v1",
-  "source_identity": "5536ec9277e4bb18ef6bd824a0f88b88c8d837fd",
+  "source_identity": "c06fafd801396fae2aeff7dd8a794771c0790f1e",
   "python_initializers": [
     {
       "path": "packages/agent-server/src/disco/agent_server/__init__.py",
@@ -22576,7 +22576,7 @@
         {
           "kind": "function",
           "name": "ContextualFieldsPanel",
-          "signature": "export function ContextualFieldsPanel({ provider, baseUrl, setBaseUrl, apiKeyEnv, setApiKeyEnv, model, setModel, workflowJson, setWorkflowJson, workflowJsonError, orModelsData, orModelsLoading, fieldsDirty, savePending, onSave, }: { provider: Provider; baseUrl: string; setBaseUrl: (value: string) => void; apiKeyEnv: string; setApiKeyEnv: (value: string) => void; model: string; setModel: (value: string) => void; workflowJson: string; setWorkflowJson: (value: string) => void; workflowJsonError: string | null; orModelsData: OpenRouterModel[] | undefined; orModelsLoading: boolean; fieldsDirty: boolean; savePending: boolean; onSave: () => void; })"
+          "signature": "export function ContextualFieldsPanel({ provider, baseUrl, setBaseUrl, apiKeyEnv, setApiKeyEnv, model, setModel, workflowJson, setWorkflowJson, workflowJsonError, orModelsData, orModelsLoading, fieldsDirty, savePending, saveBlockedByWorkflow, onSave, }: { provider: Provider; baseUrl: string; setBaseUrl: (value: string) => void; apiKeyEnv: string; setApiKeyEnv: (value: string) => void; model: string; setModel: (value: string) => void; workflowJson: string; setWorkflowJson: (value: string) => void; workflowJsonError: string | null; orModelsData: OpenRouterModel[] | undefined; orModelsLoading: boolean; fieldsDirty: boolean; savePending: boolean; saveBlockedByWorkflow?: boolean; onSave: () => void; })"
         }
       ]
     },
@@ -22616,7 +22616,7 @@
         {
           "kind": "function",
           "name": "SaveRow",
-          "signature": "export function SaveRow({ fieldsDirty, savePending, onSave, }: { fieldsDirty: boolean; savePending: boolean; onSave: () => void; })"
+          "signature": "export function SaveRow({ fieldsDirty, savePending, invalid, onSave, }: { fieldsDirty: boolean; savePending: boolean; invalid?: boolean; onSave: () => void; })"
         }
       ]
     },
@@ -30061,7 +30061,7 @@
       "surface": "frontend",
       "path": "frontend/src/components/settings/imageGenSectionParts/ContextualFieldsPanel.tsx",
       "public_name": "ContextualFieldsPanel",
-      "target_sha256": "31eb79ffaf30f91c86a95f8019c49ec3b53691d9efa9d324c32ccf90c3456fc0",
+      "target_sha256": "4ae2115139a4997450b5546fa46aae8e2b280f187709a7a7ed7525d4f78a132f",
       "owner_package": "PKG-12-FE-SETTINGS",
       "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
     },
@@ -30093,7 +30093,7 @@
       "surface": "frontend",
       "path": "frontend/src/components/settings/imageGenSectionParts/SaveRow.tsx",
       "public_name": "SaveRow",
-      "target_sha256": "8c56049d7f1d58eca8b6f30e0b9a8eee4674d99a3c0b647d33258b82178467ec",
+      "target_sha256": "5a6e046fd4cf9db19b6e8b90cc318905450b37ce0f79ca4b097e20b8833ee43e",
       "owner_package": "PKG-12-FE-SETTINGS",
       "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
     },
@@ -34807,6 +34807,32 @@
       "owner_package": "PKG-41-EXPORT-FOCUS",
       "accepting_commit": "b8dc5ecd908c96c3963c675b62b59dac18c3d154",
       "accepting_receipt": "frontend/src/components/research/ExportFocus.test.tsx"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/imageGenSectionParts/ContextualFieldsPanel.tsx",
+      "public_name": "ContextualFieldsPanel",
+      "declaration_kind": "function",
+      "old_signature": "export function ContextualFieldsPanel({ provider, baseUrl, setBaseUrl, apiKeyEnv, setApiKeyEnv, model, setModel, workflowJson, setWorkflowJson, workflowJsonError, orModelsData, orModelsLoading, fieldsDirty, savePending, onSave, }: { provider: Provider; baseUrl: string; setBaseUrl: (value: string) => void; apiKeyEnv: string; setApiKeyEnv: (value: string) => void; model: string; setModel: (value: string) => void; workflowJson: string; setWorkflowJson: (value: string) => void; workflowJsonError: string | null; orModelsData: OpenRouterModel[] | undefined; orModelsLoading: boolean; fieldsDirty: boolean; savePending: boolean; onSave: () => void; })",
+      "new_signature": "export function ContextualFieldsPanel({ provider, baseUrl, setBaseUrl, apiKeyEnv, setApiKeyEnv, model, setModel, workflowJson, setWorkflowJson, workflowJsonError, orModelsData, orModelsLoading, fieldsDirty, savePending, saveBlockedByWorkflow, onSave, }: { provider: Provider; baseUrl: string; setBaseUrl: (value: string) => void; apiKeyEnv: string; setApiKeyEnv: (value: string) => void; model: string; setModel: (value: string) => void; workflowJson: string; setWorkflowJson: (value: string) => void; workflowJsonError: string | null; orModelsData: OpenRouterModel[] | undefined; orModelsLoading: boolean; fieldsDirty: boolean; savePending: boolean; saveBlockedByWorkflow?: boolean; onSave: () => void; })",
+      "old_target_sha256": "31eb79ffaf30f91c86a95f8019c49ec3b53691d9efa9d324c32ccf90c3456fc0",
+      "new_target_sha256": "4ae2115139a4997450b5546fa46aae8e2b280f187709a7a7ed7525d4f78a132f",
+      "owner_package": "PKG-48-IMAGE-WORKFLOW",
+      "accepting_commit": "c06fafd801396fae2aeff7dd8a794771c0790f1e",
+      "accepting_receipt": "frontend/src/components/settings/ImageGenSection.validation.test.tsx"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/imageGenSectionParts/SaveRow.tsx",
+      "public_name": "SaveRow",
+      "declaration_kind": "function",
+      "old_signature": "export function SaveRow({ fieldsDirty, savePending, onSave, }: { fieldsDirty: boolean; savePending: boolean; onSave: () => void; })",
+      "new_signature": "export function SaveRow({ fieldsDirty, savePending, invalid, onSave, }: { fieldsDirty: boolean; savePending: boolean; invalid?: boolean; onSave: () => void; })",
+      "old_target_sha256": "8c56049d7f1d58eca8b6f30e0b9a8eee4674d99a3c0b647d33258b82178467ec",
+      "new_target_sha256": "5a6e046fd4cf9db19b6e8b90cc318905450b37ce0f79ca4b097e20b8833ee43e",
+      "owner_package": "PKG-48-IMAGE-WORKFLOW",
+      "accepting_commit": "c06fafd801396fae2aeff7dd8a794771c0790f1e",
+      "accepting_receipt": "frontend/src/components/settings/ImageGenSection.validation.test.tsx"
     },
     {
       "surface": "frontend",
