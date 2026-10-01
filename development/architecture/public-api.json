@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-public-api-v1",
-  "source_identity": "b8dc5ecd908c96c3963c675b62b59dac18c3d154",
+  "source_identity": "773d24fb253b27aadcd527ea38a5cbc300e09823",
   "python_initializers": [
     {
       "path": "packages/agent-server/src/disco/agent_server/__init__.py",
@@ -21651,12 +21651,12 @@
         {
           "kind": "function",
           "name": "IncludeFollowUpsModal",
-          "signature": "export function IncludeFollowUpsModal({ open, onOpenChange, followUps, onConfirm, actionLabel = \"Export\", }: IncludeFollowUpsModalProps)"
+          "signature": "export function IncludeFollowUpsModal({ open, onOpenChange, followUps, onConfirm, actionLabel = \"Export\", triggerRef, }: IncludeFollowUpsModalProps)"
         },
         {
           "kind": "InterfaceDeclaration",
           "name": "IncludeFollowUpsModalProps",
-          "signature": "export interface IncludeFollowUpsModalProps { open: boolean; onOpenChange: (open: boolean) => void; /** All post-report follow-up MessageEvents (user + assistant, in order). */ followUps: MessageEvent[]; /** Called when the user confirms their selection. * ``selectedSeqs`` are the seq values of the selected USER messages. * An empty array means \"none selected \u2192 export without follow-ups\". */ onConfirm: (selectedSeqs: number[]) => void; /** Label for the action (e.g. \"Export\" or \"Generate audio\"). */ actionLabel?: string; }"
+          "signature": "export interface IncludeFollowUpsModalProps { open: boolean; onOpenChange: (open: boolean) => void; /** All post-report follow-up MessageEvents (user + assistant, in order). */ followUps: MessageEvent[]; /** Called when the user confirms their selection. * ``selectedSeqs`` are the seq values of the selected USER messages. * An empty array means \"none selected \u2192 export without follow-ups\". */ onConfirm: (selectedSeqs: number[]) => void; /** Label for the action (e.g. \"Export\" or \"Generate audio\"). */ actionLabel?: string; /** Exact activated card opener to return focus to on cancel. Optional: * callers without a ref keep default Radix behavior. */ triggerRef?: { current: HTMLButtonElement | null }; }"
         }
       ]
     },
@@ -21856,12 +21856,12 @@
         {
           "kind": "function",
           "name": "AudioModeDialog",
-          "signature": "export function AudioModeDialog({ open, onOpenChange, onChoose }: AudioModeDialogProps)"
+          "signature": "export function AudioModeDialog({ open, onOpenChange, onChoose, triggerRef }: AudioModeDialogProps)"
         },
         {
           "kind": "InterfaceDeclaration",
           "name": "AudioModeDialogProps",
-          "signature": "export interface AudioModeDialogProps { open: boolean; onOpenChange: (open: boolean) => void; onChoose: (mode: AudioMode) => void; }"
+          "signature": "export interface AudioModeDialogProps { open: boolean; onOpenChange: (open: boolean) => void; onChoose: (mode: AudioMode) => void; /** Exact activated Audio opener to return focus to on close. Optional: * callers without a ref keep default Radix behavior. */ triggerRef?: { current: HTMLButtonElement | null }; }"
         }
       ]
     },
@@ -21886,12 +21886,12 @@
         {
           "kind": "function",
           "name": "AudioSection",
-          "signature": "export function AudioSection({ cid, followUpSeqs, modeOpen, onModeOpenChange, reportQuery, onRequestGenerate, }: AudioSectionProps)"
+          "signature": "export function AudioSection({ cid, followUpSeqs, modeOpen, onModeOpenChange, reportQuery, onRequestGenerate, triggerRef, }: AudioSectionProps)"
         },
         {
           "kind": "InterfaceDeclaration",
           "name": "AudioSectionProps",
-          "signature": "export interface AudioSectionProps { cid: string; /** Selected follow-up seqs to include in the audio (WALK-20). */ followUpSeqs?: number[]; /** Controlled: whether the mode-pick dialog is open (parent drives this * when it needs to insert the include-follow-ups step first). */ modeOpen: boolean; onModeOpenChange: (open: boolean) => void; /** B4: report title/query for a meaningful download filename. */ reportQuery: string; /** Open the mode picker (via the include-follow-ups step when the report has * follow-ups). Owned by the parent because that step is the parent's. */ onRequestGenerate: () => void; }"
+          "signature": "export interface AudioSectionProps { cid: string; /** Selected follow-up seqs to include in the audio (WALK-20). */ followUpSeqs?: number[]; /** Controlled: whether the mode-pick dialog is open (parent drives this * when it needs to insert the include-follow-ups step first). */ modeOpen: boolean; onModeOpenChange: (open: boolean) => void; /** B4: report title/query for a meaningful download filename. */ reportQuery: string; /** Open the mode picker (via the include-follow-ups step when the report has * follow-ups). Owned by the parent because that step is the parent's. */ onRequestGenerate: (event?: React.MouseEvent<HTMLButtonElement>) => void; /** Exact activated Audio opener for focus-return on mode-dialog close. */ triggerRef?: { current: HTMLButtonElement | null }; }"
         }
       ]
     },
@@ -29247,22 +29247,6 @@
     },
     {
       "surface": "frontend",
-      "path": "frontend/src/components/research/needMoreCardParts/AudioModeDialog.tsx",
-      "public_name": "AudioModeDialog",
-      "target_sha256": "051a59af3bf01ee6501114dd14915f83fca7f82b0724358e6d3007beb1d32199",
-      "owner_package": "PKG-12-FE-RESEARCH",
-      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
-    },
-    {
-      "surface": "frontend",
-      "path": "frontend/src/components/research/needMoreCardParts/AudioModeDialog.tsx",
-      "public_name": "AudioModeDialogProps",
-      "target_sha256": "76a8f5e6451427bc3a73676315fc1959597401b337fa1a5ed290e6d09c795ba6",
-      "owner_package": "PKG-12-FE-RESEARCH",
-      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
-    },
-    {
-      "surface": "frontend",
       "path": "frontend/src/components/research/needMoreCardParts/AudioProgressRow.tsx",
       "public_name": "AudioProgressRow",
       "target_sha256": "96d05964f5ebcfb415879e0eb96d7bc182247532b349848cb0e23d543e04d908",
@@ -32511,22 +32495,6 @@
     },
     {
       "surface": "frontend",
-      "path": "frontend/src/components/research/needMoreCardParts/AudioSection.tsx",
-      "public_name": "AudioSection",
-      "target_sha256": "a925c86d901b94a36bcddf877e9f72d9e3d8f04d2da898418c8f1851f2d6aa25",
-      "owner_package": "PKG-38-UI-FIXES-V51",
-      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
-    },
-    {
-      "surface": "frontend",
-      "path": "frontend/src/components/research/needMoreCardParts/AudioSection.tsx",
-      "public_name": "AudioSectionProps",
-      "target_sha256": "6ae7808b6a549a990d1a98c823d00abde1c17dfecd84f5b477f932f933a5536e",
-      "owner_package": "PKG-38-UI-FIXES-V51",
-      "reason": "Deep Research closeout: exact current checkpoint, review, provider and gateless UI declaration; before/after surfaces preserved in the closeout review artifacts."
-    },
-    {
-      "surface": "frontend",
       "path": "frontend/src/components/research/needMoreCardParts/audioProgress.ts",
       "public_name": "AudioState",
       "target_sha256": "47501516cd0a9d44be3617499c416c4e986cf9f354c678cb6f29cb88eb1aecbf",
@@ -32828,6 +32796,54 @@
       "target_sha256": "4ea1e131f8dc5d56d55ae25ff8755f384c1a3020b038a636b389c01089abc7d5",
       "owner_package": "PKG-41-EXPORT-FOCUS",
       "reason": "Optional connected export-opener reference preserves existing callers and returns keyboard focus to the initiating report card after Export closes."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/IncludeFollowUpsModal.tsx",
+      "public_name": "IncludeFollowUpsModal",
+      "target_sha256": "5a31e61db6a813962caa1e05cc6add623a4b6ad7f25dbdefc7ed5c0db531e219",
+      "owner_package": "PKG-42-AUX-DIALOG-FOCUS",
+      "reason": "Optional per-card opener references and optional click-event callback preserve existing callers while returning selector/audio-mode cancellation focus to the activated report card; Confirm/Skip handoff preserves next-dialog focus."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/IncludeFollowUpsModal.tsx",
+      "public_name": "IncludeFollowUpsModalProps",
+      "target_sha256": "dcb8753b424afc0d55fc203b586af535abbecc1e6b81288d8058f9e342dd5c34",
+      "owner_package": "PKG-42-AUX-DIALOG-FOCUS",
+      "reason": "Optional per-card opener references and optional click-event callback preserve existing callers while returning selector/audio-mode cancellation focus to the activated report card; Confirm/Skip handoff preserves next-dialog focus."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/needMoreCardParts/AudioModeDialog.tsx",
+      "public_name": "AudioModeDialog",
+      "target_sha256": "30b8bdbb37a493447c547b01daaa4c5c5a8c3f9516af2fbf4a4dccb0efee8f0b",
+      "owner_package": "PKG-42-AUX-DIALOG-FOCUS",
+      "reason": "Optional per-card opener references and optional click-event callback preserve existing callers while returning selector/audio-mode cancellation focus to the activated report card; Confirm/Skip handoff preserves next-dialog focus."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/needMoreCardParts/AudioModeDialog.tsx",
+      "public_name": "AudioModeDialogProps",
+      "target_sha256": "6effc12bdf6ff8f818ff77eff8a87b268308c2d7d2ffa644ea1e11e773e4d62f",
+      "owner_package": "PKG-42-AUX-DIALOG-FOCUS",
+      "reason": "Optional per-card opener references and optional click-event callback preserve existing callers while returning selector/audio-mode cancellation focus to the activated report card; Confirm/Skip handoff preserves next-dialog focus."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/needMoreCardParts/AudioSection.tsx",
+      "public_name": "AudioSection",
+      "target_sha256": "b4f058ffd21951fcf5085d09872a711e95bacd130d74335338b8569282bcc4c5",
+      "owner_package": "PKG-42-AUX-DIALOG-FOCUS",
+      "reason": "Optional per-card opener references and optional click-event callback preserve existing callers while returning selector/audio-mode cancellation focus to the activated report card; Confirm/Skip handoff preserves next-dialog focus."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/needMoreCardParts/AudioSection.tsx",
+      "public_name": "AudioSectionProps",
+      "target_sha256": "771cb068984c2e82a886b9008f3cd8395362a3dc4d6b0aa608404842c93c438a",
+      "owner_package": "PKG-42-AUX-DIALOG-FOCUS",
+      "reason": "Optional per-card opener references and optional click-event callback preserve existing callers while returning selector/audio-mode cancellation focus to the activated report card; Confirm/Skip handoff preserves next-dialog focus."
     },
     {
       "surface": "frontend",
@@ -34126,19 +34142,6 @@
     },
     {
       "surface": "frontend",
-      "path": "frontend/src/components/research/needMoreCardParts/AudioSection.tsx",
-      "public_name": "AudioSectionProps",
-      "owner_package": "PKG-38-UI-FIXES-V51",
-      "accepting_commit": "731f1c29b44c5654df33486fcfe4382ce6de841b",
-      "accepting_receipt": "PKG-38-UI-FIXES-V51: exact source-backed declaration migration",
-      "declaration_kind": "InterfaceDeclaration",
-      "old_signature": "export interface AudioSectionProps { cid: string; /** Selected follow-up seqs to include in the audio (WALK-20). */ followUpSeqs?: number[]; /** Controlled: whether the mode-pick dialog is open (parent drives this * when it needs to insert the include-follow-ups step first). */ modeOpen: boolean; onModeOpenChange: (open: boolean) => void; /** B4: report title/query for a meaningful download filename. */ reportQuery: string; }",
-      "new_signature": "export interface AudioSectionProps { cid: string; /** Selected follow-up seqs to include in the audio (WALK-20). */ followUpSeqs?: number[]; /** Controlled: whether the mode-pick dialog is open (parent drives this * when it needs to insert the include-follow-ups step first). */ modeOpen: boolean; onModeOpenChange: (open: boolean) => void; /** B4: report title/query for a meaningful download filename. */ reportQuery: string; /** Open the mode picker (via the include-follow-ups step when the report has * follow-ups). Owned by the parent because that step is the parent's. */ onRequestGenerate: () => void; }",
-      "old_target_sha256": "c5dfb76da036500c831f5b33c0db99a0283b278db3dd8d2c7d8de01e56b4c8f4",
-      "new_target_sha256": "6ae7808b6a549a990d1a98c823d00abde1c17dfecd84f5b477f932f933a5536e"
-    },
-    {
-      "surface": "frontend",
       "path": "frontend/src/api/deepResearch.ts",
       "public_name": "AudioStreamEvent",
       "owner_package": "PKG-38-UI-FIXES-V51",
@@ -34266,19 +34269,6 @@
       "new_signature": "export async function streamReportAudio( cid: string, mode: string, body: string | undefined, onEvent: (ev: AudioStreamEvent) => boolean, force = false, ): Promise<boolean>",
       "old_target_sha256": "6f937524db7838286cdd6a9050ab1a3d9feeb0804170ca8c5dfd94b3156a9949",
       "new_target_sha256": "3c051771e86c695a6db2d38225249ea1d2601da1d0c03e11356bd2734f254b97"
-    },
-    {
-      "surface": "frontend",
-      "path": "frontend/src/components/research/needMoreCardParts/AudioSection.tsx",
-      "public_name": "AudioSection",
-      "owner_package": "PKG-38-UI-FIXES-V51",
-      "accepting_commit": "731f1c29b44c5654df33486fcfe4382ce6de841b",
-      "accepting_receipt": "PKG-38-UI-FIXES-V51: exact source-backed declaration migration",
-      "declaration_kind": "function",
-      "old_signature": "export function AudioSection({ cid, followUpSeqs, modeOpen, onModeOpenChange, reportQuery, }: AudioSectionProps)",
-      "new_signature": "export function AudioSection({ cid, followUpSeqs, modeOpen, onModeOpenChange, reportQuery, onRequestGenerate, }: AudioSectionProps)",
-      "old_target_sha256": "0edc177e48130978eccca7958aeeac5a8cb568f3ce155d8a42fb85652465428f",
-      "new_target_sha256": "a925c86d901b94a36bcddf877e9f72d9e3d8f04d2da898418c8f1851f2d6aa25"
     },
     {
       "surface": "frontend",
@@ -34435,6 +34425,84 @@
       "new_signature": "export const initial: RawState = { status: \"IDLE\", statusDetail: null, followUpStatus: null, events: [], error: null, failure: null, connectionState: \"connected\", };",
       "old_target_sha256": "970bb154e057238d8971c01172f52c1aacb52265fefeaae33a9e9f2cd39d2cfa",
       "new_target_sha256": "ca4d7d4e14843626d813dec2bdeb84a498fa42d303bc9eaa49e32c2863081e05"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/needMoreCardParts/AudioModeDialog.tsx",
+      "public_name": "AudioModeDialogProps",
+      "declaration_kind": "InterfaceDeclaration",
+      "old_signature": "export interface AudioModeDialogProps { open: boolean; onOpenChange: (open: boolean) => void; onChoose: (mode: AudioMode) => void; }",
+      "new_signature": "export interface AudioModeDialogProps { open: boolean; onOpenChange: (open: boolean) => void; onChoose: (mode: AudioMode) => void; /** Exact activated Audio opener to return focus to on close. Optional: * callers without a ref keep default Radix behavior. */ triggerRef?: { current: HTMLButtonElement | null }; }",
+      "old_target_sha256": "76a8f5e6451427bc3a73676315fc1959597401b337fa1a5ed290e6d09c795ba6",
+      "new_target_sha256": "6effc12bdf6ff8f818ff77eff8a87b268308c2d7d2ffa644ea1e11e773e4d62f",
+      "owner_package": "PKG-42-AUX-DIALOG-FOCUS",
+      "accepting_commit": "773d24fb253b27aadcd527ea38a5cbc300e09823",
+      "accepting_receipt": "frontend/src/components/research/AuxDialogFocus.test.tsx"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/needMoreCardParts/AudioSection.tsx",
+      "public_name": "AudioSectionProps",
+      "declaration_kind": "InterfaceDeclaration",
+      "old_signature": "export interface AudioSectionProps { cid: string; /** Selected follow-up seqs to include in the audio (WALK-20). */ followUpSeqs?: number[]; /** Controlled: whether the mode-pick dialog is open (parent drives this * when it needs to insert the include-follow-ups step first). */ modeOpen: boolean; onModeOpenChange: (open: boolean) => void; /** B4: report title/query for a meaningful download filename. */ reportQuery: string; /** Open the mode picker (via the include-follow-ups step when the report has * follow-ups). Owned by the parent because that step is the parent's. */ onRequestGenerate: () => void; }",
+      "new_signature": "export interface AudioSectionProps { cid: string; /** Selected follow-up seqs to include in the audio (WALK-20). */ followUpSeqs?: number[]; /** Controlled: whether the mode-pick dialog is open (parent drives this * when it needs to insert the include-follow-ups step first). */ modeOpen: boolean; onModeOpenChange: (open: boolean) => void; /** B4: report title/query for a meaningful download filename. */ reportQuery: string; /** Open the mode picker (via the include-follow-ups step when the report has * follow-ups). Owned by the parent because that step is the parent's. */ onRequestGenerate: (event?: React.MouseEvent<HTMLButtonElement>) => void; /** Exact activated Audio opener for focus-return on mode-dialog close. */ triggerRef?: { current: HTMLButtonElement | null }; }",
+      "old_target_sha256": "6ae7808b6a549a990d1a98c823d00abde1c17dfecd84f5b477f932f933a5536e",
+      "new_target_sha256": "771cb068984c2e82a886b9008f3cd8395362a3dc4d6b0aa608404842c93c438a",
+      "owner_package": "PKG-42-AUX-DIALOG-FOCUS",
+      "accepting_commit": "773d24fb253b27aadcd527ea38a5cbc300e09823",
+      "accepting_receipt": "frontend/src/components/research/AuxDialogFocus.test.tsx"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/IncludeFollowUpsModal.tsx",
+      "public_name": "IncludeFollowUpsModalProps",
+      "declaration_kind": "InterfaceDeclaration",
+      "old_signature": "export interface IncludeFollowUpsModalProps { open: boolean; onOpenChange: (open: boolean) => void; /** All post-report follow-up MessageEvents (user + assistant, in order). */ followUps: MessageEvent[]; /** Called when the user confirms their selection. * ``selectedSeqs`` are the seq values of the selected USER messages. * An empty array means \"none selected \u2192 export without follow-ups\". */ onConfirm: (selectedSeqs: number[]) => void; /** Label for the action (e.g. \"Export\" or \"Generate audio\"). */ actionLabel?: string; }",
+      "new_signature": "export interface IncludeFollowUpsModalProps { open: boolean; onOpenChange: (open: boolean) => void; /** All post-report follow-up MessageEvents (user + assistant, in order). */ followUps: MessageEvent[]; /** Called when the user confirms their selection. * ``selectedSeqs`` are the seq values of the selected USER messages. * An empty array means \"none selected \u2192 export without follow-ups\". */ onConfirm: (selectedSeqs: number[]) => void; /** Label for the action (e.g. \"Export\" or \"Generate audio\"). */ actionLabel?: string; /** Exact activated card opener to return focus to on cancel. Optional: * callers without a ref keep default Radix behavior. */ triggerRef?: { current: HTMLButtonElement | null }; }",
+      "old_target_sha256": "8127761c0f20afbc3ff68caa13092355e26e0b0c90fbe96161d3347107a2b6b3",
+      "new_target_sha256": "dcb8753b424afc0d55fc203b586af535abbecc1e6b81288d8058f9e342dd5c34",
+      "owner_package": "PKG-42-AUX-DIALOG-FOCUS",
+      "accepting_commit": "773d24fb253b27aadcd527ea38a5cbc300e09823",
+      "accepting_receipt": "frontend/src/components/research/AuxDialogFocus.test.tsx"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/needMoreCardParts/AudioModeDialog.tsx",
+      "public_name": "AudioModeDialog",
+      "declaration_kind": "function",
+      "old_signature": "export function AudioModeDialog({ open, onOpenChange, onChoose }: AudioModeDialogProps)",
+      "new_signature": "export function AudioModeDialog({ open, onOpenChange, onChoose, triggerRef }: AudioModeDialogProps)",
+      "old_target_sha256": "051a59af3bf01ee6501114dd14915f83fca7f82b0724358e6d3007beb1d32199",
+      "new_target_sha256": "30b8bdbb37a493447c547b01daaa4c5c5a8c3f9516af2fbf4a4dccb0efee8f0b",
+      "owner_package": "PKG-42-AUX-DIALOG-FOCUS",
+      "accepting_commit": "773d24fb253b27aadcd527ea38a5cbc300e09823",
+      "accepting_receipt": "frontend/src/components/research/AuxDialogFocus.test.tsx"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/needMoreCardParts/AudioSection.tsx",
+      "public_name": "AudioSection",
+      "declaration_kind": "function",
+      "old_signature": "export function AudioSection({ cid, followUpSeqs, modeOpen, onModeOpenChange, reportQuery, onRequestGenerate, }: AudioSectionProps)",
+      "new_signature": "export function AudioSection({ cid, followUpSeqs, modeOpen, onModeOpenChange, reportQuery, onRequestGenerate, triggerRef, }: AudioSectionProps)",
+      "old_target_sha256": "a925c86d901b94a36bcddf877e9f72d9e3d8f04d2da898418c8f1851f2d6aa25",
+      "new_target_sha256": "b4f058ffd21951fcf5085d09872a711e95bacd130d74335338b8569282bcc4c5",
+      "owner_package": "PKG-42-AUX-DIALOG-FOCUS",
+      "accepting_commit": "773d24fb253b27aadcd527ea38a5cbc300e09823",
+      "accepting_receipt": "frontend/src/components/research/AuxDialogFocus.test.tsx"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/IncludeFollowUpsModal.tsx",
+      "public_name": "IncludeFollowUpsModal",
+      "declaration_kind": "function",
+      "old_signature": "export function IncludeFollowUpsModal({ open, onOpenChange, followUps, onConfirm, actionLabel = \"Export\", }: IncludeFollowUpsModalProps)",
+      "new_signature": "export function IncludeFollowUpsModal({ open, onOpenChange, followUps, onConfirm, actionLabel = \"Export\", triggerRef, }: IncludeFollowUpsModalProps)",
+      "old_target_sha256": "4a15927a1c31d49ec50e4ba97bb0dc90018fa4ef59822c18fa09254e708613b1",
+      "new_target_sha256": "5a31e61db6a813962caa1e05cc6add623a4b6ad7f25dbdefc7ed5c0db531e219",
+      "owner_package": "PKG-42-AUX-DIALOG-FOCUS",
+      "accepting_commit": "773d24fb253b27aadcd527ea38a5cbc300e09823",
+      "accepting_receipt": "frontend/src/components/research/AuxDialogFocus.test.tsx"
     },
     {
       "surface": "frontend",

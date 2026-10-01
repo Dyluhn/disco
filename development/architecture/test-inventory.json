@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "b8dc5ecd908c96c3963c675b62b59dac18c3d154",
+  "source_identity": "773d24fb253b27aadcd527ea38a5cbc300e09823",
   "collected": {
     "counts": {
       "packages": 12682,
@@ -14751,7 +14751,7 @@
     }
   },
   "mapping_static": {
-    "identity": "b8dc5ecd908c96c3963c675b62b59dac18c3d154",
+    "identity": "773d24fb253b27aadcd527ea38a5cbc300e09823",
     "python_test_file_count": 983,
     "python_static_test_id_count": 11922,
     "python_test_files": [
@@ -27663,8 +27663,8 @@
       "tests/unbiased_gate/test_authorB_models_imagegen.py::test_w50_slides_degrade_to_image_less_when_image_backend_unconfigured",
       "tests/unbiased_gate/test_authorB_models_imagegen.py::test_w50_unconfigured_image_backend_fails_loudly_instead_of_procedural_fallback"
     ],
-    "typescript_test_file_count": 315,
-    "typescript_static_test_id_count": 1674,
+    "typescript_test_file_count": 316,
+    "typescript_static_test_id_count": 1691,
     "typescript_test_files": [
       "frontend/e2e-full/scenarios/click-provenance.smoke.spec.ts",
       "frontend/e2e-full/scenarios/per-surface.full.spec.ts",
@@ -27841,6 +27841,7 @@
       "frontend/src/components/controls.test.tsx",
       "frontend/src/components/mainSurface.test.tsx",
       "frontend/src/components/research/AudioPlayer.test.tsx",
+      "frontend/src/components/research/AuxDialogFocus.test.tsx",
       "frontend/src/components/research/ClaimVerdicts.test.tsx",
       "frontend/src/components/research/DeepBoundedNotice.test.tsx",
       "frontend/src/components/research/DeepProgressStrip.heartbeat.test.tsx",
@@ -28676,6 +28677,23 @@
       "frontend/src/components/research/AudioPlayer.test.tsx::renders a Play button as the primary control",
       "frontend/src/components/research/AudioPlayer.test.tsx::shows 0:00 / 0:00 time on mount",
       "frontend/src/components/research/AudioPlayer.test.tsx::wraps controls in a labelled group",
+      "frontend/src/components/research/AuxDialogFocus.test.tsx::C1: export selector Skip opens the real Export dialog with autofocus, no export yet",
+      "frontend/src/components/research/AuxDialogFocus.test.tsx::C2: export selector Confirm threads the real selection into the Markdown payload (deselect seq 10 -> [12])",
+      "frontend/src/components/research/AuxDialogFocus.test.tsx::C3: export via selector Confirm then Export Close keeps prior focus-return pass",
+      "frontend/src/components/research/AuxDialogFocus.test.tsx::C4: audio selector Skip opens the mode dialog with focus contained, no audio generated",
+      "frontend/src/components/research/AuxDialogFocus.test.tsx::C5: audio selector Confirm opens the mode dialog with focus contained, no audio generated",
+      "frontend/src/components/research/AuxDialogFocus.test.tsx::C6: direct Audio mode (no follow-ups) opens and Close cancels without generating",
+      "frontend/src/components/research/AuxDialogFocus.test.tsx::C7 [source-level; unverified browser]: Escape closes the follow-up selector",
+      "frontend/src/components/research/AuxDialogFocus.test.tsx::C8 [source-level; unverified browser]: Escape closes the audio mode dialog",
+      "frontend/src/components/research/AuxDialogFocus.test.tsx::C9: top-bar requestedAction audio opens the selector; no topbar-origin focus asserted",
+      "frontend/src/components/research/AuxDialogFocus.test.tsx::F1: export selector Close returns focus to the Export opener",
+      "frontend/src/components/research/AuxDialogFocus.test.tsx::F2: audio selector Close returns focus to the Audio Overview opener",
+      "frontend/src/components/research/AuxDialogFocus.test.tsx::F3: audio selector Skip -> mode Close returns focus to the activated card opener (two-card isolation)",
+      "frontend/src/components/research/AuxDialogFocus.test.tsx::N1: direct Audio mode Close returns focus to the exact activated Audio button",
+      "frontend/src/components/research/AuxDialogFocus.test.tsx::N2 [source-level; unverified browser]: direct Audio mode Escape returns to the exact Audio button",
+      "frontend/src/components/research/AuxDialogFocus.test.tsx::N3 [source-level; unverified browser]: export selector Escape returns to the exact Export button",
+      "frontend/src/components/research/AuxDialogFocus.test.tsx::N4: stale Audio origin is cleared \u2014 programmatic open/cancel never restores the former card opener",
+      "frontend/src/components/research/AuxDialogFocus.test.tsx::N5: disconnected Audio opener keeps default behavior without falling back to another target",
       "frontend/src/components/research/ClaimVerdicts.test.tsx::distinguishes possible contradictions, unresolved evidence and checks that could not run",
       "frontend/src/components/research/ClaimVerdicts.test.tsx::does not invent a zero support estimate for missing evidence",
       "frontend/src/components/research/ClaimVerdicts.test.tsx::orders unsupported/weak before supported claims",
@@ -31592,8 +31610,8 @@
         ]
       }
     },
-    "vitest_ids": 1622,
-    "vitest_files": 237,
+    "vitest_ids": 1639,
+    "vitest_files": 238,
     "vitest_ids_list": [
       "frontend/src/App.moderesume.test.tsx::A2 \u2014 fresh sessions and resume targets > New preserves the active mode, then a mode chip lands on that mode's splash",
       "frontend/src/App.moderesume.test.tsx::A2 \u2014 fresh sessions and resume targets > does not resume a just-killed conversation id from the mode chip",
@@ -32200,6 +32218,23 @@
       "frontend/src/components/research/AudioPlayer.test.tsx::AudioPlayer > renders a Play button as the primary control",
       "frontend/src/components/research/AudioPlayer.test.tsx::AudioPlayer > shows 0:00 / 0:00 time on mount",
       "frontend/src/components/research/AudioPlayer.test.tsx::AudioPlayer > wraps controls in a labelled group",
+      "frontend/src/components/research/AuxDialogFocus.test.tsx::AuxDialogFocus > C1: export selector Skip opens the real Export dialog with autofocus, no export yet",
+      "frontend/src/components/research/AuxDialogFocus.test.tsx::AuxDialogFocus > C2: export selector Confirm threads the real selection into the Markdown payload (deselect seq 10 -> [12])",
+      "frontend/src/components/research/AuxDialogFocus.test.tsx::AuxDialogFocus > C3: export via selector Confirm then Export Close keeps prior focus-return pass",
+      "frontend/src/components/research/AuxDialogFocus.test.tsx::AuxDialogFocus > C4: audio selector Skip opens the mode dialog with focus contained, no audio generated",
+      "frontend/src/components/research/AuxDialogFocus.test.tsx::AuxDialogFocus > C5: audio selector Confirm opens the mode dialog with focus contained, no audio generated",
+      "frontend/src/components/research/AuxDialogFocus.test.tsx::AuxDialogFocus > C6: direct Audio mode (no follow-ups) opens and Close cancels without generating",
+      "frontend/src/components/research/AuxDialogFocus.test.tsx::AuxDialogFocus > C7 [source-level; unverified browser]: Escape closes the follow-up selector",
+      "frontend/src/components/research/AuxDialogFocus.test.tsx::AuxDialogFocus > C8 [source-level; unverified browser]: Escape closes the audio mode dialog",
+      "frontend/src/components/research/AuxDialogFocus.test.tsx::AuxDialogFocus > C9: top-bar requestedAction audio opens the selector; no topbar-origin focus asserted",
+      "frontend/src/components/research/AuxDialogFocus.test.tsx::AuxDialogFocus > F1: export selector Close returns focus to the Export opener",
+      "frontend/src/components/research/AuxDialogFocus.test.tsx::AuxDialogFocus > F2: audio selector Close returns focus to the Audio Overview opener",
+      "frontend/src/components/research/AuxDialogFocus.test.tsx::AuxDialogFocus > F3: audio selector Skip -> mode Close returns focus to the activated card opener (two-card isolation)",
+      "frontend/src/components/research/AuxDialogFocus.test.tsx::AuxDialogFocus > N1: direct Audio mode Close returns focus to the exact activated Audio button",
+      "frontend/src/components/research/AuxDialogFocus.test.tsx::AuxDialogFocus > N2 [source-level; unverified browser]: direct Audio mode Escape returns to the exact Audio button",
+      "frontend/src/components/research/AuxDialogFocus.test.tsx::AuxDialogFocus > N3 [source-level; unverified browser]: export selector Escape returns to the exact Export button",
+      "frontend/src/components/research/AuxDialogFocus.test.tsx::AuxDialogFocus > N4: stale Audio origin is cleared \u2014 programmatic open/cancel never restores the former card opener",
+      "frontend/src/components/research/AuxDialogFocus.test.tsx::AuxDialogFocus > N5: disconnected Audio opener keeps default behavior without falling back to another target",
       "frontend/src/components/research/ClaimVerdicts.test.tsx::ClaimVerdicts > distinguishes possible contradictions, unresolved evidence and checks that could not run",
       "frontend/src/components/research/ClaimVerdicts.test.tsx::ClaimVerdicts > does not invent a zero support estimate for missing evidence",
       "frontend/src/components/research/ClaimVerdicts.test.tsx::ClaimVerdicts > orders unsupported/weak before supported claims",
@@ -33318,6 +33353,7 @@
       "frontend/src/components/controls.test.tsx",
       "frontend/src/components/mainSurface.test.tsx",
       "frontend/src/components/research/AudioPlayer.test.tsx",
+      "frontend/src/components/research/AuxDialogFocus.test.tsx",
       "frontend/src/components/research/ClaimVerdicts.test.tsx",
       "frontend/src/components/research/DeepBoundedNotice.test.tsx",
       "frontend/src/components/research/DeepProgressStrip.heartbeat.test.tsx",
@@ -46759,6 +46795,40 @@
           "frontend/src/components/composerRedesign.test.tsx::the depth control exists only under Deep Research, inside the options menu",
           "frontend/src/components/research/DeepResearchSurface.test.tsx::opens the empty state with the depth tier inside the options menu",
           "frontend/src/lib/useVerboseAgentChat.test.ts::defaults to OFF (quiet mode) when unset"
+        ],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-42-AUX-DIALOG-FOCUS",
+      "root": "multiple",
+      "source_identity_before": "b8dc5ecd908c96c3963c675b62b59dac18c3d154",
+      "source_identity_after": "773d24fb253b27aadcd527ea38a5cbc300e09823",
+      "collected_roots": {},
+      "mapping_static_additions": {
+        "python_test_files": [],
+        "python_static_test_ids": [],
+        "typescript_test_files": [
+          "frontend/src/components/research/AuxDialogFocus.test.tsx"
+        ],
+        "typescript_static_test_ids": [
+          "frontend/src/components/research/AuxDialogFocus.test.tsx::C1: export selector Skip opens the real Export dialog with autofocus, no export yet",
+          "frontend/src/components/research/AuxDialogFocus.test.tsx::C2: export selector Confirm threads the real selection into the Markdown payload (deselect seq 10 -> [12])",
+          "frontend/src/components/research/AuxDialogFocus.test.tsx::C3: export via selector Confirm then Export Close keeps prior focus-return pass",
+          "frontend/src/components/research/AuxDialogFocus.test.tsx::C4: audio selector Skip opens the mode dialog with focus contained, no audio generated",
+          "frontend/src/components/research/AuxDialogFocus.test.tsx::C5: audio selector Confirm opens the mode dialog with focus contained, no audio generated",
+          "frontend/src/components/research/AuxDialogFocus.test.tsx::C6: direct Audio mode (no follow-ups) opens and Close cancels without generating",
+          "frontend/src/components/research/AuxDialogFocus.test.tsx::C7 [source-level; unverified browser]: Escape closes the follow-up selector",
+          "frontend/src/components/research/AuxDialogFocus.test.tsx::C8 [source-level; unverified browser]: Escape closes the audio mode dialog",
+          "frontend/src/components/research/AuxDialogFocus.test.tsx::C9: top-bar requestedAction audio opens the selector; no topbar-origin focus asserted",
+          "frontend/src/components/research/AuxDialogFocus.test.tsx::F1: export selector Close returns focus to the Export opener",
+          "frontend/src/components/research/AuxDialogFocus.test.tsx::F2: audio selector Close returns focus to the Audio Overview opener",
+          "frontend/src/components/research/AuxDialogFocus.test.tsx::F3: audio selector Skip -> mode Close returns focus to the activated card opener (two-card isolation)",
+          "frontend/src/components/research/AuxDialogFocus.test.tsx::N1: direct Audio mode Close returns focus to the exact activated Audio button",
+          "frontend/src/components/research/AuxDialogFocus.test.tsx::N2 [source-level; unverified browser]: direct Audio mode Escape returns to the exact Audio button",
+          "frontend/src/components/research/AuxDialogFocus.test.tsx::N3 [source-level; unverified browser]: export selector Escape returns to the exact Export button",
+          "frontend/src/components/research/AuxDialogFocus.test.tsx::N4: stale Audio origin is cleared \u2014 programmatic open/cancel never restores the former card opener",
+          "frontend/src/components/research/AuxDialogFocus.test.tsx::N5: disconnected Audio opener keeps default behavior without falling back to another target"
         ],
         "fixtures": []
       }
