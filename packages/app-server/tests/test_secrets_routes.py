@@ -6,6 +6,8 @@ the "openrouter" slot reserved for its dedicated route.
 
 from __future__ import annotations
 
+from urllib.parse import quote
+
 import pytest
 from disco.app_server import create_app
 from disco.app_server.config_state import ConfigState
@@ -55,8 +57,67 @@ def test_blank_value_rejected(client):
 
 def test_invalid_name_rejected(client):
     # path-traversal / non-identifier names are 400 (also blocks weird store keys)
-    for bad in ("../etc", "has space", "has-dash", "9starts_with_digit"):
-        assert client.put(f"/api/secrets/{bad}", json={"value": "x"}).status_code in (400, 404)
+    for bad in (
+        "../etc",
+        "has space",
+        "has.dot",
+        "has/slash",
+        "bad\x00char",
+        "9starts_with_digit",
+        "bad name!",
+    ):
+        response = client.put(f"/api/secrets/{quote(bad, safe='')}", json={"value": "x"})
+        assert response.status_code in (400, 404)
+
+
+def test_hyphenated_generated_reference_round_trip(client):
+    # regression: provider-generated references are hyphenated arbitrary
+    # identifiers (e.g. acceptance_river-lab_20260929) and must pass generic
+    # secret-reference validation — no env-var-identifier gate, no vendor logic.
+    name = "acceptance_river-lab_20260929"
+    r = client.put(f"/api/secrets/{name}", json={"value": "sk-test-hyphen"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["name"] == name and body["configured"] is True
+
+    response = client.get(f"/api/secrets/{name}")
+    assert response.status_code == 200
+    status = response.json()
+    assert status["configured"] is True
+    # GET status never exposes plaintext
+    assert "sk-test-hyphen" not in str(status) and "value" not in status
+
+    listing = client.get("/api/secrets").json()
+    assert name in listing["names"]
+    assert "sk-test-hyphen" not in str(listing)
+
+    response = client.delete(f"/api/secrets/{name}")
+    assert response.status_code == 200
+    assert response.json()["configured"] is False
+    response = client.get(f"/api/secrets/{name}")
+    assert response.status_code == 200
+    assert response.json()["configured"] is False
+
+
+def test_hyphenated_reference_replacement_never_exposes_plaintext(client):
+    name = "provider_x-go-key"
+    assert client.put(f"/api/secrets/{name}", json={"value": "first"}).status_code == 200
+    r = client.put(f"/api/secrets/{name}", json={"value": "second"})
+    assert r.status_code == 200
+    assert r.json()["configured"] is True
+    response = client.get(f"/api/secrets/{name}")
+    assert response.status_code == 200
+    status = response.json()
+    assert status["configured"] is True
+    assert "first" not in str(status) and "second" not in str(status)
+    assert "value" not in status
+
+
+def test_test_route_rejects_invalid_names_without_provider_call(client):
+    # only a bad NAME is a 400 on the /test route; no provider transport needed.
+    for bad in ("has space", "has.dot", "has/slash", "9starts_with_digit"):
+        r = client.post(f"/api/secrets/{quote(bad, safe='')}/test")
+        assert r.status_code in (400, 404), (bad, r.status_code, r.text)
 
 
 def test_openrouter_name_is_reserved(client):
