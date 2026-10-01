@@ -94,6 +94,7 @@ async def _redeem_bootstrap_token(
     expected_conversation_id: str | None,
     expected_owner_id: str | None,
     expected_authority_id: str | None,
+    partitioned_cookies: bool,
 ) -> tuple[str, str, PreviewCapability] | None:
     """Parse + redeem the one-shot intent, then verify the minted capability."""
     parsed = parse_preview_redemption(raw_body)
@@ -116,6 +117,7 @@ async def _redeem_bootstrap_token(
         expected_conversation_id=expected_conversation_id,
         expected_owner_id=expected_owner_id,
         expected_authority_id=expected_authority_id,
+        partitioned_cookies=partitioned_cookies,
     )
     if redeemed is None:
         await send(
@@ -168,7 +170,7 @@ async def _build_bootstrap_response(
     storage_reset_required: bool,
     expected_authority_id: str | None,
 ) -> None:
-    partitioned = cross_site_iframe_headers(headers)
+    partitioned = cap.partitioned_cookies
     if storage_reset_required and expected_authority_id is not None:
         handoff = self.capability_signer.mint_storage_handoff(
             cap,
@@ -266,6 +268,7 @@ async def _handle_preview_bootstrap(
         expected_conversation_id=expected_conversation_id,
         expected_owner_id=expected_owner_id,
         expected_authority_id=expected_authority_id,
+        partitioned_cookies=cross_site_iframe_headers(headers),
     )
     if redeemed is None:
         return
@@ -298,9 +301,7 @@ async def _maybe_dispatch_bootstrap(
     Returns True iff the request is already fully handled and the caller
     must return.
     """
-    if not (
-        self.require_capability and scope["type"] == "http" and path == PREVIEW_BOOTSTRAP_PATH
-    ):
+    if not (self.require_capability and scope["type"] == "http" and path == PREVIEW_BOOTSTRAP_PATH):
         return False
     await _handle_preview_bootstrap(
         self,
