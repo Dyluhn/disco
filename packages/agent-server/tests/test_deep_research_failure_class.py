@@ -171,7 +171,7 @@ async def test_the_preflight_error_event_carries_the_structured_failure() -> Non
     assert error.failure is not None
     assert error.failure.failure_class == "preflight"
     assert error.failure.why == reason
-    assert "nothing ran" in error.failure.state
+    assert "research did not start" in error.failure.state
     assert "ask this question again" in error.failure.next
 
 
