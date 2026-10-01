@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "5536ec9277e4bb18ef6bd824a0f88b88c8d837fd",
+  "source_identity": "c06fafd801396fae2aeff7dd8a794771c0790f1e",
   "collected": {
     "counts": {
       "packages": 12772,
@@ -14841,7 +14841,7 @@
     }
   },
   "mapping_static": {
-    "identity": "5536ec9277e4bb18ef6bd824a0f88b88c8d837fd",
+    "identity": "c06fafd801396fae2aeff7dd8a794771c0790f1e",
     "python_test_file_count": 988,
     "python_static_test_id_count": 11971,
     "python_test_files": [
@@ -27807,8 +27807,8 @@
       "tests/unbiased_gate/test_authorB_models_imagegen.py::test_w50_slides_degrade_to_image_less_when_image_backend_unconfigured",
       "tests/unbiased_gate/test_authorB_models_imagegen.py::test_w50_unconfigured_image_backend_fails_loudly_instead_of_procedural_fallback"
     ],
-    "typescript_test_file_count": 317,
-    "typescript_static_test_id_count": 1707,
+    "typescript_test_file_count": 318,
+    "typescript_static_test_id_count": 1716,
     "typescript_test_files": [
       "frontend/e2e-full/scenarios/click-provenance.smoke.spec.ts",
       "frontend/e2e-full/scenarios/per-surface.full.spec.ts",
@@ -28021,6 +28021,7 @@
       "frontend/src/components/settings/DeleteFocus.test.tsx",
       "frontend/src/components/settings/DiagnosticsSection.test.tsx",
       "frontend/src/components/settings/ImageGenSection.test.tsx",
+      "frontend/src/components/settings/ImageGenSection.validation.test.tsx",
       "frontend/src/components/settings/InlineEditor.focus.test.tsx",
       "frontend/src/components/settings/LiveBrowserSection.test.tsx",
       "frontend/src/components/settings/McpImportBox.test.tsx",
@@ -29088,6 +29089,15 @@
       "frontend/src/components/settings/ImageGenSection.test.tsx::says an unconfigured tier is optional and not set up, in a neutral tone (W-50, UI-2)",
       "frontend/src/components/settings/ImageGenSection.test.tsx::shows a priced picker of image-output models and PUTs the chosen model",
       "frontend/src/components/settings/ImageGenSection.test.tsx::shows the ComfyUI custom-workflow textarea and PUTs workflow_json on save",
+      "frontend/src/components/settings/ImageGenSection.validation.test.tsx::OpenAI-compatible with inactive malformed workflow still edits, saves, and probes",
+      "frontend/src/components/settings/ImageGenSection.validation.test.tsx::OpenRouter with inactive malformed workflow still edits, saves, and probes",
+      "frontend/src/components/settings/ImageGenSection.validation.test.tsx::Save stays disabled while a save is pending",
+      "frontend/src/components/settings/ImageGenSection.validation.test.tsx::clearing a bad workflow to empty restores the built-in-default save/probe path",
+      "frontend/src/components/settings/ImageGenSection.validation.test.tsx::malformed active draft shows an error, keeps Save disabled, and sends no PUT",
+      "frontend/src/components/settings/ImageGenSection.validation.test.tsx::persisted malformed active workflow never shows Saved and keeps Test image disabled",
+      "frontend/src/components/settings/ImageGenSection.validation.test.tsx::provider picker stays usable with a bad draft; switching away PUTs and preserves drafts",
+      "frontend/src/components/settings/ImageGenSection.validation.test.tsx::unsaved and offline guards keep Test image honest",
+      "frontend/src/components/settings/ImageGenSection.validation.test.tsx::valid templated graph with unquoted %seed% and quoted %prompt% saves exactly",
       "frontend/src/components/settings/LiveBrowserSection.test.tsx::(a) local backend \u2192 toggle locked off with explanatory note, screenshots only",
       "frontend/src/components/settings/LiveBrowserSection.test.tsx::(b) local backend \u2192 clicking On FLAGS the error and never saves",
       "frontend/src/components/settings/LiveBrowserSection.test.tsx::(c) gVisor backend \u2192 toggle enableable; clicking On saves enabled=true",
@@ -31777,8 +31787,8 @@
         ]
       }
     },
-    "vitest_ids": 1655,
-    "vitest_files": 239,
+    "vitest_ids": 1664,
+    "vitest_files": 240,
     "vitest_ids_list": [
       "frontend/src/App.moderesume.test.tsx::A2 \u2014 fresh sessions and resume targets > New preserves the active mode, then a mode chip lands on that mode's splash",
       "frontend/src/App.moderesume.test.tsx::A2 \u2014 fresh sessions and resume targets > does not resume a just-killed conversation id from the mode chip",
@@ -32659,6 +32669,15 @@
       "frontend/src/components/settings/ImageGenSection.test.tsx::ImageGenSection \u2014 A3 image-gen provider settings > says an unconfigured tier is optional and not set up, in a neutral tone (W-50, UI-2)",
       "frontend/src/components/settings/ImageGenSection.test.tsx::ImageGenSection \u2014 A3 image-gen provider settings > shows the ComfyUI custom-workflow textarea and PUTs workflow_json on save",
       "frontend/src/components/settings/ImageGenSection.test.tsx::ImageGenSection \u2014 OpenRouter priced image-model picker > shows a priced picker of image-output models and PUTs the chosen model",
+      "frontend/src/components/settings/ImageGenSection.validation.test.tsx::ImageGenSection \u2014 malformed ComfyUI workflow validation > OpenAI-compatible with inactive malformed workflow still edits, saves, and probes",
+      "frontend/src/components/settings/ImageGenSection.validation.test.tsx::ImageGenSection \u2014 malformed ComfyUI workflow validation > OpenRouter with inactive malformed workflow still edits, saves, and probes",
+      "frontend/src/components/settings/ImageGenSection.validation.test.tsx::ImageGenSection \u2014 malformed ComfyUI workflow validation > Save stays disabled while a save is pending",
+      "frontend/src/components/settings/ImageGenSection.validation.test.tsx::ImageGenSection \u2014 malformed ComfyUI workflow validation > clearing a bad workflow to empty restores the built-in-default save/probe path",
+      "frontend/src/components/settings/ImageGenSection.validation.test.tsx::ImageGenSection \u2014 malformed ComfyUI workflow validation > malformed active draft shows an error, keeps Save disabled, and sends no PUT",
+      "frontend/src/components/settings/ImageGenSection.validation.test.tsx::ImageGenSection \u2014 malformed ComfyUI workflow validation > persisted malformed active workflow never shows Saved and keeps Test image disabled",
+      "frontend/src/components/settings/ImageGenSection.validation.test.tsx::ImageGenSection \u2014 malformed ComfyUI workflow validation > provider picker stays usable with a bad draft; switching away PUTs and preserves drafts",
+      "frontend/src/components/settings/ImageGenSection.validation.test.tsx::ImageGenSection \u2014 malformed ComfyUI workflow validation > unsaved and offline guards keep Test image honest",
+      "frontend/src/components/settings/ImageGenSection.validation.test.tsx::ImageGenSection \u2014 malformed ComfyUI workflow validation > valid templated graph with unquoted %seed% and quoted %prompt% saves exactly",
       "frontend/src/components/settings/InlineEditor.focus.test.tsx::Inline settings editor keyboard focus > opens 'connection' at the first field and Cancel restores the opener",
       "frontend/src/components/settings/InlineEditor.focus.test.tsx::Inline settings editor keyboard focus > opens 'edit' at the first field and Cancel restores the opener",
       "frontend/src/components/settings/InlineEditor.focus.test.tsx::Inline settings editor keyboard focus > opens 'import' at the first field and Cancel restores the opener",
@@ -33572,6 +33591,7 @@
       "frontend/src/components/settings/DeleteFocus.test.tsx",
       "frontend/src/components/settings/DiagnosticsSection.test.tsx",
       "frontend/src/components/settings/ImageGenSection.test.tsx",
+      "frontend/src/components/settings/ImageGenSection.validation.test.tsx",
       "frontend/src/components/settings/InlineEditor.focus.test.tsx",
       "frontend/src/components/settings/LiveBrowserSection.test.tsx",
       "frontend/src/components/settings/McpImportBox.test.tsx",
@@ -47381,6 +47401,32 @@
           "frontend/src/components/settings/DeleteFocus.test.tsx::skills: focus moved elsewhere while pending is not stolen",
           "frontend/src/components/settings/DeleteFocus.test.tsx::skills: row and focus stay put while deletion is pending",
           "frontend/src/components/settings/DeleteFocus.test.tsx::skills: unrelated source update while pending still removes only the target"
+        ],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-48-IMAGE-WORKFLOW",
+      "root": "multiple",
+      "source_identity_before": "5536ec9277e4bb18ef6bd824a0f88b88c8d837fd",
+      "source_identity_after": "c06fafd801396fae2aeff7dd8a794771c0790f1e",
+      "collected_roots": {},
+      "mapping_static_additions": {
+        "python_test_files": [],
+        "python_static_test_ids": [],
+        "typescript_test_files": [
+          "frontend/src/components/settings/ImageGenSection.validation.test.tsx"
+        ],
+        "typescript_static_test_ids": [
+          "frontend/src/components/settings/ImageGenSection.validation.test.tsx::OpenAI-compatible with inactive malformed workflow still edits, saves, and probes",
+          "frontend/src/components/settings/ImageGenSection.validation.test.tsx::OpenRouter with inactive malformed workflow still edits, saves, and probes",
+          "frontend/src/components/settings/ImageGenSection.validation.test.tsx::Save stays disabled while a save is pending",
+          "frontend/src/components/settings/ImageGenSection.validation.test.tsx::clearing a bad workflow to empty restores the built-in-default save/probe path",
+          "frontend/src/components/settings/ImageGenSection.validation.test.tsx::malformed active draft shows an error, keeps Save disabled, and sends no PUT",
+          "frontend/src/components/settings/ImageGenSection.validation.test.tsx::persisted malformed active workflow never shows Saved and keeps Test image disabled",
+          "frontend/src/components/settings/ImageGenSection.validation.test.tsx::provider picker stays usable with a bad draft; switching away PUTs and preserves drafts",
+          "frontend/src/components/settings/ImageGenSection.validation.test.tsx::unsaved and offline guards keep Test image honest",
+          "frontend/src/components/settings/ImageGenSection.validation.test.tsx::valid templated graph with unquoted %seed% and quoted %prompt% saves exactly"
         ],
         "fixtures": []
       }
