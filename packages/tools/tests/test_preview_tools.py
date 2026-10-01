@@ -308,6 +308,64 @@ async def test_stop_names_a_port_the_platform_could_not_release(monkeypatch) -> 
 
 
 @pytest.mark.asyncio
+async def test_preview_start_dispatches_through_manager_facade(monkeypatch) -> None:
+    """Tool dispatch must use the permitted preview_manager facade namespace."""
+    from types import SimpleNamespace
+
+    from disco.agent_server import preview_manager as manager_facade
+
+    seen: dict = {}
+
+    async def _facade(sandbox, **kwargs):
+        seen.update(kwargs)
+        seen["sandbox"] = sandbox
+        return SimpleNamespace(
+            name="app",
+            port=3000,
+            status=SimpleNamespace(value="running"),
+            url="http://preview.test/3000/",
+            detail="ok",
+            to_dict=lambda: {"port": 3000},
+        )
+
+    monkeypatch.setattr(manager_facade, "start_live_preview", _facade)
+    sandbox = _FakeSandbox()
+    out = await PreviewStartTool().run(
+        PreviewStartArgs(serve_dir="dist", name="app"), _ctx(sandbox)
+    )
+    assert out.success
+    assert seen.get("serve_dir") == "dist" and seen.get("name") == "app"
+    assert out.structured == {"port": 3000}
+
+
+@pytest.mark.asyncio
+async def test_preview_handoff_failure_stays_distinct_from_invalid_command(monkeypatch) -> None:
+    """A failed handoff maps to preview_update_failed, never invalid_command."""
+    from disco.agent_server import preview_manager as manager_facade
+    from disco.agent_server.preview_models import PreviewHandoffError
+
+    async def _failing(_sandbox, **_kwargs):
+        raise PreviewHandoffError("Preview update failed; showing the previous sealed app.")
+
+    monkeypatch.setattr(manager_facade, "start_live_preview", _failing)
+    sandbox = _FakeSandbox()
+    failed = await PreviewStartTool().run(
+        PreviewStartArgs(serve_dir="dist", name="app"), _ctx(sandbox)
+    )
+    assert not failed.success
+    assert failed.error == "preview_update_failed"
+    monkeypatch.undo()
+
+    sandbox2 = _FakeSandbox()
+    _attach_manager(sandbox2)
+    rejected = await PreviewStartTool().run(
+        PreviewStartArgs(command="python3 -m http.server 9999 -d dist"), _ctx(sandbox2)
+    )
+    assert not rejected.success
+    assert rejected.error == "invalid_command"
+
+
+@pytest.mark.asyncio
 async def test_stop_stays_quiet_when_the_port_is_actually_free(monkeypatch) -> None:
     """The note must appear only when a live listener really survives — a
     TIME_WAIT socket has no owning process and is correctly reported as free."""

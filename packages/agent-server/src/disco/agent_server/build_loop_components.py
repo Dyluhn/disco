@@ -20,6 +20,7 @@ import logging
 from collections.abc import Awaitable, Callable, Iterable
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
+from functools import partial
 from typing import Any, Literal, Protocol, runtime_checkable
 
 from disco.core import (
@@ -70,6 +71,7 @@ from disco.tools.builtin.verify_appkit_app import (
 )
 from disco.tools.projects import ProjectStore
 
+from .preview_live_handoff import start_live_preview
 from .preview_manager import PreviewManager
 
 logger = logging.getLogger(__name__)
@@ -323,7 +325,7 @@ async def _sync_appkit_live_preview(session: SandboxSession) -> None:
         session._preview_manager = manager
 
     preparation = await _prepare_appkit_dependencies(session)
-    await _start_appkit_preview(manager, preparation)
+    await _start_appkit_preview(session, manager, preparation)
 
 
 @dataclass(frozen=True, slots=True)
@@ -364,9 +366,7 @@ async def _prepare_appkit_dependencies(session: SandboxSession) -> _PreviewPrepa
             dependencies_refreshed=True,
         )
     except Exception as exc:  # noqa: BLE001
-        return _PreviewPreparation(
-            install_failure=f"AppKit preview preparation failed: {exc}"
-        )
+        return _PreviewPreparation(install_failure=f"AppKit preview preparation failed: {exc}")
 
 
 async def _appkit_modules_exist(session: SandboxSession) -> bool:
@@ -385,41 +385,41 @@ async def _appkit_package_marker(session: SandboxSession) -> str:
 
 
 def _appkit_install_failure(installed: object) -> str:
-    if getattr(installed, "exit_code", 1) == 0 and not bool(
-        getattr(installed, "timed_out", False)
-    ):
+    if getattr(installed, "exit_code", 1) == 0 and not bool(getattr(installed, "timed_out", False)):
         return ""
     detail = str(
-        getattr(installed, "stderr", "")
-        or getattr(installed, "stdout", "")
-        or "npm ci failed"
+        getattr(installed, "stderr", "") or getattr(installed, "stdout", "") or "npm ci failed"
     ).strip()
     return f"AppKit preview dependency setup failed: {detail[-1200:]}"
 
 
 async def _start_appkit_preview(
+    session: SandboxSession,
     manager: PreviewManager,
     preparation: _PreviewPreparation,
 ) -> None:
     """Preserve the last healthy frame while exposing update failures."""
     try:
+        isolated = getattr(manager, "owns_sandbox", lambda: False)() is True
         current = manager.canonical_lifecycle_session()
-        running = (
-            current is not None
-            and getattr(getattr(current, "status", None), "value", "")
-            in {"running", "unavailable"}
-        )
-        if preparation.install_failure and running:
-            assert current is not None
-            current.update_error = preparation.install_failure
+        running = current is not None and getattr(
+            getattr(current, "status", None), "value", ""
+        ) in {"running", "unavailable"}
+        if preparation.install_failure and (running or isolated):
+            if current is not None:
+                current.update_error = (
+                    "Preview update failed; showing the previous app. " if isolated else ""
+                ) + preparation.install_failure
             return
         if (
             preparation.package_changed
             and preparation.dependencies_refreshed
             and current is not None
+            and not isolated
         ):
             await manager.stop(current.name)
-        preview = await manager.start(
+        start = partial(start_live_preview, session) if isolated else manager.start
+        preview = await start(
             framework="vite",
             name=APPKIT_LIVE_PREVIEW_NAME,
             supervise=True,
@@ -501,6 +501,7 @@ class LoopSandboxPort(Protocol):
         self, *, surface: str = ..., mcp_egress_hosts: frozenset[str] | None = ...
     ) -> SandboxSpec: ...
 
+
 class LoopRehydrationPort(Protocol):
     """Restore a conversation workspace after sandbox recreation."""
 
@@ -542,9 +543,7 @@ class LoopContractPort(Protocol):
         self, conversation_id: str
     ) -> tuple[ContractScopeGuard, Callable[[str], None]]: ...
 
-    def _toolscope_audit_recorder(
-        self, conversation_id: str
-    ) -> ToolScopeAuditRecorderPort: ...
+    def _toolscope_audit_recorder(self, conversation_id: str) -> ToolScopeAuditRecorderPort: ...
 
     def _finalizer_alias_for(self, conversation_id: str) -> str | None: ...
 
@@ -558,9 +557,7 @@ class LoopContractPort(Protocol):
 
     def note_build_verify_result(self, conversation_id: str, *, passed: bool) -> None: ...
 
-    def expected_delivery_mode(
-        self, conversation_id: str
-    ) -> Literal["app", "files"] | None: ...
+    def expected_delivery_mode(self, conversation_id: str) -> Literal["app", "files"] | None: ...
 
 
 class ToolScopeAuditRecorderPort(Protocol):

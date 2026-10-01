@@ -212,17 +212,23 @@ class PreviewStartTool:
                 ),
                 error="no_intent",
             )
-        mgr = _manager(ctx)
-        from disco.agent_server.preview_manager import PreviewCommandError
+        from disco.agent_server.preview_manager import (
+            PreviewCommandError,
+            PreviewHandoffError,
+            start_live_preview,
+        )
 
         try:
-            session = await mgr.start(
+            session = await start_live_preview(
+                ctx.sandbox,
                 serve_dir=args.serve_dir,
                 command=args.command,
                 framework=args.framework,
                 cwd=args.cwd,
                 name=args.name,
             )
+        except PreviewHandoffError as exc:
+            return ToolOutcome(success=False, content=str(exc), error="preview_update_failed")
         except PreviewCommandError as exc:
             # P1 #1: a raw command that binds a hardcoded port the platform can't own is
             # rejected with actionable guidance, never silently run on a model-chosen port.
