@@ -265,17 +265,19 @@ class ProviderConfigService:
     def record_probe(
         self, provider_id: str, verified: bool | None, error: str | None
     ) -> ProviderDTO:
-        """Persist the outcome of a /models probe so the row can say whether the
-        stored key actually WORKS, not just that one is stored (UI-34).
+        """Persist the outcome of a /models probe without overstating key proof.
 
-        `verified` is None when the probe answered but did not exercise the key.
+        `verified` True means the probe exercised the key; False means
+        access-denied (401/403); None means unproven (other HTTP/transport/parse
+        failures or a public catalogue). `key_error` is retained when verified
+        is False or None and cleared only when True.
         """
         cfg = self._store.load()
         provider = cfg.providers.get(provider_id)
         if provider is None:
             raise KeyError(provider_id)
         updated = provider.model_copy(
-            update={"key_verified": verified, "key_error": error if verified is False else None}
+            update={"key_verified": verified, "key_error": error if verified is not True else None}
         )
         self._store.save(
             cfg.model_copy(update={"providers": {**cfg.providers, provider_id: updated}})

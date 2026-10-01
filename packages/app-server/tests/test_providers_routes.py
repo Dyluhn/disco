@@ -690,3 +690,108 @@ def test_second_provider_for_the_same_base_url_is_refused(client, monkeypatch):
     assert resp.status_code == 400
     assert "already added as 'ollama.com'" in resp.json()["detail"]
     assert len(client.get("/api/providers").json()) == 1
+
+
+@pytest.mark.parametrize("status", [404, 405, 429, 500])
+def test_catalogue_failure_does_not_claim_key_rejection(client, monkeypatch, status):
+    async def failing_fetch(provider, api_key):
+        request = httpx.Request("GET", f"{provider.base_url}/models")
+        response = httpx.Response(status, request=request)
+        raise httpx.HTTPStatusError("catalogue unavailable", request=request, response=response)
+
+    monkeypatch.setattr(providers_mod, "_fetch_provider_catalogue", failing_fetch)
+    response = client.post(
+        "/api/providers",
+        json={
+            "label": "Arbitrary endpoint",
+            "base_url": "https://arbitrary.example/v1",
+            "kind": "openai-compat",
+            "api_key": "stored-private-value",
+        },
+    )
+    assert response.status_code == 201
+    row = client.get("/api/providers").json()[0]
+    assert row["has_key"] is True
+    assert row["key_verified"] is None
+    assert str(status) in row["key_error"]
+    assert "stored-private-value" not in str(row)
+
+
+def test_failed_anonymous_probe_cannot_prove_authenticated_key_validity(client, monkeypatch):
+    async def fetch(provider, api_key):
+        if api_key:
+            return []
+        raise httpx.ConnectError("transient outage")
+
+    monkeypatch.setattr(providers_mod, "_fetch_provider_catalogue", fetch)
+    response = client.post(
+        "/api/providers",
+        json={
+            "label": "Other endpoint",
+            "base_url": "https://other.example/v1",
+            "kind": "openai-compat",
+            "api_key": "stored-private-value",
+        },
+    )
+    assert response.json()["catalogue_ok"] is True
+    assert client.get("/api/providers").json()[0]["key_verified"] is None
+
+
+@pytest.mark.parametrize("failure", ["transport", "parse"])
+def test_catalogue_transport_or_parse_failure_keeps_unknown_diagnostic(
+    client, monkeypatch, failure
+):
+    async def failing_fetch(provider, api_key):
+        if failure == "transport":
+            raise httpx.ConnectError("transient catalogue outage")
+        raise ValueError("malformed catalogue response")
+
+    monkeypatch.setattr(providers_mod, "_fetch_provider_catalogue", failing_fetch)
+    response = client.post(
+        "/api/providers",
+        json={
+            "label": "Unknown catalogue",
+            "base_url": "https://unknown.invalid/v1",
+            "kind": "openai-compat",
+            "api_key": "synthetic-unknown-key",
+        },
+    )
+    assert response.status_code == 201
+    assert response.json()["catalogue_ok"] is False
+    row = client.get("/api/providers").json()[0]
+    assert row["has_key"] is True and row["key_verified"] is None
+    assert row["key_error"]
+    assert "synthetic-unknown-key" not in str(row)
+
+
+@pytest.mark.parametrize("anonymous_status", [401, 403, 429, 500])
+def test_anonymous_catalogue_status_only_access_denied_proves_key_exercised(
+    client, monkeypatch, anonymous_status
+):
+    seen = []
+
+    async def fetch(provider, api_key):
+        seen.append(api_key)
+        if api_key:
+            return []
+        request = httpx.Request("GET", f"{provider.base_url}/models")
+        response = httpx.Response(anonymous_status, request=request)
+        raise httpx.HTTPStatusError(
+            "anonymous catalogue failed", request=request, response=response
+        )
+
+    monkeypatch.setattr(providers_mod, "_fetch_provider_catalogue", fetch)
+    response = client.post(
+        "/api/providers",
+        json={
+            "label": "Anonymous control",
+            "base_url": "https://control.invalid/v1",
+            "kind": "openai-compat",
+            "api_key": "synthetic-control-key",
+        },
+    )
+    assert response.status_code == 201 and response.json()["catalogue_ok"] is True
+    assert seen == ["synthetic-control-key", None]
+    row = client.get("/api/providers").json()[0]
+    assert row["key_verified"] is (True if anonymous_status in (401, 403) else None)
+    assert "synthetic-control-key" not in str(row)
