@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "773d24fb253b27aadcd527ea38a5cbc300e09823",
+  "source_identity": "b933bc3efdd0b1fa90f8ff375a923ec4b2a69997",
   "collected": {
     "counts": {
-      "packages": 12682,
+      "packages": 12708,
       "harness": 1571,
       "integrations": 9,
       "tests": 468
     },
-    "total": 14730,
+    "total": 14756,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -3189,6 +3189,32 @@
         "packages/app-server/tests/test_model_origin_canonical_ref.py::test_add_openrouter_model_approves_canonical_slot_ref",
         "packages/app-server/tests/test_model_origin_canonical_ref.py::test_openrouter_key_status_is_locked_for_missing_named_rotation_key",
         "packages/app-server/tests/test_model_origin_canonical_ref.py::test_openrouter_key_status_locked_when_ciphertext_undecryptable",
+        "packages/app-server/tests/test_pairing_token_cli.py::test_exec_explicit_auth_secret_file_stays_authoritative[DISCO_AUTH_SECRET_FILE]",
+        "packages/app-server/tests/test_pairing_token_cli.py::test_exec_explicit_auth_secret_file_stays_authoritative[PMX_AUTH_SECRET_FILE]",
+        "packages/app-server/tests/test_pairing_token_cli.py::test_exec_explicit_secret_env_still_wins[DISCO_AUTH_SECRET]",
+        "packages/app-server/tests/test_pairing_token_cli.py::test_exec_explicit_secret_env_still_wins[DISCO_SECRET_KEY]",
+        "packages/app-server/tests/test_pairing_token_cli.py::test_exec_explicit_secret_env_still_wins[PMX_AUTH_SECRET]",
+        "packages/app-server/tests/test_pairing_token_cli.py::test_exec_explicit_secret_env_still_wins[PMX_SECRET_KEY]",
+        "packages/app-server/tests/test_pairing_token_cli.py::test_exec_explicit_secret_file_needs_no_install_key_write[DISCO_AUTH_SECRET_FILE]",
+        "packages/app-server/tests/test_pairing_token_cli.py::test_exec_explicit_secret_file_needs_no_install_key_write[PMX_AUTH_SECRET_FILE]",
+        "packages/app-server/tests/test_pairing_token_cli.py::test_exec_explicit_secret_needs_no_data_directory_write[DISCO_AUTH_SECRET]",
+        "packages/app-server/tests/test_pairing_token_cli.py::test_exec_explicit_secret_needs_no_data_directory_write[DISCO_SECRET_KEY]",
+        "packages/app-server/tests/test_pairing_token_cli.py::test_exec_explicit_secret_needs_no_data_directory_write[PMX_AUTH_SECRET]",
+        "packages/app-server/tests/test_pairing_token_cli.py::test_exec_explicit_secret_needs_no_data_directory_write[PMX_SECRET_KEY]",
+        "packages/app-server/tests/test_pairing_token_cli.py::test_exec_install_key_file_mode_stays_owner_only",
+        "packages/app-server/tests/test_pairing_token_cli.py::test_exec_install_key_usable_on_read_only_dir",
+        "packages/app-server/tests/test_pairing_token_cli.py::test_exec_matches_server_with_stale_cli_auth_secret[DISCO_DATA_DIR-.secret_key]",
+        "packages/app-server/tests/test_pairing_token_cli.py::test_exec_matches_server_with_stale_cli_auth_secret[DISCO_DATA_DIR-secret-key]",
+        "packages/app-server/tests/test_pairing_token_cli.py::test_exec_matches_server_with_stale_cli_auth_secret[PMX_DATA_DIR-.secret_key]",
+        "packages/app-server/tests/test_pairing_token_cli.py::test_exec_matches_server_with_stale_cli_auth_secret[PMX_DATA_DIR-secret-key]",
+        "packages/app-server/tests/test_pairing_token_cli.py::test_exec_no_persisted_file_matches_server_bootstrap",
+        "packages/app-server/tests/test_pairing_token_cli.py::test_exec_persisted_auth_secret_keeps_its_contract",
+        "packages/app-server/tests/test_pairing_token_cli.py::test_exec_process_uses_the_persisted_server_secret[DISCO_DATA_DIR-.secret_key]",
+        "packages/app-server/tests/test_pairing_token_cli.py::test_exec_process_uses_the_persisted_server_secret[DISCO_DATA_DIR-secret-key]",
+        "packages/app-server/tests/test_pairing_token_cli.py::test_exec_process_uses_the_persisted_server_secret[PMX_DATA_DIR-.secret_key]",
+        "packages/app-server/tests/test_pairing_token_cli.py::test_exec_process_uses_the_persisted_server_secret[PMX_DATA_DIR-secret-key]",
+        "packages/app-server/tests/test_pairing_token_cli.py::test_exec_unreadable_install_key_never_prints_a_foreign_token[directory]",
+        "packages/app-server/tests/test_pairing_token_cli.py::test_exec_unreadable_install_key_never_prints_a_foreign_token[key]",
         "packages/app-server/tests/test_pairing_token_cli.py::test_follows_the_configured_public_ui_url",
         "packages/app-server/tests/test_pairing_token_cli.py::test_prints_the_same_token_the_boot_banner_would",
         "packages/app-server/tests/test_preview_quarantine.py::test_app_auth_ignores_tossed_marker_and_blocks_generated_host_or_cross_alias",
@@ -14751,9 +14777,9 @@
     }
   },
   "mapping_static": {
-    "identity": "773d24fb253b27aadcd527ea38a5cbc300e09823",
+    "identity": "b933bc3efdd0b1fa90f8ff375a923ec4b2a69997",
     "python_test_file_count": 983,
-    "python_static_test_id_count": 11922,
+    "python_static_test_id_count": 11933,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -19589,6 +19615,17 @@
       "packages/app-server/tests/test_model_origin_canonical_ref.py::test_add_openrouter_model_approves_canonical_slot_ref",
       "packages/app-server/tests/test_model_origin_canonical_ref.py::test_openrouter_key_status_is_locked_for_missing_named_rotation_key",
       "packages/app-server/tests/test_model_origin_canonical_ref.py::test_openrouter_key_status_locked_when_ciphertext_undecryptable",
+      "packages/app-server/tests/test_pairing_token_cli.py::test_exec_explicit_auth_secret_file_stays_authoritative",
+      "packages/app-server/tests/test_pairing_token_cli.py::test_exec_explicit_secret_env_still_wins",
+      "packages/app-server/tests/test_pairing_token_cli.py::test_exec_explicit_secret_file_needs_no_install_key_write",
+      "packages/app-server/tests/test_pairing_token_cli.py::test_exec_explicit_secret_needs_no_data_directory_write",
+      "packages/app-server/tests/test_pairing_token_cli.py::test_exec_install_key_file_mode_stays_owner_only",
+      "packages/app-server/tests/test_pairing_token_cli.py::test_exec_install_key_usable_on_read_only_dir",
+      "packages/app-server/tests/test_pairing_token_cli.py::test_exec_matches_server_with_stale_cli_auth_secret",
+      "packages/app-server/tests/test_pairing_token_cli.py::test_exec_no_persisted_file_matches_server_bootstrap",
+      "packages/app-server/tests/test_pairing_token_cli.py::test_exec_persisted_auth_secret_keeps_its_contract",
+      "packages/app-server/tests/test_pairing_token_cli.py::test_exec_process_uses_the_persisted_server_secret",
+      "packages/app-server/tests/test_pairing_token_cli.py::test_exec_unreadable_install_key_never_prints_a_foreign_token",
       "packages/app-server/tests/test_pairing_token_cli.py::test_follows_the_configured_public_ui_url",
       "packages/app-server/tests/test_pairing_token_cli.py::test_prints_the_same_token_the_boot_banner_would",
       "packages/app-server/tests/test_preview_quarantine.py::test_app_auth_ignores_tossed_marker_and_blocks_generated_host_or_cross_alias",
@@ -43105,6 +43142,65 @@
           "frontend/src/views/settings.test.tsx::lets the user explicitly mark a model as image-capable",
           "frontend/src/views/settings.test.tsx::recommends a visual model for a text-only primary and can assign one"
         ],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-43-PAIRING-CLI",
+      "root": "packages",
+      "source_identity_before": "773d24fb253b27aadcd527ea38a5cbc300e09823",
+      "source_identity_after": "b933bc3efdd0b1fa90f8ff375a923ec4b2a69997",
+      "collected_roots": {
+        "packages": {
+          "before_count": 12682,
+          "after_count": 12708,
+          "added_ids": [
+            "packages/app-server/tests/test_pairing_token_cli.py::test_exec_explicit_auth_secret_file_stays_authoritative[DISCO_AUTH_SECRET_FILE]",
+            "packages/app-server/tests/test_pairing_token_cli.py::test_exec_explicit_auth_secret_file_stays_authoritative[PMX_AUTH_SECRET_FILE]",
+            "packages/app-server/tests/test_pairing_token_cli.py::test_exec_explicit_secret_env_still_wins[DISCO_AUTH_SECRET]",
+            "packages/app-server/tests/test_pairing_token_cli.py::test_exec_explicit_secret_env_still_wins[DISCO_SECRET_KEY]",
+            "packages/app-server/tests/test_pairing_token_cli.py::test_exec_explicit_secret_env_still_wins[PMX_AUTH_SECRET]",
+            "packages/app-server/tests/test_pairing_token_cli.py::test_exec_explicit_secret_env_still_wins[PMX_SECRET_KEY]",
+            "packages/app-server/tests/test_pairing_token_cli.py::test_exec_explicit_secret_file_needs_no_install_key_write[DISCO_AUTH_SECRET_FILE]",
+            "packages/app-server/tests/test_pairing_token_cli.py::test_exec_explicit_secret_file_needs_no_install_key_write[PMX_AUTH_SECRET_FILE]",
+            "packages/app-server/tests/test_pairing_token_cli.py::test_exec_explicit_secret_needs_no_data_directory_write[DISCO_AUTH_SECRET]",
+            "packages/app-server/tests/test_pairing_token_cli.py::test_exec_explicit_secret_needs_no_data_directory_write[DISCO_SECRET_KEY]",
+            "packages/app-server/tests/test_pairing_token_cli.py::test_exec_explicit_secret_needs_no_data_directory_write[PMX_AUTH_SECRET]",
+            "packages/app-server/tests/test_pairing_token_cli.py::test_exec_explicit_secret_needs_no_data_directory_write[PMX_SECRET_KEY]",
+            "packages/app-server/tests/test_pairing_token_cli.py::test_exec_install_key_file_mode_stays_owner_only",
+            "packages/app-server/tests/test_pairing_token_cli.py::test_exec_install_key_usable_on_read_only_dir",
+            "packages/app-server/tests/test_pairing_token_cli.py::test_exec_matches_server_with_stale_cli_auth_secret[DISCO_DATA_DIR-.secret_key]",
+            "packages/app-server/tests/test_pairing_token_cli.py::test_exec_matches_server_with_stale_cli_auth_secret[DISCO_DATA_DIR-secret-key]",
+            "packages/app-server/tests/test_pairing_token_cli.py::test_exec_matches_server_with_stale_cli_auth_secret[PMX_DATA_DIR-.secret_key]",
+            "packages/app-server/tests/test_pairing_token_cli.py::test_exec_matches_server_with_stale_cli_auth_secret[PMX_DATA_DIR-secret-key]",
+            "packages/app-server/tests/test_pairing_token_cli.py::test_exec_no_persisted_file_matches_server_bootstrap",
+            "packages/app-server/tests/test_pairing_token_cli.py::test_exec_persisted_auth_secret_keeps_its_contract",
+            "packages/app-server/tests/test_pairing_token_cli.py::test_exec_process_uses_the_persisted_server_secret[DISCO_DATA_DIR-.secret_key]",
+            "packages/app-server/tests/test_pairing_token_cli.py::test_exec_process_uses_the_persisted_server_secret[DISCO_DATA_DIR-secret-key]",
+            "packages/app-server/tests/test_pairing_token_cli.py::test_exec_process_uses_the_persisted_server_secret[PMX_DATA_DIR-.secret_key]",
+            "packages/app-server/tests/test_pairing_token_cli.py::test_exec_process_uses_the_persisted_server_secret[PMX_DATA_DIR-secret-key]",
+            "packages/app-server/tests/test_pairing_token_cli.py::test_exec_unreadable_install_key_never_prints_a_foreign_token[directory]",
+            "packages/app-server/tests/test_pairing_token_cli.py::test_exec_unreadable_install_key_never_prints_a_foreign_token[key]"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [],
+        "python_static_test_ids": [
+          "packages/app-server/tests/test_pairing_token_cli.py::test_exec_explicit_auth_secret_file_stays_authoritative",
+          "packages/app-server/tests/test_pairing_token_cli.py::test_exec_explicit_secret_env_still_wins",
+          "packages/app-server/tests/test_pairing_token_cli.py::test_exec_explicit_secret_file_needs_no_install_key_write",
+          "packages/app-server/tests/test_pairing_token_cli.py::test_exec_explicit_secret_needs_no_data_directory_write",
+          "packages/app-server/tests/test_pairing_token_cli.py::test_exec_install_key_file_mode_stays_owner_only",
+          "packages/app-server/tests/test_pairing_token_cli.py::test_exec_install_key_usable_on_read_only_dir",
+          "packages/app-server/tests/test_pairing_token_cli.py::test_exec_matches_server_with_stale_cli_auth_secret",
+          "packages/app-server/tests/test_pairing_token_cli.py::test_exec_no_persisted_file_matches_server_bootstrap",
+          "packages/app-server/tests/test_pairing_token_cli.py::test_exec_persisted_auth_secret_keeps_its_contract",
+          "packages/app-server/tests/test_pairing_token_cli.py::test_exec_process_uses_the_persisted_server_secret",
+          "packages/app-server/tests/test_pairing_token_cli.py::test_exec_unreadable_install_key_never_prints_a_foreign_token"
+        ],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
         "fixtures": []
       }
     },
