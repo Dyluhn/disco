@@ -1,5 +1,35 @@
 # Launch Checklist — release readiness
 
+## 2026-10-21 v0.2.3 landing
+
+Package **PKG-65-V023-LANDING** lands the v0.2.3 stack and PR #30 onto main
+(see [Current State](CURRENT-STATE.md) and
+`development/notes/landing-v023-20261021.md`). The owner's finish line is
+**"v0.2.3 + launch-ready"** (2026-10-21). Remaining before launch, in order:
+
+- OPEN: Deep Research wall time (owner concern). Measured on past runs only:
+  median 26 min active per finished report, about 90% serial model calls.
+- OPEN: false-affordance audit of every surface in Firefox on the landed stack
+  (owner concern).
+- OPEN: gVisor proven on a rootful Docker host (`runsc` reported by the engine,
+  `docker inspect` and runsc logs; silent downgrade still refused, PKG-24).
+- OPEN: harness deterministic replay
+  (`development/harness/tests/test_replay_runner.py::test_deterministic_replay_reproduces_recorded_events`)
+  fails on the v0.2.3 branch tip and on this landing: v0.2.3's last commit
+  `8cf5e80c` changed grounding text cleanup after the v4 replay was captured,
+  so the review request no longer matches the cassette. It needs a genuine
+  v5 capture (live GLM-5.3 Flash). The harness is not a landing gate; this is
+  recorded, not waived.
+- OPEN: README quickstart, demo GIF and benchmark methodology link.
+- OPEN: tag v0.2.3, publish images, anonymous pull of
+  `ghcr.io/dyluhn/disco-{server,frontend,sandbox}:v0.2.3`.
+- OPEN: clean-machine install from the published images (Search, Deep
+  Research, Build) and an independent review of the landing diff.
+
+Evidence note: the 2026-09-05 closeout evidence directory cited below
+(`/var/home/dylan/AI-Work/disco-gap-closure-2026-09-05/CLOSEOUT-RECORD.json`)
+was deleted in the 2026-10-16 storage cleanup; the citation is dangling.
+
 ## 2026-09-21 validation cleanup
 
 Package **PKG-64-VALIDATION-CLEANUP** fixes the remaining validation failures
