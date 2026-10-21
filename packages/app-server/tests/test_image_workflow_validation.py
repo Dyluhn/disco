@@ -28,7 +28,8 @@ def test_invalid_workflow_cannot_replace_saved_configuration(tmp_path, invalid):
         assert client.put(url, json={**valid, "workflow_json": ""}).status_code == 200
 
 
-def test_invalid_inactive_workflow_does_not_block_switching_provider(tmp_path):
+
+def test_inactive_invalid_draft_can_switch_away_and_back_for_correction(tmp_path):
     state = ConfigState(
         store=ConfigStore(tmp_path / "config.json"),
         secrets=SecretStore(tmp_path / "secrets.json", box=SecretBox("test-app-secret")),
@@ -40,7 +41,13 @@ def test_invalid_inactive_workflow_does_not_block_switching_provider(tmp_path):
                     "workflow_json": "{invalid"}
         assert client.put(url, json=switched).status_code == 200
         assert client.get(url).json()["provider"] == "openrouter"
-        comfy = {**switched, "provider": "comfyui", "base_url": "http://localhost:8188"}
-        response = client.put(url, json=comfy)
+        # Back to ComfyUI with the stored graph unchanged: allowed, so Settings
+        # can show it for correction.
+        back = {**switched, "provider": "comfyui", "base_url": "http://localhost:8188"}
+        assert client.put(url, json=back).status_code == 200
+        assert client.get(url).json()["provider"] == "comfyui"
+        # New invalid input for the active ComfyUI graph is still refused.
+        response = client.put(url, json={**back, "workflow_json": "[]"})
         assert response.status_code == 400
         assert response.json()["detail"]["reason"] == "invalid_image_workflow"
+        assert client.get(url).json()["workflow_json"] == "{invalid"

@@ -880,7 +880,8 @@ class TestFrontendPublicApi:
         # moved public targets carry frontend target relocations.
         # MCP connection form extraction adds one module; existing declarations remain unchanged.
         # Catalogue form extraction adds one module; existing public declarations stay unchanged.
-        assert len(live["frontend_modules"]) == 448
+        # 468 after the v0.2.3 landing: v0.2.3's new modules joined main's.
+        assert len(live["frontend_modules"]) == 468
         assert len(authority["contract_files"]) == 2
         assert all(set(row) == {"path", "sha256", "bytes"} for row in authority["contract_files"])
         assert module == {

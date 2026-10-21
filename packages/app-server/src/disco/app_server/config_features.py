@@ -106,9 +106,12 @@ class ConfigFeatures:
         met — until then image generation fails NOT CONFIGURED (W-50, no placeholder)."""
         from disco.core.llm import ImageGenSettings
 
-        # Only the active ComfyUI graph runs; an inactive draft must not block
-        # switching provider away from it (the Settings escape hatch).
-        if dto.provider == "comfyui":
+        # Validate new input for the active ComfyUI graph only. An inactive draft
+        # must not block switching provider away (the Settings escape hatch), and
+        # switching back to the stored graph must stay possible so Settings can
+        # show it for correction (Save and Test stay blocked until it is valid).
+        stored = _image_gen_from(self._store.load()).workflow_json
+        if dto.provider == "comfyui" and dto.workflow_json.strip() != stored:
             validate_image_workflow(dto.workflow_json)
         self._store.sections.save_image_gen(
             ImageGenSettings(

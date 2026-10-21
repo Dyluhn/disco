@@ -7,7 +7,7 @@ export interface McpConnectionDraft {
   risk_tier: string;
 }
 
-const EMPTY_DRAFT: McpConnectionDraft = {
+export const EMPTY_DRAFT: McpConnectionDraft = {
   name: "",
   url: "",
   transport: "streamable_http",
