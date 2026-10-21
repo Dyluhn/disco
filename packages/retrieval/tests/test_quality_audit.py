@@ -1,3 +1,5 @@
+from itertools import permutations
+
 from disco.retrieval.deep_research.quality_audit import (
     ClaimRecord,
     corroboration_counts,
@@ -57,6 +59,43 @@ def test_source_concentration_is_claim_level() -> None:
     assert metric.flagged
 
 
+def test_source_concentration_ties_are_independent_of_claim_and_citation_order() -> None:
+    # Multiple passages from the same work still count only once per claim.
+    for sources in permutations(("b1", "a2", "a1")):
+        claims = (
+            ClaimRecord("1", "shared", sources),
+            ClaimRecord("2", "second work", ("b1",)),
+            ClaimRecord("3", "first work", ("a2",)),
+        )
+        for ordered_claims in permutations(claims):
+            metric = source_concentration(ordered_claims, _work, threshold=0.5)
+            assert metric.work_claim_counts == (("work-a", 2), ("work-b", 2))
+            assert metric.dominant_work == "work-a"
+            assert metric.dominant_share == 2 / 3
+            assert metric.flagged
+
+
+def test_source_concentration_prioritizes_share_over_work_identity() -> None:
+    claims = (
+        ClaimRecord("1", "shared", ("a1", "b1")),
+        ClaimRecord("2", "second work", ("b1",)),
+        ClaimRecord("3", "unsupported"),
+    )
+    metric = source_concentration(claims, _work, threshold=0.75)
+    assert metric.work_claim_counts == (("work-a", 1), ("work-b", 2))
+    assert metric.dominant_work == "work-b"
+    assert metric.dominant_share == 2 / 3
+    assert not metric.flagged
+
+
+def test_source_concentration_without_resolved_works_has_no_dominant_work() -> None:
+    metric = source_concentration((ClaimRecord("1", "missing", ("a1",)),), lambda _: "")
+    assert metric.work_claim_counts == ()
+    assert metric.dominant_work is None
+    assert metric.dominant_share == 0.0
+    assert not metric.flagged
+
+
 def test_duplicate_body_paragraphs_ignore_citations_and_summary() -> None:
     repeated = (
         "The measured result remained robust across every reported deployment, "
@@ -69,9 +108,12 @@ def test_duplicate_body_paragraphs_ignore_citations_and_summary() -> None:
 
 
 def test_duplicate_check_ignores_short_repeated_fragments() -> None:
-    assert near_duplicate_body_paragraphs(
-        "", ("The result is robust [[a]].", "The result is robust [[b]].")
-    ) == ()
+    assert (
+        near_duplicate_body_paragraphs(
+            "", ("The result is robust [[a]].", "The result is robust [[b]].")
+        )
+        == ()
+    )
 
 
 def test_hedge_metrics_report_repeated_boilerplate() -> None:

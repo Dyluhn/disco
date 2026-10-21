@@ -10,6 +10,7 @@ import {
   downloadProject,
   exportProjectManifest,
   getProjectManifest,
+  getProjectFile,
   getProjectRelease,
   listProjects,
   type DownloadBinding,
@@ -60,11 +61,19 @@ export function useExportManifest() {
  * callers that know the run has not committed yet pass `available: false` and
  * nothing is requested. A late 404 is still possible (the commit and this
  * request can race), so the query does not retry it into three errors either. */
-export function useProjectManifest(conversationId: string | null, available = true) {
+export function useProjectManifest(conversationId: string | null, available = true, revision = "") {
   return useQuery<ProjectManifest>({
-    queryKey: ["project-manifest", conversationId],
+    queryKey: ["project-manifest", conversationId, revision],
     queryFn: () => getProjectManifest(conversationId!),
     enabled: !!conversationId && available,
+    retry: false,
+  });
+}
+
+export function useProjectFile(conversationId: string, path: string, revision: string) {
+  return useQuery({
+    queryKey: ["project-file", conversationId, path, revision],
+    queryFn: () => getProjectFile(conversationId, path),
     retry: false,
   });
 }
@@ -73,9 +82,9 @@ export function useProjectManifest(conversationId: string | null, available = tr
  * it needs, its ingress). Gated on a non-null id like `useProjectManifest`; offline
  * it resolves the in-repo fixture verdict so the capabilities UI works with no
  * backend. */
-export function useProjectRelease(conversationId: string | null) {
+export function useProjectRelease(conversationId: string | null, revision = "") {
   return useQuery<ReleaseResponse>({
-    queryKey: ["project-release", conversationId],
+    queryKey: revision ? ["project-release", conversationId, revision] : ["project-release", conversationId],
     queryFn: () => getProjectRelease(conversationId!),
     enabled: !!conversationId,
   });

@@ -60,6 +60,7 @@ from ._report_audio_store import (
     existing_report_audio,
     read_report_audio_meta,
     report_content_key,
+    select_report_audio,
 )
 from .audio_config import SILENCE_MS_DEFAULT
 
@@ -703,6 +704,10 @@ async def generate_report_audio(
     run_started = time.monotonic()
     out_dir.mkdir(parents=True, exist_ok=True)
     mp3_path, transcript_path = _report_audio_cache_paths(report, follow_ups, mode, out_dir)
+    # Persist intent before yielding: an older slow generation must not replace
+    # a newer selected cache hit when it eventually finishes. Restore still
+    # considers only completed artifact pairs.
+    select_report_audio(mp3_path, report_content_key(report))
 
     # If a previous run for this conversation already wrote both files, hand
     # them back verbatim — see `_audio_cache_hit`. `force` is what "Regenerate"

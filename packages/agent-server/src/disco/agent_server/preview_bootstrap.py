@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import secrets
+import time
 import urllib.parse
 
 MAX_PREVIEW_REDEMPTION_BODY_BYTES = 32 * 1024
@@ -26,7 +27,7 @@ def preview_redemption_content_type(value: str | None) -> bool:
 
 
 def preview_navigation_document(
-    target: str, *, clear_storage: bool = True
+    target: str, *, clear_storage: bool = True, access_expires_at: int | None = None
 ) -> tuple[bytes, dict[str, str]]:
     """Return a locked document that moves a redeemed POST to its exact target.
 
@@ -37,12 +38,25 @@ def preview_navigation_document(
 
     nonce = secrets.token_urlsafe(18)
     safe_target = json.dumps(target).replace("<", "\\u003c").replace(">", "\\u003e")
+    access_message = (
+        "window.parent.postMessage("
+        + json.dumps(
+            {
+                "channel": "disco-preview-access",
+                "expires_at": access_expires_at,
+                "server_time": time.time(),
+            }
+        )
+        + ',"*");'
+        if access_expires_at is not None
+        else ""
+    )
     document = (
         '<!doctype html><html><head><meta charset="utf-8">'
         '<meta name="referrer" content="no-referrer">'
         "<title>Opening isolated preview</title></head><body>"
         f'<script nonce="{nonce}">'
-        "if(window.parent!==window){window.parent.postMessage("
+        f"if(window.parent!==window){{{access_message}window.parent.postMessage("
         '"disco-preview-bootstrap-ready","*")}'
         f"window.location.replace({safe_target})</script>"
         "<noscript>JavaScript is required to open this isolated preview.</noscript>"
@@ -76,14 +90,15 @@ def preview_storage_reset_document(handoff: str) -> tuple[bytes, dict[str, str]]
         '<meta name="referrer" content="no-referrer">'
         "<title>Preparing isolated preview</title></head><body>"
         f'<script nonce="{nonce}">'
-        "if(window.parent!==window){window.parent.postMessage("
-        '"disco-preview-bootstrap-ready","*")} '
         f"fetch(location.pathname,{{method:'POST',credentials:'same-origin',cache:'no-store',"
         "headers:{'content-type':'application/x-www-form-urlencoded'},"
         f"body:{encoded_body}}})"
         ".then(response=>{if(!response.ok){throw new Error('preview reset failed')}"
         "return response.json()})"
-        ".then(payload=>window.location.replace(payload.target))"
+        ".then(payload=>{if(window.parent!==window){window.parent.postMessage("
+        '{channel:"disco-preview-access",expires_at:payload.access_expires_at,'
+        'server_time:payload.server_time},"*");window.parent.postMessage('
+        '"disco-preview-bootstrap-ready","*")}window.location.replace(payload.target)})'
         ".catch(()=>{document.body.textContent='Preview isolation could not be established'})"
         "</script><noscript>JavaScript is required to open this isolated preview.</noscript>"
         "</body></html>"

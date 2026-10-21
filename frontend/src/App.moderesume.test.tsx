@@ -36,7 +36,7 @@ vi.mock("@/components/BuildSurface", () => ({
   ),
 }));
 vi.mock("@/components/ResearchSurface", () => ({
-  ResearchSurface: () => <div data-testid="research-surface-stub" />,
+  ResearchSurface: () => <div data-testid="research-surface-stub"><input aria-label="Search draft" defaultValue="" /></div>,
 }));
 vi.mock("@/components/research/DeepResearchSurface", () => ({
   DeepResearchSurface: () => <div data-testid="deep-surface-stub" />,
@@ -170,4 +170,21 @@ describe("A2 — fresh sessions and resume targets", () => {
     });
     expect(window.location.pathname).toBe("/");
   });
+});
+
+
+it("New replaces the compose session even when already at the root URL", async () => {
+  const user = userEvent.setup();
+  window.history.pushState({}, "", "/");
+  render(<App />);
+  await user.click(screen.getByRole("radio", { name: "search" }));
+  const first = await screen.findByLabelText("Search draft");
+  await user.type(first, "Old query with an allocated conversation");
+  await user.click(screen.getByRole("link", { name: "New" }));
+  await waitFor(() => expect(screen.getByLabelText("Search draft")).toHaveValue(""));
+  expect(screen.getByLabelText("Search draft")).not.toBe(first);
+  await user.type(screen.getByLabelText("Search draft"), "Second query");
+  await user.click(screen.getByRole("link", { name: "New" }));
+  await waitFor(() => expect(screen.getByLabelText("Search draft")).toHaveValue(""));
+  expect(window.location.pathname).toBe("/");
 });

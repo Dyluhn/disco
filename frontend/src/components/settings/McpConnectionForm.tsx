@@ -1,40 +1,34 @@
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 
-export interface DraftState {
+export interface McpConnectionDraft {
   name: string;
   url: string;
   transport: string;
   risk_tier: string;
 }
 
-export const EMPTY_DRAFT: DraftState = {
+const EMPTY_DRAFT: McpConnectionDraft = {
   name: "",
   url: "",
   transport: "streamable_http",
   risk_tier: "medium",
 };
 
-export function ConnectionForm({
-  initial,
+export function McpConnectionForm({
   busy,
   onSave,
   onCancel,
 }: {
-  initial: DraftState;
   busy: boolean;
-  onSave: (draft: DraftState) => void;
+  onSave: (draft: McpConnectionDraft) => void;
   onCancel: () => void;
 }) {
-  const [draft, setDraft] = useState<DraftState>(initial);
-  const firstFieldRef = useRef<HTMLInputElement | null>(null);
-  useEffect(() => {
-    firstFieldRef.current?.focus();
-  }, []);
+  const [draft, setDraft] = useState<McpConnectionDraft>(EMPTY_DRAFT);
   const canSave = draft.name.trim().length > 0 && draft.url.trim().length > 0;
   return (
     <div className="flex flex-col gap-inline rounded-card border border-accent/40 bg-surface-1 p-body">
       <input
-        ref={firstFieldRef}
+        autoFocus
         value={draft.name}
         onChange={(e) => setDraft({ ...draft, name: e.target.value })}
         placeholder="Server name (e.g. filesystem)"
@@ -85,8 +79,9 @@ export function ConnectionForm({
         <button
           type="button"
           data-disco-control="settings.mcp-add-save"
-          disabled={!canSave || busy}
-          onClick={() => onSave(draft)}
+          disabled={!canSave}
+          aria-disabled={!canSave || busy}
+          onClick={() => { if (canSave && !busy) onSave(draft); }}
           className="min-h-11 rounded-control bg-accent px-body py-hair font-ui text-[0.8rem] font-medium text-bg transition-opacity disabled:opacity-40 lg:min-h-0"
         >
           {busy ? "Adding…" : "Add connection"}
@@ -95,4 +90,3 @@ export function ConnectionForm({
     </div>
   );
 }
-

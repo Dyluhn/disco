@@ -5,8 +5,8 @@
  * unresolved / not checked) while the meter beside it said only "25 OF 104
  * SUPPORTED". Read together those say "three quarters of this report is
  * unsupported", which is not what the checker measured: most of the remainder
- * is UNRESOLVED — no source excerpt was found to match the sentence against.
- * That is a gap in the evidence, not a finding against the sentence (UI-20).
+ * is UNRESOLVED — the check established neither support nor contradiction.
+ * An excerpt can exist without resolving the claim (UI-20).
  *
  * The names and the counting rule live here so the header, the meter and the
  * per-claim list cannot drift apart again.
@@ -22,8 +22,8 @@ export const CHECK_LABEL: Record<VerificationStatus, string> = {
 
 /** The sentence a reader needs next to the counts, in plain words. */
 export const UNRESOLVED_MEANING =
-  "Unresolved means the checker found no source excerpt to match the sentence " +
-  "against — it is not a contradiction.";
+  "Unresolved means the check did not establish support or contradiction; " +
+  "it does not mean the claim is false.";
 
 export type CheckCounts = Record<VerificationStatus, number>;
 

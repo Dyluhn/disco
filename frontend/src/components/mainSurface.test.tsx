@@ -108,6 +108,6 @@ describe("Main surface — empty state + reactive provider errors", () => {
     expect(alert).toHaveTextContent(/image input is not supported/i);
     // …and it is NOT flattened into a generic message.
     expect(alert).not.toHaveTextContent(/something went wrong/i);
-    expect(alert).toHaveTextContent(/the model returned an error/i);
+    expect(alert).toHaveTextContent(/the request could not complete/i);
   }, TEST_TIMEOUT);
 });

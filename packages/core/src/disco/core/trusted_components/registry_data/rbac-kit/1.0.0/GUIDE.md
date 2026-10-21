@@ -21,7 +21,11 @@ database-kit database.
 Mount rbac-kit **inside** auth-kit's chain — auth-kit proves *who you are*
 (session, else 401); rbac-kit proves *what you may do* (role, else 403):
 
+Run this server module from the app's root with Node 22 or later. Supply your
+`yourAppHandler` request handler and `port` before starting the server.
+
 ```js
+import http from "node:http";
 import { openDatabase, runMigrations } from "./src/trusted/database-kit/core/db.js";
 import { AUTH_MIGRATIONS } from "./src/trusted/auth-kit/core/schema.js";
 import { seedDevUser } from "./src/trusted/auth-kit/core/auth.js";
@@ -29,6 +33,8 @@ import { createAuthApp } from "./src/trusted/auth-kit/core/middleware.js";
 import { RBAC_MIGRATIONS } from "./src/trusted/rbac-kit/core/schema.js";
 import { seedRoleUsers } from "./src/trusted/rbac-kit/core/roles.js";
 import { createRbacApp } from "./src/trusted/rbac-kit/core/guard.js";
+import authConfig from "./src/trusted/auth-kit/config/auth.config.json" with { type: "json" };
+import rbacConfig from "./src/trusted/rbac-kit/config/rbac.config.json" with { type: "json" };
 
 const db = openDatabase();
 runMigrations(db, AUTH_MIGRATIONS);
@@ -38,7 +44,8 @@ seedRoleUsers(db, rbacConfig);
 
 const guarded = createRbacApp({ db, config: rbacConfig, handler: yourAppHandler });
 const app = createAuthApp({ db, config: authConfig, handler: guarded });
-http.createServer(app).listen(port);
+const server = http.createServer(app);
+server.listen(port);
 ```
 
 Grant roles programmatically with `assignRole(db, userId, "admin")` (idempotent;

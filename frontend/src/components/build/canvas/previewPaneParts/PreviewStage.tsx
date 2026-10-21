@@ -2,7 +2,7 @@ import type { MutableRefObject } from "react";
 import type { PreviewLaunch } from "@/api/preview";
 import { PreviewLaunchFrame } from "@/components/PreviewLaunchFrame";
 import { EditAffordance } from "@/components/build/canvas/EditAffordance";
-import { SelectionOverlay } from "@/components/build/canvas/SelectionOverlay";
+import { SelectionOverlay, SelectionToolbar } from "@/components/build/canvas/SelectionOverlay";
 import type { ElementSelectState } from "@/hooks/useElementSelect";
 import { formatSelectionContext } from "@/lib/resolvers/appResolver";
 import {
@@ -27,8 +27,12 @@ export function PreviewStage({
   untrusted,
   selection,
   onSteer,
+  onArmInspect,
   onDisarmEdit,
   onApplyEdit,
+  onReloadAccess,
+  accessExpired,
+  onExpiredChange,
   onRefresh,
   onDownloadSource,
   downloadPending,
@@ -46,8 +50,12 @@ export function PreviewStage({
   untrusted: boolean;
   selection: ElementSelectState;
   onSteer?: (text: string) => void;
+  onArmInspect: () => void;
   onDisarmEdit: () => void;
   onApplyEdit: (instruction: string) => void;
+  onReloadAccess: () => void | Promise<void>;
+  accessExpired: boolean;
+  onExpiredChange: (expired: boolean) => void;
   onRefresh: () => void;
   /** Null when there is no conversation to download (the static run view). */
   onDownloadSource: (() => void) | null;
@@ -58,66 +66,77 @@ export function PreviewStage({
   // overlaying a progress strip on top of a server error.
   const showFrame = shouldRenderPreviewFrame(launch, visibleFailure, frameReady);
   return (
-    <div className="relative min-h-0 flex-1 bg-white">
-      {showFrame && launch ? (
-        <PreviewLaunchFrame
-          ref={frameRef}
-          title="Preview"
-          launch={launch}
-          onLoad={onFrameLoad}
-          onBootstrapReady={onBootstrapReady}
-          sandbox="allow-scripts allow-forms allow-same-origin allow-popups allow-downloads"
-          className="h-full w-full border-0 bg-white"
-        />
-      ) : (
-        <PreviewStagePlaceholder
-          visibleFailure={visibleFailure}
-          dataReason={dataReason}
-          onRefresh={onRefresh}
-          onDownloadSource={onDownloadSource}
-          downloadPending={downloadPending}
-        />
-      )}
-      {showFrame &&
-        shouldShowStatusOverlay(launch, minting, runtimeUnavailable, visibleFailure, frameReady) && (
-          <div
-            role={statusOverlayRole(visibleFailure, runtimeUnavailable)}
-            data-testid="preview-status-overlay"
-            // UI-15: the strip spans the FULL stage width. Inset from the sides it
-            // left a few pixels of the frame's own first line showing past its left
-            // edge — when that frame was a bare proxy error ("preview origin
-            // expired"), the user saw a stray "p" glyph floating beside this
-            // message. A full-bleed strip covers the line it is speaking for.
-            className="pointer-events-none absolute inset-x-0 top-0 z-20 border-b border-hairline bg-bg/95 px-body py-hair font-ui text-[0.76rem] text-text-muted shadow-sm backdrop-blur"
-          >
-            {statusOverlayMessage(visibleFailure, runtimeUnavailable, dataReason)}
-          </div>
-        )}
-      <SelectionOverlay
-        armed={editMode && selection.armed}
+    <div className="flex min-h-0 flex-1 flex-col bg-white">
+      {!accessExpired && <SelectionToolbar
+        armed={!accessExpired && selection.armed}
         untrusted={untrusted}
-        selection={selection.selection}
-        onArm={selection.arm}
+        onArm={onArmInspect}
         onDisarm={onDisarmEdit}
-        onWalkUp={selection.walkUp}
-        onDiscuss={
-          onSteer
-            ? (selected) => {
-                onSteer(formatSelectionContext(selected));
-                selection.resetSelection();
-                onDisarmEdit();
-              }
-            : undefined
-        }
-      />
-      {editMode && selection.selection !== null && (
-        <EditAffordance
-          targetLabel={selection.selection.human_label}
-          rect={selection.selection.rect}
-          onApply={onApplyEdit}
-          onCancel={selection.resetSelection}
+      />}
+      <div className="relative min-h-0 flex-1">
+        {showFrame && launch ? (
+          <PreviewLaunchFrame
+            ref={frameRef}
+            title="Preview"
+            launch={launch}
+            onReload={onReloadAccess}
+            onExpiredChange={onExpiredChange}
+            onLoad={onFrameLoad}
+            onBootstrapReady={onBootstrapReady}
+            sandbox="allow-scripts allow-forms allow-same-origin allow-popups allow-downloads"
+            className="h-full w-full border-0 bg-white"
+          />
+        ) : (
+          <PreviewStagePlaceholder
+            visibleFailure={visibleFailure}
+            dataReason={dataReason}
+            onRefresh={onRefresh}
+            onDownloadSource={onDownloadSource}
+            downloadPending={downloadPending}
+          />
+        )}
+        {showFrame &&
+          shouldShowStatusOverlay(launch, minting, runtimeUnavailable, visibleFailure, frameReady) && (
+            <div
+              role={statusOverlayRole(visibleFailure, runtimeUnavailable)}
+              data-testid="preview-status-overlay"
+              // UI-15: the strip spans the FULL stage width. Inset from the sides it
+              // left a few pixels of the frame's own first line showing past its left
+              // edge — when that frame was a bare proxy error ("preview origin
+              // expired"), the user saw a stray "p" glyph floating beside this
+              // message. A full-bleed strip covers the line it is speaking for.
+              className="pointer-events-none absolute inset-x-0 top-0 z-20 border-b border-hairline bg-bg/95 px-body py-hair font-ui text-[0.76rem] text-text-muted shadow-sm backdrop-blur"
+            >
+              {statusOverlayMessage(visibleFailure, runtimeUnavailable, dataReason)}
+            </div>
+          )}
+        <SelectionOverlay
+          showToolbar={false}
+          armed={!accessExpired && selection.armed}
+          untrusted={untrusted}
+          selection={accessExpired ? null : selection.selection}
+          onArm={onArmInspect}
+          onDisarm={onDisarmEdit}
+          onWalkUp={selection.walkUp}
+          onDiscuss={
+            onSteer
+              ? (selected) => {
+                  onSteer(formatSelectionContext(selected));
+                  selection.resetSelection();
+                  onDisarmEdit();
+                }
+              : undefined
+          }
         />
-      )}
+        {!accessExpired && editMode && selection.selection !== null && (
+          <EditAffordance
+            targetLabel={selection.selection.human_label}
+            rect={selection.selection.rect}
+            onApply={onApplyEdit}
+            onCancel={selection.resetSelection}
+          />
+        )}
+      </div>
     </div>
   );
 }

@@ -133,6 +133,9 @@ class WorkflowScheduleRunRecord(BaseModel):
 
     run_id: str = Field(default_factory=_new_run_id)
     schedule_id: str
+    # New records retain ownership even if the schedule is later unavailable.
+    # Legacy records resolve through their surviving schedule, never a guessed owner.
+    owner_id: str | None = None
     run_cid: str
     fired_at: datetime = Field(default_factory=_now)
     terminal_state: str
@@ -186,15 +189,22 @@ class JsonWorkflowScheduleStore:
         now: datetime | None = None,
     ) -> WorkflowScheduleRow:
         current = now or _now()
+        owner = owner_id or install_owner_id()
+        for existing in self.list_schedules(owner_id=owner):
+            if existing.spec.model_copy(update={"enabled": spec.enabled}) == spec:
+                # Retrying Save must neither duplicate nor silently resume a paused job.
+                return existing
         row = WorkflowScheduleRow(
-            owner_id=owner_id or install_owner_id(),
+            owner_id=owner,
             spec=spec,
             created_at=current,
             next_run=_next_future_run(
                 spec.cron,
                 current,
                 timezone=spec.timezone,
-            ),
+            )
+            if spec.enabled
+            else None,
         )
         _write_json_atomic(self._path_for(row.schedule_id), row.to_json_dict())
         return row
@@ -227,26 +237,55 @@ class JsonWorkflowScheduleStore:
             row for row in self.list_schedules(include_unclaimed_legacy=True) if row.spec.enabled
         ]
 
-    def update_next_run(self, schedule_id: str, next_run: datetime | None) -> None:
+    def set_enabled(
+        self, schedule_id: str, *, enabled: bool, owner_id: str, now: datetime | None = None
+    ) -> WorkflowScheduleRow | None:
+        if not _SAFE_ID.fullmatch(schedule_id):
+            return None
+        path = self._path_for(schedule_id)
+        try:
+            row, legacy = self._load_schedule(path)
+        except (OSError, ValueError, TypeError, KeyError):
+            return None
+        if legacy or row.owner_id != owner_id or row.schedule_id != schedule_id:
+            return None
+        if row.spec.enabled == enabled:
+            return row
+        updated = row.model_copy(
+            update={
+                "spec": row.spec.model_copy(update={"enabled": enabled}),
+                "next_run": _next_future_run(
+                    row.spec.cron, now or _now(), timezone=row.spec.timezone
+                )
+                if enabled
+                else None,
+            }
+        )
+        _write_json_atomic(path, updated.to_json_dict())
+        return updated
+
+    def update_next_run(
+        self,
+        schedule_id: str,
+        next_run: datetime | None,
+        *,
+        expected_next_run: datetime | None = None,
+    ) -> None:
         path = self._path_for(schedule_id)
         raw = json.loads(path.read_text(encoding="utf-8"))
         row = WorkflowScheduleRow.from_json_dict(raw)
-        updated = row.model_copy(update={"next_run": next_run})
+        if expected_next_run is not None and row.next_run != expected_next_run:
+            # A pause/resume while this run awaited owns the new future deadline.
+            return
+        updated = row.model_copy(update={"next_run": next_run if row.spec.enabled else None})
         _write_json_atomic(path, updated.to_json_dict())
 
     def append_run(self, record: WorkflowScheduleRunRecord) -> None:
-        rows = self.list_runs()
+        rows = self._read_runs()
         rows.append(record)
         _write_json_atomic(self._runs_path, [row.to_json_dict() for row in rows])
 
-    def list_runs(
-        self,
-        *,
-        schedule_id: str | None = None,
-        owner_id: str | None = None,
-        include_unclaimed_legacy: bool = False,
-        limit: int = 100,
-    ) -> list[WorkflowScheduleRunRecord]:
+    def _read_runs(self) -> list[WorkflowScheduleRunRecord]:
         if not self._runs_path.is_file():
             return []
         try:
@@ -263,6 +302,17 @@ class JsonWorkflowScheduleStore:
                 rows.append(WorkflowScheduleRunRecord.model_validate(item))
             except ValueError:
                 continue
+        return rows
+
+    def list_runs(
+        self,
+        *,
+        schedule_id: str | None = None,
+        owner_id: str | None = None,
+        include_unclaimed_legacy: bool = False,
+        limit: int = 100,
+    ) -> list[WorkflowScheduleRunRecord]:
+        rows = self._read_runs()
         if owner_id is not None:
             owned_schedule_ids = {
                 row.schedule_id
@@ -271,7 +321,12 @@ class JsonWorkflowScheduleStore:
                     include_unclaimed_legacy=include_unclaimed_legacy,
                 )
             }
-            rows = [row for row in rows if row.schedule_id in owned_schedule_ids]
+            rows = [
+                row
+                for row in rows
+                if row.owner_id == owner_id
+                or (row.owner_id is None and row.schedule_id in owned_schedule_ids)
+            ]
         if schedule_id is not None:
             rows = [row for row in rows if row.schedule_id == schedule_id]
         rows.sort(key=lambda r: r.fired_at, reverse=True)
@@ -324,6 +379,13 @@ class WorkflowScheduleManager:
             include_unclaimed_legacy=include_unclaimed_legacy,
         )
 
+    def set_enabled(
+        self, schedule_id: str, *, enabled: bool, owner_id: str
+    ) -> WorkflowScheduleRow | None:
+        return self._store().set_enabled(
+            schedule_id, enabled=enabled, owner_id=owner_id, now=self._now_fn()
+        )
+
     def list_runs(
         self,
         *,
@@ -357,7 +419,7 @@ class WorkflowScheduleManager:
             ),
             None,
         )
-        if row is None:
+        if row is None or not row.spec.enabled:
             return None
         record = await self._execute_run(row, coalesced=False)
         return record
@@ -366,6 +428,18 @@ class WorkflowScheduleManager:
         now = self._now_fn()
         store = self._store()
         for row in store.list_enabled_schedules():
+            # Another run can await while the owner pauses this pending schedule.
+            # Re-read before dispatch rather than trusting the sweep's stale snapshot.
+            row = next(
+                (
+                    current
+                    for current in store.list_enabled_schedules()
+                    if current.schedule_id == row.schedule_id
+                ),
+                None,
+            )
+            if row is None:
+                continue
             if row.next_run is None:
                 continue
             next_run = row.next_run
@@ -387,6 +461,7 @@ class WorkflowScheduleManager:
                     now,
                     timezone=row.spec.timezone,
                 ),
+                expected_next_run=next_run,
             )
 
     async def _execute_run(
@@ -411,6 +486,7 @@ class WorkflowScheduleManager:
                 coalesced=coalesced,
                 error=str(exc),
             )
+        record = record.model_copy(update={"owner_id": row.owner_id})
         self._store().append_run(record)
         return record
 

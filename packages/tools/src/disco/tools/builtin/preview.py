@@ -43,7 +43,32 @@ async def _surviving_port_owners(ctx: ToolContext, ports: list[int]) -> list[Any
         owners = await port_owners(ctx.sandbox, sorted(set(ports)))
     except Exception:  # noqa: BLE001 — a probe failure must not fail the stop
         return []
-    return [owner for owner in owners.values() if owner is not None]
+    return [owner for owner in owners.values() if owner is not None and owner.pid is not None]
+
+
+def _residual_owner_note(ctx: ToolContext, owner: Any) -> str:
+    """Describe observed ownership; only suggest a locally addressable shell."""
+    from ..sandbox.shell_sessions import _PREFIX, _short_session_name
+
+    prefix = f"NOTE: port {owner.port} is STILL served by "
+    if owner.session:
+        namespace = getattr(getattr(ctx.sandbox, "sessions", None), "namespace", "") or ""
+        name = _short_session_name(namespace, owner.session)
+        # A legacy/foreign/internal tmux name is not a tool-facing local session.
+        # shell_kill_process adds the CURRENT prefix; do not hand it a raw name.
+        if name and owner.session == f"{_PREFIX}-{namespace}{name}":
+            return (
+                prefix + f"shell session {name!r} — stop it with "
+                f"shell_kill_process(session={name!r}) before rebinding it."
+            )
+        return (
+            prefix + f"tmux session {owner.session!r} (pid {owner.pid}) — "
+            "no local shell_kill_process session has been identified."
+        )
+    return (
+        prefix + f"pid {owner.pid} ({owner.cmdline or 'unknown command'}) — "
+        "no owning shell session has been identified."
+    )
 
 
 def _manager(ctx: ToolContext) -> Any:
@@ -362,18 +387,7 @@ class PreviewStopTool:
         residual = await _surviving_port_owners(ctx, [ports[n] for n in stopped if n in ports])
         content = "Stopped preview(s): " + ", ".join(stopped)
         if residual:
-            content += "\n" + "\n".join(
-                f"NOTE: port {owner.port} is STILL served by "
-                + (
-                    f"shell session {owner.session!r} — stop it with "
-                    f"shell_kill_process(session={owner.session!r}) before rebinding it."
-                    if owner.session
-                    else f"pid {owner.pid} ({owner.cmdline or 'unknown command'}) — "
-                    "it was not started by the platform, so stopping the preview "
-                    "cannot release it."
-                )
-                for owner in residual
-            )
+            content += "\n" + "\n".join(_residual_owner_note(ctx, owner) for owner in residual)
         return ToolOutcome(
             success=True,
             content=content,

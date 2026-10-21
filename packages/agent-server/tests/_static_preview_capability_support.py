@@ -8,8 +8,10 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
+from unittest.mock import AsyncMock
 from urllib.parse import parse_qs, urlsplit
 
+import httpx
 import pytest
 from disco.agent_server.auth import AgentAuthMiddleware, make_auth_router
 from disco.agent_server.host_proxy import HostPreviewProxyMiddleware
@@ -84,6 +86,7 @@ class _StaticRuntime:
             wake_for_preview=self.wake_for_preview,
             ensure_preview=self.ensure_preview,
             preview=self.preview_metadata,
+            live_session=self._live_preview_session,
             resolve_finished_preview_runtime=self._resolve_finished_preview_runtime,
         )
 
@@ -129,6 +132,16 @@ class _StaticRuntime:
             "generation": "pv_static_test",
             "port": self._target_port or PREVIEW_PORT,
         }
+
+    def _live_preview_session(self, _conversation_id: str) -> SimpleNamespace:
+        lifecycle = SimpleNamespace(
+            to_dict=lambda: {
+                "generation": "pv_static_test",
+                "port": self._target_port or PREVIEW_PORT,
+            }
+        )
+        manager = SimpleNamespace(canonical_lifecycle_session=lambda: lifecycle)
+        return SimpleNamespace(_preview_manager=manager)
 
     @property
     def projects(self) -> SimpleNamespace:
@@ -911,3 +924,43 @@ async def _exercise_path_preview_capability_contract(
             pass
     assert collision_ws.value.reason == "preview capability required"
     store.close()
+
+
+def _published_preview_transport(
+    monkeypatch: pytest.MonkeyPatch,
+    restarted: Any,
+    restored_sandbox: Any,
+    restored_manager: Any,
+    restored_upstream: str,
+    published_transport: str,
+) -> tuple[AsyncMock, AsyncMock]:
+    """Model daemon-host port reachability without replacing the real runtime read."""
+    host_fetch = AsyncMock(side_effect=AssertionError("sealed reads must not use host sandbox"))
+    monkeypatch.setattr(restored_sandbox, "fetch_inside", host_fetch)
+    from disco.agent_server import preview_request
+
+    isolated_fetch = AsyncMock(wraps=preview_request.request_inside)
+    monkeypatch.setattr(preview_request, "request_inside", isolated_fetch)
+    if published_transport == "unpublished":
+        monkeypatch.setattr(restarted.preview, "port_upstream", lambda *_args: None)
+    elif published_transport == "refused":
+        original_get = httpx.AsyncClient.get
+
+        async def unreachable_published_port(client, url, *args, **kwargs):
+            if str(url).startswith(restored_upstream):
+                raise httpx.ConnectError("published port is in another network namespace")
+            return await original_get(client, url, *args, **kwargs)
+
+        monkeypatch.setattr(httpx.AsyncClient, "get", unreachable_published_port)
+    return host_fetch, isolated_fetch
+
+
+def _assert_foreign_owner_cannot_mint_preview(capability_app: Any, cid: str) -> None:
+    with TestClient(capability_app, base_url="http://127.0.0.1:18240") as stranger:
+        csrf = _install_owner_session(stranger, "owner-b")
+        denied = stranger.post(
+            f"/conversations/{cid}/preview/capability",
+            headers={"Origin": "http://127.0.0.1:18240", CSRF_HEADER: csrf},
+            json={"target_path": "/", "transport": "canonical"},
+        )
+    assert denied.status_code in {403, 404}

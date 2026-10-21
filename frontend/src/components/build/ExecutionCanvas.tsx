@@ -19,6 +19,7 @@ import { deriveFiles, deriveSrcDoc, deriveTerminal } from "@/lib/buildTrace";
 import { useSnapToAction } from "@/lib/useSnapToAction";
 import { useBuildPreview } from "@/hooks/useBuildPreview";
 import { useProjectManifest } from "@/hooks/useProjects";
+import { useSavedWorkspaceAvailability } from "@/hooks/useSavedWorkspaceAvailability";
 import { useSessions } from "@/hooks/useSessions";
 import type { StreamingFile } from "@/hooks/useBuildStream";
 import type { ElementMentionPayload } from "@/lib/elementMention";
@@ -28,6 +29,7 @@ import { FilesPane } from "./canvas/FilesPane";
 import { TerminalPane } from "./canvas/TerminalPane";
 import { PreviewPane } from "./canvas/PreviewPane";
 import { CockpitPane } from "./canvas/CockpitPane";
+import { useFileActionSnap } from "./useFileActionSnap";
 import { previewActiveStatus } from "./canvas/previewPaneParts/helpers";
 
 type TabId = "files" | "terminal" | "preview" | "cockpit";
@@ -39,11 +41,32 @@ const TABS: { id: TabId; label: string; icon: typeof FileCode2 }[] = [
   { id: "cockpit", label: "Cockpit", icon: Gauge },
 ];
 
+function useWorkspaceInspection(events: AgentEvent[], status: ConversationStatus, cid: string | null, untrusted: boolean) {
+  // Imports materialize a host workspace before any agent run/seal. Only the
+  // server's environment-event hint enables that read, never message prose or
+  // untrusted shared events. Manifest/file endpoints still enforce ownership.
+  const { importedWorkspace, persistedProject, hasAvailableWorkspace } =
+    useSavedWorkspaceAvailability(events, status, cid, untrusted);
+  const workspaceRevision = useMemo(() => {
+    const latest = [...events].reverse().find(
+      (event) => event.kind === "workspace_restored" || event.kind === "workspace_version",
+    );
+    return `${status}:${latest?.id ?? (importedWorkspace ? importedWorkspace.id : persistedProject?.last_snapshot_at ?? (persistedProject ? "project" : ""))}`;
+  }, [events, status, importedWorkspace, persistedProject]);
+  const manifestQuery = useProjectManifest(cid, hasAvailableWorkspace, workspaceRevision);
+
+  const inspectSavedWorkspace = hasAvailableWorkspace && !untrusted && (status === "FINISHED" ||
+    (["IDLE", "PAUSED", "ERROR"].includes(status) && Boolean(importedWorkspace || persistedProject)));
+
+  return { manifestQuery, inspectSavedWorkspace, workspaceRevision, hasAvailableWorkspace };
+}
+
 export function ExecutionCanvas({
   events,
   status,
   cid,
   streamingFile = null,
+  replayThrough = null,
   untrusted = false,
   onSteer,
   onSelectionEdit,
@@ -54,6 +77,8 @@ export function ExecutionCanvas({
   status: ConversationStatus;
   cid: string | null;
   streamingFile?: StreamingFile | null;
+  /** Socket state-frame boundary; absent for static history-only canvases. */
+  replayThrough?: number | null;
   /** Third-party events (shared/imported run) → harden the preview iframe. */
   untrusted?: boolean;
   /** Steer the agent (free-form) from the preview-pane "Discuss" affordance.
@@ -98,16 +123,13 @@ export function ExecutionCanvas({
     [],
   );
   // Controlled tab so a starting write can pull focus to Files (watch-it-write is
-  // the hero moment). We only force the switch on the streaming RISING edge — once
-  // the user clicks away mid-write, we respect it (no repeated yank per delta).
+  // the hero moment). A partial stream and its durable action count as one write;
+  // once the user clicks away mid-write, respect it (no repeated yank per delta).
   const [tab, setTab] = useState<TabId>(initial);
   const { snapToAction, setSnapToAction } = useSnapToAction();
-  const wasStreaming = useRef(false);
-  useEffect(() => {
-    const now = streamingFile != null;
-    if (snapToAction && now && !wasStreaming.current) setTab("files");
-    wasStreaming.current = now;
-  }, [snapToAction, streamingFile]);
+  useFileActionSnap({
+    events, streamingFile, replayThrough, cid, status, enabled: snapToAction, setTab,
+  });
   // Auto-switch to Preview at the capstone: when the run FINISHES and there's a
   // renderable artifact, pull focus to the result (the deliverable handoff — the
   // user wants to SEE the finished app, not stare at the file tree). Only on the
@@ -127,28 +149,23 @@ export function ExecutionCanvas({
   // tab content, and the tab-label busy dot must keep updating while the user
   // is on Files/Preview (that's the dot's entire job — pane-local polling
   // would freeze it at its last-seen value on switch-away). The cheap
-  // /sessions list polls whenever the build is active; the heavier /view
+  // /sessions list polls whenever the build is active or a session pane is
+  // visible (finished/paused runs may retain live sessions); the heavier /view
   // capture-pane polls only while the Terminal tab is actually shown. The
   // Cockpit tab also needs /view (to render the selected session's live
   // capture-pane tail) — same cheap reuse, just one more "is view visible"
   // caller.
   const cockpitWantsView = tab === "cockpit";
   const { sessions, selectedName, setSelectedName, view } = useSessions(
-    cid,
+    untrusted ? null : cid,
     active,
     tab === "terminal" || cockpitWantsView,
   );
   // The Cockpit also surfaces bound-port data from the same useBuildPreview
   // the Preview pane uses — shared query cache, no extra fetch.
   const previewQuery = useBuildPreview(cid, active);
-  // UI-7: the committed-workspace manifest does not exist until the run has
-  // sealed one. Asking for it mid-run answered 404 on every visit and put a
-  // console error on the page for an entirely expected state, so we only ask
-  // once a workspace version has actually landed (or the run has finished).
-  const hasCommittedWorkspace =
-    status === "FINISHED" || events.some((event) => event.kind === "workspace_version");
-  const manifestQuery = useProjectManifest(cid, hasCommittedWorkspace);
-  const manifestFiles = manifestQuery.data?.files ?? [];
+  const { manifestQuery, inspectSavedWorkspace, workspaceRevision, hasAvailableWorkspace } = useWorkspaceInspection(events, status, cid, untrusted);
+  const manifestFiles = hasAvailableWorkspace ? manifestQuery.data?.files ?? [] : [];
   const anySessionBusy = sessions.some((s) => s.busy);
 
   return (
@@ -221,6 +238,11 @@ export function ExecutionCanvas({
             events={events}
             streamingFile={streamingFile}
             manifestFiles={manifestFiles}
+            snapshot={cid && inspectSavedWorkspace ? {
+              cid, revision: workspaceRevision,
+              loading: manifestQuery.isPending,
+              error: manifestQuery.isError,
+            } : undefined}
           />
         </Tabs.Content>
         <Tabs.Content value="terminal" className="h-full focus:outline-none">

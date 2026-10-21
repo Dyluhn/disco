@@ -31,6 +31,11 @@ const FRESH_QUERY = "A fresh composer query stays on its own run";
 
 const harness = vi.hoisted(() => ({
   subscribes: [] as string[],
+  subscriptions: [] as {
+    cid: string;
+    sink: (frame: WSServerFrame) => void;
+    cancel: ReturnType<typeof vi.fn>;
+  }[],
   sendsByCid: new Map<string, WSClientFrame[]>(),
   cancelsByCid: new Map<string, number>(),
   framesByCid: new Map<string, (f: WSServerFrame) => void>(),
@@ -112,19 +117,21 @@ vi.mock("@/api/agent", () => ({
         }
       }, 0),
     );
+    const cancel = vi.fn(() => {
+      if (canceled) return;
+      canceled = true;
+      harness.cancelsByCid.set(cid, (harness.cancelsByCid.get(cid) ?? 0) + 1);
+      queue.length = 0;
+      for (const t of timers) clearTimeout(t);
+    });
+    harness.subscriptions.push({ cid, sink: onFrame, cancel });
     return {
       send: (frame: WSClientFrame) => {
         if (canceled) return;
         if (!open) queue.push(frame);
         else harness.sendsByCid.get(cid)?.push(frame);
       },
-      cancel: () => {
-        if (canceled) return;
-        canceled = true;
-        harness.cancelsByCid.set(cid, (harness.cancelsByCid.get(cid) ?? 0) + 1);
-        queue.length = 0;
-        for (const t of timers) clearTimeout(t);
-      },
+      cancel,
     };
   },
 }));
@@ -146,15 +153,17 @@ function sendMessages(cid: string): WSClientFrame[] {
   );
 }
 
-describe("useDeepResearch retry from a failed resumed run", () => {
-  beforeEach(() => {
-    harness.subscribes.length = 0;
-    harness.sendsByCid.clear();
-    harness.cancelsByCid.clear();
-    harness.framesByCid.clear();
-    createDeepResearchConversation.mockClear();
-  });
+beforeEach(() => {
+  harness.subscribes.length = 0;
+  harness.subscriptions.length = 0;
+  harness.sendsByCid.clear();
+  harness.cancelsByCid.clear();
+  harness.framesByCid.clear();
+  createDeepResearchConversation.mockClear();
+});
 
+
+describe("useDeepResearch retry from a failed resumed run", () => {
   it("cold-open control: a failed resumed run is a safe read (no kick)", async () => {
     const { result } = renderHook(() => useDeepResearch(CONV_OLD), {
       wrapper: wrapper(),
@@ -315,4 +324,47 @@ describe("useDeepResearch retry from a failed resumed run", () => {
     expect(sendMessages(CONV_NEW)).toHaveLength(1);
     expect(sendMessages(CONV_OLD)).toEqual([]);
   });
+
+});
+
+it("Retry keeps the new session while the old route remains and discards retired stream frames", async () => {
+  const wire = {
+    create: createDeepResearchConversation,
+    subscriptions: harness.subscriptions,
+    get sent() {
+      return [...harness.sendsByCid].flatMap(([cid, frames]) => frames.map(frame => ({ cid, frame })));
+    },
+  };
+  let complete!: (cid: string) => void;
+  wire.create.mockImplementationOnce(() => new Promise(resolve => { complete = resolve; }));
+  const observed: { cid: string | null; ids: string[] }[] = [];
+  const client = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
+  const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+  const { result, rerender } = renderHook(({ route }) => {
+    const r = useDeepResearch(route);
+    observed.push({ cid: r.cid, ids: r.events.map(e => e.id) });
+    return r;
+  }, { initialProps: { route: "old" }, wrapper });
+  await waitFor(() => expect(wire.subscriptions).toHaveLength(1));
+  const old = wire.subscriptions[0];
+  act(() => old.sink({ type: "event", event: { id: "old-question", seq: 1, kind: "message", source: "user", message: { role: "user", content: "Research the actual question" } } }));
+  act(() => result.current.retry());
+  await waitFor(() => expect(wire.create).toHaveBeenCalledTimes(1));
+  expect(result.current.cid).toBeNull();
+  await act(async () => complete("new"));
+  await waitFor(() => expect(result.current.cid).toBe("new"));
+  expect(wire.subscriptions.map(s => s.cid)).toEqual(["old", "new"]);
+  await waitFor(() => expect(wire.sent).toHaveLength(1));
+  expect(wire.sent).toEqual([{ cid: "new", frame: { type: "send_message", content: "Research the actual question" } }]);
+  expect(old.cancel).toHaveBeenCalledOnce();
+  expect(observed.filter(s => s.cid === "new").every(s => !s.ids.includes("old-question"))).toBe(true);
+  act(() => old.sink({ type: "event", event: { id: "late-error", seq: 99, kind: "status", source: "system", status: "ERROR" } }));
+  expect(result.current.events).toHaveLength(0);
+  expect(result.current.status).toBe("IDLE");
+  rerender({ route: "new" });
+  expect(wire.subscriptions.map(s => s.cid)).toEqual(["old", "new"]);
+  expect(wire.sent).toHaveLength(1);
+  rerender({ route: "another" });
+  await waitFor(() => expect(result.current.cid).toBe("another"));
+  expect(wire.sent).toHaveLength(1);
 });

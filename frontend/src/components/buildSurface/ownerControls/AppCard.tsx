@@ -4,7 +4,7 @@
  * callback) — the parent supplies the real fields/values and wires onTweak to app_set_tweak.
  */
 
-import { TweakPanel, type TweakFieldView, type TweakValue } from "@/components/build/TweakPanel";
+import { TweakPanel, type TweakFieldView, type TweakValue } from "./TweakPanel";
 
 interface Props {
   title: string;

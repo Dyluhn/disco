@@ -28,6 +28,8 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
+import sys
 
 import pytest
 from disco.agent_server.redaction import (
@@ -540,3 +542,20 @@ def test_ui18_activity_feed_shell_observation_is_readable() -> None:
     out = redact_frame(frame)
     assert UI18_CURL_IDIOM in out["tool_result"]["content"]
     assert "REDACTED" not in json.dumps(out)
+
+
+def test_long_plain_text_does_not_trigger_quadratic_url_scheme_scan():
+    # A share-import payload containing this ordinary unbroken text previously
+    # monopolized a CPU for minutes before reaching the durable size check.
+    script = """
+from disco.agent_server.redaction import redact_text
+text = 'x' * (2 * 1024 * 1024)
+assert redact_text(text) == text
+assert 'hunter2' not in redact_text('URL: https://user:hunter2@example.com')
+"""
+    subprocess.run([sys.executable, "-c", script], check=True, timeout=10)
+
+
+@pytest.mark.parametrize("prefix", ["1", ".", "+", "-", "abc123"])
+def test_url_scan_boundary_does_not_expose_credentials_after_prefixes(prefix):
+    assert "hunter2" not in redact_text(f"{prefix}https://user:hunter2@example.com")

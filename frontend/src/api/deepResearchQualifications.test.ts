@@ -11,7 +11,7 @@ describe("report qualification downloads", () => {
     const md = serializeReportToMarkdown(report);
     expect(md.indexOf("Evidence and review qualifications")).toBeLessThan(md.indexOf("Executive Summary"));
     expect(md).toContain("2 supported, 1 possible contradictions, 3 unresolved, 4 not checked");
-    expect(md).toContain("it is not a contradiction");
+    expect(md).toContain("did not establish support or contradiction; it does not mean the claim is false");
     expect(md).toContain(String.raw`qualification \[1\]`);
     expect(md).toContain("Unverified: The other participant must fail");
     expect(md).toContain("Not researched: Long-term behavior");

@@ -1,10 +1,12 @@
+import { usePreviewSelectionAccess } from "@/hooks/usePreviewSelectionAccess";
 import { useCallback, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { previewBootstrapUrl } from "@/api/preview";
 import { restartPreview } from "@/api/agent";
-import { useToast } from "@/components/toastApi";
+import { usePreviewOpenError } from "./previewPaneParts/usePreviewOpenError";
 import { useBuildPreview } from "@/hooks/useBuildPreview";
 import { useDownloadProject } from "@/hooks/useProjects";
+import { useSavedWorkspaceAvailability } from "@/hooks/useSavedWorkspaceAvailability";
 import { useElementMention } from "@/hooks/useElementMention";
 import { useElementSelect } from "@/hooks/useElementSelect";
 import { useWorkspaceVersions } from "@/hooks/useWorkspaceVersions";
@@ -42,6 +44,12 @@ import { usePreviewRouteBridge } from "./previewPaneParts/usePreviewRouteBridge"
 import { useWorkspaceRollback } from "./previewPaneParts/useWorkspaceRollback";
 import { VersionBanner } from "./previewPaneParts/VersionBanner";
 
+function armPreviewInspection(untrusted: boolean, disarmPoint: () => void, armSelection: () => void) {
+  if (untrusted) return;
+  disarmPoint();
+  armSelection();
+}
+
 /**
  * One canonical Build Preview. Owned web builds always use the platform-managed
  * capability proxy; event-derived srcdoc is reserved for the hardened imported /
@@ -71,8 +79,9 @@ export function PreviewPane({
   const active = previewActiveStatus(status);
   const { data } = useBuildPreview(cid, active);
   const queryClient = useQueryClient();
-  const toast = useToast();
+  const previewOpenError = usePreviewOpenError();
   const download = useDownloadProject();
+  const { hasAvailableWorkspace } = useSavedWorkspaceAvailability(events, status, cid, untrusted);
   const { versions, refetch: refetchVersions } = useWorkspaceVersions(cid, events, status);
   const files = useMemo(() => deriveFiles(events), [events]);
   const appDeliverable = useMemo(() => latestAppDeliverable(events), [events]);
@@ -103,6 +112,8 @@ export function PreviewPane({
   const frameRef = useRef<HTMLIFrameElement | null>(null);
   const currentRouteRef = useRef("/");
 
+  const selectionDisarm = useRef(() => {});
+  const { expired: previewAccessExpired, onExpiredChange } = usePreviewSelectionAccess(() => selectionDisarm.current());
   const generation = previewGeneration(data);
   const selectedTarget = computeSelectedTarget(selectedVersionSeq, currentRouteRef.current, refreshNonce);
   const requestedLaunchKey = computeRequestedLaunchKey(
@@ -118,6 +129,7 @@ export function PreviewPane({
     launchKey,
     launchVersionSeq,
     minting,
+    reloadPreview,
     launchFailure,
     bootstrapFailure,
     onBootstrapReady,
@@ -141,16 +153,6 @@ export function PreviewPane({
     currentRouteRef,
     setRefreshNonce,
   );
-
-  const previewOpenError = (reason: "popup_blocked" | "capability_unavailable") => {
-    toast.show({
-      title: reason === "popup_blocked" ? "Preview popup blocked" : "Couldn’t open Preview",
-      body:
-        reason === "popup_blocked"
-          ? "Allow popups for this site, then try again."
-          : "Isolated Preview access could not be established. Try again.",
-    });
-  };
 
   const refresh = useCallback(async () => {
     if (!cid) return;
@@ -180,10 +182,11 @@ export function PreviewPane({
     frameRef,
     mentionOrigin,
     handleElementMention,
-    computeMentionEnabled(Boolean(onElementMention), launch, untrusted, displayedVersionSeq),
+    computeMentionEnabled(Boolean(onElementMention) && !previewAccessExpired, launch, untrusted, displayedVersionSeq),
   );
   const [editMode, setEditMode] = useState(false);
-  const canEdit = computeCanEdit(Boolean(onSelectionEdit), launch, untrusted, displayedVersionSeq);
+  selectionDisarm.current = () => { handleDisarmEdit(); mention.disarm(); };
+  const canEdit = !previewAccessExpired && computeCanEdit(Boolean(onSelectionEdit), launch, untrusted, displayedVersionSeq);
 
   function toggleEdit() {
     if (!canEdit) return;
@@ -208,8 +211,12 @@ export function PreviewPane({
   }
 
   function handleArmMention() {
-    if (editMode) toggleEdit();
+    handleDisarmEdit();
     mention.arm();
+  }
+
+  function handleArmInspect() {
+    armPreviewInspection(untrusted, mention.disarm, selection.arm);
   }
 
   function handleDisarmEdit() {
@@ -257,8 +264,9 @@ export function PreviewPane({
         onSelectVersion={selectVersion}
         onRefresh={() => void refresh()}
         restarting={restarting}
+        accessExpired={previewAccessExpired}
         cid={cid}
-        showPointButton={computeShowPointButton(Boolean(onElementMention), displayedVersionSeq)}
+        showPointButton={!previewAccessExpired && computeShowPointButton(Boolean(onElementMention), displayedVersionSeq)}
         mentionArmed={mention.armed}
         onArmMention={handleArmMention}
         onDisarmMention={mention.disarm}
@@ -273,6 +281,8 @@ export function PreviewPane({
         updateError={data?.update_error}
       />
       <VersionBanner
+        selectedVersionSeq={selectedVersionSeq}
+        versions={versions}
         displayedVersionSeq={displayedVersionSeq}
         restoringSeq={restoringSeq}
         onBackToCurrent={() => selectVersion(null)}
@@ -300,11 +310,15 @@ export function PreviewPane({
         untrusted={untrusted}
         selection={selection}
         onSteer={onSteer}
+        onArmInspect={handleArmInspect}
         onDisarmEdit={handleDisarmEdit}
         onApplyEdit={applyEdit}
+        onReloadAccess={reloadPreview}
+        accessExpired={previewAccessExpired}
+        onExpiredChange={onExpiredChange}
         onRefresh={() => void refresh()}
         onDownloadSource={
-          cid ? () => download.mutate({ id: cid, binding: null, title: downloadTitle }) : null
+          cid && hasAvailableWorkspace ? () => download.mutate({ id: cid, binding: null, title: downloadTitle }) : null
         }
         downloadPending={download.isPending}
       />

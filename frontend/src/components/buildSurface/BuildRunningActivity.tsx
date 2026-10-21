@@ -13,6 +13,7 @@ import { ActivityFeed } from "@/components/build/ActivityFeed";
 import { AgentStageCard } from "@/components/build/AgentStageCard";
 import { LiveSignalBar } from "@/components/build/LiveSignalBar";
 import { PlanPanel } from "@/components/build/PlanPanel";
+import { BlockedRunNotice } from "./BlockedRunNotice";
 import type { ActivityItem, LiveSignal } from "@/lib/buildTrace";
 import type { BuildController } from "./types";
 import type { BuildFraming } from "@/components/BuildSurface";
@@ -36,6 +37,7 @@ export function BuildRunningActivity({
 }) {
   return (
     <>
+      <BlockedRunNotice events={b.events} status={b.status} />
       {/* front-door: drafting the first plan (live, no plan yet) */}
       {draftingPlan && (
         <div
@@ -59,7 +61,7 @@ export function BuildRunningActivity({
       {b.plan && (
         <div
           data-testid="build-sticky-plan-card"
-          className="sticky top-0 z-20 -mx-body bg-bg px-body pb-section pt-px"
+          className="sticky top-0 z-20 -mx-body max-h-[50%] overflow-y-auto overscroll-contain bg-bg px-body pb-section pt-px"
         >
           {/* runthru-v2 (#3): capable models that emit declarative progress
               snapshots get a live checklist; otherwise (small models, or none

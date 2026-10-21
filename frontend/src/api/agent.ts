@@ -142,7 +142,7 @@ export interface AgentHandle {
  * machinery, so the same create path serves both. */
 export async function createBuildConversation(
   modelOverride?: string | null,
-  surface: "build" | "agent" = "build",
+  surface: "build" | "agent" | "research" = "build",
   autonomous = false,
   /** Weak-model assist tier — EXPLICIT user toggle only (null/false = standard).
    *  Assist is never auto-enabled by hosting; the user opts in via the UI toggle. */
@@ -150,6 +150,7 @@ export async function createBuildConversation(
   quiet = false,
   /** PKG-47: Reference Packs to bind before the first model call (ids from the library). */
   referencePackIds: string[] = [],
+  appkitMode = false,
 ): Promise<string> {
   if (!agentLive()) return FIXTURE_CID;
   const res = await agentSend<{ conversation_id: string }>("POST", "/conversations", {
@@ -158,6 +159,7 @@ export async function createBuildConversation(
     autonomous,
     quiet,
     assist,
+    ...(appkitMode ? { appkit_mode: true } : {}),
     ...(referencePackIds.length > 0 ? { reference_pack_ids: referencePackIds } : {}),
   });
   return res.conversation_id;

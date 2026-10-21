@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 from typing import Any
 
 from disco.core import (
@@ -22,19 +23,23 @@ from disco.core.selection_edit import (
 )
 from disco.core.store.sqlite import SqliteEventStore, SubscriberOverflow
 from disco.retrieval.local_encoders import EncoderUnavailable
-from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from pydantic import ValidationError
 
 from ..auth import websocket_session
 from ..redaction import redact_frame
 from ..runtime import ConversationRuntime
+from ..search_history import SearchHistory, SearchScope, close_search_stream, read_search_history
 from ..space_access import owned_space_ids_or_403
 from ._common import (
     _build_brief_message,
     _context_message,
     _user_message,
+    require_owned_conversation,
     validate_canonical_conversation_id,
 )
+
+_LOG = logging.getLogger(__name__)
 
 
 def _file_stream_payload(frame: dict[str, Any]) -> FileStreamFrame:
@@ -418,29 +423,38 @@ async def _pump_conversation_events(
         # instead of retaining an unbounded in-memory queue on the server.
         with contextlib.suppress(Exception):
             await websocket.close(code=1013, reason="event stream fell behind; reconnect")
+    finally:
+        close = getattr(stream, "aclose", None)
+        if close is not None:
+            await close()
 
 
 async def _pump_ephemeral_frames(websocket: WebSocket, eph_stream: Any) -> None:
     # Watch-it-write: drain the EPHEMERAL bus (transient file-stream deltas,
     # never persisted) onto the same socket. A second pump so a flood of
     # stream frames never blocks the primary event pump (and vice versa).
-    async for frame in eph_stream:
-        # D3: route mcp_approval_required frames via the typed WS event
-        if isinstance(frame, dict) and frame.get("type") == "mcp_approval_required":
-            await _send_json_redacted(
-                websocket,
-                WSServerFrame(
-                    type="mcp_approval_required",
-                    mcp_approval=frame,
-                ).model_dump(mode="json"),
-            )
-        else:
-            await _send_json_redacted(
-                websocket,
-                WSServerFrame(
-                    type="file_stream", file_stream=_file_stream_payload(frame)
-                ).model_dump(mode="json"),
-            )
+    try:
+        async for frame in eph_stream:
+            # D3: route mcp_approval_required frames via the typed WS event
+            if isinstance(frame, dict) and frame.get("type") == "mcp_approval_required":
+                await _send_json_redacted(
+                    websocket,
+                    WSServerFrame(
+                        type="mcp_approval_required",
+                        mcp_approval=frame,
+                    ).model_dump(mode="json"),
+                )
+            else:
+                await _send_json_redacted(
+                    websocket,
+                    WSServerFrame(
+                        type="file_stream", file_stream=_file_stream_payload(frame)
+                    ).model_dump(mode="json"),
+                )
+    finally:
+        close = getattr(eph_stream, "aclose", None)
+        if close is not None:
+            await close()
 
 
 async def _run_conversation_ws(
@@ -451,30 +465,60 @@ async def _run_conversation_ws(
     last_seq: int,
 ) -> None:
     """Drive the conversation WebSocket: state frame, event/ephemeral pumps, frame loop."""
-    await _send_conversation_state_frame(store, websocket, conversation_id, runtime)
-    projection = AgentViewProjection()
-    if last_seq > 0:
-        for event in await store.get_events(conversation_id):
-            if type(event.seq) is int and event.seq <= last_seq:
-                projection.accept(event)
-    stream = await store.subscribe(conversation_id, after_seq=last_seq)
-    eph_stream = await store.subscribe_ephemeral(conversation_id)
-
-    sender = asyncio.create_task(_pump_conversation_events(websocket, stream, projection))
-    eph_sender = asyncio.create_task(_pump_ephemeral_frames(websocket, eph_stream))
     try:
-        await _ws_frame_loop(store, websocket, conversation_id, runtime)
+        await _send_conversation_state_frame(store, websocket, conversation_id, runtime)
+        projection = AgentViewProjection()
+        if last_seq > 0:
+            for event in await store.get_events(conversation_id):
+                if type(event.seq) is int and event.seq <= last_seq:
+                    projection.accept(event)
+        stream = await store.subscribe(conversation_id, after_seq=last_seq)
+        eph_stream = await store.subscribe_ephemeral(conversation_id)
+        tasks = (
+            asyncio.create_task(_pump_conversation_events(websocket, stream, projection)),
+            asyncio.create_task(_pump_ephemeral_frames(websocket, eph_stream)),
+        )
+        primary_failed = False
+        try:
+            await _ws_frame_loop(store, websocket, conversation_id, runtime)
+        except WebSocketDisconnect:
+            raise
+        except BaseException:
+            primary_failed = True
+            raise
+        finally:
+            await _drain_conversation_pumps(tasks, primary_failed=primary_failed)
+    except WebSocketDisconnect:
+        # Starlette raises this for an ASGI send after the client closes too.
+        pass
     finally:
-        sender.cancel()
-        eph_sender.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await sender
-        with contextlib.suppress(asyncio.CancelledError):
-            await eph_sender
-        # Last viewer left → after a grace window, free an idle sandbox
-        # (an in-flight RUNNING loop is left alone; see runtime._suspend).
+        # Notification must survive failed sends, including the initial state.
+        # This releases viewer bookkeeping; it never cancels a live agent run.
         if runtime is not None:
             runtime.connections.on_disconnect(conversation_id)
+
+
+async def _drain_conversation_pumps(
+    tasks: tuple[asyncio.Task[None], ...],
+    *,
+    primary_failed: bool,
+) -> None:
+    for task in tasks:
+        task.cancel()
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    for result in results:
+        if not isinstance(result, BaseException) or isinstance(
+            result, (asyncio.CancelledError, WebSocketDisconnect)
+        ):
+            continue
+        if not primary_failed:
+            raise result
+        # Preserve the receiver's real failure/cancellation, while still
+        # recording an independent producer error after consuming both tasks.
+        _LOG.error(
+            "Conversation event sender failed during teardown",
+            exc_info=(type(result), result, result.__traceback__),
+        )
 
 
 async def _ws_frame_loop(
@@ -514,9 +558,10 @@ def _parse_research_request(
     body: dict[str, Any], runtime: ConversationRuntime | None
 ) -> dict[str, Any]:
     """Parse the research request body into the research_stream kwargs."""
-    # P3: seed from last-selected when no explicit override is given.
+    # Only an omitted selection inherits the sticky pick. Explicit null means
+    # Use Settings default, preserving each role's configured assignment.
     model_override = body.get("model_override") or None
-    if not model_override and runtime is not None:
+    if "model_override" not in body and runtime is not None:
         model_override = runtime.settings.model_binding.get_last_selected_model()
     drop_weak = bool(body.get("drop_weak"))
     think = bool(body.get("think"))
@@ -547,6 +592,7 @@ async def _run_research_ws(
     runtime: ConversationRuntime | None,
     websocket: WebSocket,
     session: Any,
+    history: SearchHistory,
 ) -> None:
     """Drive the research WebSocket: parse request, validate, stream frames, close."""
     try:
@@ -555,7 +601,7 @@ async def _run_research_ws(
         with contextlib.suppress(Exception):
             await websocket.close()
         return
-    body = raw or {}
+    body = raw if isinstance(raw, dict) else {}
     query = str(body.get("query", "")).strip()
     if not query:
         await _send_json_redacted(websocket, {"type": "error", "message": "empty query"})
@@ -594,7 +640,31 @@ async def _run_research_ws(
         )
         await websocket.close()
         return
-    await _stream_research_frames(runtime, websocket, query, params, space_ids, session)
+    scope = None
+    if body.get("request_id") is not None:
+        try:
+            scope = SearchScope.model_validate(
+                {
+                    **params,
+                    "query": query,
+                    "request_id": body["request_id"],
+                    "parent_request_id": body.get("parent_request_id"),
+                    "domains_deny": sorted(params["domains_deny"]),
+                    "space_ids": sorted(space_ids),
+                    # Identity follows the submitted setting, not a mutable
+                    # last-selected default looked up again during replay.
+                    "model_override": body.get("model_override") or None,
+                }
+            )
+        except ValidationError:
+            await _send_json_redacted(
+                websocket, {"type": "error", "message": "Invalid search request identity"}
+            )
+            await websocket.close()
+            return
+    await _stream_research_frames(
+        runtime, websocket, query, params, space_ids, session, history, scope
+    )
 
 
 async def _stream_research_frames(
@@ -604,22 +674,28 @@ async def _stream_research_frames(
     params: dict[str, Any],
     space_ids: frozenset[str],
     session: Any,
+    history: SearchHistory,
+    scope: SearchScope | None,
 ) -> None:
     """Stream research frames to the WebSocket, handling errors and closing."""
     try:
-        async for frame in runtime.deep_research.research_stream(
-            query,
-            model_override=params["model_override"],
-            drop_weak=params["drop_weak"],
-            domains_deny=params["domains_deny"],
-            think=params["think"],
-            conversation_id=params["conversation_id"],
-            space_ids=space_ids,
-            owner_id=session.owner_id,
-            include_unclaimed_legacy=session.is_admin,
-            sources=params["sources"],
-        ):
-            await _send_json_redacted(websocket, frame)
+
+        def run():
+            return runtime.deep_research.research_stream(
+                query,
+                model_override=params["model_override"],
+                drop_weak=params["drop_weak"],
+                domains_deny=params["domains_deny"],
+                think=params["think"],
+                conversation_id=params["conversation_id"],
+                space_ids=space_ids,
+                owner_id=session.owner_id,
+                include_unclaimed_legacy=session.is_admin,
+                sources=params["sources"],
+            )
+
+        frames = history.stream(scope, run) if scope else run()
+        await _send_search_until_disconnect(websocket, frames)
     except WebSocketDisconnect:
         return  # client cancelled mid-stream
     except EncoderUnavailable as exc:
@@ -638,8 +714,42 @@ async def _stream_research_frames(
             await websocket.close()
 
 
+async def _send_search_until_disconnect(websocket: WebSocket, frames: Any) -> None:
+    """Observe cancellation while retrieval/inference is not yielding frames."""
+
+    async def send() -> None:
+        async with close_search_stream(frames):
+            async for frame in frames:
+                await _send_json_redacted(websocket, frame)
+
+    async def disconnected() -> None:
+        while True:
+            if (await websocket.receive())["type"] == "websocket.disconnect":
+                return
+
+    sender = asyncio.create_task(send())
+    receiver = asyncio.create_task(disconnected())
+    try:
+        done, _ = await asyncio.wait((sender, receiver), return_when=asyncio.FIRST_COMPLETED)
+        for task in done:
+            await task
+    finally:
+        sender.cancel()
+        receiver.cancel()
+        await asyncio.gather(sender, receiver, return_exceptions=True)
+
+
 def make_ws_router(store: SqliteEventStore, runtime: ConversationRuntime | None) -> APIRouter:
     router = APIRouter()
+    history = SearchHistory(store)
+
+    @router.get("/conversations/{conversation_id}/research")
+    async def research_history(conversation_id: str, request: Request, response: Response) -> dict:
+        cid = await require_owned_conversation(request, store, conversation_id)
+        if store.conversation_surface_sync(cid) != "research":
+            raise HTTPException(status_code=404, detail="search_not_found")
+        response.headers["Cache-Control"] = "private, no-store"
+        return redact_frame(await read_search_history(store, cid))
 
     @router.websocket("/ws/conversations/{conversation_id}")
     async def conversation_ws(
@@ -680,6 +790,6 @@ def make_ws_router(store: SqliteEventStore, runtime: ConversationRuntime | None)
             )
             await websocket.close()
             return
-        await _run_research_ws(store, runtime, websocket, session)
+        await _run_research_ws(store, runtime, websocket, session, history)
 
     return router

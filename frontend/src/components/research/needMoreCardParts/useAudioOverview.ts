@@ -8,7 +8,7 @@
  * The `audioReasonMessage` human-message mapping stays UI-side.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   absoluteAudioUrl,
   fetchExistingReportAudio,
@@ -134,10 +134,18 @@ export function useAudioOverview({
   onModeOpenChange,
 }: UseAudioOverviewOptions): UseAudioOverviewResult {
   const [audio, setAudio] = useState<AudioState>({ status: "idle" });
+  const generation = useRef(0);
+  useEffect(() => {
+    setAudio({ status: "idle" });
+    return () => { generation.current += 1; };
+  }, [cid]);
   useRestoreExistingAudio(cid, setAudio);
 
   const generate = useCallback(
     async (mode: AudioMode, options?: { force?: boolean }) => {
+      const request = ++generation.current;
+      const isCurrent = () => generation.current === request;
+      const update = (state: AudioState) => { if (isCurrent()) setAudio(state); };
       onModeOpenChange(false);
       setAudio({ status: "generating" });
 
@@ -152,12 +160,12 @@ export function useAudioOverview({
           cid,
           mode,
           bodyPayload,
-          makeStreamEventHandler(setAudio),
+          makeStreamEventHandler(update),
           force,
         );
-        if (!streamed) {
+        if (!streamed && isCurrent()) {
           const data = await requestReportAudioBlocking(cid, mode, bodyPayload, force);
-          setAudio({
+          update({
             status: "done",
             audioUrl: absoluteAudioUrl(data.mp3_url),
             note: data.note || undefined,
@@ -166,13 +174,16 @@ export function useAudioOverview({
         }
       } catch (e: unknown) {
         const reason = e instanceof Error ? e.message : String(e);
-        setAudio({ status: "unavailable", reason });
+        update({ status: "unavailable", reason });
       }
     },
     [cid, followUpSeqs, onModeOpenChange],
   );
 
-  const reset = useCallback(() => setAudio({ status: "idle" }), []);
+  const reset = useCallback(() => {
+    generation.current += 1;
+    setAudio({ status: "idle" });
+  }, []);
 
   return { audio, generate, reset };
 }

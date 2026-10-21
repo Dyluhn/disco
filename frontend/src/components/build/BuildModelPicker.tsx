@@ -1,6 +1,6 @@
 /**
  * The Build chat model picker — chooses the driver model that runs the agent (the
- * cost-legible picker, applied to the agent). Selecting one pins it for the next task
+ * cost-legible picker). Selecting one prepares the model for the next submitted task
  * (model_override → AGENT_DRIVER on the agent-server). Free (local) vs paid (overflow)
  * is always legible at the point of choice.
  */
@@ -8,7 +8,7 @@
 import * as Dropdown from "@radix-ui/react-dropdown-menu";
 import * as Dialog from "@radix-ui/react-dialog";
 import { Check, ChevronDown, Cpu, Eye } from "lucide-react";
-import { useState } from "react";
+import { type Ref, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { cn } from "@/lib/cn";
 import { costTag, driverCostTag } from "@/lib/cost";
@@ -37,6 +37,7 @@ function VisionRecommendationDialog({
   busy,
   saveFailed,
   onSelect,
+  returnFocus,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -44,12 +45,19 @@ function VisionRecommendationDialog({
   busy: boolean;
   saveFailed: boolean;
   onSelect: (id: string) => void;
+  returnFocus: () => void;
 }) {
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-40 bg-black/45" />
-        <Dialog.Content className="fixed left-1/2 top-1/2 z-50 flex max-h-[80vh] w-[min(34rem,92vw)] -translate-x-1/2 -translate-y-1/2 flex-col gap-body overflow-y-auto rounded-card border border-hairline bg-bg p-body pmx-rise">
+        <Dialog.Content
+          onCloseAutoFocus={(event) => {
+            event.preventDefault();
+            returnFocus();
+          }}
+          className="fixed left-1/2 top-1/2 z-50 flex max-h-[80vh] w-[min(34rem,92vw)] -translate-x-1/2 -translate-y-1/2 flex-col gap-body overflow-y-auto rounded-card border border-hairline bg-bg p-body pmx-rise"
+        >
           <div className="flex items-start gap-inline">
             <Eye className="mt-px size-4 shrink-0 text-accent" aria-hidden />
             <div>
@@ -122,12 +130,14 @@ function DriverModelMenu({
   effectiveId,
   disabled,
   onSelect,
+  triggerRef,
 }: {
   models: DriverModel[];
   current: DriverModel | undefined;
   effectiveId: string | null;
   disabled?: boolean;
   onSelect: (model: DriverModel) => void;
+  triggerRef: Ref<HTMLButtonElement>;
 }) {
   const free = models.filter((model) => model.free && !isSubscriptionDriver(model));
   const subscription = models.filter(isSubscriptionDriver);
@@ -153,14 +163,19 @@ function DriverModelMenu({
   return (
     <Dropdown.Root>
       <Dropdown.Trigger
+        ref={triggerRef}
         disabled={disabled}
         aria-label="Choose the model that runs the agent"
+        title={effectiveId && !current
+          ? `Selected model '${effectiveId}' is unavailable. Choose another model for your next request.`
+          : "Model changes apply when you start or continue a task."}
         className="flex max-w-[15rem] max-lg:min-h-11 items-center gap-hair rounded-control border border-hairline bg-surface-1 px-inline py-hair font-ui text-[0.76rem] text-text-muted transition-colors hover:border-hairline-strong hover:text-text disabled:opacity-50"
       >
         <Cpu className="size-3.5 shrink-0" aria-hidden />
         <span className="truncate">
-          {current?.label ??
-            (models.length === 0 ? "Configure model" : "Default model")}
+          {current?.label ?? (effectiveId
+            ? `Unavailable model: ${effectiveId}`
+            : models.length === 0 ? "Configure model" : "Default model")}
         </span>
         {current && (
           <span className={cn("shrink-0", driverCostClass(current))}>
@@ -245,8 +260,14 @@ export function BuildModelPicker({
   const { data: settingsModels } = useModels();
   const updateAssignments = useUpdateAssignments();
   const [visionPromptOpen, setVisionPromptOpen] = useState(false);
+  const driverTrigger = useRef<HTMLButtonElement>(null);
   const toast = useToast();
-  const models = data?.models ?? [];
+  // The same API model can be configured at multiple endpoints. Preserve the
+  // catalogue label so choosing a driver does not present identical menu rows.
+  const models = (data?.models ?? []).map((model) => ({
+    ...model,
+    label: settingsModels?.find((entry) => entry.id === model.id)?.label ?? model.label,
+  }));
   const defaultId = data?.default ?? null;
   // P3: prefer last-selected over the static settings default when null (no
   // explicit pick for this conversation). Falls through to defaultId if no
@@ -265,21 +286,22 @@ export function BuildModelPicker({
   };
 
   const select = (m: DriverModel) => {
-    onChange(m.id === defaultId ? null : m.id);
-    const action = surface === "agent" ? "working" : "building";
+    // Every row is an explicit choice, including the settings default. Null
+    // remains an untouched/inherited selection and can resolve to a sticky pick.
+    onChange(m.id);
     // Cost honesty (A2): the build driver IS the whole agent — a paid/subscription
     // pick drives every step. Say it once; a genuinely free model stays silent.
     if (isSubscriptionDriver(m)) {
       toast.show({
         tone: "cost",
-        title: `Now ${action} with ${m.label}`,
-        body: "This subscription model drives every step of the agent (flat-rate plan, not per-token).",
+        title: `Selected ${m.label} for your next request`,
+        body: "Applied when you start or continue a task. This subscription model uses a flat-rate plan, not per-token billing.",
       });
     } else if (!m.free) {
       toast.show({
         tone: "cost",
-        title: `Now ${action} with ${m.label}`,
-        body: `This paid model drives every step of the agent for this ${surface === "agent" ? "task" : "build"}.`,
+        title: `Selected ${m.label} for your next request`,
+        body: `Applied when you start or continue a task. This paid model will drive every step of the ${surface === "agent" ? "task" : "build"}.`,
       });
     }
     if (
@@ -299,6 +321,7 @@ export function BuildModelPicker({
         effectiveId={effectiveId}
         disabled={disabled}
         onSelect={select}
+        triggerRef={driverTrigger}
       />
       <VisionRecommendationDialog
         open={visionPromptOpen}
@@ -307,6 +330,7 @@ export function BuildModelPicker({
         busy={updateAssignments.isPending}
         saveFailed={Boolean(updateAssignments.error)}
         onSelect={selectVision}
+        returnFocus={() => driverTrigger.current?.focus()}
       />
     </>
   );

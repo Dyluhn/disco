@@ -199,7 +199,10 @@ function parseRound(
   const k = num(args.k);
   const of = num(args.of);
   if (k === null || of === null) return null;
-  return { kind: name as DeepRoundActivity["kind"], k, of };
+  return {
+    kind: name as DeepRoundActivity["kind"], k, of,
+    ...(name === "review" && args.after_rework === true ? { afterRework: true } : {}),
+  };
 }
 
 /** The observation's own extraction rollup, when the retrieval trace carried

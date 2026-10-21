@@ -86,11 +86,11 @@ async def test_explicit_launch_serves_current_and_future_host_bytes_with_new_aut
     state = handoff
     identity = live_preview_identity(state.host)
 
-    async def metadata(cid):
+    def live_session(cid):
         assert cid == "conv_handoff"
-        return managed_preview_metadata(state.host._preview_manager)[0]
+        return state.host
 
-    runtime = SimpleNamespace(preview=SimpleNamespace(preview=metadata))
+    runtime = SimpleNamespace(preview=SimpleNamespace(live_session=live_session))
     authority = await _live_preview_authority(runtime, [], "conv_handoff", 3000)
     assert isinstance(authority, str) and authority
     outcome = await _start(state)

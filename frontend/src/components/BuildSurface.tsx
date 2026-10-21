@@ -18,7 +18,9 @@
  * header comment for the rationale on *why* it was split out that way.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { BuildRouteSync } from "./buildSurface/BuildRouteSync";
+import { AppKitOwnerPanel } from "./buildSurface/ownerControls/AppKitOwnerPanel";
 import { useBuild } from "@/hooks/useBuild";
 import { useBuildNotifications } from "@/hooks/useBuildNotifications";
 import {
@@ -33,6 +35,7 @@ import { publishConversationTitle } from "@/lib/documentTitle";
 import { publishRunStatus } from "@/lib/runStatusBridge";
 import { useVerboseAgentChat } from "@/lib/useVerboseAgentChat";
 import { useDownloadProject, useExportManifest, useProjectRelease } from "@/hooks/useProjects";
+import { useSavedWorkspaceAvailability } from "@/hooks/useSavedWorkspaceAvailability";
 import { ResizableSplit } from "@/components/build/ResizableSplit";
 import { ExecutionCanvas } from "@/components/build/ExecutionCanvas";
 import { AgentCanvas } from "@/components/build/AgentCanvas";
@@ -86,6 +89,7 @@ export function BuildSurface({
   seedContext?: string | null;
 } = {}) {
   const b = useBuild(resumeCid, framing, seedTask, seedContext);
+  const steerInputRef = useRef<HTMLInputElement>(null);
   const copy = FRAMING[framing];
   const [draft, setDraft] = useState("");
 
@@ -96,10 +100,11 @@ export function BuildSurface({
   const download = useDownloadProject();
   const exportManifest = useExportManifest();
   // WO-9: the release verdict drives the capability-only Self-host panel in the
-  // finished-handoff region. Gated on FINISHED (like the DeliverablePanel) so the
+  // finished-handoff region. Gated on the current final workspace seal so the
   // fetch only fires once a persisted snapshot exists to assess; the panel renders
   // purely from this data, so Build and Agent get the IDENTICAL UI by construction.
-  const release = useProjectRelease(b.status === "FINISHED" ? (b.cid ?? null) : null);
+  const { finalWorkspace } = useSavedWorkspaceAvailability(b.events, b.status, b.cid);
+  const release = useProjectRelease(finalWorkspace ? b.cid : null, finalWorkspace?.id ?? "");
 
   const { verbose: verboseChat } = useVerboseAgentChat();
   const { isReplaying, steerable, settled, collapseFeed, draftingPlan, terminalIncomplete } =
@@ -169,6 +174,17 @@ export function BuildSurface({
   // ── Control pane (chat) — the Project-Manager view ─────────────────────
   const chatPane = (
     <>
+      {b.persistentConversation && (
+        <BuildRouteSync
+          cid={b.cid}
+          resumeCid={resumeCid}
+          framing={framing}
+          hasPersistedEvents={b.events.some((event) =>
+            event.kind === "message" && event.source === "user" &&
+            typeof event.seq === "number" && event.message.content === b.task,
+          )}
+        />
+      )}
       <BuildSurfaceHeader
         b={b}
         isolation={isolation}
@@ -218,7 +234,8 @@ export function BuildSurface({
           release={release}
           downloadTitle={taskLabel}
         />
-        <BuildDecisionGates b={b} />
+        <BuildDecisionGates b={b} onSteer={steerable ? () => steerInputRef.current?.focus() : undefined} />
+        {b.persistentConversation && b.cid && <AppKitOwnerPanel key={b.cid} cid={b.cid} status={b.status} />}
         <BuildAskGate b={b} finalMessage={finalMessage} />
         <BuildComposerSection
           b={b}
@@ -226,6 +243,7 @@ export function BuildSurface({
           steerable={steerable}
           settled={settled}
           terminalIncomplete={terminalIncomplete}
+          steerInputRef={steerInputRef}
           steerWithMention={steerWithMention}
           requestPlanWithMention={requestPlanWithMention}
           elementMentionChip={elementMentionChip}
@@ -256,6 +274,7 @@ export function BuildSurface({
             status={b.status}
             cid={b.cid}
             streamingFile={b.streamingFile}
+            replayThrough={b.frameSeq}
             // Discuss affordance → free-form steer. Same wire as the steer composer.
             onSteer={steerable ? steerWithMention : undefined}
             // P8 click-to-edit: the preview-pane edit box submits the selected

@@ -2,8 +2,8 @@
  * Live tmux session polling for the Terminal tab (BP-14).
  *
  * useSessions(cid, active, visible):
- *   - polls /sessions every 2s while active (so the tab badge works regardless of
- *     which tab is shown)
+ *   - polls /sessions every 2s while active or visible (finished/paused runs may
+ *     retain live sessions; active runs keep their badge updated on other tabs)
  *   - polls the selected session's /view every 1s only when the tab is visible
  */
 
@@ -17,7 +17,7 @@ export type { SessionInfo, SessionView };
 export function useSessions(cid: string | null, active: boolean, visible: boolean) {
   const [selectedName, setSelectedName] = useState<string | null>(null);
 
-  const sessionsEnabled = !!cid && active;
+  const sessionsEnabled = !!cid && (active || visible);
   const sessionsQuery = useQuery({
     queryKey: ["sessions", cid],
     queryFn: () => getSessions(cid!),

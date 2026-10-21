@@ -6,6 +6,7 @@ code and prose disagree, they win:
 
 - [`basis-of-design.md`](./docs/contracts/basis-of-design.md) — the cornerstone design document.
 - [`event-state-contract.md`](./docs/contracts/event-state-contract.md) — the spine's binding contract.
+- [API additions](./docs/api-additions.md) — saved Standard Search answers and workflow schedule management.
 
 Hosted CI runs the deterministic release gates. Before opening a PR, run the
 local equivalents for the area you touched; the `Makefile` remains the fastest
@@ -152,10 +153,21 @@ make capture       # record the real research cassette (HEAVY: cold fastembed + 
 make capture-loop  # record a real deep-research conversation (event-log + cassette)
 make canary        # live probe of a running agent-server: /health + a real grounded query
 make canary-health # live /health probe only (no model call)
-make replay        # event-log deterministic replay (needs the loop_demo fixture)
+make replay        # event-log deterministic replay (checked-in loop_paris_standard_low_v4 fixture; make capture-loop records the historical loop_demo pair only)
 make e2e           # frontend Playwright E2E + visual regression (fixture mode)
 make e2e-update    # refresh E2E visual snapshots
 ```
+
+The current replay pair is `loop_paris_standard_low_v4`, a genuine capture of
+the table evidence selector at `5103fd905`. Its provenance records the exact
+source, base image and read-only overlays, explicit request policy, artifact
+hashes, and replay scope. The v2 and v3 pairs and older `loop_demo` evidence remain
+unchanged. An intentional semantic request change requires a new versioned
+capture and strict offline replay; existing responses must not be rekeyed.
+`make capture-loop` writes the historical `loop_demo` filenames, so refresh the
+current fixture through `build_recording_runtime` in an isolated output directory
+with the versioned conversation ID and `standard_deep` depth. Preserve the current
+replay test ID, exact event comparison, and complete cassette consumption.
 
 Frontend tests:
 

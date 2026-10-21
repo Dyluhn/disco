@@ -6,11 +6,18 @@ from disco.core.auth import AuthSession
 from disco.core.store.sqlite import SqliteEventStore
 from disco.core.workflow import ScheduleSpec
 from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel, ConfigDict, StrictBool
 
 from ..auth import current_owner_id, current_session
 from ..runtime import ConversationRuntime
 from ..schedule_models import CreateScheduleBody, PreviewScheduleBody
 from ._common import _reject_if_imported, require_owned_conversation
+
+
+class WorkflowScheduleStateBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: StrictBool
 
 
 async def _create_schedule_response(
@@ -203,6 +210,20 @@ def make_schedules_router(
         return _list_workflow_schedule_runs_response(
             runtime, current_session(request), schedule_id, limit
         )
+
+    @router.patch("/api/workflows/schedules/{schedule_id}")
+    async def set_workflow_schedule_state(
+        schedule_id: str, body: WorkflowScheduleStateBody, request: Request
+    ) -> dict:
+        """Pause/resume future dispatch without deleting the schedule or its history."""
+        if runtime is None:
+            raise HTTPException(status_code=503, detail={"reason": "no_runtime"})
+        row = runtime.schedules.set_workflow_schedule_enabled(
+            schedule_id, enabled=body.enabled, owner_id=current_owner_id(request)
+        )
+        if row is None:
+            raise HTTPException(status_code=404, detail={"reason": "workflow_schedule_not_found"})
+        return row
 
     @router.post("/api/workflows/schedules/{schedule_id}/fire-now")
     async def fire_workflow_schedule_now(schedule_id: str, request: Request) -> dict:

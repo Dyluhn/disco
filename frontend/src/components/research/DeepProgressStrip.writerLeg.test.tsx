@@ -102,6 +102,21 @@ describe("DeepProgressStrip during the writer leg", () => {
     expect(screen.queryByText(RATIONALE)).not.toBeInTheDocument();
   });
 
+  it("shows the revised-report check while retaining live review activity", () => {
+    renderStrip(researchThenWriter(
+      action("initial", "review", { k: 1, of: 1 }, 30),
+      action("repair", "rework", { k: 1, of: 1 }, 50),
+      action("revised", "review", { k: 1, of: 1, after_rework: true }, 60),
+      action("live", "model_activity", {
+        stage: "review", tokens_streamed: 512, reasoning_tokens: 512,
+        seconds: 20, call_ordinal: 17,
+      }, 80),
+    ), { phase: "reviewing" });
+    expect(screen.getByText(/^Checking revisions/)).toBeInTheDocument();
+    expect(screen.queryByText(/^Review 1 of 1/)).not.toBeInTheDocument();
+    expect(screen.getByText("Research done · 16 turns")).toBeInTheDocument();
+  });
+
   it("does the same when only a writer-stage model_activity is newer", () => {
     renderStrip(
       researchThenWriter(

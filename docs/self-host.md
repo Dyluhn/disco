@@ -248,8 +248,8 @@ Type=oneshot
 RemainAfterExit=yes
 WorkingDirectory=%h/disco
 Environment=DISCO_SANDBOX_SOCKET=%t/podman/podman.sock
-ExecStart=/usr/bin/./deploy/compose/disco-compose up -d
-ExecStop=/usr/bin/podman compose down
+ExecStart=%h/disco/deploy/compose/disco-compose up -d
+ExecStop=%h/disco/deploy/compose/disco-compose down
 TimeoutStartSec=0
 
 [Install]
@@ -519,7 +519,8 @@ DISCO_LOCAL_ENGINE=docker DISCO_SANDBOX_SOCKET=/var/run/docker.sock \
 ```
 
 Note that `/var/run/docker.sock` is root-equivalent, so this trades one boundary
-for another; the remote `gvisor` backend avoids that trade. Also be aware that
+for another; the remote `gvisor` backend confines that authority to a separate
+sandbox host. Also be aware that
 `runsc` under a rootless engine currently fails on cgroup delegation
 (`/sys/fs/cgroup/cgroup.subtree_control: permission denied`), and the
 `--runtime-flag ignore-cgroups` workaround disables the memory/CPU/pids limits
@@ -532,6 +533,71 @@ are running it, agent code can exhaust host memory, CPU and PIDs.
 
 The unisolated `process` backend is development-only and fails closed unless both
 `DISCO_SANDBOX=process` and `DISCO_ALLOW_PROCESS_SANDBOX_FOR_DEV=1` are explicit.
+
+### Remote gVisor and live browser
+
+Use a dedicated Linux host or disposable VM with Docker and the official `runsc`
+package installed. The `systrap` platform works inside a VM without nested KVM.
+Register the runtime **on that sandbox host**, then restart its Docker daemon:
+
+```bash
+sudo runsc install --runtime=runsc -- \
+  --platform=systrap --file-access=shared --overlay2=none
+sudo systemctl restart docker
+```
+
+Disco injects its policy scripts through Docker's archive API into running
+containers. The shared filesystem mode and disabled gVisor root overlay make
+those host-mediated writes visible to the guest. Without them, the current
+runtime's root filesystem cache/overlay can hide the injected files. These flags
+retain gVisor syscall isolation and resource limits; do not disable cgroups.
+See the [gVisor filesystem guide](https://gvisor.dev/docs/user_guide/filesystem/).
+
+Pull the sandbox image matching your Disco release into **that host's Docker
+image store**, then tag it `disco-sandbox:base`. The backend never pulls images
+automatically. The image includes Chromium, Xvfb, x11vnc, noVNC and websockify;
+these packages run inside the sandbox, not on the Docker host.
+
+The app-server performs the connection test and the agent-server creates the
+sandbox. **Both server containers need an OpenSSH client, a dedicated SSH key,
+and verified `known_hosts` entries.** Current server builds include the client;
+check older images with `command -v ssh` inside each container. Mount only the
+dedicated credentials, not your personal SSH directory. For the stock image's
+root user, a Compose override can provide them as follows:
+
+```yaml
+services:
+  app-server:
+    volumes:
+      - ./sandbox-ssh:/root/.ssh:ro
+  agent-server:
+    volumes:
+      - ./sandbox-ssh:/root/.ssh:ro
+```
+
+Use directory mode `0700` and private-key mode `0600`; ensure the files are owned
+by the container's effective user, accounting for rootless UID mapping. Put the
+key at `id_ed25519`, or specify its container path in an SSH `config` file. Verify
+the remote host key through a trusted channel before recording it in
+`known_hosts`. Recreate the two services after adding mounts.
+
+The remote SSH account needs Docker socket access (root-equivalent **on the
+sandbox host**). Disco uses `true`, `ip -j address show`, and
+`docker system dial-stdio`, plus local SSH forwarding to the remote host's
+`127.0.0.1` ports. A restricted SSH command policy must permit those operations;
+PTY, agent and X11 forwarding are unnecessary. Do not expose an unauthenticated
+Docker TCP listener or public VNC port.
+
+In Settings → Agent → Sandbox, select **gVisor**, set the Docker endpoint to
+`ssh://sandbox@YOUR_SANDBOX_HOST`, runtime to `runsc`, and image to
+`disco-sandbox:base`. Save and test the connection. Leave `DISCO_SANDBOX` unset
+so Settings controls the backend. The saved backend applies to new sandboxes.
+Enable **Live browser**, start a new conversation, and use the browser tool
+before opening its live view. A successful connection test alone does not prove
+live viewing: verify the actual container runtime and resource limits, then
+confirm the browser's noVNC view updates as the browser navigates. VNC stays
+loopback-bound and view-only inside the sandbox; port 6080 is delivered through
+Disco's conversation-scoped preview path and SSH forwarding.
 
 ## Models
 

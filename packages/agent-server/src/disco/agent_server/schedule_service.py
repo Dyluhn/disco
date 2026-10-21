@@ -310,6 +310,14 @@ class ScheduleService:
             )
         ]
 
+    def set_workflow_schedule_enabled(
+        self, schedule_id: str, *, enabled: bool, owner_id: str
+    ) -> dict | None:
+        row = self._schedule_manager().set_workflow_schedule_enabled(
+            schedule_id, enabled=enabled, owner_id=owner_id
+        )
+        return row.model_dump(mode="json") if row is not None else None
+
     async def fire_workflow_schedule_now(
         self,
         schedule_id: str,

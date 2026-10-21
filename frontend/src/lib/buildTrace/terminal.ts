@@ -6,7 +6,7 @@ import { stripElementMention } from "@/lib/elementMention";
 import type { TerminalEntry } from "../buildTrace";
 import type { AgentEvent } from "@/types/agent";
 
-/** Index shell/code_exec observations + errors by action id. */
+/** Index command observations + errors by action id. */
 function collectTerminalObservations(
   events: AgentEvent[],
 ): Map<string, { output: string; success: boolean }> {
@@ -24,7 +24,22 @@ function collectTerminalObservations(
   return obs;
 }
 
-/** The terminal/output Inspector view: shell + code_exec commands paired with their
+const SESSION_COMMANDS = new Map([
+  ["shell_view", "View session"],
+  ["shell_wait", "Wait for session"],
+  ["shell_write_to_process", "Send input to session"],
+  ["shell_kill_process", "Stop session process"],
+]);
+
+function terminalCommand(tool: string, args: Record<string, unknown>): string | null {
+  if (tool === "shell") return String(args.command ?? "");
+  if (tool === "code_exec") return `${args.language ?? "python"} «code»`;
+  if (tool === "shell_exec") return `[${args.session ?? "main"}] ${args.command ?? ""}`;
+  const label = SESSION_COMMANDS.get(tool);
+  return label ? `${label} ${args.session ?? "main"}` : null;
+}
+
+/** The terminal/output Inspector view: shell, session and code commands paired with their
  * observed output. The "raw" tier lives here, not on the Activity Feed. */
 export function deriveTerminal(events: AgentEvent[]): TerminalEntry[] {
   const obs = collectTerminalObservations(events);
@@ -32,8 +47,8 @@ export function deriveTerminal(events: AgentEvent[]): TerminalEntry[] {
   for (const e of events) {
     if (e.kind !== "action" || !e.tool_call) continue;
     const { tool_name, arguments: a } = e.tool_call;
-    if (tool_name !== "shell" && tool_name !== "code_exec") continue;
-    const cmd = tool_name === "shell" ? String(a.command ?? "") : `${a.language ?? "python"} «code»`;
+    const cmd = terminalCommand(tool_name, a);
+    if (cmd === null) continue;
     const r = obs.get(e.id);
     out.push({
       id: e.id,

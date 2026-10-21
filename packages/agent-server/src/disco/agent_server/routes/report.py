@@ -13,7 +13,7 @@ from typing import Annotated, Any
 from disco.core import MessageEvent, ReportEvent
 from disco.core.store.sqlite import SqliteEventStore
 from fastapi import APIRouter, Body, HTTPException, Query, Request, Response
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
 from ..report_audio import (
@@ -525,8 +525,8 @@ def _report_audio_file_response(conversation_id: str, name: str) -> Response:
     fpath = (cid_cache / name).resolve()
     if not fpath.is_relative_to(cid_cache) or not fpath.is_file():
         raise HTTPException(status_code=404)
-    return Response(
-        content=fpath.read_bytes(),
+    return FileResponse(
+        path=fpath,
         media_type=media_type,
         headers={
             "Content-Disposition": f'attachment; filename="{name}"',

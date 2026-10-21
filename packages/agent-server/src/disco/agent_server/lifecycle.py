@@ -417,6 +417,7 @@ class LifecycleManager:
         require_inactive_finished_head: bool = False,
     ) -> StatusEvent:
         """Persist FINISHED and its immutable workspace commit as one barrier."""
+        self._rehydration.require_complete(conversation_id)
         return await self._persistence.commit_finished_workspace(
             conversation_id,
             terminal_event,
@@ -531,6 +532,10 @@ class LifecycleManager:
         # silently losing all prior work (the "can't keep building after the first
         # plan finished" bug — the second iteration started from nothing).
         self._rehydration.clear(conversation_id)
+
+    def restoring_workspace(self, conversation_id: str) -> contextlib.AbstractContextManager[None]:
+        """Guard a fenced, authority-checked host restore against partial snapshots."""
+        return self._rehydration.restoring(conversation_id)
 
     async def reconcile_orphaned_runs(self, *, owner_id: str = DEFAULT_OWNER_ID) -> int:
         return await self._orphan_reconciler.reconcile_orphaned_runs(owner_id=owner_id)
@@ -725,6 +730,9 @@ class LifecycleManager:
         generation. It removes the WINDOW, nothing more.
         """
 
+        if not self._rehydration.snapshot_allowed(conversation_id):
+            return
+
         # DECLINE when this terminal is already sealed. A FINISHED run is captured
         # and sealed synchronously by the loop's terminal hook and THEN rides the
         # idle sweep into `_suspend`, which lands here. Its workspace is already
@@ -766,6 +774,7 @@ class LifecycleManager:
         pinned_session: Any | None = None,
     ) -> WorkspaceVersionEvent | None:
         """Mirror live bytes and optionally publish a strict immutable seal."""
+        self._rehydration.require_complete(conversation_id)
         return await self._persistence.capture_workspace(
             conversation_id,
             trigger=trigger,

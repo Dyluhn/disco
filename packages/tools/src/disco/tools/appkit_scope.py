@@ -69,6 +69,7 @@ APPKIT_MUTATORS: frozenset[str] = frozenset(
         "app_add_section",
         "app_update_content",
         "app_set_design",
+        "app_set_tweak",
         "app_add_primitive",
     }
 )

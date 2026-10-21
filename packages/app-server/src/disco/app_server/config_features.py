@@ -36,6 +36,7 @@ from .config.mappers import (
     _tts_from,
 )
 from .config_state_errors import ConfigValidationError
+from .config_workflow_validation import validate_image_workflow
 
 
 class ConfigFeatures:
@@ -105,6 +106,10 @@ class ConfigFeatures:
         met — until then image generation fails NOT CONFIGURED (W-50, no placeholder)."""
         from disco.core.llm import ImageGenSettings
 
+        # Only the active ComfyUI graph runs; an inactive draft must not block
+        # switching provider away from it (the Settings escape hatch).
+        if dto.provider == "comfyui":
+            validate_image_workflow(dto.workflow_json)
         self._store.sections.save_image_gen(
             ImageGenSettings(
                 provider=dto.provider,

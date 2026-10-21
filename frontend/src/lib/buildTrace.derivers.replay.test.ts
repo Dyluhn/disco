@@ -170,6 +170,35 @@ describe("deriveTerminal — shell + code_exec output reconstruction", () => {
     ]);
     expect(deriveTerminal(events)).toHaveLength(0);
   });
+
+  it("replays named session output by action identity, including failed and pending reads", () => {
+    const events = asEvents([
+      { kind: "action", id: "amber", tool_call: { tool_name: "shell_exec", arguments: { session: "amber", command: "printf AMBER_73" } } },
+      { kind: "action", id: "cedar", tool_call: { tool_name: "shell_exec", arguments: { session: "cedar", command: "printf CEDAR_91" } } },
+      { kind: "observation", action_id: "cedar", tool_result: { tool_name: "shell_exec", success: true, content: "CEDAR_91" } },
+      { kind: "observation", action_id: "amber", tool_result: { tool_name: "shell_exec", success: true, content: "AMBER_73" } },
+      { kind: "action", id: "view", tool_call: { tool_name: "shell_view", arguments: { session: "amber" } } },
+      { kind: "agent_error", action_id: "view", error: "session unavailable" },
+      { kind: "action", id: "wait", tool_call: { tool_name: "shell_wait", arguments: { session: "cedar" } } },
+    ]);
+    expect(deriveTerminal(events)).toEqual([
+      { id: "amber", command: "[amber] printf AMBER_73", output: "AMBER_73", success: true, running: false },
+      { id: "cedar", command: "[cedar] printf CEDAR_91", output: "CEDAR_91", success: true, running: false },
+      { id: "view", command: "View session amber", output: "session unavailable", success: false, running: false },
+      { id: "wait", command: "Wait for session cedar", output: "", success: true, running: true },
+    ]);
+  });
+
+  it("labels stdin operations without copying their input and ignores unrelated tool names", () => {
+    const events = asEvents([
+      { kind: "action", id: "input", tool_call: { tool_name: "shell_write_to_process", arguments: { session: "amber", input: "private-stdin-value" } } },
+      { kind: "observation", action_id: "input", tool_result: { tool_name: "shell_write_to_process", success: true, content: "input accepted" } },
+      { kind: "action", id: "other", tool_call: { tool_name: "constructor", arguments: {} } },
+    ]);
+    expect(deriveTerminal(events)).toEqual([
+      { id: "input", command: "Send input to session amber", output: "input accepted", success: true, running: false },
+    ]);
+  });
 });
 
 // ---------------------------------------------------------------------------

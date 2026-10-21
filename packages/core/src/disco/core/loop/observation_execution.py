@@ -18,12 +18,14 @@ from ..events import (
     ObservationEvent,
     RuntimeConstraintEvent,
     ToolResult,
+    WorkspaceMutationEvent,
     find_elided_arg_markers,
     value_is_only_elision_marker,
 )
 from ..llm import LLMContextWindowExceeded
 from ..obs import log_span
 from . import check_ledger
+from ._plan_progress_validation import _validate_plan_progress
 from .dedup import (
     _W39_NOTICE_TOOLS,
     _W39_PLAN_TOOLS,
@@ -547,48 +549,6 @@ async def _annotate_result(
     )
 
 
-async def _answer_from_record(
-    loop: _LoopFacet,
-    action: ActionEvent,
-    before: check_ledger.CheckSnapshot,
-) -> bool:
-    """Answer a repeated check from its recorded run instead of executing it.
-
-    Only a command that has proven repeatable (one real repeat agreed, none ever
-    disagreed) on the same source digest and live sessions is answered this way; the
-    result says so and how to force execution. The W-39 reminder is not emitted — the
-    memo result is the notice.
-    """
-    events = await loop.store.get_events(loop.conversation_id)
-    source = check_ledger.memo_source_for(action, before, events)
-    if source is None:
-        return False
-    source_event = next(
-        (e for e in events if isinstance(e, ObservationEvent) and e.seq == source.seq), None
-    )
-    source_content = source_event.tool_result.content if source_event is not None else ""
-    assert action.tool_call is not None
-    call = action.tool_call
-    _LOG.info(
-        "check ledger: answered %s (call_id=%s) from step %s without executing",
-        call.tool_name,
-        call.call_id,
-        source.seq,
-    )
-    meta = {"check": check_ledger.memo_meta(action, before, source)}
-    result = ToolResult(
-        call_id=call.call_id,
-        tool_name=call.tool_name,
-        success=True,
-        content=check_ledger.memo_content(source, source_content),
-        structured={"exit_code": source.exit_code, "memo_of_seq": source.seq},
-        action_profile=_action_profile_for_call(loop, action),
-    )
-    result = await _annotate_result(loop, action, result, events, meta)
-    await loop._emit(ObservationEvent(tool_result=result, action_id=action.id, meta=meta))
-    return True
-
-
 async def _emit_execution_error(
     loop: _LoopFacet,
     action: ActionEvent,
@@ -612,6 +572,9 @@ async def maybe_emit_sandbox_restart(
         return
     if getattr(sandbox, "generation", generation_before) <= generation_before:
         return
+    # Runtime loss is a semantic effect boundary, not diagnostic metadata.
+    # Publish it before the explanatory prose so interrupted emission stays safe.
+    await loop._emit(WorkspaceMutationEvent(operation="sandbox.restarted"))
     await loop._emit(
         MessageEvent(
             source=EventSource.ENVIRONMENT,
@@ -667,9 +630,13 @@ async def execute_and_observe(
     if check_ledger.ledger_tool(action):
         with log_span("loop.ledger.snapshot", phase="before"):
             check_before = await check_ledger.snapshot(sandbox)
-    if check_before is not None and await _answer_from_record(loop, action, check_before):
-        return
     persist = partial(_persist_primary_result, loop, action, check_before=check_before)
+
+    async def prepare() -> None:
+        await loop._prepare_executor()
+        if tool_name in {"plan_step", "update_plan_progress"}:
+            _validate_plan_progress(action, await loop._events())
+
     primary_persisted = False
     try:
         attributed_execute = getattr(loop.executor, "execute_attributed", None)
@@ -679,11 +646,11 @@ async def execute_and_observe(
                     action.tool_call,
                     action.agent_view_id,
                     persist,
-                    loop._prepare_executor,
+                    prepare,
                 )
                 primary_persisted = True
             else:
-                await loop._prepare_executor()
+                await prepare()
                 result = await loop.executor.execute(action.tool_call)
     except LLMContextWindowExceeded:
         raise

@@ -1,6 +1,6 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { Search, Plus, Clock, FolderGit2, Settings, Moon, Sun } from "lucide-react";
-import { useEffect, useMemo, useState, useCallback, type ComponentType } from "react";
+import { useEffect, useMemo, useState, useRef, useCallback, type ComponentType } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTheme } from "@/lib/useTheme";
 import { markAllModesFresh } from "@/lib/sessionResume";
@@ -17,6 +17,7 @@ export function CommandPalette() {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const returnFocus = useRef<HTMLElement | null>(null);
   const navigate = useNavigate();
   const { theme, toggle: toggleTheme } = useTheme();
 
@@ -55,13 +56,17 @@ export function CommandPalette() {
     const down = (e: KeyboardEvent) => {
       if (e.key === "k" && (e.metaKey || e.ctrlKey)) {
         e.preventDefault();
-        setOpen((open) => !open);
+        if (!open) {
+          returnFocus.current = document.activeElement instanceof HTMLElement
+            ? document.activeElement : null;
+        }
+        setOpen(!open);
       }
     };
 
     document.addEventListener("keydown", down);
     return () => document.removeEventListener("keydown", down);
-  }, []);
+  }, [open]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     const count = filteredCommands.length;
@@ -90,6 +95,17 @@ export function CommandPalette() {
         <Dialog.Overlay className="fixed inset-0 z-50 bg-black/45 backdrop-blur-[2px]" />
         <Dialog.Content
           data-testid="command-palette"
+          onCloseAutoFocus={(event) => {
+            // A keyboard-opened dialog has no Radix Trigger to return focus to.
+            // Navigation may have removed the initiator; preserve the new page's
+            // focus in that case instead of focusing a detached element.
+            const target = returnFocus.current;
+            returnFocus.current = null;
+            if (target?.isConnected) {
+              event.preventDefault();
+              target.focus();
+            }
+          }}
           className="fixed left-1/2 top-[20%] z-50 w-full max-w-lg -translate-x-1/2 overflow-hidden rounded-control border border-hairline bg-surface-1 shadow-2xl pmx-rise focus:outline-none"
         >
           {/* Visually-hidden title/description: Radix Dialog requires a title for

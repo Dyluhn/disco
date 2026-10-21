@@ -1,3 +1,4 @@
+import { finishedWorkspaceEvents } from "@/test/workspaceFixtures";
 /**
  * Canonical Build Preview contracts. Owned web builds render only the
  * platform-managed Preview; srcdoc remains a hardened artifact-viewer fallback
@@ -434,12 +435,14 @@ describe("PreviewPane — one canonical owned-web surface", () => {
         generation: "pv_finished_static_site",
       },
     });
-    render(
-      withClient(
-        <PreviewPane events={[HTML]} status="FINISHED" cid="conv_static_site" />,
-      ),
-    );
-
+    const complete = [{ ...HTML, seq: 1, source: "agent" } as AgentEvent, ...finishedWorkspaceEvents("conv_static_site", 10, 1, 1)];
+    const { rerender } = render(withClient(
+      <PreviewPane events={complete.slice(0, 2)} status="FINISHED" cid="conv_static_site" />,
+    ));
+    const pendingAlert = await screen.findByRole("alert");
+    expect(pendingAlert).toHaveTextContent("Preview is not available for this run");
+    expect(screen.queryByRole("button", { name: /Download source/i })).not.toBeInTheDocument();
+    rerender(withClient(<PreviewPane events={complete} status="FINISHED" cid="conv_static_site" />));
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("Preview is not available for this run");
     expect(alert).toHaveTextContent("Download source");

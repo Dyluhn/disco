@@ -28,6 +28,7 @@ from disco.tools.projects import StorageStatus
 from disco.tools.sandbox.port_owner import port_owners
 
 from .live_session_directory import LiveSessionDirectory
+from .preview_content import PreviewContentService
 from .preview_projection import SealedPreviewRuntimeContract
 from .preview_runtime_projection import PreviewRuntimeProjection
 from .preview_sealed_restore import (
@@ -72,6 +73,7 @@ class PreviewService:
         workspace: WorkspaceCoordinator,
     ) -> None:
         self._live_sessions = live_sessions
+        self.content = PreviewContentService(live_sessions)
         self._store = store
         self._settings = settings
         self._connections = connections

@@ -145,6 +145,8 @@ export interface DeepPhaseActivity {
 
 export interface DeepRoundActivity {
   kind: "review" | "rework" | "continuation";
+  /** Explicit producer marker for a review of revised prose; absent on old events. */
+  afterRework?: boolean;
   k: number;
   of: number;
 }

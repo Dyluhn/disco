@@ -318,3 +318,71 @@ async def test_child_task_does_not_inherit_parent_local_fence_ownership(
         assert stored.status is ConversationStatus.RUNNING
     finally:
         store.close()
+
+
+@pytest.mark.parametrize("option", ["__continue__", "label", "high"])
+async def test_recovery_controls_cross_real_strict_lifecycle_boundary(tmp_path, option):
+    """A UI control has no model-worker ContextVar; its gate supplies authority."""
+    from unittest.mock import MagicMock
+
+    from disco.core import AlternativesEvent, NoOpCondenser, SecurityRisk
+    from disco.core.events import AlternativeOption
+    from disco.core.llm import OperatingMode
+    from disco.core.loop import AgentLoop, ConfirmRisky
+
+    store = SqliteEventStore(":memory:")
+    try:
+        await _seed_view(store, view_id="recovery-view")
+        coordinator, _peer = _coordinator_pair(store, tmp_path)
+        await store.append(
+            CID,
+            AlternativesEvent(
+                agent_view_id="recovery-view",
+                failed_action_id="prior-action",
+                summary="Choose recovery",
+                options=[
+                    AlternativeOption(
+                        id="label", title="Adjust approach", description="", tool_name=""
+                    ),
+                    AlternativeOption(
+                        id="high", title="Privileged action", description="", tool_name="shell"
+                    ),
+                ],
+            ),
+        )
+        await store.append(
+            CID,
+            StatusEvent(
+                status=ConversationStatus.AWAITING_USER_DECISION,
+                agent_view_id="recovery-view",
+            ),
+        )
+        executor = MagicMock()
+        executor.available_tools.return_value = []
+        executor.callable_tool_names.return_value = ["shell"]
+        analyzer = MagicMock(spec=["assess"])
+        analyzer.assess.return_value = SecurityRisk.HIGH
+        loop = AgentLoop(
+            CID,
+            store,
+            MagicMock(),
+            executor,
+            MagicMock(),
+            analyzer,
+            ConfirmRisky(),
+            NoOpCondenser(),
+            MagicMock(),
+            mode=OperatingMode.INTERACTIVE,
+        )
+        loop._terminal_commit_hook = coordinator._lifecycle_commands.terminal_commit_hook(CID)
+        state = await asyncio.create_task(loop.pick_alternative(option, resume=False))
+        assert state.execution_status is (
+            ConversationStatus.WAITING_FOR_CONFIRMATION
+            if option == "high"
+            else ConversationStatus.RUNNING
+        )
+        executor.execute.assert_not_called()
+        statuses = [e for e in await store.get_events(CID) if isinstance(e, StatusEvent)]
+        assert statuses[-1].agent_view_id == "recovery-view"
+    finally:
+        store.close()

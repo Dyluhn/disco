@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, cast
 
 from disco.core.auth import MAX_PREVIEW_TARGET_PATH_CHARS
@@ -22,6 +23,15 @@ class PreviewCapabilityBody(BaseModel):
     target_path: str = Field("/", max_length=MAX_PREVIEW_TARGET_PATH_CHARS)
     transport: Literal["host", "path", "path_live", "canonical"] = "host"
     workspace_version: int | None = Field(default=None, ge=1)
+
+
+@dataclass(frozen=True)
+class _CapabilityLaunch:
+    bootstrap: str
+    intent: str
+    authority_id: str | None = None
+    immutable_version: int | None = None
+    access_expires_at: int | None = None
 
 
 CaptureLease = Callable[[str], AbstractAsyncContextManager[None]]

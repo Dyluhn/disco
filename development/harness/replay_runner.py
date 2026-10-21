@@ -213,18 +213,24 @@ async def _main() -> None:
     from harness.cassette import Cassette
 
     root = Path(__file__).resolve().parent / "cassettes"
-    events_path = root / "loop_demo.events.jsonl"
-    cassette_path = root / "loop_demo.cassette.jsonl"
+    events_path = root / "loop_paris_standard_low_v4.events.jsonl"
+    cassette_path = root / "loop_paris_standard_low_v4.cassette.jsonl"
     if not events_path.exists():
-        print(f"missing {events_path} — run 'make capture-loop' first", file=sys.stderr)
+        print(
+            f"missing {events_path} — the current replay fixture "
+            f"(loop_paris_standard_low_v4 pair, see its provenance.json) is checked in; "
+            f"make capture-loop records the historical loop_demo pair only",
+            file=sys.stderr,
+        )
         raise SystemExit(2)
 
     cassette = Cassette.load(cassette_path)
     recorded = load_events(events_path)
     if is_legacy_plan_fixture(recorded):
         print(
-            "legacy plan-gate loop_demo fixture detected; rerun `make capture-loop` "
-            "to capture the current gateless ReportEvent flow",
+            "legacy plan-gate fixture detected; rerun `make capture-loop` "
+            "to capture the current gateless ReportEvent flow "
+            "(the historical loop_demo pair is retained for evidence only)",
             file=sys.stderr,
         )
         raise SystemExit(2)
@@ -232,11 +238,17 @@ async def _main() -> None:
     def _builder(store):
         from harness.runtime import build_replay_runtime
 
-        return build_replay_runtime(cassette, store)
+        runtime = build_replay_runtime(cassette, store)
+        runtime.deep_research.set_depth("loop_paris_standard_low_v4", "standard_deep")
+        return runtime
 
     surface = "deep_research"
     outputs = await replay_conversation(
-        recorded, build_runtime=_builder, store=SqliteEventStore(":memory:"), surface=surface
+        recorded,
+        build_runtime=_builder,
+        store=SqliteEventStore(":memory:"),
+        cid="loop_paris_standard_low_v4",
+        surface=surface,
     )
     _, recorded_outputs = split_io(recorded)
     diffs = diff_sequences(recorded_outputs, outputs)
@@ -245,6 +257,7 @@ async def _main() -> None:
         for d in diffs:
             print(f"  - {d}")
         raise SystemExit(1)
+    cassette.assert_all_consumed()
     print(f"✓ replay reproduced {len(outputs)} output events identically (no regression)")
 
 

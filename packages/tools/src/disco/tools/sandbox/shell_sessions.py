@@ -23,11 +23,13 @@ from dataclasses import dataclass
 
 from .base import SandboxInstance, clean_sandbox_env
 from .shell_sessions_parts import exec_dispatch as _exec_dispatch_part
+from .shell_sessions_parts import foreground as _foreground_part
 from .shell_sessions_parts import rematerialize as _rematerialize_part
 from .shell_sessions_parts import text as _text_part
 from .shell_sessions_parts.text import _DONE_MARKER as _DONE_MARKER
 from .shell_sessions_parts.text import _FRESH_MARKER_RE as _FRESH_MARKER_RE
-from .shell_sessions_parts.text import _MARKER_RE, _PS1
+from .shell_sessions_parts.text import _MARKER_RE as _MARKER_RE
+from .shell_sessions_parts.text import _PS1
 from .shell_sessions_parts.text import _PS1_MARKER as _PS1_MARKER
 
 _LOG = logging.getLogger(__name__)
@@ -126,6 +128,7 @@ class ShellSessionManager:
         # infer this from arbitrary scrollback: exec() sets idle only from its own
         # post-dispatch delta, and a fresh command resets it to busy.
         self._foreground_state: dict[str, str] = {}
+        self._foreground_epochs: dict[str, _foreground_part._ForegroundEpoch] = {}
         # C3: persistent dev servers the agent launched — keys are tmux session
         # names (no namespace prefix), values are the command/exec_dir/port
         # needed to RE-MATERIALIZE them on the fresh instance after a recreate.
@@ -144,6 +147,7 @@ class ShellSessionManager:
         self._lost_sessions |= self._known_sessions
         self._known_sessions.clear()
         self._foreground_state.clear()
+        self._foreground_epochs = {}
 
     def _classify_persistent_server(self, command: str) -> int | None:
         """Return the USER_PORT this command will bind, or None.
@@ -291,6 +295,7 @@ class ShellSessionManager:
             await self._run_tmux_safe(f"kill-session -t {shlex.quote(session)}")
             retired.append(session)
         self._foreground_state.clear()
+        self._foreground_epochs = {}
         self._known_sessions.clear()
         return retired
 
@@ -436,23 +441,7 @@ class ShellSessionManager:
         return await _rematerialize_part.rehydrate_persistent_servers(self, port_check)
 
     async def view(self, name: str, tail_chars: int = _VIEW_TAIL_CHARS) -> SessionView:
-        full = self._full_name(name)
-        code, out = await self._run_tmux_safe(f"capture-pane -t {shlex.quote(full)} -p -S -")
-        if code != 0:
-            if name in self._lost_sessions:
-                return SessionView(running=False, output="session lost: sandbox was recreated")
-            return SessionView(running=False, output=f"Session not found or error: {out}")
-
-        out = out.rstrip("\r\n")
-        lines = out.split("\n")
-        running = self._foreground_state.get(name) != "idle"
-        if lines:
-            m = _MARKER_RE.search(lines[-1])
-            if m:
-                running = False
-                self._foreground_state[name] = "idle"
-
-        return SessionView(running=running, output=out[-tail_chars:])
+        return await _foreground_part._view(self, name, tail_chars)
 
     async def wait(self, name: str, seconds: int) -> SessionView:
         max_sec = min(seconds, 300)
@@ -476,15 +465,15 @@ class ShellSessionManager:
         # Text delivery itself is state-ambiguous: a transport exception may be
         # raised after tmux accepted bytes, and a successful no-Enter write leaves
         # unsubmitted text at the prompt.  Both must invalidate cached idle proof.
-        self._foreground_state.pop(name, None)
-        await self._run_tmux(f"send-keys -t {shlex.quote(full)} -l {shlex.quote(text)}")
-        if press_enter:
-            try:
+        token = _foreground_part._begin(self, name, None)
+        try:
+            await self._run_tmux(f"send-keys -t {shlex.quote(full)} -l {shlex.quote(text)}")
+            if press_enter:
                 await self._run_tmux(f"send-keys -t {shlex.quote(full)} Enter")
-            except Exception:
-                self._foreground_state.pop(name, None)
-                raise
-            self._foreground_state[name] = "busy"
+        except BaseException:
+            _foreground_part._settle(self, name, token, None)
+            raise
+        _foreground_part._settle(self, name, token, "busy" if press_enter else None)
 
     async def kill_foreground(self, name: str) -> str:
         full = self._full_name(name)
@@ -497,7 +486,11 @@ class ShellSessionManager:
         ):
             return f"Session '{name}' is already idle; no signal sent."
 
-        await self._run_tmux(f"send-keys -t {shlex.quote(full)} C-c")
+        token = _foreground_part._begin(self, name, "busy")
+        try:
+            await self._run_tmux(f"send-keys -t {shlex.quote(full)} C-c")
+        finally:
+            _foreground_part._settle(self, name, token, None)
 
         for _ in range(6):
             await asyncio.sleep(_POLL_S)
@@ -507,7 +500,8 @@ class ShellSessionManager:
         await self._run_tmux(f"kill-session -t {shlex.quote(full)}")
         if name in self._known_sessions:
             self._known_sessions.remove(name)
-        self._foreground_state.pop(name, None)
+        token = _foreground_part._begin(self, name, None)
+        _foreground_part._settle(self, name, token, None)
         await self.ensure(name)
         return f"Process ignored Ctrl-C; session '{name}' was killed and recreated."
 

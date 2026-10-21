@@ -10,6 +10,7 @@ class holds NO verification state; it is a plain collaborator the tool HOLDS
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING
 
 from disco.core.appkit import (
@@ -77,18 +78,24 @@ class SandboxReader:
         except Exception:  # noqa: BLE001 — no components dir
             names = []
         paths.update(f"{_COMPONENTS_DIR}/{name}" for name in names if name.endswith(".tsx"))
-        tree: dict[str, str] = {}
-        for path in sorted(paths):
-            text = await self.read_text(ctx, path)
-            if text is not None:
-                tree[path] = text
-        return tree
+        # Each jailed read can require multiple remote container execs. Bound the
+        # overlap rather than serializing hundreds of round trips, or issuing an
+        # unbounded burst against the daemon. No bytes survive this verification.
+        slots = asyncio.Semaphore(4)
+
+        async def read_entry(path: str) -> tuple[str, str | None]:
+            async with slots:
+                return path, await self.read_text(ctx, path)
+
+        entries = await asyncio.gather(*(read_entry(path) for path in sorted(paths)))
+        return {path: text for path, text in entries if text is not None}
 
     async def read_bytes(self, ctx: ToolContext, relpath: str) -> bytes | None:
         assert ctx.sandbox is not None
         try:
-            if not await ctx.sandbox.file_exists(relpath):
-                return None
+            # read_file already enforces the sandbox jail and rejects missing,
+            # non-file or unreadable targets. A preliminary existence probe adds
+            # remote round trips and cannot make the subsequent read atomic.
             return await ctx.sandbox.read_file(relpath)
         except Exception:  # noqa: BLE001 — unreadable → absent
             return None

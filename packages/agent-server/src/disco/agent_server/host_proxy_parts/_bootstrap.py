@@ -205,6 +205,7 @@ async def _build_bootstrap_response(
     response_body, navigation_headers = preview_navigation_document(
         target,
         clear_storage=expected_authority_id is None,
+        access_expires_at=cap.expires_at,
     )
     await send(
         {
@@ -392,7 +393,17 @@ async def _complete_storage_handoff(
     cookie = (
         f"{cookie_name}={token}; Path=/; Max-Age={preview_ttl_s()}; HttpOnly; {cookie_policy}"
     ).encode("latin1")
-    response_body = json.dumps({"target": target}, separators=(",", ":")).encode()
+    capability = proxy.capability_signer.verify(
+        token, cid8=cid8, port=port, method="GET", path=urllib.parse.urlsplit(target).path or "/"
+    )
+    response_body = json.dumps(
+        {
+            "target": target,
+            "access_expires_at": capability.expires_at if capability is not None else None,
+            "server_time": time.time(),
+        },
+        separators=(",", ":"),
+    ).encode()
     await send(
         {
             "type": "http.response.start",

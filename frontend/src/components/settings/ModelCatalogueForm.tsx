@@ -1,6 +1,6 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { type FormEvent, useState } from "react";
-import { isApiFailure } from "@/api/errors";
+import { readableRequestError } from "@/api/errors";
 import { cn } from "@/lib/cn";
 import { useCreateModel, useUpdateModel } from "@/hooks/useModels";
 import {
@@ -303,7 +303,7 @@ function ModelForm({
 
       {err && (
         <p role="alert" className="font-ui text-[0.8rem] text-unsupported">
-          {isApiFailure(err) ? err.message : "Couldn't save the model."}
+          {readableRequestError(err, "Couldn't save the model.")}
         </p>
       )}
 

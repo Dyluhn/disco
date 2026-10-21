@@ -341,19 +341,19 @@ class ActionlessValveMixin(_ValveHost):
             if not undone
             else f"plan step(s) {', '.join(str(i) for i in undone)} are not marked done"
         )
+        from .finish._terminal_content import _terminal_content
+
+        content, terminal_meta = _terminal_content(
+            events,
+            f"The record shows {step_state}, and the agent signaled completion without "
+            "calling finish. The execution, render-verify, Definition-of-Done and seal "
+            "gates passed on this record, so the build is being marked finished.",
+        )
         await self._loop._emit(
             MessageEvent(
-                source=EventSource.ENVIRONMENT,
-                message=LLMMessage(
-                    role="user",
-                    content=(
-                        f"The record shows {step_state}, and the agent signaled"
-                        " completion without calling finish. The execution,"
-                        " render-verify, Definition-of-Done and seal gates all"
-                        " passed on this record, so the build is being marked"
-                        " finished."
-                    ),
-                ),
+                source=EventSource.AGENT if terminal_meta else EventSource.ENVIRONMENT,
+                message=LLMMessage(role="assistant" if terminal_meta else "user", content=content),
+                meta=terminal_meta,
             )
         )
         await self._loop._emit(

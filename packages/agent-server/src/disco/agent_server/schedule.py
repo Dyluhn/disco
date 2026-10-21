@@ -243,6 +243,11 @@ class ScheduleManager:
             include_unclaimed_legacy=include_unclaimed_legacy,
         )
 
+    def set_workflow_schedule_enabled(
+        self, schedule_id: str, *, enabled: bool, owner_id: str
+    ) -> WorkflowScheduleRow | None:
+        return self._workflow.set_enabled(schedule_id, enabled=enabled, owner_id=owner_id)
+
     def list_workflow_schedule_runs(
         self,
         *,

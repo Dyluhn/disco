@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type RefObject } from "react";
+import { useRef, useState } from "react";
 import { ClipboardPaste, Plus, ShieldOff, Trash2 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { TAP_TARGET_ICON } from "@/lib/tapTarget";
@@ -16,7 +16,7 @@ import {
 } from "@/hooks/useConfig";
 import type { McpServerConfig, McpStatus } from "@/types/config";
 import { McpImportBox } from "./McpImportBox";
-import { ConnectionForm, EMPTY_DRAFT, type DraftState } from "./McpConnectionForm";
+import { McpConnectionForm, type McpConnectionDraft } from "./McpConnectionForm";
 import { ProbeButton } from "./ProbeButton";
 
 /**
@@ -157,16 +157,16 @@ function HeaderActions({
   isLoading,
   onImport,
   onCreate,
-  addButtonRef,
-  importButtonRef,
+  onImportMount,
+  onCreateMount,
 }: {
   creating: boolean;
   importing: boolean;
   isLoading: boolean;
   onImport: () => void;
   onCreate: () => void;
-  addButtonRef: RefObject<HTMLButtonElement | null>;
-  importButtonRef: RefObject<HTMLButtonElement | null>;
+  onImportMount: (node: HTMLButtonElement | null) => void;
+  onCreateMount: (node: HTMLButtonElement | null) => void;
 }) {
   if (creating) return null;
   return (
@@ -174,7 +174,7 @@ function HeaderActions({
       {!importing && (
         <button
           type="button"
-          ref={importButtonRef}
+          ref={onImportMount}
           data-disco-control="settings.mcp-import-open"
           disabled={isLoading}
           onClick={onImport}
@@ -186,7 +186,7 @@ function HeaderActions({
       )}
       <button
         type="button"
-        ref={addButtonRef}
+        ref={onCreateMount}
         data-disco-control="settings.mcp-add"
         disabled={isLoading}
         onClick={onCreate}
@@ -196,6 +196,40 @@ function HeaderActions({
         {isLoading ? "Loading connections…" : "Add connection"}
       </button>
     </div>
+  );
+}
+
+/** Remove control; focus moves to a surviving row (or Add) once the delete lands. */
+function RemoveConnectionButton({
+  connection: { id, name },
+  removeFocus,
+  remove,
+}: {
+  connection: { id: string; name: string };
+  removeFocus: ReturnType<typeof useRowRemovalFocus>;
+  remove: ReturnType<typeof useDeleteMcpServer>;
+}) {
+  return (
+    <button
+      type="button"
+      data-disco-control="settings.mcp-remove"
+      ref={(node) => removeFocus.register(id, node)}
+      onBlur={(event) => removeFocus.leave(id, event.currentTarget)}
+      onClick={(event) => {
+        removeFocus.begin(id, event.currentTarget);
+        remove.mutate(id, {
+          onSuccess: () => removeFocus.succeed(id),
+          onError: () => removeFocus.cancel(id),
+        });
+      }}
+      aria-label={`Remove ${name}`}
+      className={cn(
+        "rounded-control text-text-faint transition-colors hover:text-unsupported",
+        TAP_TARGET_ICON,
+      )}
+    >
+      <Trash2 className="size-3.5" aria-hidden />
+    </button>
   );
 }
 
@@ -211,25 +245,28 @@ export function McpSection() {
   const [importing, setImporting] = useState(false);
   const addButtonRef = useRef<HTMLButtonElement | null>(null);
   const removeFocus = useRowRemovalFocus((connections ?? []).map((row) => row.id), addButtonRef);
-  const importButtonRef = useRef<HTMLButtonElement | null>(null);
-  const wasCreatingRef = useRef(false);
-  const wasImportingRef = useRef(false);
-
-  useEffect(() => {
-    if (wasCreatingRef.current && !creating) addButtonRef.current?.focus();
-    if (wasImportingRef.current && !importing) importButtonRef.current?.focus();
-    wasCreatingRef.current = creating;
-    wasImportingRef.current = importing;
-  }, [creating, importing]);
-
   const [approvingServer, setApprovingServer] = useState<string | null>(null);
   const mutationError =
     create.error ?? update.error ?? remove.error ?? approve.error ?? revoke.error;
 
-  const closeForm = () => setCreating(false);
+  const returnFocus = useRef<"create" | "import" | null>(null);
+  const restoreOpener = (node: HTMLButtonElement | null, kind: "create" | "import") => {
+    if (node && returnFocus.current === kind) {
+      returnFocus.current = null;
+      node.focus();
+    }
+  };
+  const closeForm = () => {
+    returnFocus.current = "create";
+    setCreating(false);
+  };
+  const closeImport = () => {
+    returnFocus.current = "import";
+    setImporting(false);
+  };
   const closeApproval = () => setApprovingServer(null);
 
-  const handleCreate = (draft: DraftState) => {
+  const handleCreate = (draft: McpConnectionDraft) => {
     const config: McpServerConfig = {
       name: draft.name,
       url: draft.url,
@@ -269,13 +306,16 @@ export function McpSection() {
           </h3>
         </div>
         <HeaderActions
-          addButtonRef={addButtonRef}
-          importButtonRef={importButtonRef}
           creating={creating}
           importing={importing}
           isLoading={isLoading}
           onImport={() => setImporting(true)}
           onCreate={() => setCreating(true)}
+          onImportMount={(node) => restoreOpener(node, "import")}
+          onCreateMount={(node) => {
+            addButtonRef.current = node;
+            restoreOpener(node, "create");
+          }}
         />
       </div>
       <p className="font-ui text-[0.84rem] text-text-muted">
@@ -290,11 +330,10 @@ export function McpSection() {
         </p>
       )}
 
-      {importing && <McpImportBox onClose={() => setImporting(false)} />}
+      {importing && <McpImportBox onClose={closeImport} />}
 
       {creating && (
-        <ConnectionForm
-          initial={EMPTY_DRAFT}
+        <McpConnectionForm
           busy={create.isPending}
           onCancel={closeForm}
           onSave={handleCreate}
@@ -401,26 +440,7 @@ export function McpSection() {
                       <ShieldOff className="size-3.5" aria-hidden />
                     </button>
                   )}
-                  <button
-                    type="button"
-                    data-disco-control="settings.mcp-remove"
-                    ref={(node) => removeFocus.register(c.id, node)}
-                  onBlur={(event) => removeFocus.leave(c.id, event.currentTarget)}
-                  onClick={(event) => {
-                    removeFocus.begin(c.id, event.currentTarget);
-                    remove.mutate(c.id, {
-                      onSuccess: () => removeFocus.succeed(c.id),
-                      onError: () => removeFocus.cancel(c.id),
-                    });
-                  }}
-                    aria-label={`Remove ${c.name}`}
-                    className={cn(
-                      "rounded-control text-text-faint transition-colors hover:text-unsupported",
-                      TAP_TARGET_ICON,
-                    )}
-                  >
-                    <Trash2 className="size-3.5" aria-hidden />
-                  </button>
+                  <RemoveConnectionButton connection={c} removeFocus={removeFocus} remove={remove} />
                 </div>
               </div>
               {/* T4.5 live probe: handshake the server (initialize + tools/list)

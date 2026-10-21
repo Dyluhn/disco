@@ -16,6 +16,8 @@ from typing import Literal, NamedTuple, Protocol
 from disco.core import LLMMessage
 from disco.core.llm import CapabilityProfile, CompletionRequest, LLMRouter, ModelRole
 
+from ._grounding_text import _plain_text
+from ._table_citation_context import _table_caption_citations
 from .models import Claim, GroundedAnswer, Passage, RetrievalResult, VerifiedClaim
 from .source_excerpts import relevant_excerpt
 
@@ -162,7 +164,6 @@ _PERSON_INITIAL = re.compile(r"\b[A-Z]\.$")
 # back to cite text that does not exist (phase-6 run-02: 8 of 11 findings).
 _CASE_V = re.compile(r"\bv\.$")
 _CLUSTER = re.compile(r"(.*?)((?:\[\[[\w-]+\]\]\s*)+)", re.DOTALL)
-_MD = re.compile(r"[*`#_>]+")
 _MD_IMG = re.compile(r"!\[[^\]]*\]\([^)]*\)")
 _MD_LINK = re.compile(r"\[([^\]]*)\]\([^)]*\)")
 _WORDISH = re.compile(r"[A-Za-z][\w'-]*")
@@ -180,6 +181,7 @@ class _ClaimSpan(NamedTuple):
     end: int
     text: str
     cited_passage_ids: tuple[str, ...]
+    evidence_focus: str | None = None
 
 
 def _sentence_boundaries(text: str) -> list[re.Match[str]]:
@@ -216,14 +218,14 @@ def _split_sentences(text: str) -> list[str]:
 
 def _plain(text: str) -> str:
     """Strip markdown emphasis so the NLI hypothesis is clean prose."""
-    return _MD.sub("", text).strip()
+    return _plain_text(text)
 
 
 def _clean_premise(text: str) -> str:
     """Remove markdown links and images before sentence-level comparison."""
     text = _MD_IMG.sub(" ", text)
     text = _MD_LINK.sub(r"\1", text)
-    return _MD.sub("", text)
+    return _plain_text(text)
 
 
 def _best_entail(passage_text: str, claim: str, nli: _NLILike) -> tuple[str, float]:
@@ -232,11 +234,17 @@ def _best_entail(passage_text: str, claim: str, nli: _NLILike) -> tuple[str, flo
     return label, score
 
 
-def _passage_check(passage_text: str, claim: str, nli: _NLILike) -> tuple[str, float, bool]:
+def _passage_check(
+    passage_text: str, claim: str, nli: _NLILike, *, evidence_focus: str | None = None
+) -> tuple[str, float, bool]:
     # Keep surrounding qualifications together rather than selecting the most
     # agreeable of twelve isolated opening sentences. Relevant late text stays
     # reachable while each model input remains bounded.
-    premise = relevant_excerpt(_clean_premise(passage_text), claim, max_chars=1600).text
+    premise = relevant_excerpt(
+        _clean_premise(passage_text),
+        claim if evidence_focus is None else evidence_focus,
+        max_chars=1600,
+    ).text
     label = nli.entail(premise, claim)
     score = nli.score(premise, claim)
     availability = getattr(nli, "verification_available", None)
@@ -425,9 +433,16 @@ def _table_claim_spans(text: str) -> list[_ClaimSpan]:
             if index + 1 < len(lines) and _is_gfm_table_divider(lines[index + 1]):
                 headers = [_plain(cell) for cell in cells]
             elif headers and len(cells) == len(headers):
+                values = [_CITE.sub("", cell).strip() for cell in cells]
                 hypothesis = "; ".join(
-                    f"{header}: {_CITE.sub('', cell).strip()}"
-                    for header, cell in zip(headers, cells, strict=True)
+                    f"{header}: {value}" for header, value in zip(headers, values, strict=True)
+                )
+                # Citation-only columns carry provenance, not search terms. Keep
+                # the canonical claim intact while selecting evidence for this row.
+                evidence_focus = "; ".join(
+                    f"{header}: {value}"
+                    for header, value in zip(headers, values, strict=True)
+                    if value
                 )
                 rows.append(
                     _ClaimSpan(
@@ -435,6 +450,7 @@ def _table_claim_spans(text: str) -> list[_ClaimSpan]:
                         offset + len(line.rstrip("\r\n")),
                         hypothesis,
                         tuple(dict.fromkeys(_CITE.findall(line))),
+                        evidence_focus,
                     )
                 )
         offset += len(line)
@@ -488,7 +504,14 @@ def _verify_claim_span(
     if not unknown_id:
         measurements: list[tuple[str, str, float, bool]] = []
         for passage_id in checked:
-            verdict, score, available = _passage_check(by_id[passage_id].text, hypothesis, nli)
+            verdict, score, available = _passage_check(
+                by_id[passage_id].text,
+                hypothesis,
+                nli,
+                evidence_focus=_plain(span.evidence_focus)
+                if span.evidence_focus is not None
+                else None,
+            )
             measurements.append((passage_id, verdict, score, available))
         best_verdict, status, reason = _measurement_status(measurements)
         candidates = [row for row in measurements if row[1] == best_verdict and row[3]]
@@ -505,6 +528,19 @@ def _verify_claim_span(
     if borrowed and not span.cited_passage_ids:
         record["borrowed_passage_ids"] = list(borrowed)
     return record
+
+
+def _borrowed_span_citations(
+    span: _ClaimSpan,
+    paragraphs: dict[int, tuple[str, ...]],
+    table_context: dict[int, tuple[str, ...]],
+    by_id: dict[str, Passage],
+) -> list[str]:
+    """Select bounded context; caption IDs remain intact for unknown-ID checks."""
+    if span.start in table_context:
+        return list(table_context[span.start])
+    paragraph = max(start for start in paragraphs if start <= span.start)
+    return [passage_id for passage_id in paragraphs[paragraph] if passage_id in by_id]
 
 
 def _verify_claims(
@@ -537,16 +573,20 @@ def _verify_claims(
     out: list[dict] = []
     spans = _claim_spans(text)
     borrowed_by_paragraph = _paragraph_citations(text, spans) if borrow_paragraph_citations else {}
+    table_context = (
+        _table_caption_citations(
+            text, {row.start for row in _table_claim_spans(text)}, _CITE, _is_gfm_table_divider
+        )
+        if borrow_paragraph_citations
+        else {}
+    )
     if progress is not None:
         progress(0, len(spans))
     for span in spans:
         ids = list(span.cited_passage_ids)
         borrowed: list[str] = []
         if not ids and borrow_paragraph_citations:
-            paragraph = max(start for start in borrowed_by_paragraph if start <= span.start)
-            borrowed = [
-                passage_id for passage_id in borrowed_by_paragraph[paragraph] if passage_id in by_id
-            ]
+            borrowed = _borrowed_span_citations(span, borrowed_by_paragraph, table_context, by_id)
         checked = ids or borrowed
         record = _verify_claim_span(span, checked, by_id, nli, borrowed)
         if borrow_paragraph_citations and not ids and not borrowed:

@@ -158,6 +158,21 @@ class PreviewResource(_PreviewSupervisedResource):
         self._sealed_contracts[contract_id] = (session.name, dict(expected_intent))
         return session
 
+    async def fetch_finished_inside(
+        self, contract: Any, port: int, path: str
+    ) -> tuple[int, bytes, str] | None:
+        """Read only the exact live or restored runtime bound to the sealed contract.
+
+        The caller holds the conversation capture lease through this read. Never
+        fall back to another sandbox if this manager's generation is unavailable.
+        """
+        resolved = await self.resolve_active_projection(contract.projection)
+        if resolved is None:
+            resolved = await self.resolve_sealed_contract(contract)
+        if resolved is None or resolved.port != port:
+            return None
+        return await self._sandbox.fetch_inside(port, path)
+
     async def resolve_sealed_contract(self, contract: Any) -> PreviewSession | None:
         """Resolve only a current healthy session host-bound to ``contract``."""
 

@@ -134,6 +134,10 @@ describe("ImageGenSection — A3 image-gen provider settings", () => {
     await openImageConfiguration();
 
     const textarea = await screen.findByPlaceholderText(/Save \(API Format\)/i);
+    fireEvent.change(textarea, { target: { value: "{invalid" } });
+    expect(screen.getByRole("button", { name: /^Save$/ })).toBeDisabled();
+    expect(screen.getByText(/Not valid JSON yet/)).toBeInTheDocument();
+    expect(lastPut).toBeNull();
     const graph = '{ "1": { "class_type": "CheckpointLoaderSimple", "inputs": { "ckpt_name": "%ckpt%" } } }';
     fireEvent.change(textarea, { target: { value: graph } });
     fireEvent.click(screen.getByRole("button", { name: /^Save$/ }));
@@ -142,6 +146,21 @@ describe("ImageGenSection — A3 image-gen provider settings", () => {
     const body = lastPut!.body as { provider: string; workflow_json: string };
     expect(body.provider).toBe("comfyui");
     expect(body.workflow_json).toBe(graph);
+  });
+
+  it("blocks probing an invalid workflow already saved by an older release", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      if (url !== "/api/image-gen/config") throw new Error(`unexpected fetch: ${url}`);
+      return jsonResponse({ provider: "comfyui", base_url: "http://host:8188", model: "checkpoint", workflow_json: "{invalid" });
+    }));
+    render(createElement(ImageGenSection), { wrapper: makeWrapper() });
+    await openImageConfiguration();
+    expect(await screen.findByRole("button", { name: /Test image/ })).toBeDisabled();
+    expect(screen.getByText(/saved image workflow needs valid JSON/)).toBeInTheDocument();
+    // Escape hatch (ImageGenSection.validation.test.tsx): a bad workflow never
+    // disables switching to another provider.
+    expect(screen.getByRole("button", { name: /Paid API/ })).toBeEnabled();
+    expect(lastPut).toBeNull();
   });
 
   it("says an unconfigured tier is optional and not set up, in a neutral tone (W-50, UI-2)", async () => {

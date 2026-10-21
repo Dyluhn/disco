@@ -1,3 +1,4 @@
+import { finishedWorkspaceEvents } from "@/test/workspaceFixtures";
 /**
  * BuildSurface — resumed-task recovery (W-01) + feed scroll affordances (W-40/W-41).
  *
@@ -13,7 +14,7 @@
  *  - W-41: a jump-to-latest chevron appears only when scrolled up past the threshold.
  */
 
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement } from "react";
@@ -23,6 +24,7 @@ import type { AgentEvent, ConversationStatus } from "@/types/agent";
 // ── mocks ──────────────────────────────────────────────────────────────────
 // The build state the surface reads. Mutable so each test sets it before render.
 let buildState: Record<string, unknown>;
+const { releaseQuery } = vi.hoisted(() => ({ releaseQuery: vi.fn(() => ({ data: undefined })) }));
 
 vi.mock("@/hooks/useBuild", () => ({
   useBuild: () => buildState,
@@ -35,7 +37,7 @@ vi.mock("@/hooks/useProjects", () => ({
   }),
   useExportManifest: () => ({ mutate: vi.fn() }),
   useProjectManifest: () => ({ data: { files: [] } }),
-  useProjectRelease: () => ({ data: undefined }),
+  useProjectRelease: (...args: unknown[]) => releaseQuery(...(args as [])),
 }));
 vi.mock("@/api/client", async (orig) => ({
   ...(await orig<typeof import("@/api/client")>()),
@@ -219,7 +221,7 @@ describe("W-40: gate scroll target — plan gate pulls to TOP, others to BOTTOM"
 
 describe("WO-9: the workspace-zip action is labelled 'Download source'", () => {
   it("renders a 'Download source' button (not 'Export') in the resumed header", () => {
-    buildState = baseBuild({ cid: "cid-9", resumed: true, status: "FINISHED" });
+    buildState = baseBuild({ cid: "cid-9", resumed: true, status: "FINISHED", events: finishedWorkspaceEvents("cid-9") });
     renderSurface(<BuildSurface resumeCid="cid-9" />);
     expect(
       screen.getByRole("button", { name: "Download source" }),
@@ -227,6 +229,62 @@ describe("WO-9: the workspace-zip action is labelled 'Download source'", () => {
     expect(
       screen.queryByRole("button", { name: /^export$/i }),
     ).not.toBeInTheDocument();
+  });
+});
+
+describe("saved source availability", () => {
+  it("waits for the current final save before offering source and hides a prior seal on continuation", async () => {
+    const output: AgentEvent = { kind: "deliverable", id: "result", source: "agent", title: "Site", path: "index.html", artifact_kind: "app" };
+    const completed = [output, ...finishedWorkspaceEvents("delayed")];
+    buildState = baseBuild({ cid: "delayed", resumed: true, status: "FINISHED", events: completed.slice(0, 2) });
+    const { rerenderSurface } = renderSurface(<BuildSurface resumeCid="delayed" />);
+    expect(screen.getByText("Source not ready")).toBeVisible();
+    expect(releaseQuery).toHaveBeenLastCalledWith(null, "");
+    expect(screen.queryByRole("link", { name: "Download source" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /open the deliverable/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Download source" })).not.toBeInTheDocument();
+    buildState = { ...buildState, events: completed };
+    await act(async () => rerenderSurface(<BuildSurface resumeCid="delayed" />));
+    for (const button of screen.getAllByRole("button", { name: "Download source" })) expect(button).toBeEnabled();
+    expect(screen.queryByText("Source not ready")).not.toBeInTheDocument();
+    expect(releaseQuery).toHaveBeenLastCalledWith("delayed", "sealed-1");
+    expect(screen.getByRole("link", { name: "Download source" })).toBeVisible();
+    expect(screen.getByRole("button", { name: /open the deliverable/i })).toBeEnabled();
+    const next = finishedWorkspaceEvents("delayed", 30, 2);
+    buildState = { ...buildState, events: [...completed, next[0]] };
+    await act(async () => rerenderSurface(<BuildSurface resumeCid="delayed" />));
+    expect(screen.queryByRole("button", { name: "Download source" })).not.toBeInTheDocument();
+    expect(releaseQuery).toHaveBeenLastCalledWith(null, "");
+    expect(screen.queryByRole("link", { name: "Download source" })).not.toBeInTheDocument();
+    buildState = { ...buildState, events: [...completed, ...next] };
+    await act(async () => rerenderSurface(<BuildSurface resumeCid="delayed" />));
+    for (const button of screen.getAllByRole("button", { name: "Download source" })) expect(button).toBeEnabled();
+    expect(releaseQuery).toHaveBeenLastCalledWith("delayed", "sealed-2");
+  });
+
+  it.each(["RUNNING", "AWAITING_USER_DECISION"] as const)("does not offer a missing source archive on a resumed %s route", (status) => {
+    buildState = baseBuild({ cid: "new-unsaved-run", resumed: true, status });
+    renderSurface(<BuildSurface resumeCid="new-unsaved-run" />);
+    expect(screen.queryByRole("button", { name: "Download source" })).not.toBeInTheDocument();
+  });
+
+  it("retains source download during a continuation with a saved workspace version", () => {
+    buildState = baseBuild({ cid: "saved-continuation", resumed: true, status: "RUNNING", events: [{
+      kind: "workspace_version", id: "saved-version", source: "system", version_seq: 1,
+      tree_digest: "saved-digest", trigger: "checkpoint",
+    }] });
+    renderSurface(<BuildSurface resumeCid="saved-continuation" />);
+    expect(screen.getByRole("button", { name: "Download source" })).toBeEnabled();
+  });
+
+  it("offers imported source before the first agent run", () => {
+    buildState = baseBuild({ cid: "imported-source", resumed: true, status: "IDLE", events: [{
+      kind: "message", id: "import-ready", source: "environment",
+      message: { role: "user", content: "Imported workspace" },
+      meta: { project_import: { workspace_ready: true } },
+    }] });
+    renderSurface(<BuildSurface resumeCid="imported-source" />);
+    expect(screen.getByRole("button", { name: "Download source" })).toBeEnabled();
   });
 });
 
@@ -271,7 +329,12 @@ describe("W-41: scroll-to-latest chevron", () => {
   });
 
   it("uses an immediate scroll when the operator prefers reduced motion", async () => {
-    vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: true }));
+    vi.stubGlobal("matchMedia", vi.fn().mockImplementation((query: string) => ({
+      matches: query === "(prefers-reduced-motion: reduce)",
+      media: query,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    })));
     const user = userEvent.setup();
     buildState = baseBuild({ status: "RUNNING" });
     renderSurface(<BuildSurface />);
@@ -288,4 +351,26 @@ describe("W-41: scroll-to-latest chevron", () => {
     ).scrollTo;
     expect(scrollTo).toHaveBeenCalledWith({ top: 1000, behavior: "auto" });
   });
+});
+
+it("focuses the actual steering composer without resolving the pending choice or sending a draft", async () => {
+  const steer = vi.fn(), pickAlternative = vi.fn(), cancel = vi.fn(), answer = vi.fn();
+  const alternatives: AgentEvent = { kind: "alternatives", id: "choice", source: "agent", failed_action_id: "", summary: "Choose a direction", options: [{ id: "one", title: "First option", description: "", tool_name: "", arguments: {} }] };
+  buildState = baseBuild({ cid: "manual-steer", status: "AWAITING_USER_DECISION", awaitingDecision: true, pendingAlternatives: alternatives, events: [alternatives], steer, pickAlternative, cancel, answer });
+  renderSurface(<BuildSurface resumeCid="manual-steer" />);
+  const user = userEvent.setup();
+  const input = screen.getByRole("textbox", { name: "Steer the agent" });
+  await user.type(input, "Keep the existing files");
+  await user.click(screen.getByRole("button", { name: "or steer manually" }));
+  expect(input).toHaveFocus();
+  expect(input).toHaveValue("Keep the existing files");
+  expect(screen.getByRole("alertdialog", { name: /needs a decision/i })).toBeVisible();
+  expect(steer).not.toHaveBeenCalled();
+  expect(pickAlternative).not.toHaveBeenCalled();
+  expect(cancel).not.toHaveBeenCalled();
+  expect(answer).not.toHaveBeenCalled();
+  await user.keyboard(" and add a footer{Enter}");
+  expect(steer).toHaveBeenCalledExactlyOnceWith("Keep the existing files and add a footer");
+  expect(input).toHaveValue("");
+  expect(pickAlternative).not.toHaveBeenCalled();
 });

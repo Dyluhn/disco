@@ -39,6 +39,7 @@ public signatures to carry a passive signal. The same reasoning already put
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from collections.abc import Awaitable, Callable, Iterator, Mapping
@@ -116,6 +117,39 @@ def observe_stream_progress(observer: ProgressObserver) -> Iterator[None]:
         yield
     finally:
         _OBSERVER.reset(token)
+
+
+async def await_with_progress_timeout[T](work: Awaitable[T], *, timeout: float) -> T:
+    """Bound inactivity without cancelling a stream that is still producing.
+
+    Only increasing delivered-output counts renew the deadline. Waiting,
+    backoff, buffered starts and repeated counts cannot keep it alive. A final
+    report renews the deadline only if it contains newly observed output.
+    Each retry has its own stream identity. Calls without observable output
+    retain the original deadline; cancellation propagates into the awaited work.
+    The surrounding observer continues to receive the original reports.
+    """
+    previous = _OBSERVER.get()
+    delivered: dict[int, int] = {}
+    loop = asyncio.get_running_loop()
+    async with asyncio.timeout(timeout) as deadline:
+
+        async def observe(progress: StreamProgress) -> None:
+            if (
+                progress.streams
+                and progress.state == "generating"
+                and progress.tokens_streamed > delivered.get(progress.stream_id, 0)
+            ):
+                delivered[progress.stream_id] = progress.tokens_streamed
+                deadline.reschedule(loop.time() + timeout)
+            if previous is not None:
+                try:
+                    await previous(progress)
+                except Exception:  # noqa: BLE001 — observation cannot fail live work
+                    _LOG.debug("outer stream-progress observer failed", exc_info=True)
+
+        with observe_stream_progress(observe):
+            return await work
 
 
 def _inspect_stage(metadata: Mapping[str, Any] | None) -> str | None:
@@ -273,6 +307,7 @@ __all__ = [
     "ProgressObserver",
     "StreamProgress",
     "StreamProgressReporter",
+    "await_with_progress_timeout",
     "observe_stream_progress",
     "reporter_for",
 ]

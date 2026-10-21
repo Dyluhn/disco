@@ -1,6 +1,6 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import type { ReactNode } from "react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 /**
  * A small confirm gate for destructive actions (e.g. deleting a conversation).
@@ -13,6 +13,8 @@ interface Props {
   description: string;
   confirmLabel: string;
   onConfirm: () => void;
+  /** Restore focus to a surviving control when confirmation removes the trigger. */
+  onConfirmedClose?: () => void;
   /** Gap #63: a stable, machine-readable tag distinguishing WHICH confirm flow
    *  this is (e.g. "history-delete" vs "projects-delete"). Both delete flows
    *  share this one component, so the harness otherwise can't tell which gate it
@@ -27,15 +29,26 @@ export function ConfirmDialog({
   description,
   confirmLabel,
   onConfirm,
+  onConfirmedClose,
   confirmContext = "generic",
 }: Props) {
   const [open, setOpen] = useState(false);
+  const confirmed = useRef(false);
   return (
-    <Dialog.Root open={open} onOpenChange={setOpen}>
+    <Dialog.Root open={open} onOpenChange={(next) => {
+      if (next) confirmed.current = false;
+      setOpen(next);
+    }}>
       <Dialog.Trigger asChild>{trigger}</Dialog.Trigger>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-40 bg-black/45" />
         <Dialog.Content
+          onCloseAutoFocus={(event) => {
+            if (confirmed.current && onConfirmedClose) {
+              event.preventDefault();
+              onConfirmedClose();
+            }
+          }}
           data-confirm-context={confirmContext}
           className="fixed left-1/2 top-1/2 z-50 w-[min(26rem,92vw)] -translate-x-1/2 -translate-y-1/2 rounded-card border border-hairline bg-bg p-body pmx-rise"
         >
@@ -60,6 +73,7 @@ export function ConfirmDialog({
               type="button"
               onClick={() => {
                 onConfirm();
+                confirmed.current = true;
                 setOpen(false);
               }}
               data-disco-control="confirm-dialog.confirm"

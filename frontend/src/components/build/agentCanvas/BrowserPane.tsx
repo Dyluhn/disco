@@ -27,7 +27,7 @@ export function BrowserPane({
   const [picked, setPicked] = useState<string | null>(null);
   const hero = pickHeroScreenshot(picked, shots);
 
-  const { liveView, liveStartFailure, streaming, setIframeConnected } = useLiveBrowserSession(cid);
+  const { liveView, liveStartFailure, streaming, setIframeConnected, reloadPreview } = useLiveBrowserSession(cid);
 
   // When live view is active, show the noVNC iframe instead of screenshots.
   if (liveView && cid) {
@@ -38,6 +38,8 @@ export function BrowserPane({
           <PreviewLaunchFrame
             title="Live browser (noVNC)"
             launch={liveView.launch}
+            onReload={reloadPreview}
+            onExpiredChange={(expired) => { if (expired) setIframeConnected(false); }}
             // The iframe genuinely LOADING is the truth behind the green-blink badge.
             onLoad={() => setIframeConnected(true)}
             // The capability host is cross-origin from the app. same-origin is

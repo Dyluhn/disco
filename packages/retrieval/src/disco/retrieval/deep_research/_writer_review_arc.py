@@ -13,7 +13,7 @@ from disco.core.llm import LLMRouter
 from ..models import Passage
 from ._citation_aliases import CitationAliases
 from ._progress_events import emit_review, emit_rework
-from ._review_protocol import ReviewBudget, review_actions
+from ._review_protocol import ReviewBudget
 from ._stop import ShouldCancelFn, await_stoppable, raise_if_stopped
 from ._writer_checkpoint import WriterCheckpoint, WriterCheckpointFn
 from ._writer_parts import FinalReport
@@ -47,7 +47,9 @@ async def _grade(state: WriterCheckpoint, ctx: _ArcContext, *, final_check: bool
     async def save_decision() -> None:
         await ctx.save(state)
 
-    await emit_review(ctx.emit, 1, 1)
+    # Legacy checkpoints can name an unchanged-draft retry "final_check".
+    # Only an actual repair releases its reserved review decisions.
+    await emit_review(ctx.emit, 1, 1, after_rework=final_check and state.repair_started)
     review = await _review(
         ctx.router,
         state.final,
@@ -60,7 +62,7 @@ async def _grade(state: WriterCheckpoint, ctx: _ArcContext, *, final_check: bool
         untested=ctx.untested,
         conversation_id=ctx.conversation_id,
         budget=state.budget,
-        reserve=0 if final_check else state.budget.final_reserve,
+        reserve=0 if state.repair_started else state.budget.final_reserve,
         final_check=final_check,
         should_cancel=ctx.should_cancel,
         checkpoint=save_decision,
@@ -73,23 +75,20 @@ async def _grade(state: WriterCheckpoint, ctx: _ArcContext, *, final_check: bool
     )
     state.trail.append(review.trail)
     state.stage = "repair" if review.findings and not state.repair_started else "complete"
-    if (
-        not final_check
-        and not state.budget.complete
-        and state.budget.remaining
-        and state.budget.provider_error is None
-    ):
-        # Resolve an incomplete verdict before deciding whether prose needs repair.
-        # Reuse the reserved decision, exact draft and existing feedback; validated
-        # findings remain available if the reviewer cannot resolve the conflict.
-        state.stage = "final_check"
-        state.budget.messages.append(
-            LLMMessage(role="user", content=review_actions(state.budget.remaining))
-        )
+    # With no actionable findings, terminate honestly instead of borrowing the
+    # repair reserve to retry the unchanged draft or scheduling an empty loop.
     await ctx.save(state)
 
 
 async def _repair(state: WriterCheckpoint, ctx: _ArcContext) -> None:
+    if not state.repair_started and state.budget.remaining == 0:
+        # An older checkpoint may already have spent the reserve on its original
+        # draft. Keep that draft and its findings; do not create unreviewable prose
+        # or refund committed decisions to manufacture a fresh allowance.
+        state.trail.append({"kind": "report_rework_exhausted", "applied": []})
+        state.stage, state.review_outcome = "complete", "incomplete"
+        await ctx.save(state)
+        return
     if state.repair_started:
         # The provider may have received the committed request before a crash.
         # Preserve its draft and findings; never reset the one-repair allowance.
@@ -184,8 +183,7 @@ async def _review_arc(
     )
     await ctx.save(state)
     # A grade spends the finite review allowance; repair is reserved only once.
-    # Re-entering final_check can resolve protocol feedback before that repair,
-    # but cannot reopen the repair allowance after prose has been changed.
+    # Its reserved decisions follow the changed draft, including across resume.
     while state.stage != "complete":
         if state.stage == "repair":
             raise_if_stopped(should_cancel, boundary="report_rework")

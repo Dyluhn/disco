@@ -15,7 +15,7 @@ import httpx
 from disco.core.host_egress import EgressDenied
 
 from .models import SearchHit
-from .source_adapters import _fetch_get, _strip_html, _with_params
+from .source_adapters import _fetch_get, _SearchSourceUnavailable, _strip_html, _with_params
 from .url_policy import url_allowed
 
 _WIKIPEDIA_API = "https://en.wikipedia.org/w/api.php"
@@ -92,14 +92,16 @@ class WikipediaSearchProvider:
         try:
             resp = await _fetch_get(
                 _with_params(self._base_url, params),
+                source=self.name,
                 timeout_s=self._timeout,
                 headers={"User-Agent": _WIKIPEDIA_UA},
                 transport=self._transport,
             )
             status = resp.status_code
-            if status >= 400:
-                return [], named_failure_diagnostic(self.name, f"http {status}", status)
             payload = json.loads(resp.text)
+        except _SearchSourceUnavailable as exc:
+            detail = f"http {exc.status_code}" if exc.status_code is not None else str(exc)
+            return [], named_failure_diagnostic(self.name, detail, exc.status_code)
         except (EgressDenied, OSError, ValueError, httpx.HTTPError) as exc:
             return [], named_failure_diagnostic(self.name, type(exc).__name__, None)
         if not isinstance(payload, dict):

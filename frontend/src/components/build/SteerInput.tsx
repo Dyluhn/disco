@@ -4,16 +4,18 @@
  * in as a user message and replans against.
  */
 
-import { useState } from "react";
+import { useState, type Ref } from "react";
 import { CornerDownLeft, Navigation } from "lucide-react";
 import { cn } from "@/lib/cn";
 
 export function SteerInput({
   onSteer,
+  inputRef,
   disabled,
   attachment,
 }: {
   onSteer: (text: string) => void;
+  inputRef?: Ref<HTMLInputElement>;
   disabled?: boolean;
   attachment?: React.ReactNode;
 }) {
@@ -34,6 +36,7 @@ export function SteerInput({
       >
         <Navigation className="size-3.5 shrink-0 text-text-faint" aria-hidden />
         <input
+          ref={inputRef}
           value={text}
           disabled={disabled}
           onChange={(e) => setText(e.target.value)}

@@ -1,0 +1,124 @@
+{
+  "case": "loop_paris_standard_low_v4",
+  "source": "5103fd905f45d5dba176903ddc9270ffff27f559",
+  "source_tree": "d886054f0379fc42b2e3f549918ba1b16d9a2e0f",
+  "runtime_image_id": "5256259eab4c2d196fd7bea6d584cac77533df80fd2f6db97f552ed6114735d2",
+  "runtime_base_source": "a97c96b90494974e3c1c8020a898d0bd50db3b32",
+  "production_overlays": [
+    "packages/retrieval/src/disco/retrieval/grounding.py"
+  ],
+  "image_receipt_sha256": "494867b1e09a7e55702bf970ccfeaba68ba4c942ff724edbd8d322224c6857ca",
+  "runtime_source_manifest_sha256": "dc09eb2532724d40ddeb6eec9ce48765f6498dba1a80bca09dff9538a1a57b37",
+  "original_config_sha256": "d4672d76a17d8360260349d275578b0fcb7ee1d0ccbd6ea3cea59ad7fec2c307",
+  "effective_config_sha256": "6294243d5e37617de239c3ddbf8e5cc0d3d17989186c36a0c5bb9a7fa6f8a23c",
+  "policy_changes": [
+    {
+      "model_key": "prov-ollama-com-glm-5-3-flash",
+      "path": [
+        "models",
+        "prov-ollama-com-glm-5-3-flash",
+        "request_policy",
+        "body",
+        "reasoning_effort"
+      ],
+      "before": null,
+      "after": "low"
+    }
+  ],
+  "query": "What is the capital of France and roughly its population?",
+  "cid": "loop_paris_standard_low_v4",
+  "surface": "deep_research",
+  "depth": "standard_deep",
+  "model_pick": null,
+  "enable_thinking": true,
+  "retrieval": "unchanged harness bundled search/local extraction/full local encoders",
+  "soft_wall_seconds": 1200,
+  "hard_wall_seconds": 1260,
+  "started": "2026-09-25T09:22:58.581951+00:00",
+  "complete": true,
+  "qualification": "Separate explicitly configured integration case; not UI acceptance or historical-fixture repair.",
+  "error_type": null,
+  "event_count": 286,
+  "interactions": 131,
+  "seams": {
+    "search.provider": 1,
+    "research.environment.schema": 1,
+    "research.environment.read": 75,
+    "llm.complete": 28,
+    "search": 2,
+    "extract": 15,
+    "llm.output_token_limit": 9
+  },
+  "status": "ConversationStatus.FINISHED",
+  "finished": "2026-09-25T09:28:17.215757+00:00",
+  "artifact_sha256": {
+    "loop_paris_standard_low_v4.events.jsonl": "906a82b06622fda7bc092f31ca6802652fb8b52a734e86a6e121481af3753349",
+    "loop_paris_standard_low_v4.cassette.jsonl": "cc08495c0fb7260f6509ab5295dbaaee2d8d5797387e3ba6c1c39d77b07c973c"
+  },
+  "memory.peak": "3480702976",
+  "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0",
+  "capture_provenance_sha256": "4e07c44193ea0290fbd2e1238ced79d697df78625bed16c9198bbaf58aeaa0db",
+  "fixture_files": {
+    "events": "development/harness/cassettes/loop_paris_standard_low_v4.events.jsonl",
+    "cassette": "development/harness/cassettes/loop_paris_standard_low_v4.cassette.jsonl",
+    "provenance": "development/harness/cassettes/loop_paris_standard_low_v4.provenance.json"
+  },
+  "byte_exact_copy": true,
+  "byte_exact_copy_scope": "Event/cassette pair only. Original capture provenance fields are preserved; integration and replay metadata are added, and the original provenance hash is recorded separately.",
+  "historical_fixtures_retained_byte_for_byte": {
+    "files": {
+      "loop_demo.cassette.jsonl": "716ac692f947340e0de526b01edff6451142f8b91ea6b9e22e8966243e7e0a60",
+      "loop_demo.reading-checkpoints.json": "ea9bde65cd68163d15d5145aa2cb93c23c5883c60896993bf7c00a10b06e2931",
+      "loop_paris_standard_low_v2.provenance.json": "04fe50ffd526a6c0adb7b1727c4760caf093864c53589b08fa230d7b2c53280c",
+      "loop_paris_standard_low_v2.cassette.jsonl": "9b49d00a2b2fec9208547fa8be23708f6fee5b274658b442a85b70f618a7fc47",
+      "loop_paris_standard_low_v3.provenance.json": "3216cdb25bb2b7028d38fa7ba36f2e9a430acfc93369ecc8c8ff93a77cc08e6c",
+      "loop_demo.provenance.json": "3bfc08cf267b0a8b87d4e1644d88b61b8a9777ff659d7090bc5474c639833957",
+      "loop_paris_standard_low_v3.events.jsonl": "82104a3171f690a7f3b474c40334e2753e01ef472bb7c3afc525d08d7c31bed1",
+      "loop_demo.events.jsonl": "e9157689bf8658d5a43b56109cc5ae47c6b97469836a9cc0e32579bfbf8a9e2e",
+      "loop_paris_standard_low_v2.events.jsonl": "d59672670031cff5d43cd896e5dc184b5e48b72ce7a44b281111ac0c70b7858d",
+      "loop_paris_standard_low_v3.cassette.jsonl": "bb593cd7adfff28c727967c1a76cf6a3e28003d4cd187bb2814e71700aad824b"
+    },
+    "note": "V2, v3 and loop_demo evidence remains unchanged. V3 strict replay failed under the table selector fix at report-review request key f181626a4acde2f3. This new genuine pair does not rekey or normalize its responses."
+  },
+  "replay_contract": {
+    "test_id": "development/harness/tests/test_replay_runner.py::test_deterministic_replay_reproduces_recorded_events",
+    "surface": "deep_research",
+    "recorded_events": 286,
+    "interactions": 131,
+    "migration": "None. Strict semantic event equality plus all ordered/reusable cassette reads consumed. Request keys retain output budgets.",
+    "capture_policy": "Explicit private low-effort integration policy; no live configuration mutation. Not the unconfigured UI research case.",
+    "qualification": "Private-config full-encoder offline replay passed. Public-fixture/default-harness-config replay remains a required parent integration check."
+  },
+  "private_config_replay": {
+    "source": "5103fd905f45d5dba176903ddc9270ffff27f559",
+    "network": "none",
+    "full_local_encoders": true,
+    "owner_credentials_or_authority_mounted": false,
+    "captured_private_config_used": true,
+    "result": {
+      "case": "loop_paris_standard_low_v4",
+      "source": "5103fd905f45d5dba176903ddc9270ffff27f559",
+      "differences": [],
+      "remaining_occurrences": [],
+      "output_events": 183,
+      "reports": 1,
+      "finished": true,
+      "complete": true
+    },
+    "receipt_sha256": "19e6011b9118a47a9183e09e8cc55bd40d62073f93c72dcb66014cc6623af3f3"
+  },
+  "credential_review": {
+    "reviewed_by": "fixture worker, 2026-09-25",
+    "known_active_credential_matches": 0,
+    "known_active_credential_review": "Hash-verified capture helper checks the completed pair against the master key and active configured provider secrets before marking complete.",
+    "local_format_scan": {
+      "private_key": 0,
+      "bearer_credential": 0,
+      "api_key_format": 0,
+      "aws_key": 0,
+      "email": 0
+    },
+    "scope": "Public research question, source URLs/content, request/response records and event metadata; no owner config, secret store, key or private database included."
+  },
+  "quality_scope": "Completion and exact replay are workflow/determinism evidence, not a factual-quality pass. The final model review returned passes=false for a remaining conclusion citation issue; writer review_outcome is incomplete. Captured report/requests/responses remain unchanged."
+}

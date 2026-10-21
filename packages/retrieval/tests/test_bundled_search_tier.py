@@ -111,6 +111,33 @@ async def test_wikipedia_api_level_error_is_named_too():
     assert "srsearch-error" in str(diagnostic.get("provider_error"))
 
 
+@pytest.mark.parametrize("status", [401, 403, 429, 500, 503])
+async def test_wikipedia_shared_fetch_failure_preserves_status_and_sanitizes_body(status):
+    provider = WikipediaSearchProvider(
+        transport=_wiki_transport(httpx.Response(status, text="private-upstream-body"))
+    )
+    hits, diagnostic = await provider.search_detailed("q")
+    assert hits == []
+    assert diagnostic["status_code"] == status
+    markers = str(diagnostic.get("provider_error") or diagnostic.get("unresponsive_engines"))
+    assert "wikipedia" in markers
+    assert str(status) in markers
+    assert "private-upstream-body" not in markers
+
+
+async def test_wikipedia_shared_fetch_transport_failure_is_a_sanitized_diagnostic():
+    def disconnect(request):
+        raise httpx.ConnectError("private-transport-secret", request=request)
+
+    provider = WikipediaSearchProvider(transport=httpx.MockTransport(disconnect))
+    hits, diagnostic = await provider.search_detailed("q")
+    assert hits == []
+    assert diagnostic["status_code"] is None
+    assert "wikipedia" in str(diagnostic)
+    assert "private-transport-secret" not in str(diagnostic)
+    assert diagnostic.get("provider_error") or diagnostic.get("unresponsive_engines")
+
+
 # ---- the composite ----------------------------------------------------------
 
 

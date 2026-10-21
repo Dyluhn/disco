@@ -37,6 +37,7 @@ export function subscribeLive(
   wsUrlForCursor: ConversationWsUrlFactory = defaultConversationWsUrl,
 ): AgentHandle {
   let closed = false;
+  let connecting = false;
   let ws: WebSocket | null = null;
   let attempt = 0;
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -77,9 +78,31 @@ export function subscribeLive(
     document.addEventListener("visibilitychange", resetAttemptOnVisible);
   }
 
+  const scheduleReconnect = () => {
+    if (closed || terminalIdle || policyClosed || timer) return;
+    attempt += 1;
+    if (attempt > _RECONNECT_DEGRADED_AFTER_ATTEMPTS && !degraded) {
+      degraded = true;
+      onFrame({ type: "connection", state: "degraded" });
+    }
+    const delay = Math.min(1000 * 2 ** (attempt - 1), _RECONNECT_BACKOFF_CAP_MS);
+    timer = setTimeout(() => void connect(), delay);
+  };
+
   async function connect() {
+    if (connecting || closed || policyClosed) return;
+    connecting = true;
     timer = null;
-    await ensureAgentSession();
+    try {
+      await ensureAgentSession();
+    } catch {
+      connecting = false;
+      // Restart can interrupt auth before a socket exists. It needs the same
+      // bounded retry path as a dropped socket, not an abandoned promise.
+      scheduleReconnect();
+      return;
+    }
+    connecting = false;
     if (closed || policyClosed) return;
     const socket = new WebSocket(wsUrlForCursor(cid, lastSeq));
     ws = socket;
@@ -130,13 +153,7 @@ export function subscribeLive(
       clearWatchdog();
       ws = null;
       if (terminalIdle || policyClosed) return;
-      attempt += 1;
-      if (attempt > _RECONNECT_DEGRADED_AFTER_ATTEMPTS && !degraded) {
-        degraded = true;
-        onFrame({ type: "connection", state: "degraded" });
-      }
-      const delay = Math.min(1000 * 2 ** (attempt - 1), _RECONNECT_BACKOFF_CAP_MS);
-      timer = setTimeout(() => void connect(), delay);
+      scheduleReconnect();
     };
     socket.onerror = () => {
       /* onclose handles teardown + reconnect */

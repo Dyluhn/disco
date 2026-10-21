@@ -1,3 +1,4 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -7,8 +8,14 @@ import { SelectionOverlay } from "@/components/build/canvas/SelectionOverlay";
 import { formatSelectionContext } from "@/lib/resolvers/appResolver";
 import { setVerboseAgentChat } from "@/lib/useVerboseAgentChat";
 import { deriveActivity } from "@/lib/buildTrace";
+import { finishedWorkspaceEvents } from "@/test/workspaceFixtures";
 import type { AgentEvent, ConversationStatus, PlanEvent, ActionEvent } from "@/types/agent";
 import type { SelectionEnvelope } from "@/lib/selectionBridge";
+
+function withClient(ui: React.ReactElement) {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+  return <QueryClientProvider client={client}>{ui}</QueryClientProvider>;
+}
 
 const buildState = vi.hoisted(() => ({ value: null as unknown }));
 
@@ -196,7 +203,7 @@ describe("AuthorB unbiased gate — W-14/W-26/W-28/W-43 chat and inspect", () =>
     setVerboseAgentChat(false);
     buildState.value = baseBuildState("WAITING_FOR_CONFIRMATION", [plan, pendingShell]);
 
-    render(<BuildSurface />);
+    render(withClient(<BuildSurface />));
 
     expect(screen.getByTestId("agent-stage-card")).toBeInTheDocument();
     expect(
@@ -216,9 +223,11 @@ describe("AuthorB unbiased gate — W-14/W-26/W-28/W-43 chat and inspect", () =>
       artifact_kind: "files",
       source: "agent",
     };
-    buildState.value = baseBuildState("FINISHED", [plan, deliverable]);
+    buildState.value = baseBuildState("FINISHED", [
+      plan, deliverable, ...finishedWorkspaceEvents("conv_authorb"),
+    ]);
 
-    render(<BuildSurface />);
+    render(withClient(<BuildSurface />));
 
     expect(screen.getByTestId("agent-stage-card")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /download the deliverable/i })).toBeInTheDocument();

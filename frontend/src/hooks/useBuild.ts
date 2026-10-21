@@ -30,7 +30,7 @@ import { useBuildStream, type BuildSession, type BuildStream } from "./useBuildS
  * unless the user has already picked. One-shot, guarded by modelTouched. Also owns
  * the touched flag so a later patch-before-continue knows whether to send anything. */
 function useModelSelection(resumeCid?: string | null) {
-  const [modelId, setModelIdRaw] = useState<string | null>(null); // null → server default
+  const [modelId, setModelIdRaw] = useState<string | null>(null); // null → inherited selection
   // Track an explicit user pick so the resume-seed (below) never clobbers it.
   const modelTouched = useRef(false);
   const setModelId = useCallback((id: string | null) => {
@@ -66,9 +66,9 @@ function useModelSelection(resumeCid?: string | null) {
  * TOUCHED-vs-UNTOUCHED: only PATCH when the user actually changed the picker
  * (modelTouched). An untouched picker — including one seeded from /state on resume —
  * means "leave the model as-is", so we send NOTHING (the backend leaves it). When
- * touched we ALWAYS send model_override, INCLUDING when the user explicitly chose
- * DEFAULT (modelId === null) — that is an intentional RESET, and the backend clears the
- * override so the next turn runs the server default (NOT a silent-ignore). */
+ * touched we ALWAYS send model_override. Picker rows carry explicit IDs, including
+ * the configured default; a caller can still deliberately reset with null, clearing
+ * the override so the next turn inherits Settings (NOT a silent-ignore). */
 function useModelAwareContinuations(
   session: BuildSession | null,
   stream: BuildStream,
@@ -83,7 +83,7 @@ function useModelAwareContinuations(
       s === "ERROR" || s === "STUCK" || s === "FINISHED" || s === "PAUSED" || s === "IDLE";
     if (!terminal) return;
     try {
-      // modelId may be null here — an EXPLICIT default pick → backend resets to default.
+      // Null is an explicit reset; concrete picker choices always retain their ID.
       await patchConversationSettings(session.cid, { modelOverride: modelId });
     } catch {
       /* gate rejected (a run is in flight) — keep the existing model */
@@ -128,13 +128,13 @@ function useModelAwareContinuations(
  * REAL signal: an actual upload (ensurePreCid, called by the paperclip) or
  * submit (which falls through to create.mutate when no preCid exists). The
  * same cid is reused so uploads in the pending session survive the kick. */
-function usePrecreatedUploadCid(surface: "build" | "agent", quietChoice: boolean) {
+function usePrecreatedUploadCid(surface: "build" | "agent", quietChoice: boolean, appkitMode: boolean) {
   const [preCid, setPreCid] = useState<string | null>(null);
   const preCidRef = useRef<string | null>(null);
   const preCreateFlightRef = useRef<Promise<string> | null>(null);
   const preCreate = useMutation({
     mutationFn: (opts: { modelOverride: string | null; autonomous: boolean; quiet: boolean }) =>
-      createBuildConversation(opts.modelOverride, surface, opts.autonomous, null, opts.quiet),
+      createBuildConversation(opts.modelOverride, surface, opts.autonomous, null, opts.quiet, [], appkitMode),
   });
 
   // W-07: lazily obtain the upload cid. Concurrent callers share one in-flight
@@ -164,7 +164,7 @@ function usePrecreatedUploadCid(surface: "build" | "agent", quietChoice: boolean
     setPreCid(null);
   }, []);
 
-  return { preCid, preCidRef, preCreateFlightRef, ensurePreCid, clearPreCid };
+  return { preCid, preCidRef, preCreateFlightRef, ensurePreCid, clearPreCid, creating: preCreate.isPending };
 }
 
 /** Opens a build-like conversation. `surface` is "build" (software framing) or
@@ -172,6 +172,15 @@ function usePrecreatedUploadCid(surface: "build" | "agent", quietChoice: boolean
  * (the /build/:cid or /agent/:cid route), skip the create call and connect to the
  * existing conversation — the WebSocket replays history-then-live, so prior events
  * restore (the stored surface is authoritative; resume never re-sets it). */
+type BuildCreateSettings = {
+  modelOverride: string | null;
+  autonomous: boolean;
+  assist: boolean;
+  quiet: boolean;
+  referencePackIds: string[];
+  appkitMode: boolean;
+};
+
 export function useBuild(
   resumeCid?: string | null,
   surface: "build" | "agent" = "build",
@@ -195,13 +204,14 @@ export function useBuild(
   // auto-enabled by hosting (a capable local model like Qwen 27B is not sandbagged).
   // Off by default; the user flips it for a genuinely weak model. Locked once work begins.
   const [assistChoice, setAssistChoice] = useState(false);
+  const [appkitChoice, setAppkitChoice] = useState(false);
   // PKG-47: Reference Packs the user picked for this build. Bound (snapshotted)
   // server-side before the first model call; never selected automatically.
   const [referencePackIds, setReferencePackIds] = useState<string[]>([]);
   const { verbose: verboseChat } = useVerboseAgentChat();
   const quietChoice = !verboseChat;
 
-  const precreated = usePrecreatedUploadCid(surface, quietChoice);
+  const precreated = usePrecreatedUploadCid(surface, quietChoice, appkitChoice);
   const stream = useBuildStream(session, { surface });
   const { resume, requestPlan, steer } = useModelAwareContinuations(
     session,
@@ -227,13 +237,7 @@ export function useBuild(
   }, [resumeCid, session, seedTask, seedContext]);
 
   const create = useMutation({
-    mutationFn: (opts: {
-      modelOverride: string | null;
-      autonomous: boolean;
-      assist: boolean;
-      quiet: boolean;
-      referencePackIds: string[];
-    }) =>
+    mutationFn: (opts: BuildCreateSettings) =>
       createBuildConversation(
         opts.modelOverride,
         surface,
@@ -241,6 +245,7 @@ export function useBuild(
         opts.assist,
         opts.quiet,
         opts.referencePackIds,
+        opts.appkitMode,
       ),
   });
 
@@ -302,6 +307,7 @@ export function useBuild(
           assist: assistChoice,
           quiet: quietChoice,
           referencePackIds,
+          appkitMode: appkitChoice,
         },
         { onSuccess: (cid) => setSession({ cid, task: trimmed, kick: true }) },
       );
@@ -314,6 +320,7 @@ export function useBuild(
       assistChoice,
       quietChoice,
       referencePackIds,
+      appkitChoice,
       precreated.preCid,
       precreated.preCidRef,
       precreated.preCreateFlightRef,
@@ -332,6 +339,8 @@ export function useBuild(
 
   return {
     started: session !== null,
+    // Offline demonstrations have no server resource to reopen after routing.
+    persistentConversation: agentLive(),
     cid: session?.cid ?? null,
     task: session?.task ?? null,
     resumed: Boolean(resumeCid),
@@ -342,6 +351,9 @@ export function useBuild(
     setAutonomousChoice,
     assistChoice,
     setAssistChoice,
+    appkitChoice,
+    setAppkitChoice,
+    appkitChoiceLocked: Boolean(precreated.preCid) || precreated.creating || create.isPending,
     referencePackIds,
     setReferencePackIds,
     submit,

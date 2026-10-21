@@ -9,14 +9,14 @@ import { QuestionsV2Panel } from "@/components/build/QuestionsV2Panel";
 import { ClarifyPanel } from "@/components/build/ClarifyPanel";
 import type { BuildController } from "./types";
 
-export function BuildDecisionGates({ b }: { b: BuildController }) {
+export function BuildDecisionGates({ b, onSteer }: { b: BuildController; onSteer?: () => void }) {
   return (
     <>
       {b.pendingAction && (
         <ConfirmationPanel action={b.pendingAction} onApprove={b.confirm} onReject={b.reject} />
       )}
       {b.awaitingDecision && b.pendingAlternatives && (
-        <AlternativesGate alternatives={b.pendingAlternatives} onPick={b.pickAlternative} />
+        <AlternativesGate alternatives={b.pendingAlternatives} onPick={b.pickAlternative} onSteer={onSteer} />
       )}
       {b.awaitingQuestion && b.pendingQuestionsV2 && (
         <QuestionsV2Panel

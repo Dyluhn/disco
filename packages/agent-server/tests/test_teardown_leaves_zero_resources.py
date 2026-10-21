@@ -124,6 +124,7 @@ def _fresh_state() -> tuple[LifecycleRunState, LifecycleConnections, Rehydration
     connections = LifecycleConnections(connection_state)
     rehydration = Rehydration.__new__(Rehydration)
     rehydration._rehydrated = {CID}  # type: ignore[attr-defined]
+    rehydration._failed = set()
     return run_state, connections, rehydration
 
 

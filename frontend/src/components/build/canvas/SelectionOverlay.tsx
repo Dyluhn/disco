@@ -2,7 +2,7 @@
  * SelectionOverlay — host-side chrome layered over a preview iframe.
  *
  * Renders:
- *  - An "Inspect" / arm toggle button in the top-right corner.
+ *  - An optional Inspect toolbar; iframe hosts render it as a separate sibling.
  *  - A transparent intercept layer (pointer-events: none) when armed, so
  *    the cursor changes to crosshair over the iframe area.
  *  - A positioned rect box + label when a selection has been received.
@@ -12,9 +12,10 @@
  * that exactly covers the iframe it decorates.  The iframe's flex sibling
  * should be wrapped like:
  *
+ *   <SelectionToolbar ... />
  *   <div className="relative min-h-0 flex-1">
  *     <iframe ref={iframeRef} className="h-full w-full ..." />
- *     <SelectionOverlay ... />
+ *     <SelectionOverlay showToolbar={false} ... />
  *   </div>
  *
  * **Untrusted content:** when `untrusted` is true the arm toggle is replaced
@@ -77,7 +78,7 @@ function InspectTip() {
 
   return (
     <div
-      className="absolute right-2 top-10 z-[103] flex max-w-[220px] items-start gap-1.5 rounded border border-hairline bg-surface-1/95 px-2 py-1.5 shadow-md backdrop-blur-sm select-none"
+      className="ml-auto mt-1 flex max-w-[280px] items-start gap-1.5 rounded border border-hairline bg-surface-1 px-2 py-1.5 select-none"
       role="status"
     >
       <MousePointer2 className="mt-0.5 size-3 shrink-0 text-accent" aria-hidden />
@@ -118,28 +119,21 @@ interface Props {
    * passes this when steering is actually available (`steerable`), so the action is
    * never a false affordance during disabled/non-steerable states. */
   onDiscuss?: (sel: SelectionEnvelope) => void;
+  /** False when the host renders SelectionToolbar outside the iframe bounds. */
+  showToolbar?: boolean;
 }
 
-export function SelectionOverlay({
+/** Inspector controls occupy host layout space so they cannot cover app controls. */
+export function SelectionToolbar({
   armed,
   untrusted,
-  selection,
   onArm,
   onDisarm,
-  onWalkUp,
-  onDiscuss,
-}: Props) {
-  const rect = selection?.rect ?? null;
-  const label = selection?.human_label ?? null;
-
-  // Clamp the label bar so it doesn't escape the top of the overlay area.
-  const labelLeft = rect ? Math.max(0, rect.x) : 0;
-  const labelTop = rect ? rect.y + rect.height + 4 : 0;
-
+}: Pick<Props, "armed" | "untrusted" | "onArm" | "onDisarm">) {
   return (
-    <>
+    <div className="shrink-0 border-b border-hairline bg-surface-1 px-2 py-1">
       {/* ── Arm / untrusted notice ──────────────────────────────────────── */}
-      <div className="absolute right-2 top-2 z-[102] flex items-center gap-1 select-none">
+      <div className="flex items-center justify-end gap-1 select-none">
         {untrusted ? (
           <span
             className="rounded border border-hairline bg-surface-1/90 px-2 py-0.5 font-ui text-[0.67rem] text-text-faint backdrop-blur-sm"
@@ -170,6 +164,32 @@ export function SelectionOverlay({
 
       {/* ── W-27: first-run inspect explainer (only when inspect is usable) ─── */}
       {!untrusted && <InspectTip />}
+    </div>
+  );
+}
+
+export function SelectionOverlay({
+  armed,
+  untrusted,
+  selection,
+  onArm,
+  onDisarm,
+  onWalkUp,
+  onDiscuss,
+  showToolbar = true,
+}: Props) {
+  const rect = selection?.rect ?? null;
+  const label = selection?.human_label ?? null;
+
+  // Clamp the label bar so it doesn't escape the top of the overlay area.
+  const labelLeft = rect ? Math.max(0, rect.x) : 0;
+  const labelTop = rect ? rect.y + rect.height + 4 : 0;
+
+  return (
+    <>
+      {showToolbar && (
+        <SelectionToolbar armed={armed} untrusted={untrusted} onArm={onArm} onDisarm={onDisarm} />
+      )}
 
       {/* ── Armed: crosshair layer (pointer-events:none so iframe gets events) */}
       {armed && !untrusted && (

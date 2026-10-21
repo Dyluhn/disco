@@ -10,6 +10,7 @@ export function PreviewToolbar({
   onSelectVersion,
   onRefresh,
   restarting,
+  accessExpired = false,
   cid,
   showPointButton,
   mentionArmed,
@@ -25,6 +26,7 @@ export function PreviewToolbar({
   onSelectVersion: (seq: number | null) => void;
   onRefresh: () => void;
   restarting: boolean;
+  accessExpired?: boolean;
   cid: string | null;
   showPointButton: boolean;
   mentionArmed: boolean;
@@ -43,7 +45,8 @@ export function PreviewToolbar({
         <button
           type="button"
           onClick={onRefresh}
-          disabled={restarting || !cid}
+          disabled={restarting || !cid || accessExpired}
+          title={accessExpired ? "Use Reload Preview to confirm replacing this expired page" : undefined}
           aria-label="Refresh or restart Preview"
           data-disco-control="build.preview-refresh"
           className="flex min-h-11 items-center gap-hair font-ui text-[0.74rem] text-text-muted transition-colors hover:text-text disabled:opacity-50 lg:min-h-0"

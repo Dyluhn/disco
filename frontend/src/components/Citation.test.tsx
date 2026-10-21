@@ -30,7 +30,7 @@ describe("Citation", () => {
   it("carries the verdict in its accessible label (chroma = meaning)", () => {
     render(<Citation n={3} passage={passage} verdict="unsupported" />);
     expect(
-      screen.getByRole("button", { name: /Source 3.*Not supported by the cited source/i }),
+      screen.getByRole("button", { name: /Source 3.*Support not established/i }),
     ).toBeInTheDocument();
   });
 
@@ -40,4 +40,32 @@ describe("Citation", () => {
     expect(screen.getByText(/corroborating sentence the reader can verify/i)).toBeInTheDocument();
     expect(screen.getByText("example.com")).toBeInTheDocument(); // clean domain
   });
+});
+
+it("dismisses a fine-pointer source with Escape and restores focus from its link", async () => {
+  window.matchMedia = (query: string): MediaQueryList => ({
+    matches: false,
+    media: query,
+    onchange: null,
+    addEventListener() {},
+    removeEventListener() {},
+    addListener() {},
+    removeListener() {},
+    dispatchEvent: () => false,
+  });
+  render(<Citation n={2} passage={passage} verdict="supported" />);
+  const user = userEvent.setup();
+  const trigger = screen.getByRole("button", { name: /Source 2/ });
+  await user.click(trigger);
+  expect(screen.getByRole("dialog")).toBeInTheDocument();
+  await user.tab();
+  expect(screen.getByRole("link", { name: passage.source_title })).toHaveFocus();
+  await user.keyboard("{Escape}");
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(trigger).toHaveFocus();
+  await user.tab();
+  await user.click(trigger);
+  await user.click(screen.getByRole("button", { name: "Close source" }));
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(trigger).toHaveFocus();
 });

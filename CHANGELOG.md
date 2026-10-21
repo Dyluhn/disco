@@ -28,6 +28,73 @@
   prove each one inside the sandbox. The build prompts point at the playbooks the
   way they point at starter kits and trusted components.
 
+## v0.2.3 - 2026-09-25
+
+### Added
+
+- Explicit AppKit selection for new builds and owner controls for editing saved
+  apps, with guarded batch saves and refreshed previews.
+- Read-only run bundle downloads from History and saved workflow schedule lists
+  with pause/resume controls that retain previous runs.
+
+### Fixed
+
+- Preserve task identity through navigation, retry and reconnect. Save Standard
+  Search answers and restore them after reload without resubmitting the search.
+- Restore imported and rolled-back workspace files, wait for the current final
+  workspace save before offering source downloads, and repair installed sharing
+  and read-only bundle imports.
+- Resume approved plans and recovery choices without replaying handled actions;
+  reject failed or stale plan progress, display blocked-run guidance, and retain
+  completed workflow activity and shell output. Explicit shell requests execute
+  afresh; viewing old diagnostics does not rerun commands.
+- Preserve HTTP methods, bodies and application cookies in live and finished app
+  previews, including partitioned cookies in embedded previews. Bind requests
+  to the current runtime and keep Inspect separate from Point mode. Expired
+  access now offers an explicit reload while preserving the mounted form until
+  the user chooses it; live identity checks avoid process discovery.
+- Allocate Deep Research reader output across initial reads and recovery, retain
+  spent work after resume, and reserve final review decisions for changed report
+  drafts. Exclude empty citation columns from excerpt selection while retaining
+  original claims and citations; bind inline verdicts to each claim occurrence.
+- Honor direct source URLs and explicit host scopes in Standard Search, fit
+  evidence within declared model capacity, repair truncated follow-ups, and
+  report upstream source failures instead of presenting them as empty results.
+- Preserve configured credentials and explicit model defaults, explain model
+  catalogue and validation failures accurately, and retain tool requirements
+  during auxiliary fallback. Runtime behavior remains based on explicit
+  configuration rather than provider or model names.
+- Restore keyboard focus across dialogs, menus and inline editors; keep focus
+  out of covered mobile chat and restore it after Inspector dismissal. Add
+  keyboard pane resizing and accessible import tabs and mobile navigation.
+- Keep screenshot capture paths unique across browser restarts so new captures
+  cannot overwrite previous frames. Name thumbnail controls and display a clear
+  unavailable state when an image cannot load.
+- Retain the latest audio selection during concurrent generation and support
+  full-track seeking. Reject invalid image workflow configuration before save.
+- Include Git and the SSH client in release images for project imports and
+  remote sandbox transport; preserve shell output across transport teardown.
+
+### Changed
+
+- Describe unresolved citation checks as evidence assessments, without claiming
+  source excerpts are absent. Report downloads retain incomplete-review and
+  unresolved-finding qualifications.
+- Default published Compose image tag is `v0.2.3`.
+
+### Known limitations
+
+- Deep Research may still take a long time and produce incomplete or inaccurate
+  reports. Reader and review-budget fixes do not establish factual quality;
+  evidence checks and generated reports still require review.
+- Standard Search has no production inline-slide producer, and Spaces do not
+  provide an ingestion path for embedded document search. Some image, search
+  and extraction integrations require separately configured services or
+  credentials and remain unverified in manual acceptance.
+- Comprehensive real-browser UI acceptance remains separate from CI and is
+  incomplete. Blocked, failed and untested control variants are not passes;
+  this release does not claim every control or workflow has been verified.
+
 ## v0.2.2 - 2026-09-23
 
 ### Fixed

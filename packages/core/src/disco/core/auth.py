@@ -58,6 +58,7 @@ from .auth_parts.origin_policy import (
     request_traversed_proxy,
     session_cookie_secure,
 )
+from .auth_parts.preview_claims import _cap_authority_invalid, _cap_scalar_fields
 from .auth_parts.preview_origin import (
     _is_generated_preview_label,
     _is_local_preview_hostname,
@@ -66,10 +67,6 @@ from .auth_parts.preview_origin import (
     path_preview_host_label,
     validated_canonical_preview_url,
     validated_isolated_path_preview_url,
-)
-from .auth_parts.preview_payload import (
-    _cap_scalar_fields,
-    _partitioned_cookies_from_payload,
 )
 from .auth_parts.secret_strength import _warn_if_weak_auth_secret
 from .env import disco_env
@@ -363,12 +360,6 @@ def _check_immutable_preview_version(value: int | None) -> None:
         raise ValueError("invalid immutable preview version")
 
 
-def _cap_authority_invalid(authority_id: object) -> bool:
-    return authority_id is not None and (
-        not isinstance(authority_id, str) or not authority_id or len(authority_id) > 256
-    )
-
-
 def _normalize_cap_methods(payload: dict[str, Any], methods: object) -> tuple[str, ...] | None:
     # Short-lived pre-upgrade GET-only cookies remain readable during a
     # rolling deploy, but newly minted tokens always carry the explicit,
@@ -572,8 +563,7 @@ class PreviewCapabilitySigner:
             return None
         if not self._consume_intent(intent_payload):
             return None
-        cap = replace(cap, partitioned_cookies=partitioned_cookies)
-        return self._mint_cookie(cap, target)
+        return self._mint_cookie(replace(cap, partitioned_cookies=partitioned_cookies), target)
 
     def _consume_intent(self, payload: dict[str, Any]) -> bool:
         store = self._redemption_store
@@ -596,7 +586,7 @@ class PreviewCapabilitySigner:
                 "authority": cap.authority_id,
                 "version": cap.immutable_version,
                 "capture_generation": cap.capture_generation,
-                "partitioned_cookies": cap.partitioned_cookies,
+                "partitioned": cap.partitioned_cookies,
                 "exp": int(time.time()) + preview_ttl_s(),
             }
         )
@@ -675,9 +665,7 @@ class PreviewCapabilitySigner:
             or not self._consume_intent(payload)
         ):
             return None
-        token, verified_target = self._mint_cookie(
-            replace(cap, partitioned_cookies=partitioned), target
-        )
+        token, verified_target = self._mint_cookie(cap, target)
         return token, verified_target, partitioned
 
     def verify(
@@ -737,6 +725,9 @@ class PreviewCapabilitySigner:
         authority_id = payload.get("authority")
         immutable_version = payload.get("version")
         capture_generation = payload.get("capture_generation")
+        partitioned_cookies = payload.get("partitioned", False)
+        if not isinstance(partitioned_cookies, bool):
+            return None
         scalars = _cap_scalar_fields(owner, cid, prefix, port, exp, allow_websocket)
         if scalars is None:
             return None
@@ -751,9 +742,6 @@ class PreviewCapabilitySigner:
             return None
         normalized_methods = _normalize_cap_methods(payload, methods)
         if normalized_methods is None:
-            return None
-        partitioned_cookies = _partitioned_cookies_from_payload(payload)
-        if partitioned_cookies is None:
             return None
         return PreviewCapability(
             owner,

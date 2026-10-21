@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Protocol
 
 from ..events import AlternativeOption
 from .engine_contracts import (
+    _ACTIVE_AGENT_VIEW_ID,
     _CONTINUE_OPTION_ID,
     _LOG,
     ActionEvent,
@@ -43,21 +44,13 @@ if TYPE_CHECKING:
     )
 
     class _LoopFacet(
-
         ConversationModePort,
-
         GateCounterPort,
-
         LoopEventPort,
-
         PlanLifecyclePort,
-
         ToolExecutionPort,
-
         TurnControlPort,
-
         Protocol,
-
     ):
         """The loop capability this module uses: conversation mode, gate counters, the event log,
         the plan lifecycle, tool execution, turn control.
@@ -145,11 +138,16 @@ class PlanApprovalController:
             except PlanRevisionWeakeningError as exc:
                 await reject_plan_weakening(self._loop, plan, exc.diff)
                 return await self._loop.get_state()
+            # Sandbox context I/O can be slow or cancelled. Keep the plan
+            # pending until preparation completes: the caller has not registered
+            # a run yet, so publishing RUNNING first resembles an orphan to the
+            # runtime's recovery sweep. Both operations remain under the same
+            # loop lock and ownership fence.
+            await self._loop._seed_context_from_plan()
             await self._loop._emit(
                 approval.model_copy(update={"agent_view_id": plan.agent_view_id})
             )
             self._loop.mode = self._loop._execution_mode
-            await self._loop._seed_context_from_plan()
         return await self._loop.get_state()
 
     async def _seed_context_from_plan(self) -> None:
@@ -216,29 +214,37 @@ class PlanApprovalController:
                 exc_info=True,
             )
 
-    async def _continue_anyway(self) -> ConversationState:
-        # Constraint 1: the user's bypass reaches the agent as a USER turn, so it
-        # must name what is being waived. `count_recent_failures` is the same
-        # streak the circuit breaker opened on, and the streak is reset below.
+    async def _continue_anyway(self, alternative: AlternativesEvent) -> ConversationState:
+        # A generic ask_user choice also offers Continue. Name a circuit-breaker
+        # waiver only when its current recovery marker and failure streak exist.
+        # Emitting a USER turn still resets the streak for either kind of gate.
         continue_events = await self._loop._events()
         failures = signals.count_recent_failures(continue_events)
+        recovery = (
+            failures >= self._loop._circuit_breaker_threshold
+            and signals.recovery_requested_since_reset(continue_events)
+        )
+        content = (
+            "Continue — keep working. I've reviewed the "
+            f"{failures} recent failure(s) that opened the circuit "
+            "breaker and want you to proceed with your own best next "
+            "step. Don't just repeat the exact action that was "
+            "failing; adjust your approach."
+            if recovery
+            else "Continue — keep working. Use your own judgment to choose the best next step."
+        )
         await self._loop._emit(
             MessageEvent(
                 source=EventSource.USER,
-                message=LLMMessage(
-                    role="user",
-                    content=(
-                        "Continue — keep working. I've reviewed the "
-                        f"{failures} recent failure(s) that opened the circuit "
-                        "breaker and want you to proceed with your own best next "
-                        "step. Don't just repeat the exact action that was "
-                        "failing; adjust your approach."
-                    ),
-                ),
+                message=LLMMessage(role="user", content=content),
             )
         )
         await self._loop._emit(
-            StatusEvent(status=ConversationStatus.RUNNING, detail="continue_anyway")
+            StatusEvent(
+                status=ConversationStatus.RUNNING,
+                detail="continue_anyway",
+                agent_view_id=alternative.agent_view_id,
+            )
         )
         return await self._loop.get_state()
 
@@ -263,9 +269,7 @@ class PlanApprovalController:
         reply = option.title.strip()
         if option.description.strip():
             reply = (
-                f"{reply}. {option.description.strip()}"
-                if reply
-                else option.description.strip()
+                f"{reply}. {option.description.strip()}" if reply else option.description.strip()
             )
         await self._loop._emit(
             MessageEvent(
@@ -285,8 +289,7 @@ class PlanApprovalController:
                 message=LLMMessage(
                     role="user",
                     content=(
-                        f"Try the alternative approach: “{option.title}”. "
-                        f"{option.description}"
+                        f"Try the alternative approach: “{option.title}”. {option.description}"
                     ),
                 ),
             )
@@ -307,8 +310,12 @@ class PlanApprovalController:
             return Disp.HALT, None
         return Disp.FALLTHROUGH, await self._loop._emit(action)
 
-    async def pick_alternative(self, option_id: str) -> ConversationState:
-        """Select a pending alternative without bypassing action gates."""
+    async def pick_alternative(self, option_id: str, *, resume: bool = True) -> ConversationState:
+        """Resolve the gate, optionally letting the host schedule the next model run.
+
+        ``resume=False`` keeps the WebSocket control handler out of the model
+        drive loop; the server starts it through its supervised run controller.
+        """
         emitted: Event | None = None
         async with self._loop._lock, _optional_async_fence(self._loop._control_fence):
             state = await self._loop.get_state()
@@ -336,25 +343,36 @@ class PlanApprovalController:
                 )
                 return await self._loop.get_state()
             if option_id == _CONTINUE_OPTION_ID:
-                return await self._continue_anyway()
-            option = next(
-                (candidate for candidate in alternative.options if candidate.id == option_id),
-                None,
-            )
-            if option is None:
-                return await self._reject_unknown_option(option_id)
-            if option.tool_name.strip():
-                disp, emitted = await self._prepare_runnable_option(alternative, option)
-                if disp is Disp.HALT:
-                    return await self._loop.get_state()
+                await self._continue_anyway(alternative)
             else:
-                await self._record_label_option(option)
-            await self._loop._emit(
-                StatusEvent(
-                    status=ConversationStatus.RUNNING,
-                    detail=f"alternative_picked:{option.id}",
+                option = next(
+                    (candidate for candidate in alternative.options if candidate.id == option_id),
+                    None,
                 )
-            )
+                if option is None:
+                    return await self._reject_unknown_option(option_id)
+                if option.tool_name.strip():
+                    disp, emitted = await self._prepare_runnable_option(alternative, option)
+                    if disp is Disp.HALT:
+                        return await self._loop.get_state()
+                else:
+                    await self._record_label_option(option)
+                await self._loop._emit(
+                    StatusEvent(
+                        status=ConversationStatus.RUNNING,
+                        detail=f"alternative_picked:{option.id}",
+                        agent_view_id=alternative.agent_view_id,
+                    )
+                )
         if emitted is not None:
             await self._loop._execute_and_observe(cast("ActionEvent", emitted))
-        return await self._loop.run()
+        if not resume:
+            return await self._loop.get_state()
+        # Controls may arrive in a different task than the worker that opened
+        # this gate. Bind the initial resume transition to the validated gate;
+        # subsequent model steps admit their own view as usual.
+        token = _ACTIVE_AGENT_VIEW_ID.set(alternative.agent_view_id)
+        try:
+            return await self._loop.run()
+        finally:
+            _ACTIVE_AGENT_VIEW_ID.reset(token)

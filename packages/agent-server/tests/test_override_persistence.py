@@ -87,7 +87,7 @@ async def test_teardown_clears_rehydrate_flag_so_continuation_restores_files(tmp
     cid = "conv_build"
     # First run rehydrated once → the flag is set (and stays set within a live
     # session so each subsequent kick doesn't re-overwrite in-progress files).
-    await rt.lifecycle._maybe_rehydrate(cid)
+    rt.lifecycle._mark_rehydrated(cid)
     assert cid in rt.lifecycle._rehydration._rehydrated
     # FINISHED → the sandbox is torn down. The flag MUST clear, else the next run
     # skips rehydrate and the continuation builds on nothing.

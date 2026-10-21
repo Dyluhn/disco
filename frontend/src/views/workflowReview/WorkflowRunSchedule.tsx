@@ -2,17 +2,21 @@ import { CalendarClock, Check, Loader2, Play } from "lucide-react";
 import { Link } from "react-router-dom";
 import { useState } from "react";
 import { useToast } from "@/components/toastApi";
-import { useRunWorkflow, useScheduleWorkflow } from "@/hooks/useWorkflows";
+import { useRunWorkflow, useScheduleWorkflow, useWorkflowSchedules } from "@/hooks/useWorkflows";
 import { browserScheduleTimezone } from "@/lib/scheduleLocal";
 import type { WorkflowReview } from "@/types/workflow";
+import { WorkflowScheduleList } from "./WorkflowScheduleList";
 
 export function WorkflowRunSchedule({ workflow }: { workflow: WorkflowReview }) {
   const run = useRunWorkflow();
   const schedule = useScheduleWorkflow();
+  const schedules = useWorkflowSchedules();
   const toast = useToast();
   const [cron, setCron] = useState("* * * * *");
   const [lastConversationId, setLastConversationId] = useState<string | null>(null);
-  const [scheduleSaved, setScheduleSaved] = useState(false);
+  const rows = (schedules.data ?? []).filter((row) => row.spec.instance_id === workflow.instance_id);
+  const alreadySaved = rows.some((row) => row.spec.instance_digest === workflow.definition_digest
+    && row.spec.cron === cron.trim() && row.spec.timezone === browserScheduleTimezone());
 
   const runPending = run.isPending && run.variables === workflow.instance_id;
   const schedulePending =
@@ -31,6 +35,7 @@ export function WorkflowRunSchedule({ workflow }: { workflow: WorkflowReview }) 
   }
 
   function handleSchedule() {
+    if (alreadySaved || schedulePending) return;
     schedule.mutate(
       {
         instanceId: workflow.instance_id,
@@ -40,7 +45,6 @@ export function WorkflowRunSchedule({ workflow }: { workflow: WorkflowReview }) 
       },
       {
         onSuccess: () => {
-          setScheduleSaved(true);
           toast.show({ title: "Workflow schedule saved", body: cron.trim() });
         },
       },
@@ -80,7 +84,6 @@ export function WorkflowRunSchedule({ workflow }: { workflow: WorkflowReview }) 
             value={cron}
             onChange={(event) => {
               setCron(event.target.value);
-              setScheduleSaved(false);
             }}
             className="min-h-11 w-[9rem] rounded-control border border-hairline bg-surface-1 px-inline py-hair font-mono text-[0.76rem] text-text outline-none focus:border-accent lg:min-h-0"
           />
@@ -88,7 +91,7 @@ export function WorkflowRunSchedule({ workflow }: { workflow: WorkflowReview }) 
         <button
           type="button"
           onClick={handleSchedule}
-          disabled={schedulePending || !cron.trim()}
+          disabled={schedulePending || schedules.isPending || alreadySaved || !cron.trim()}
           className="inline-flex min-h-11 items-center justify-center gap-hair rounded-control border border-hairline px-body py-hair font-ui text-[0.82rem] text-text-muted transition-colors hover:border-accent/60 hover:text-text disabled:cursor-not-allowed disabled:opacity-50 lg:min-h-0"
         >
           {schedulePending ? (
@@ -98,7 +101,12 @@ export function WorkflowRunSchedule({ workflow }: { workflow: WorkflowReview }) 
           )}
           Save
         </button>
-        {scheduleSaved && <span className="font-ui text-[0.76rem] text-supported">Saved</span>}
+        {alreadySaved && <span className="font-ui text-[0.76rem] text-supported">Saved</span>}
+      </div>
+      <div className="md:col-span-2">
+        {schedules.isPending && <p role="status">Loading schedules…</p>}
+        {schedules.isError && <p role="alert">Could not load schedules. <button type="button" onClick={() => void schedules.refetch()}>Retry</button></p>}
+        <WorkflowScheduleList rows={rows} />
       </div>
       {(run.isError || schedule.isError) && (
         <div role="alert" className="md:col-span-2 font-ui text-[0.78rem] text-unsupported">

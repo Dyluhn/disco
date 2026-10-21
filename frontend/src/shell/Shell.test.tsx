@@ -1,8 +1,8 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, render, screen, within } from "@testing-library/react";
+import { act, render, screen, within, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ModeProvider } from "./ModeProvider";
 import { Shell } from "./Shell";
 
@@ -86,6 +86,65 @@ describe("Application shell", () => {
     expect(close).toBeInTheDocument();
     await user.click(close);
     expect(screen.queryByRole("button", { name: "Close navigation" })).not.toBeInTheDocument();
+  });
+
+  it("moves keyboard focus into navigation and restores it on Escape", async () => {
+    const user = userEvent.setup();
+    renderShell();
+    const trigger = screen.getByRole("button", { name: "Open navigation" });
+    trigger.focus();
+    await user.keyboard("{Enter}");
+    const dialog = screen.getByRole("dialog", { name: "Navigation" });
+    // Opening lands on the first navigation link (see "transfers focus to the
+    // first drawer link on open"); the Close control precedes it.
+    expect(within(dialog).getByRole("link", { name: "New" })).toHaveFocus();
+    await user.tab({ shift: true });
+    expect(within(dialog).getByRole("button", { name: "Close navigation" })).toHaveFocus();
+    await user.tab({ shift: true });
+    expect(within(dialog).getByRole("button", { name: "Collapse navigation" })).toHaveFocus();
+    await user.tab();
+    expect(within(dialog).getByRole("button", { name: "Close navigation" })).toHaveFocus();
+    await user.tab();
+    expect(within(dialog).getByRole("link", { name: "New" })).toHaveFocus();
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(trigger).toHaveFocus());
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("navigates by keyboard and closes the mobile drawer", async () => {
+    const user = userEvent.setup();
+    renderShell();
+    const trigger = screen.getByRole("button", { name: "Open navigation" });
+    trigger.focus();
+    await user.keyboard("{Enter}");
+    const dialog = screen.getByRole("dialog", { name: "Navigation" });
+    // Focus starts on New; Activity and then History follow.
+    await user.tab();
+    await user.tab();
+    expect(within(dialog).getByRole("link", { name: "History" })).toHaveFocus();
+    await user.keyboard("{Enter}");
+    expect(screen.getByText("History view content")).toBeInTheDocument();
+    await waitFor(() => expect(trigger).toHaveFocus());
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("closes an open mobile drawer when the desktop navigation becomes visible", async () => {
+    const user = userEvent.setup();
+    const desktop = Object.assign(new EventTarget(), { matches: false });
+    const media = vi.spyOn(window, "matchMedia").mockReturnValue(desktop as MediaQueryList);
+    try {
+      renderShell();
+      await user.click(screen.getByRole("button", { name: "Open navigation" }));
+      expect(screen.getByRole("dialog", { name: "Navigation" })).toBeInTheDocument();
+      act(() => {
+        desktop.matches = true;
+        desktop.dispatchEvent(new Event("change"));
+      });
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      expect(screen.getByRole("link", { name: "History" })).toBeInTheDocument();
+    } finally {
+      media.mockRestore();
+    }
   });
 });
 
@@ -175,7 +234,8 @@ describe("mobile drawer keyboard boundaries and responsive closure (jsdom-bounde
   // resize plus a local matchMedia fixture. This proves JS closure and focus
   // retargeting only — never real CSS hiding — and asserts only user-visible
   // outcomes (mounted controls + document.activeElement), never hook/ref names.
-  // No role=dialog is assumed: the drawer exposes no such role today.
+  // These tests do not depend on the drawer's dialog role; the role is
+  // asserted in the drawer focus tests above.
   it("keeps forward Tab inside the drawer from the final Collapse control", async () => {
     const user = userEvent.setup();
     renderShell();

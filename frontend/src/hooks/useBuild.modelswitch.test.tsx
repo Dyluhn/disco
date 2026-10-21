@@ -126,8 +126,8 @@ describe("useBuild — terminal-state model swap", () => {
     streamStatus = "FINISHED";
     const { result } = renderHook(() => useBuild("conv_reset"), { wrapper: wrapper() });
 
-    // The conversation was seeded to its current model; the user then explicitly chooses
-    // DEFAULT (the picker emits null). That is a deliberate reset, NOT a no-op.
+    // Explicit null remains a supported controller reset. Concrete picker rows,
+    // including the configured default, now carry their actual model ID.
     await act(async () => {
       result.current.setModelId(null);
     });
@@ -168,4 +168,17 @@ describe("useBuild — terminal-state model swap", () => {
     await new Promise((r) => setTimeout(r, 0));
     expect(result.current.modelId).toBe("user-pick");
   });
+});
+
+it("keeps a finished model pick pending until continuation, so leaving does not persist it", async () => {
+  streamStatus = "FINISHED";
+  const hook = renderHook(() => useBuild("conv_done"), { wrapper: wrapper() });
+  await waitFor(() => expect(hook.result.current.modelId).toBe("model-from-server"));
+  await act(async () => { hook.result.current.setModelId("pending-choice"); });
+  expect(hook.result.current.modelId).toBe("pending-choice");
+  expect(patchConversationSettings).not.toHaveBeenCalled();
+  hook.unmount();
+  const reopened = renderHook(() => useBuild("conv_done"), { wrapper: wrapper() });
+  await waitFor(() => expect(reopened.result.current.modelId).toBe("model-from-server"));
+  expect(patchConversationSettings).not.toHaveBeenCalled();
 });

@@ -4,10 +4,11 @@
  */
 
 import * as Dialog from "@radix-ui/react-dialog";
-import { useCallback, useState } from "react";
+import { useState, type RefObject } from "react";
 import { X } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { useExportCapabilities } from "@/hooks/useExportCapabilities";
+import { useDialogRestoreFocus } from "@/hooks/useDialogRestoreFocus";
 import { useTemplates } from "@/hooks/useTemplates";
 import type { ReportEvent } from "@/types/agent";
 import { TemplatePicker } from "../TemplatePicker";
@@ -24,25 +25,12 @@ export interface ExportModalProps {
   cid: string;
   /** Selected follow-up user-message seqs to include (WALK-20). */
   followUpSeqs?: number[];
-  /** Exact activated Export opener to return focus to on close. Optional:
-   *  existing callers without a ref keep default Radix behavior. */
-  triggerRef?: { current: HTMLButtonElement | null };
+  /** Original invoker, retained when the include-follow-ups dialog hands off. */
+  returnFocusRef?: RefObject<HTMLElement | null>;
 }
 
-/** Guard: only a still-connected, enabled, visible opener may take focus.
- *  Never falls back to another card's button (no selectors, no globals). */
-function isReturnTargetFocusable(el: HTMLButtonElement | null | undefined): el is HTMLButtonElement {
-  if (!el) return false;
-  if (!el.isConnected) return false;
-  if (el.disabled) return false;
-  if (el.closest("[hidden], [inert]")) return false;
-  const view = el.ownerDocument?.defaultView;
-  const style = view?.getComputedStyle?.(el);
-  if (style && (style.display === "none" || style.visibility === "hidden" || style.visibility === "collapse")) return false;
-  return true;
-}
-
-export function ExportModal({ open, onOpenChange, report, cid, followUpSeqs, triggerRef }: ExportModalProps) {
+export function ExportModal({ open, onOpenChange, report, cid, followUpSeqs, returnFocusRef }: ExportModalProps) {
+  const focus = useDialogRestoreFocus(returnFocusRef);
   const exportCaps = useExportCapabilities();
   // Export template — a brand theme spin. Threaded into the POST body as `theme`
   // (registry name) + `mode` (split from the chosen catalogue entry). Default =
@@ -59,26 +47,12 @@ export function ExportModal({ open, onOpenChange, report, cid, followUpSeqs, tri
     themeMode: tpl.mode,
   });
 
-  // Controlled Dialog has no registered Trigger, so default Close/Escape
-  // focus restoration lands on BODY. Return focus explicitly to the exact
-  // activated opener; guarded targets leave default behavior (BODY), never
-  // another card. Open focus + containment untouched (no autoFocus props).
-  const handleCloseAutoFocus = useCallback(
-    (event: Event) => {
-      const opener = triggerRef?.current;
-      if (!isReturnTargetFocusable(opener)) return;
-      event.preventDefault();
-      opener.focus({ preventScroll: true });
-    },
-    [triggerRef],
-  );
-
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-40 bg-black/40 backdrop-blur-md" />
         <Dialog.Content
-          onCloseAutoFocus={handleCloseAutoFocus}
+          {...focus}
           className={cn(
             "fixed left-1/2 top-1/2 z-50 w-[min(26rem,92vw)]",
             "-translate-x-1/2 -translate-y-1/2",

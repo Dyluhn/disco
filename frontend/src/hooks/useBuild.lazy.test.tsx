@@ -97,4 +97,20 @@ describe("useBuild — BW-08 lazy pre-create", () => {
       expect.objectContaining({ modelOverride: null }),
     );
   });
+
+  it.each([false, true])("sets AppKit at creation and locks mode for attachment=%s", async (upload) => {
+    const { result } = renderHook(() => useBuild(), { wrapper: wrapper() });
+    act(() => result.current.setAppkitChoice(true));
+    if (upload) {
+      await act(async () => { await result.current.ensurePreCid!(); });
+      expect(result.current.appkitChoiceLocked).toBe(true);
+    }
+    await act(async () => { await result.current.submit("Build an AppKit page"); });
+    await waitFor(() => expect(result.current.cid).toBe("conv_created"));
+    expect(createBuildConversation).toHaveBeenCalledTimes(1);
+    expect(createBuildConversation.mock.calls[0][6]).toBe(true);
+    if (upload) {
+      expect(patchConversationSettings.mock.calls[0][1]).not.toHaveProperty("appkit_mode");
+    }
+  });
 });

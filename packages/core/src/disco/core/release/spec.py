@@ -320,7 +320,14 @@ class LocalResourceProfile(BaseModel):
 
     model_config = _STRICT
 
-    url: _UrlStr
+    url: _UrlStr = Field(
+        description=(
+            "For sqlite, use an absolute POSIX file URL such as file:/data/app.db; "
+            "no authority/userinfo, query, fragment, traversal, or shell characters. "
+            "Its path must match, contain, or be contained by the resource persistent_path "
+            "after leading/trailing slashes are removed."
+        )
+    )
     volume: _ShortStr
 
     @field_validator("url")
@@ -374,8 +381,22 @@ class ResourceDecl(BaseModel):
 
     id: _IdStr
     kind: ResourceKind
-    persistent_path: _PathStr
-    profiles: ResourceProfiles
+    persistent_path: _PathStr = Field(
+        description=(
+            "Persistent resource path: letters, digits and ._/- only; no '..' segment. "
+            "For sqlite, after trimming leading/trailing slashes, this path must equal, "
+            "contain, or be contained by profiles.local.url's file path. "
+            "Matching pair: persistent_path='data/app.db', profiles.local.url='file:/data/app.db'."
+        )
+    )
+    profiles: ResourceProfiles = Field(
+        description=(
+            "For sqlite, profiles.local.url must be a credential-free file URL with an "
+            "absolute POSIX path and no authority, query or fragment. Its file path must "
+            "equal, contain, or be contained by persistent_path after trimming slashes. "
+            "For file:/app/data/app.db, use a matching persistent_path such as /app/data/app.db."
+        )
+    )
     consumers: tuple[_IdStr, ...] = Field(default_factory=tuple, max_length=_MAX_LINKS)
     migrate_cmd: tuple[_ArgvItemStr, ...] = Field(default_factory=tuple, max_length=_MAX_ARGV)
 

@@ -6,7 +6,7 @@ import {
   Search,
   Trash2,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { cn } from "@/lib/cn";
@@ -98,7 +98,10 @@ function MemberRow({ c }: { c: ConversationSummary }) {
   );
 }
 
-function SpaceDetailPane({ spaceId }: { spaceId: string | null }) {
+function SpaceDetailPane({ spaceId, onDeletedClose }: {
+  spaceId: string | null;
+  onDeletedClose: () => void;
+}) {
   const { data: space, isLoading, isError, refetch } = useSpace(spaceId);
   const del = useDeleteSpace();
 
@@ -158,6 +161,7 @@ function SpaceDetailPane({ spaceId }: { spaceId: string | null }) {
             confirmLabel="Delete"
             confirmContext="space-delete"
             onConfirm={() => del.mutate(space.space_id)}
+            onConfirmedClose={onDeletedClose}
             trigger={
               <button
                 type="button"
@@ -194,6 +198,7 @@ export function SpacesView() {
   const spaces = useMemo(() => data?.spaces ?? [], [data?.spaces]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [q, setQ] = useState("");
+  const searchRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (spaces.length === 0) {
@@ -243,6 +248,7 @@ export function SpacesView() {
             <div className="flex items-center gap-hair border-b border-hairline px-inline py-hair">
               <Search className="size-4 shrink-0 text-text-faint" aria-hidden />
               <input
+                ref={searchRef}
                 type="search"
                 value={q}
                 onChange={(e) => setQ(e.target.value)}
@@ -280,7 +286,7 @@ export function SpacesView() {
               </ul>
             )}
           </aside>
-          <SpaceDetailPane spaceId={selectedId} />
+          <SpaceDetailPane spaceId={selectedId} onDeletedClose={() => searchRef.current?.focus()} />
         </div>
       </div>
     </div>

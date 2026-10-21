@@ -77,11 +77,22 @@ class ContraryNote(BaseModel):
     end: int
 
 
+class _PendingRead(BaseModel):
+    """One durable chunk request, including bounded recovery feedback."""
+
+    model_config = ConfigDict(extra="forbid")
+    chunk: int = Field(ge=1)
+    mode: Literal["initial", "compact", "repair"] = "initial"
+    reply: str = Field(default="", max_length=65536)
+    error: str = Field(default="", max_length=2048)
+
+
 class SourceNotes(BaseModel):
     """The validated notes for one source, plus what the read itself did.
 
-    ``ok`` is about the READ, not the source: false means a reply never parsed
-    or a provider failed, and the writer falls back to that source's windows.
+    ``ok`` is about the READ, not the source: false means full reading is
+    pending or failed, and the writer falls back to that source's windows.
+    ``complete`` means terminal scheduling state, not successful source coverage.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -94,8 +105,12 @@ class SourceNotes(BaseModel):
     complete: bool = False
     # Durable recovery after an empty answer; chunk boundaries never change.
     compact_reading: bool = False
+    # Present before reservation/dispatch and until its reply is durably applied.
+    reader_pending: _PendingRead | None = None
     input_tokens: int = 0
     output_tokens: int = 0
+    # Includes pre-dispatch reservations that survive cancellation/restart.
+    reader_output_tokens_charged: int | None = Field(default=None, ge=0)
     latency_ms: float = 0.0
     findings_rejected: int = 0
     ok: bool = True
@@ -250,6 +265,17 @@ def render_source_notes(notes: SourceNotes, *, char_cap: int | None = None) -> s
             return block
         lines.pop()
     return ""
+
+
+def reading_disclosure(notes: Mapping[str, SourceNotes]) -> str:
+    incomplete = sum(not note.ok for note in notes.values())
+    if not incomplete:
+        return ""
+    return (
+        f"Full source reading was incomplete for {incomplete} source(s). "
+        "The report uses retained source excerpts and any validated notes; "
+        "do not treat these sources as read in full."
+    )
 
 
 def notes_blocks(notes: Mapping[str, SourceNotes]) -> dict[str, str]:

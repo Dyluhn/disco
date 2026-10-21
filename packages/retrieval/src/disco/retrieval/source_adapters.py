@@ -16,6 +16,7 @@ from urllib.parse import urlencode, urlparse
 import httpx
 from disco.core.host_egress import EgressDenied, GuardedResponse, guarded_get
 
+from ._arxiv_query import _arxiv_query
 from ._transport_retry import degradation_markers, engines_cooling, note_rate_limited_engines
 from .models import SearchHit
 from .providers import SearchProvider
@@ -31,22 +32,51 @@ def _with_params(base: str, params: Mapping[str, object]) -> str:
     return f"{base}{sep}{urlencode(params)}"
 
 
+class _SearchSourceUnavailable(RuntimeError):
+    """A sanitized discovery failure, distinct from a successful empty search."""
+
+    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+
 async def _fetch_get(
     url: str,
     *,
+    source: str,
     timeout_s: float,
     headers: Mapping[str, str] | None = None,
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> httpx.Response | GuardedResponse:
-    if transport is not None:
-        async with httpx.AsyncClient(
-            transport=transport,
-            timeout=timeout_s,
-            follow_redirects=True,
-            trust_env=False,
-        ) as client:
-            return await client.get(url, headers=headers)
-    return await guarded_get(url, timeout_s=timeout_s, headers=headers)
+    try:
+        if transport is not None:
+            async with httpx.AsyncClient(
+                transport=transport,
+                timeout=timeout_s,
+                follow_redirects=True,
+                trust_env=False,
+            ) as client:
+                response = await client.get(url, headers=headers)
+        else:
+            response = await guarded_get(url, timeout_s=timeout_s, headers=headers)
+    except (EgressDenied, OSError, httpx.HTTPError) as exc:
+        # Never echo URLs, headers, or upstream exception text: endpoints can
+        # contain credentials, and transport messages commonly include them.
+        raise _SearchSourceUnavailable(
+            f"Search source {source} could not be reached ({type(exc).__name__}). "
+            "Check its connection or choose another source."
+        ) from None
+    if response.status_code >= 400:
+        guidance = {
+            401: "Check its credentials or choose another source.",
+            403: "Check its access permissions or choose another source.",
+            429: "Rate limited. Try again later or choose another source.",
+        }.get(response.status_code, "Try again later or choose another source.")
+        raise _SearchSourceUnavailable(
+            f"Search source {source} returned HTTP {response.status_code}. {guidance}",
+            status_code=response.status_code,
+        )
+    return response
 
 
 def _collapse_ws(value: str | None) -> str:
@@ -120,17 +150,25 @@ class ArxivSearchProvider:
         domains_deny: frozenset[str] | None = None,
         time_filter: str | None = None,
     ) -> list[SearchHit]:
+        expression = _arxiv_query(query)
+        if not expression or limit <= 0:
+            return []
         recency_start = _recency_start(time_filter)
         request_limit = min(limit * 4, 100) if recency_start else limit
-        params = {"search_query": f"all:{query}", "start": 0, "max_results": request_limit}
+        params = {
+            "search_query": expression,
+            "start": 0,
+            "max_results": request_limit,
+            "sortBy": "relevance",
+            "sortOrder": "descending",
+        }
         try:
             resp = await _fetch_get(
                 _with_params(self._base_url, params),
+                source=self.name,
                 timeout_s=self._timeout,
                 transport=self._transport,
             )
-            if resp.status_code >= 400:
-                return []
             root = ET.fromstring(resp.content)
         except (EgressDenied, OSError, ET.ParseError, ValueError, httpx.HTTPError):
             return []
@@ -200,11 +238,10 @@ class NewsSearchProvider:
         try:
             resp = await _fetch_get(
                 _with_params(self._base_url, params),
+                source=self.name,
                 timeout_s=self._timeout,
                 transport=self._transport,
             )
-            if resp.status_code >= 400:
-                return []
             root = ET.fromstring(resp.content)
         except (EgressDenied, OSError, ET.ParseError, ValueError, httpx.HTTPError):
             return []
@@ -296,12 +333,11 @@ class SemanticScholarSearchProvider:
         try:
             resp = await _fetch_get(
                 _with_params(f"{self._base_url}/paper/search", params),
+                source=self.name,
                 timeout_s=self._timeout,
                 headers=headers,
                 transport=self._transport,
             )
-            if resp.status_code >= 400:
-                return []
             payload = json.loads(resp.text)
             return payload.get("data", []) if isinstance(payload, dict) else []
         except (EgressDenied, OSError, ValueError, httpx.HTTPError):
@@ -375,8 +411,12 @@ class SiteScopedSearchProvider:
                 domains_deny=domains_deny,
                 time_filter=time_filter,
             )
-        except Exception:  # noqa: BLE001 — discovery adapters must never break a run
-            return []
+        except _SearchSourceUnavailable:
+            raise
+        except Exception:  # noqa: BLE001 — preserve failure without exposing upstream secrets
+            raise _SearchSourceUnavailable(
+                "Site-scoped search could not complete. Try again later or choose another source."
+            ) from None
         if not domains:
             return hits
         return [
@@ -507,7 +547,11 @@ class MultiSearchProvider:
                 # An exception names the leg it came from — a bare "HTTPError"
                 # tells the cooldown registry nothing about which engine to cool.
                 diagnostics[provider_name] = {
-                    "provider_error": f"{provider_name}: upstream error ({type(result).__name__})"
+                    "provider_error": (
+                        str(result)
+                        if isinstance(result, _SearchSourceUnavailable)
+                        else f"{provider_name}: upstream error ({type(result).__name__})"
+                    )
                 }
                 refused += 1
                 _LOG.warning(

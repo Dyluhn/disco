@@ -16,8 +16,8 @@ export function getWorkflowJsonError(workflowJson: string): string | null {
     .replace(/%prompt%|%negative%|%ckpt%/g, "x");
   try {
     const parsed = JSON.parse(probe);
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed))
-      return "Workflow must be a JSON object of nodes (ComfyUI 'Save (API Format)').";
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed) || Object.keys(parsed).length === 0)
+      return "Workflow must be a non-empty JSON object of nodes (ComfyUI 'Save (API Format)').";
     return null;
   } catch {
     return "Not valid JSON yet — paste a ComfyUI 'Save (API Format)' export.";

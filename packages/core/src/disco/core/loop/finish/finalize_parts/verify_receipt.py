@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 from typing import TYPE_CHECKING, Protocol
 
+from ....events import AgentErrorEvent, WorkspaceMutationEvent, latest_workspace_run_intent
 from ..common import (
     ActionEvent,
     Event,
@@ -54,10 +55,14 @@ def _single_correlated_observation(
     """
     correlated = [
         ev
-        for ev in events[action_index + 1 :]
-        if isinstance(ev, ObservationEvent) and ev.action_id == action_id
+        for ev in events
+        if isinstance(ev, (ObservationEvent, AgentErrorEvent)) and ev.action_id == action_id
     ]
-    if len(correlated) != 1:
+    if (
+        len(correlated) != 1
+        or not isinstance(correlated[0], ObservationEvent)
+        or events.index(correlated[0]) <= action_index
+    ):
         return None
     return correlated[0]
 
@@ -96,6 +101,40 @@ def _plan_verifier_failed_after(events: list[Event], since_index: int) -> bool:
     return False
 
 
+def _synthetic_or_failed_receipt(observation: ObservationEvent) -> bool:
+    """Cached, foreign, and failed observations cannot suppress an explicit request."""
+    result = observation.tool_result
+    check = observation.meta.get("check", {})
+    structured = result.structured or {}
+    return (
+        observation.source is not EventSource.ENVIRONMENT
+        or (isinstance(check, dict) and "memo_of" in check)
+        or "memo_of_seq" in structured
+        or result.error is not None
+        or structured.get("timed_out") is True
+        or ("exit_code" in structured and structured["exit_code"] != 0)
+    )
+
+
+def _receipt_invalidated(events: list[Event], observation: ObservationEvent) -> bool:
+    """Only real executor evidence with no later execution/authority boundary."""
+    if _synthetic_or_failed_receipt(observation):
+        return True
+    observation_index = events.index(observation)
+    intent = latest_workspace_run_intent(events[: observation_index + 1])
+    for event in events[observation_index + 1 :]:
+        if isinstance(event, MessageEvent):
+            if event.source is EventSource.USER:
+                return True
+            continue
+        if isinstance(event, WorkspaceMutationEvent) and event.operation == "agent.view-admitted":
+            if intent is not None and event.run_intent_id == intent.id:
+                continue  # Same-run model view bookkeeping changes no executor state.
+            return True
+        return True  # New run, runtime/source mutation, receipt, or lifecycle boundary.
+    return False
+
+
 async def reuse_finish_verify_receipt(
     loop: _LoopFacet, verify_cmd: str, events: list[Event]
 ) -> bool:
@@ -116,10 +155,8 @@ async def reuse_finish_verify_receipt(
         return False
 
     action_index = events.index(most_recent_action)
-    observation = _single_correlated_observation(
-        events, action_index, most_recent_action.id
-    )
-    if observation is None:
+    observation = _single_correlated_observation(events, action_index, most_recent_action.id)
+    if observation is None or _receipt_invalidated(events, observation):
         return False
     result = observation.tool_result
     if not (
@@ -134,7 +171,7 @@ async def reuse_finish_verify_receipt(
         return False
 
     fingerprint = hashlib.sha256(verify_cmd.encode()).hexdigest()
-    reuses = _prior_reuse_count(events, fingerprint)
+    reuses = _prior_reuse_count(events[observation_index + 1 :], fingerprint)
     # Constraint 4 (F51). A repeat here is a real signal and the agent was never
     # given it: the verify command is passing and being carried forward, so
     # whatever is refusing the finish is something ELSE. Restating the reuse
@@ -147,7 +184,7 @@ async def reuse_finish_verify_receipt(
             f"This is reuse {reuses} of the same receipt in this run — "
             f"{_RECEIPT_REUSE_NOT_BLOCKING}. Read the refusal that "
             "follows this message and address that instead; re-running the verify "
-            "will keep producing this same carried-forward result.\n"
+            "would duplicate an explicitly requested action, not add acceptance authority.\n"
         )
     )
     await loop._emit(
@@ -159,8 +196,8 @@ async def reuse_finish_verify_receipt(
                     "<system-reminder>\n"
                     f"Finish verify receipt for `{verify_cmd}` reused from the prior "
                     f"successful shell execution recorded at {observation.id} — that "
-                    "correlated observation's success is carried forward without "
-                    "re-executing the command.\n"
+                    "historical executor evidence is cited without re-executing the command. "
+                    "This does not certify current runtime state or required acceptance.\n"
                     f"{escalation}"
                     "</system-reminder>"
                 ),

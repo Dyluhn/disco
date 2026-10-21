@@ -281,10 +281,49 @@ describe("PreviewPane version history", () => {
     );
     expect(screen.getByTitle("Preview")).toBe(currentFrame);
     expect(screen.queryByText(/Viewing immutable v2/)).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /^roll back$/i })).not.toBeInTheDocument();
+    expect(screen.getByText("Selected immutable v2; preview has not loaded this version.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^roll back$/i })).toBeEnabled();
     expect(document.body.innerHTML).not.toContain(
       "/conversations/conv_versions/preview-app/",
     );
+  });
+
+  it("rolls back a known selected snapshot even when no preview frame ever loads", async () => {
+    const user = userEvent.setup();
+    restoreWorkspaceVersionMock.mockResolvedValue({ restored: 2, new_version: 4, tree_digest: "digest-4" });
+    renderPane();
+    await screen.findByTitle("Preview");
+    await user.click(screen.getByRole("button", { name: /version history/i }));
+    await user.click(versionLabel(2, "finished app"));
+    expect(screen.getByText("Selected immutable v2; preview has not loaded this version.")).toBeInTheDocument();
+    // No bootstrap-ready message or iframe load has occurred.
+    await user.click(screen.getByRole("button", { name: /^roll back$/i }));
+    expect(screen.getByRole("heading", { name: "Roll back to v2?" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /^roll back$/i }));
+    await waitFor(() => expect(restoreWorkspaceVersionMock).toHaveBeenCalledWith("conv_versions", 2));
+    expect(await screen.findByText("Rolled back to v2; saved as v4.")).toHaveAttribute("role", "status");
+  });
+
+  it("restores the selected snapshot rather than a different version retained in the frame", async () => {
+    const user = userEvent.setup();
+    restoreWorkspaceVersionMock.mockResolvedValue({ restored: 1, new_version: 4, tree_digest: "digest-4" });
+    renderPane();
+    await screen.findByTitle("Preview");
+    await user.click(screen.getByRole("button", { name: /version history/i }));
+    await user.click(versionLabel(2, "finished app"));
+    await completePreviewLoad();
+    const displayed = screen.getByTitle("Preview");
+    expect(screen.getByText("Viewing immutable v2 (read-only)")).toBeInTheDocument();
+    canonicalPreviewBootstrapUrlMock.mockRejectedValueOnce(new Error("capability unavailable"));
+    await user.click(screen.getByRole("button", { name: /version history/i }));
+    await user.click(versionLabel(1, "turn"));
+    expect(await screen.findByRole("alert")).toHaveTextContent("capability unavailable");
+    expect(screen.getByTitle("Preview")).toBe(displayed);
+    expect(screen.getByText("Selected immutable v1; preview has not loaded this version.")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /^roll back$/i }));
+    expect(screen.getByRole("heading", { name: "Roll back to v1?" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /^roll back$/i }));
+    await waitFor(() => expect(restoreWorkspaceVersionMock).toHaveBeenCalledWith("conv_versions", 1));
   });
 
   it("confirms rollback, refetches, and returns to current Preview", async () => {

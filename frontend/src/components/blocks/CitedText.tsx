@@ -1,6 +1,6 @@
 import { Fragment, type ReactNode } from "react";
-import { citationNumbers, passageById, verdictForPassage } from "@/lib/sources";
-import type { GroundedAnswer } from "@/types/grounded";
+import { citationNumbers, passageById } from "@/lib/sources";
+import type { GroundedAnswer, Verdict } from "@/types/grounded";
 import { Citation } from "../Citation";
 
 const CITE = /\[\[(\w+)\]\]/g;
@@ -40,8 +40,54 @@ function inlineMd(text: string, keyBase: number): ReactNode[] {
   return out;
 }
 
+/** Formatting is presentation-only; punctuation inside claims (e.g.
+ * example.com) is retained. This binds recorded text, never infers support. */
+function claimText(text: string): string {
+  return text
+    .replace(/\[\[\w+\]\]/g, "")
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+    .replace(/^[ \t]*(?:[-*+] |\d+[.)] |#{1,6} |> )/gm, "")
+    .replace(/[*_`~]/g, "")
+    .replace(/\s+/g, " ")
+    .replace(/ +([,;:.!?])/g, "$1");
+}
+
+function occurrenceVerdict(answer: GroundedAnswer, id: string, textBefore: string, textAfter: string): Verdict {
+  const before = claimText(textBefore).trimStart();
+  const prose = claimText(`${textBefore} ${textAfter}`).trimStart();
+  const marker = before.length;
+  const matches = answer.claims.filter(({ claim }) => {
+    if (!claim.cited_passage_ids.includes(id)) return false;
+    const text = claimText(claim.text).trim().replace(/[.,;:!?]+$/, "").trim();
+    if (!text) return false;
+    for (let start = prose.indexOf(text); start >= 0; start = prose.indexOf(text, start + 1)) {
+      const prefix = prose.slice(0, start).trimEnd();
+      // A shorter positive claim must not match "not <claim>" or another
+      // qualification inside a sentence merely because its suffix is equal.
+      if (prefix && !/[.!?]$/.test(prefix)) continue;
+      const end = start + text.length;
+      if (marker < start) continue;
+      // A citation may follow its claim or be embedded inside the verified
+      // sentence. Include its remaining qualification, never just the prefix.
+      if (marker <= end || /^[\s.,;:!?]*$/.test(prose.slice(end, marker))) return true;
+    }
+    return false;
+  });
+  // No positional identity exists for identical repeated claims. An ambiguous
+  // or unmatched occurrence must never inherit another claim's green verdict.
+  if (matches.length !== 1) return "weak";
+  return matches[0].verdict;
+}
+
 /** Individual citation marker (the [n] chip or a placeholder). */
-export function CitationMarker({ id, answer }: { id: string; answer: GroundedAnswer | null }) {
+export function CitationMarker({ id, answer, textBefore = "", textAfter = "" }: {
+  id: string;
+  answer: GroundedAnswer | null;
+  /** Prose before this exact marker, including earlier markers in its group. */
+  textBefore?: string;
+  /** Remaining prose, including any qualification after an inline marker. */
+  textAfter?: string;
+}) {
   const numbers = answer ? citationNumbers(answer) : null;
   const passage = answer ? passageById(answer, id) : undefined;
   if (answer && passage && numbers) {
@@ -49,7 +95,7 @@ export function CitationMarker({ id, answer }: { id: string; answer: GroundedAns
       <Citation
         n={numbers.get(id) ?? 0}
         passage={passage}
-        verdict={verdictForPassage(answer, id)}
+        verdict={occurrenceVerdict(answer, id, textBefore, textAfter)}
       />
     );
   }
@@ -74,7 +120,7 @@ export function CitedText({ text, answer }: { text: string; answer: GroundedAnsw
   while ((m = CITE.exec(text))) {
     out.push(<Fragment key={key++}>{inlineMd(text.slice(last, m.index), key * 1000)}</Fragment>);
     const id = m[1];
-    out.push(<CitationMarker key={key++} id={id} answer={answer} />);
+    out.push(<CitationMarker key={key++} id={id} answer={answer} textBefore={text.slice(0, m.index)} textAfter={text.slice(m.index + m[0].length)} />);
     last = m.index + m[0].length;
   }
   out.push(<Fragment key={key++}>{inlineMd(text.slice(last), key * 1000)}</Fragment>);

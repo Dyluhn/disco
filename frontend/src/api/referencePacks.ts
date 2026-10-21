@@ -3,7 +3,7 @@
  * Creation is the Agent's `create_reference_pack` action; this module lists,
  * edits and deletes what exists. Offline (no agent base) → an empty library.
  */
-import { agentFetch, agentGet, agentLive, agentSend } from "./client";
+import { agentFetch, agentGet, agentHttpBase, agentLive, agentSend } from "./client";
 import type { ReferencePackDetail, ReferencePackSummary } from "@/types/referencePacks";
 
 export async function listReferencePacks(): Promise<ReferencePackSummary[]> {
@@ -63,5 +63,5 @@ export async function deleteReferencePack(packId: string): Promise<void> {
 }
 
 export function referencePackFilePath(packId: string, name: string): string {
-  return `/api/reference-packs/${packId}/files/${encodeURIComponent(name)}`;
+  return `${agentHttpBase()}/api/reference-packs/${encodeURIComponent(packId)}/files/${encodeURIComponent(name)}`;
 }

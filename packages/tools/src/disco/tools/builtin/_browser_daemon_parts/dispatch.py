@@ -16,7 +16,9 @@ each call, so a test that monkeypatches ``daemon.state`` is still honored.
 from __future__ import annotations
 
 import base64
+import contextlib
 import os
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -533,10 +535,20 @@ def _capture_elements_and_text(
 def _take_screenshot(state, page, action, params, *, workspace_root, screenshot_dir):
     state.screenshot_seq += 1
     os.makedirs(screenshot_dir, exist_ok=True)
-    screenshot_rel_path = f".pmx/screenshots/{state.screenshot_seq:04d}-{action}.png"
-    screenshot_full_path = os.path.join(workspace_root, screenshot_rel_path)
-    page.screenshot(path=screenshot_full_path, full_page=params.get("full_page", False))
-    return screenshot_rel_path, screenshot_full_path
+    # Counters restart with the daemon. Reserve a fresh file atomically so a
+    # later daemon cannot overwrite the bytes named by a historical observation.
+    screenshot_full_path = os.path.join(
+        screenshot_dir, f"{state.screenshot_seq:04d}-{action}-{uuid.uuid4().hex}.png"
+    )
+    fd = os.open(screenshot_full_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
+    os.close(fd)
+    try:
+        page.screenshot(path=screenshot_full_path, full_page=params.get("full_page", False))
+    except Exception:
+        with contextlib.suppress(OSError):
+            os.unlink(screenshot_full_path)
+        raise
+    return os.path.relpath(screenshot_full_path, workspace_root), screenshot_full_path
 
 
 def _capture_common_result(

@@ -39,7 +39,7 @@ from ._transport_retry import (
 from .models import ExtractedDoc, Passage, RetrievalRequest, RetrievalResult, SearchHit
 from .providers import ExtractionProvider, SearchProvider
 from .ranking import Embedder, Reranker, deduplicate_search_hits, distinct_source_passages
-from .url_policy import source_url_key
+from .url_policy import query_scoped_domains, source_url_key, url_allowed
 
 # Default cap on URLs sent to extraction per retrieve() (cost bound; [INTERIOR]).
 _CANDIDATE_CAP = 20
@@ -347,7 +347,12 @@ class DefaultRetrievalEngine:
         direct = _direct_discovery(req)
         if direct is not None:
             return direct
-        hits, diagnostic = await self._search_one(req)
+        allow, deny = query_scoped_domains(req.query, req.domains_allow, req.domains_deny)
+        scoped = req.model_copy(update={"domains_allow": allow, "domains_deny": deny})
+        hits, diagnostic = await self._search_one(scoped)
+        # A provider may ignore its host-filter arguments. Enforce the same
+        # boundary before extraction regardless of which discovery backend ran.
+        hits = [hit for hit in hits if url_allowed(hit.url, allow, deny)]
         return deduplicate_search_hits(hits), diagnostic
 
     async def _corpus_passages(self, req: RetrievalRequest) -> list[Passage]:

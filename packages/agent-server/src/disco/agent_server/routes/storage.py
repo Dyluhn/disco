@@ -16,6 +16,9 @@ from .storage_support import (
     _browse_path_allowed as _browse_path_allowed,
 )
 from .storage_support import (
+    _configured_extra_roots as _configured_extra_roots,
+)
+from .storage_support import (
     _ensure_allowed_browse_path as _ensure_allowed_browse_path,
 )
 from .storage_support import (
@@ -37,6 +40,9 @@ def make_storage_router(
         request: Request,
         path: str = Query(default=""),
     ) -> dict:
-        return _browse_storage(request, path)
+        # Browse unifies around the validated configured projects_root: a
+        # Settings-valid root outside home/mnt/media is browsable, while an
+        # invalid setting contributes nothing (no broadened access).
+        return _browse_storage(request, path, extra_roots=_configured_extra_roots(runtime))
 
     return router

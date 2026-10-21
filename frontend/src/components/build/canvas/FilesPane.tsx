@@ -5,6 +5,7 @@ import { deriveFiles } from "@/lib/buildTrace";
 import type { ManifestFile } from "@/lib/buildTrace";
 import type { StreamingFile } from "@/hooks/useBuildStream";
 import type { AgentEvent } from "@/types/agent";
+import { useProjectFile } from "@/hooks/useProjects";
 import { Empty } from "./Empty";
 
 /** The live watch-it-write pane: the file the driver is composing/editing RIGHT NOW,
@@ -39,21 +40,36 @@ function StreamingFileView({ file }: { file: StreamingFile }) {
   );
 }
 
+function CurrentFileContent({ cid, path, revision }: { cid: string; path: string; revision: string }) {
+  const query = useProjectFile(cid, path, revision);
+  if (query.isPending) return <Empty>Loading current file…</Empty>;
+  if (query.isError) return <Empty>Could not load the current file. Reopen Files to retry.</Empty>;
+  return <pre className="overflow-auto whitespace-pre-wrap px-body py-inline font-mono text-[0.78rem] leading-relaxed text-text">
+    {query.data.binary ? "Binary file — download the project to open it." : query.data.content || "(empty)"}
+  </pre>;
+}
+
 export function FilesPane({
   events,
   streamingFile,
   manifestFiles = [],
+  snapshot,
 }: {
   events: AgentEvent[];
   streamingFile: StreamingFile | null;
   manifestFiles?: ManifestFile[];
+  snapshot?: { cid: string; revision: string; loading: boolean; error: boolean };
 }) {
-  const files = useMemo(() => deriveFiles(events, manifestFiles), [events, manifestFiles]);
+  const files = useMemo(() => snapshot
+    ? manifestFiles.map((file) => ({ ...file, content: "" }))
+    : deriveFiles(events, manifestFiles), [events, manifestFiles, snapshot]);
   const [active, setActive] = useState(0);
   // While a file mutation is streaming, it is the hero — show the live buffer regardless
   // of which file was selected. The final ActionEvent retires it (streamingFile →
   // null) and the file then appears in the list as a normal, complete entry.
   if (streamingFile) return <StreamingFileView file={streamingFile} />;
+  if (snapshot?.loading) return <Empty>Loading current workspace…</Empty>;
+  if (snapshot?.error) return <Empty>Could not load the current workspace. Reopen Files to retry.</Empty>;
   if (files.length === 0)
     return <Empty>No files written yet. Files the agent creates appear here.</Empty>;
   const file = files[Math.min(active, files.length - 1)];
@@ -82,9 +98,9 @@ export function FilesPane({
           {/* C5: server-side artifacts land with bytes=0 — suppress the misleading "0 B" */}
           {file.bytes > 0 && <span>{file.bytes} B</span>}
         </div>
-        <pre className="overflow-auto whitespace-pre-wrap px-body py-inline font-mono text-[0.78rem] leading-relaxed text-text">
+        {snapshot ? <CurrentFileContent cid={snapshot.cid} path={file.path} revision={snapshot.revision} /> : <pre className="overflow-auto whitespace-pre-wrap px-body py-inline font-mono text-[0.78rem] leading-relaxed text-text">
           {file.content || "(empty)"}
-        </pre>
+        </pre>}
       </div>
     </div>
   );

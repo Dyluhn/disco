@@ -16,6 +16,7 @@ from .preview_models import (
     preview_requires_node_dependencies,
 )
 from .preview_port_allocator import _default_port_pool
+from .preview_request import request_finished_inside
 from .preview_resource import PreviewResource
 
 
@@ -52,6 +53,33 @@ class _PreviewManagerLifecycleFacade:
 
     async def resolve_sealed_contract(self, contract: Any) -> PreviewSession | None:
         return await self._resource.resolve_sealed_contract(contract)
+
+    async def request_finished_inside(
+        self,
+        contract: Any,
+        port: int,
+        method: str,
+        target: str,
+        headers: list[tuple[str, str]],
+        body: bytes,
+        *,
+        projection_id: str,
+    ) -> tuple[int, list[tuple[str, str]], bytes] | None:
+        return await request_finished_inside(
+            self._resource,
+            contract,
+            port,
+            method,
+            target,
+            headers,
+            body,
+            projection_id=projection_id,
+        )
+
+    async def fetch_finished_inside(
+        self, contract: Any, port: int, path: str
+    ) -> tuple[int, bytes, str] | None:
+        return await self._resource.fetch_finished_inside(contract, port, path)
 
     async def resolve_active_projection(self, projection: Any) -> PreviewSession | None:
         return await self._resource.resolve_active_projection(projection)

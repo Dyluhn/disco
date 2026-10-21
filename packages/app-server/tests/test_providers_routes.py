@@ -23,6 +23,31 @@ from fastapi.testclient import TestClient
 FIXTURES = Path(__file__).parent / "fixtures" / "provider_catalogues"
 
 
+@pytest.mark.parametrize("label", ["River Lab", "different.endpoint-example"])
+def test_generated_credential_is_editable_probeable_and_clearable(client, state, label):
+    """Advanced key routes must accept identifiers produced by provider setup."""
+    provider = state.providers.create_provider(ProviderCreate(
+        label=label, base_url="https://arbitrary.example/v1",
+        kind="openai-compat", api_key="original-private-value",
+    ))
+    name = provider.secret_name
+    assert "-" in name
+    url = f"/api/secrets/{name}"
+    assert client.get(url).status_code == 200
+    edited = client.put(url, json={"value": "replacement-private-value"})
+    assert edited.status_code == 200
+    assert edited.json()["configured"] is True
+    assert "replacement-private-value" not in edited.text
+    assert state.secrets_admin._resolve_secret_value(name) == "replacement-private-value"
+    probe = client.post(url + "/test")
+    assert probe.status_code == 200
+    # No model refers to this provider yet, so an inference probe cannot run.
+    assert probe.json()["status"] == "misconfigured"
+    assert "No configured model" in probe.json()["detail"]
+    assert client.delete(url).json()["configured"] is False
+    assert client.get(url).json()["configured"] is False
+
+
 class _CatalogueSink:
     """A real loopback HTTP sink that records bearer credentials."""
 
@@ -600,6 +625,41 @@ def test_wrong_key_is_not_reported_as_key_ready(client, monkeypatch):
     assert row["has_key"] is True
     assert row["key_verified"] is False
     assert row["key_error"] == "ollama.com rejected this key (401)"
+
+
+@pytest.mark.parametrize("status", [404, 405, 429, 500])
+def test_catalogue_failure_does_not_claim_key_rejection(client, monkeypatch, status):
+    async def failing_fetch(provider, api_key):
+        request = httpx.Request("GET", f"{provider.base_url}/models")
+        response = httpx.Response(status, request=request)
+        raise httpx.HTTPStatusError("catalogue unavailable", request=request, response=response)
+
+    monkeypatch.setattr(providers_mod, "_fetch_provider_catalogue", failing_fetch)
+    response = client.post("/api/providers", json={
+        "label": "Arbitrary endpoint", "base_url": "https://arbitrary.example/v1",
+        "kind": "openai-compat", "api_key": "stored-private-value",
+    })
+    assert response.status_code == 201
+    row = client.get("/api/providers").json()[0]
+    assert row["has_key"] is True
+    assert row["key_verified"] is None
+    assert str(status) in row["key_error"]
+    assert "stored-private-value" not in str(row)
+
+
+def test_failed_anonymous_probe_cannot_prove_authenticated_key_validity(client, monkeypatch):
+    async def fetch(provider, api_key):
+        if api_key:
+            return []
+        raise httpx.ConnectError("transient outage")
+
+    monkeypatch.setattr(providers_mod, "_fetch_provider_catalogue", fetch)
+    response = client.post("/api/providers", json={
+        "label": "Other endpoint", "base_url": "https://other.example/v1",
+        "kind": "openai-compat", "api_key": "stored-private-value",
+    })
+    assert response.json()["catalogue_ok"] is True
+    assert client.get("/api/providers").json()[0]["key_verified"] is None
 
 
 def _needs_a_key(good_key: str):

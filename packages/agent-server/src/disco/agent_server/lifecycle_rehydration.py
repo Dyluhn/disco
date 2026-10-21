@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterator
+from contextlib import contextmanager
 
 from disco.tools.projects import StorageStatus, rehydrate_workspace
+from disco.tools.projects.archive import WorkspaceArchiveError
 
 from .lifecycle_ports import (
     LifecycleBoundPacks,
@@ -35,15 +38,30 @@ class Rehydration:
         self._uploads = uploads
         self._bound_packs = bound_packs
         self._rehydrated: set[str] = set()
+        self._failed: set[str] = set()
 
     def _mark_rehydrated(self, conversation_id: str) -> None:
         self._rehydrated.add(conversation_id)
+
+    @contextmanager
+    def restoring(self, conversation_id: str) -> Iterator[None]:
+        """Keep interrupted host restoration out of snapshots, including cancellation."""
+        self._rehydrated.discard(conversation_id)
+        self._failed.add(conversation_id)
+        try:
+            yield
+        except BaseException:
+            # A transport recreation hook may have reset the markers meanwhile.
+            self._rehydrated.discard(conversation_id)
+            self._failed.add(conversation_id)
+            raise
+        self._failed.discard(conversation_id)
+        self._mark_rehydrated(conversation_id)
 
     async def _maybe_rehydrate(self, conversation_id: str) -> None:
         """Restore a prior snapshot once into the current live sandbox."""
         if conversation_id in self._rehydrated:
             return
-        self._rehydrated.add(conversation_id)
         store = self._sandbox.current_project_store()
         if store is None or store.status() != StorageStatus.OK:
             return
@@ -57,13 +75,20 @@ class Rehydration:
         session = getattr(executor, "_sandbox", None) if executor is not None else None
         if session is None:
             return
+        # Mark incomplete before I/O: cancellation can interrupt after partial writes
+        # without reaching an Exception handler. Only successful completion clears it.
+        self._failed.add(conversation_id)
         try:
             await rehydrate_workspace(session, store.path_for(conversation_id))
-        except Exception as exc:  # noqa: BLE001 — surface, don't crash the run
+        except Exception as exc:  # noqa: BLE001 — keep partial bytes out of runs/snapshots
             await self._notifier.emit(
                 conversation_id,
-                f"Could not restore project files: {exc}",
+                f"Could not restore project files: {exc}. "
+                "Saved files are preserved; retry to restore.",
             )
+            raise WorkspaceArchiveError(f"project files could not be restored: {exc}") from exc
+        self._failed.discard(conversation_id)
+        self._mark_rehydrated(conversation_id)
 
     async def _rehydrate_after_recreate(self, conversation_id: str) -> None:
         """Restore bytes and uploads after a mid-run sandbox replacement."""
@@ -120,5 +145,14 @@ class Rehydration:
         if written:
             _LOG.info("materialized %d reference pack file(s) for %s", written, conversation_id)
 
+    def require_complete(self, conversation_id: str) -> None:
+        if not self.snapshot_allowed(conversation_id):
+            raise WorkspaceArchiveError("project restoration is incomplete; saved files preserved")
+
+    def snapshot_allowed(self, conversation_id: str) -> bool:
+        """Never replace the saved tree with a partially restored sandbox."""
+        return conversation_id not in self._failed
+
     def clear(self, conversation_id: str) -> None:
         self._rehydrated.discard(conversation_id)
+        self._failed.discard(conversation_id)

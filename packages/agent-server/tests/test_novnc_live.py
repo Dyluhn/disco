@@ -180,6 +180,7 @@ def test_live_url_route_happy_path_returns_200_and_NO_raw_url():
             assert body["port"] == 6080
             # view_only=1 is enforced in the server-returned path, not just the client.
             assert "view_only=1" in body["novnc_path"]
+            assert "resize=scale" in body["novnc_path"]
             # SECURITY: the raw sandbox host:port must never reach the browser.
             assert "url" not in body
             assert raw not in resp.text

@@ -202,6 +202,39 @@ def _mask_quoted_spans(text: str) -> str:
 
 
 _CALL_PREFIX_RE = re.compile(r"[\w.\]\)]\($")
+_TOOL_INVOCATION_RE = re.compile(
+    r"\b(?P<verb>call|invoke|use|using)\s+(?:the\s+)?"
+    r"(?P<prefix>tool\s+)?(?P<name>[A-Za-z_]\w*(?:\.\w+)*)"
+    r"(?P<suffix>\s+tool)?\s+with\s+",
+    re.IGNORECASE,
+)
+_NAMED_ARGUMENT_PREFIX_RE = re.compile(
+    r"(?:[A-Za-z_]\w*\s*=\s*"
+    r"(?:'[^'\n]*'|\"[^\"\n]*\"|[A-Za-z_]\w*|[+-]?\d+(?:\.\d+)?)\s*,\s*)*"
+    r"[A-Za-z_]\w*\s*=\s*$"
+)
+
+
+def _is_tool_argument_literal(instruction: str, quote_start: int) -> bool:
+    """Recognize named scalar arguments in explicit prose tool invocations.
+
+    ``using app_create with recipe_id='…'`` configures a tool; it does not
+    dictate visible copy. Require both invocation syntax and an uninterrupted
+    argument list, so ordinary instructions such as ``Use a button with
+    label='Buy now'`` and copy following the call retain their authority.
+    """
+    prefix = instruction[max(0, quote_start - 480) : quote_start]
+    for match in _TOOL_INVOCATION_RE.finditer(_mask_quoted_spans(prefix)):
+        explicit_tool = (
+            match["verb"].lower() in {"call", "invoke"}
+            or match["prefix"] is not None
+            or match["suffix"] is not None
+            or "_" in match["name"]
+            or "." in match["name"]
+        )
+        if explicit_tool and _NAMED_ARGUMENT_PREFIX_RE.fullmatch(prefix[match.end() :]):
+            return True
+    return False
 
 
 def _is_code_expression_literal(instruction: str, quote_start: int) -> bool:
@@ -338,6 +371,7 @@ def _dictated_content_literals(text: str) -> list[_DictatedContentLiteral]:
             or _is_serve_metadata_literal(text, mt.start())
             or _is_diagnostic_protocol_metadata_literal(text, mt.start(), literal)
             or _is_code_expression_literal(text, mt.start())
+            or _is_tool_argument_literal(text, mt.start())
         ):
             continue
         if literal in seen:

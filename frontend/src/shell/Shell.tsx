@@ -1,4 +1,5 @@
-import { Menu } from "lucide-react";
+import * as Dialog from "@radix-ui/react-dialog";
+import { Menu, X } from "lucide-react";
 import { Suspense, useEffect, useRef, useState } from "react";
 import { Outlet } from "react-router-dom";
 import { DemoDataBadge } from "@/components/DemoDataBadge";
@@ -22,99 +23,44 @@ import { NavRail } from "./NavRail";
 export function Shell() {
   const [collapsed, setCollapsed] = useState(false); // desktop rail width
   const [drawerOpen, setDrawerOpen] = useState(false); // mobile overlay
-  const openerRef = useRef<HTMLButtonElement>(null);
   const drawerRef = useRef<HTMLDivElement>(null);
   const desktopRailRef = useRef<HTMLElement>(null);
-  const wasOpenRef = useRef(false);
   // Set when the open drawer is closed by a mobile->desktop breakpoint
   // crossing, so focus retargets to the surviving desktop navigation instead
   // of the mobile opener (which is hidden at lg+).
   const breakpointCloseRef = useRef(false);
 
-  useEffect(() => {
-    if (drawerOpen) {
-      wasOpenRef.current = true;
-      const firstLink = drawerRef.current?.querySelector("a[href]");
-      if (firstLink instanceof HTMLElement) {
-        firstLink.focus();
-      }
-    } else if (wasOpenRef.current) {
-      wasOpenRef.current = false;
-      if (breakpointCloseRef.current) {
-        breakpointCloseRef.current = false;
-        const target = desktopRailRef.current?.querySelector("a[href], button:not([disabled])");
-        if (target instanceof HTMLElement) {
-          target.focus();
-          return;
-        }
-        // Desktop rail missing its controls: leave focus where the browser
-        // placed it rather than forcing the hidden opener or BODY.
-        return;
-      }
-      if (openerRef.current?.isConnected) {
-        openerRef.current.focus();
-      }
-    }
-  }, [drawerOpen]);
-
-  // While the mobile drawer is open, a crossing to the desktop breakpoint
-  // (Tailwind lg: 1024px) unmounts the overlay and retargets focus. Listeners
-  // exist only while open and are removed on close/unmount, so a closed
-  // drawer never opens or traps on resize.
+  // While the drawer is open, crossing to the desktop breakpoint (Tailwind lg:
+  // 1024px) closes it. The listener exists only while open, so a closed drawer
+  // never reacts to resizes.
   useEffect(() => {
     if (!drawerOpen) {
       return;
     }
-    const closeForDesktop = () => {
+    const desktop = window.matchMedia("(min-width: 1024px)");
+    const closeOnDesktop = () => {
+      if (!desktop.matches) return;
       breakpointCloseRef.current = true;
       setDrawerOpen(false);
     };
-    const onResize = () => {
-      if (window.innerWidth >= 1024) {
-        closeForDesktop();
-      }
-    };
-    const onMediaChange = (event: { matches: boolean }) => {
-      if (event.matches) {
-        closeForDesktop();
-      }
-    };
-    window.addEventListener("resize", onResize);
-    let media: MediaQueryList | null = null;
-    try {
-      media = window.matchMedia("(min-width: 1024px)");
-      if (typeof media.addEventListener === "function") {
-        media.addEventListener("change", onMediaChange as (event: MediaQueryListEvent) => void);
-      } else {
-        (media as unknown as { addListener: (cb: typeof onMediaChange) => void }).addListener(
-          onMediaChange,
-        );
-      }
-    } catch {
-      media = null;
+    desktop.addEventListener("change", closeOnDesktop);
+    return () => desktop.removeEventListener("change", closeOnDesktop);
+  }, [drawerOpen]);
+
+  // After a breakpoint close, focus the surviving desktop navigation. The
+  // dialog's own close focus (to the now-hidden opener) is suppressed below.
+  useEffect(() => {
+    if (drawerOpen || !breakpointCloseRef.current) {
+      return;
     }
-    return () => {
-      window.removeEventListener("resize", onResize);
-      try {
-        if (media) {
-          if (typeof media.removeEventListener === "function") {
-            media.removeEventListener(
-              "change",
-              onMediaChange as (event: MediaQueryListEvent) => void,
-            );
-          } else {
-            (
-              media as unknown as { removeListener: (cb: typeof onMediaChange) => void }
-            ).removeListener(onMediaChange);
-          }
-        }
-      } catch {
-        // Ignore cleanup errors; listeners are best-effort.
-      }
-    };
+    const target = desktopRailRef.current?.querySelector("a[href], button:not([disabled])");
+    if (target instanceof HTMLElement) {
+      target.focus();
+    }
   }, [drawerOpen]);
 
   return (
+    <Dialog.Root open={drawerOpen} onOpenChange={setDrawerOpen}>
     <div className="flex h-dvh overflow-hidden bg-bg text-text">
       <CommandPalette />
       {/* desktop rail — in-flow, width-collapsing */}
@@ -129,76 +75,55 @@ export function Shell() {
       </aside>
 
       {/* mobile drawer + backdrop — overlays, never squeezes */}
-      {drawerOpen && (
-        <div
-          ref={drawerRef}
-          className="lg:hidden"
-          onKeyDown={(event) => {
-            if (event.key === "Escape") {
-              setDrawerOpen(false);
-              return;
-            }
-            if (event.key !== "Tab") {
-              return;
-            }
-            const root = drawerRef.current;
-            if (!root) {
-              return;
-            }
-            const focusables = Array.from(
-              root.querySelectorAll<HTMLElement>(
-                'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
-              ),
-            );
-            if (focusables.length === 0) {
-              event.preventDefault();
-              return;
-            }
-            const first = focusables[0];
-            const last = focusables[focusables.length - 1];
-            const active = document.activeElement as HTMLElement | null;
-            if (event.shiftKey) {
-              if (active === first || !root.contains(active)) {
+      <Dialog.Portal>
+          <Dialog.Overlay className="fixed inset-0 z-30 bg-black/45 lg:hidden" />
+          <Dialog.Content
+            ref={drawerRef}
+            className="fixed inset-y-0 left-0 z-40 w-64 pmx-rise lg:hidden"
+            onOpenAutoFocus={(event) => {
+              // Land on the first navigation link (Radix skips links by default).
+              const firstLink = drawerRef.current?.querySelector("a[href]");
+              if (firstLink instanceof HTMLElement) {
                 event.preventDefault();
-                last.focus();
+                firstLink.focus();
               }
-            } else if (active === last) {
-              event.preventDefault();
-              first.focus();
-            }
-          }}
-        >
-          <button
-            type="button"
-            data-disco-control="shell.drawer-close"
-            aria-label="Close navigation"
-            onClick={() => setDrawerOpen(false)}
-            className="fixed inset-0 z-30 bg-black/45"
-          />
-          <div className="fixed inset-y-0 left-0 z-40 w-64 pmx-rise">
+            }}
+            onCloseAutoFocus={(event) => {
+              if (breakpointCloseRef.current) {
+                breakpointCloseRef.current = false;
+                event.preventDefault();
+              }
+            }}
+          >
+            <Dialog.Title className="sr-only">Navigation</Dialog.Title>
+            <Dialog.Description className="sr-only">Choose a Disco view.</Dialog.Description>
+            <Dialog.Close
+              data-disco-control="shell.drawer-close"
+              aria-label="Close navigation"
+              className="absolute right-3 top-3 z-50 grid size-11 place-items-center rounded-control text-text-muted hover:text-text"
+            >
+              <X className="size-4" aria-hidden />
+            </Dialog.Close>
             <NavRail
               collapsed={false}
               onToggleCollapse={() => setDrawerOpen(false)}
               onNavigate={() => setDrawerOpen(false)}
             />
-          </div>
-        </div>
-      )}
+          </Dialog.Content>
+      </Dialog.Portal>
 
       {/* main column */}
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex shrink-0 items-center justify-between gap-inline border-b border-hairline px-body py-inline">
           <div className="flex items-center gap-inline">
-            <button
-              ref={openerRef}
+            <Dialog.Trigger
               type="button"
               data-disco-control="shell.drawer-open"
               aria-label="Open navigation"
-              onClick={() => setDrawerOpen(true)}
               className="grid size-11 shrink-0 place-items-center rounded-control border border-hairline text-text-muted transition-colors hover:text-text lg:hidden"
             >
               <Menu className="size-4" aria-hidden />
-            </button>
+            </Dialog.Trigger>
             <ModeSlider />
           </div>
           <ThemeToggle />
@@ -220,5 +145,6 @@ export function Shell() {
         </main>
       </div>
     </div>
+    </Dialog.Root>
   );
 }

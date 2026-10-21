@@ -186,3 +186,37 @@ async def test_stream_midstream_transient_is_not_replayed_with_fallback():
 
     assert primary.calls == 1
     assert fallback.calls == 0
+
+
+@pytest.mark.parametrize("delivery", ["complete", "stream"])
+async def test_actual_tools_block_json_only_fallback_without_redundant_metadata(delivery):
+    from disco.core.llm.types import ToolSpec
+
+    local = FakeModelProvider("arbitrary-primary", raises=LLMTransientError("unavailable"))
+    router, _sink, primary, fallback = _router_with_fallback(local=local)
+    req = _req(ModelRole.VERIFIER).model_copy(
+        update={
+            "tools": [
+                ToolSpec(
+                    name="inspect", description="Read state", parameters_schema={"type": "object"}
+                )
+            ]
+        }
+    )
+    with pytest.raises(LLMTransientError):
+        if delivery == "complete":
+            await router.complete(req)
+        else:
+            async for _chunk in router.stream_complete(req):
+                pass
+    assert primary.calls == 8
+    assert fallback.calls == 0
+
+
+async def test_missing_fallback_provider_preserves_primary_failure():
+    local = FakeModelProvider("arbitrary-primary", raises=LLMTransientError("unavailable"))
+    router, _sink, primary, fallback = _router_with_fallback(local=local)
+    router._providers.pop(ROLE_FALLBACK_PROVIDER_KEY)
+    with pytest.raises(LLMTransientError):
+        await router.complete(_req(ModelRole.QUERY_REWRITER))
+    assert primary.calls == 8 and fallback.calls == 0

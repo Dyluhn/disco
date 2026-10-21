@@ -28,6 +28,7 @@ from fastapi.responses import JSONResponse
 
 from ..auth import current_session
 from ..preview_inject import inject_element_mention_picker, inject_selection_agent
+from ..preview_projection import SealedPreviewRuntimeContract
 from ..runtime import ConversationRuntime
 from ._common import require_owned_conversation
 from .preview_handoff import _capture_hooks
@@ -296,14 +297,20 @@ async def _fetch_inside_response(
     rel_path: str,
     *,
     inject_selection: bool = False,
+    finished_contract: SealedPreviewRuntimeContract | None = None,
 ) -> Response | None:
     if port == NOVNC_PORT:
         return None
     try:
-        session = runtime.live_sessions.live_session(conversation_id)
-        if session is None:
-            return None
-        got = await session.fetch_inside(port, rel_path)
+        if finished_contract is not None:
+            got = await runtime.preview.content.fetch_finished_inside(
+                conversation_id, finished_contract, port, rel_path
+            )
+        else:
+            session = runtime.live_sessions.live_session(conversation_id)
+            if session is None:
+                return None
+            got = await session.fetch_inside(port, rel_path)
     except Exception:  # noqa: BLE001 — liveness cannot fail the route
         return None
     if got is None:
@@ -327,6 +334,7 @@ async def _upstream_http_response(
     rel_path: str,
     *,
     inject_selection: bool,
+    finished_contract: SealedPreviewRuntimeContract | None = None,
 ) -> Response | None:
     try:
         async with httpx.AsyncClient(
@@ -342,6 +350,7 @@ async def _upstream_http_response(
             port,
             rel_path,
             inject_selection=inject_selection,
+            finished_contract=finished_contract,
         )
     media_type = response.headers.get("content-type", "text/html")
     body = response.content
@@ -499,7 +508,7 @@ async def _browser_live_url_response(
     return JSONResponse(
         {
             "ready": True,
-            "novnc_path": "/vnc.html?autoconnect=1&view_only=1",
+            "novnc_path": "/vnc.html?autoconnect=1&view_only=1&resize=scale",
             "port": NOVNC_PORT,
         }
     )

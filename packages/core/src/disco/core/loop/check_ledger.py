@@ -3,8 +3,9 @@
 Phase 1 of the verification ledger (observe only). Every ``shell`` / ``shell_exec``
 observation or error carries ``meta["check"]``: the call's fingerprint, the workspace
 tree digest before and after the run, the exit code, and the busy sessions before and
-after. Nothing is memoised or gated yet; :func:`memo_hits` counts what a later phase
-would have answered from the record instead of executing.
+after. Shell commands are always executed; :func:`memo_hits` counts what a later phase
+would have matched by source digest and session names. These are diagnostic
+comparisons, not permission to replay or skip an execution.
 
 The digest is computed inside the sandbox with coreutils only (``find | sort |
 sha256sum``), so it works on every backend that has ``exec_shell``. It covers source
@@ -153,7 +154,7 @@ class CheckRecord:
 
     @property
     def pure(self) -> bool:
-        """The run changed neither the source tree nor the set of live sessions."""
+        """Recorded source digests and session names match; runtime purity is unknown."""
         return (
             self.tree_before is not None
             and self.tree_before == self.tree_after
@@ -188,10 +189,11 @@ def check_records(events: list[Event]) -> list[CheckRecord]:
 
 
 def memo_source(record: CheckRecord, prior: list[CheckRecord]) -> CheckRecord | None:
-    """The earlier record that already answers ``record``, or None.
+    """An earlier matching historical observation, for diagnostic comparison only.
 
-    A hit needs the same call, a prior run that passed without changing anything, and
-    the same source digest and live sessions now as then. Unknown digests never match.
+    A hit needs the same call, an earlier zero exit with equal source hashes, and
+    matching digest and session names. Runtime state is not covered, so this
+    match cannot authorize skipping execution. Unknown digests never match.
     """
     if record.tree_before is None:
         return None
@@ -210,7 +212,7 @@ def memo_source(record: CheckRecord, prior: list[CheckRecord]) -> CheckRecord | 
 
 
 def memo_hits(events: list[Event]) -> list[tuple[CheckRecord, CheckRecord]]:
-    """(run, earlier run that already answered it) for every would-be memo hit."""
+    """Historical pairs with matching recorded inputs; never execution authority."""
     hits: list[tuple[CheckRecord, CheckRecord]] = []
     seen: list[CheckRecord] = []
     for record in check_records(events):
@@ -236,7 +238,9 @@ def memo_disagreements(events: list[Event]) -> list[tuple[CheckRecord, CheckReco
 MUTATE_CAPABILITY = "workspace.mutate"
 CHECKS_SHOWN = 12
 COMMAND_CHARS = 90
-CHECKS_HEADER = "Checks (recorded shell runs; current = nothing changed since it ran):"
+CHECKS_HEADER = (
+    "Checks (historical shell exits; current = no later recorded source change, not runtime proof):"
+)
 
 
 @dataclass(frozen=True)
@@ -279,7 +283,7 @@ def mutations(events: list[Event]) -> list[Mutation]:
         tool = event.tool_result.tool_name
         if action is not None and ledger_tool(action):
             # The record is the authority for a shell run: an unchanged digest proves
-            # purity; a changed or unknown one counts as a mutation.
+            # unchanged recorded source files only; runtime state is not covered.
             raw = event.meta.get("check") or {}
             before, after = raw.get("tree_before"), raw.get("tree_after")
             if before is not None and before == after:
@@ -493,17 +497,17 @@ FORCE_ARG = "force"
 
 
 def memo_enabled() -> bool:
-    """`DISCO_CHECK_MEMO` (default on) — the one switch that turns memoised answers off."""
-    from ..env import disco_env
+    """Compatibility reader: opaque shell commands are always executed.
 
-    return (disco_env("CHECK_MEMO", "on") or "").strip().lower() in {"1", "true", "yes", "on"}
+    Source hashes exclude mutable runtime state, so repeated exits do not prove
+    that a future invocation can be answered from history. The old environment
+    switch cannot restore execution caching.
+    """
+    return False
 
 
 def check_fingerprint(tool_call: Any) -> str:
-    (
-        "The call's identity for the ledger: `force` asks for execution, "
-        "it is not a different check."
-    )
+    "The call's identity for the ledger: `force` asks for execution, it is not a different check."
     arguments = {k: v for k, v in (tool_call.arguments or {}).items() if k != FORCE_ARG}
     return tool_call_fingerprint(tool_call.tool_name, arguments)
 
@@ -531,8 +535,7 @@ def flaky_fingerprints(records: list[CheckRecord]) -> frozenset[str]:
 
 
 def repeatable(fingerprint: str, records: list[CheckRecord]) -> bool:
-    """A command has proven repeatable when one real repeat agreed with its source and none
-    ever disagreed. Its first repeat therefore always executes."""
+    """Whether recorded repeats agreed; descriptive history, not proof of repeatability."""
     if fingerprint in flaky_fingerprints(records):
         return False
     return any(
@@ -544,25 +547,13 @@ def repeatable(fingerprint: str, records: list[CheckRecord]) -> bool:
 def memo_source_for(
     action: ActionEvent, before: CheckSnapshot | None, events: list[Event]
 ) -> CheckRecord | None:
-    """The recorded run that answers this call without executing it, or None."""
-    if before is None or before.tree_digest is None or not memo_enabled() or forced(action):
-        return None
-    assert action.tool_call is not None
-    fingerprint = check_fingerprint(action.tool_call)
-    records = check_records(events)
-    if not repeatable(fingerprint, records):
-        return None
-    candidate = CheckRecord(
-        seq=0,
-        action_id=action.id,
-        fingerprint=fingerprint,
-        tree_before=before.tree_digest,
-        tree_after=before.tree_digest,
-        exit_code=None,
-        sessions_before=before.sessions,
-        sessions_after=before.sessions,
-    )
-    return memo_source(candidate, records)
+    """Compatibility reader; historical observations never authorize cached execution.
+
+    ``memo_hits`` and ``memo_disagreements`` remain retrospective telemetry only.
+    Even identical source digests and session names cannot cover databases,
+    service generations, network responses, or other command effects.
+    """
+    return None
 
 
 def memo_content(source: CheckRecord, source_content: str) -> str:
@@ -670,7 +661,8 @@ def finish_fact(events: list[Event], statuses: list[CheckStatus]) -> str | None:
     return (
         f"No source change since step {since} ({count} verification actions since); all "
         f"{len(statuses)} recorded checks are current. "
-        "Nothing is stale for the finish gate to re-run."
+        "These are recorded shell exits, not independent acceptance proof; "
+        "no historical command is replayed."
     )
 
 

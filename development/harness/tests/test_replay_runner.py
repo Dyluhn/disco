@@ -139,12 +139,17 @@ def test_legacy_plan_fixture_is_detected() -> None:
 
 # ---- full deterministic replay (gated on the captured fixture) --------------
 
-_FIXTURE = Path(__file__).resolve().parents[1] / "cassettes" / "loop_demo.events.jsonl"
+_FIXTURE = (
+    Path(__file__).resolve().parents[1] / "cassettes" / "loop_paris_standard_low_v4.events.jsonl"
+)
+_LEGACY_FIXTURE = Path(__file__).resolve().parents[1] / "cassettes" / "loop_demo.events.jsonl"
 
 
 def _with_reading_checkpoints(recorded_outputs):
     """Apply the captured host-event migration without weakening replay equality."""
-    migration = json.loads(_FIXTURE.with_name("loop_demo.reading-checkpoints.json").read_text())
+    migration = json.loads(
+        _LEGACY_FIXTURE.with_name("loop_demo.reading-checkpoints.json").read_text()
+    )
     before = {row["before_event_id"]: row["events"] for row in migration["insertions"]}
     expected = []
     for event in recorded_outputs:
@@ -160,6 +165,23 @@ def _with_reading_checkpoints(recorded_outputs):
     return expected
 
 
+_CASE = "loop_paris_standard_low_v4"
+_DEPTH = "standard_deep"
+_PROVENANCE = (
+    Path(__file__).resolve().parents[1]
+    / "cassettes"
+    / ("loop_paris_standard_low_v4.provenance.json")
+)
+
+
+def _sha256(path: Path) -> str:
+    import hashlib
+
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+# Preserve the accepted skip marker identity; current capture provenance and
+# commands are documented in CONTRIBUTING and the versioned fixture record.
 @pytest.mark.skipif(
     not _FIXTURE.exists(), reason="needs the captured loop fixture (make capture-loop)"
 )
@@ -170,25 +192,105 @@ async def test_deterministic_replay_reproduces_recorded_events():
     from harness.replay_runner import load_events, replay_conversation
     from harness.runtime import build_replay_runtime
 
-    cassette = Cassette.load(str(_FIXTURE.with_name("loop_demo.cassette.jsonl")))
+    provenance = json.loads(_PROVENANCE.read_text(encoding="utf-8"))
+    assert provenance["case"] == _CASE and provenance["cid"] == _CASE
+    assert provenance["depth"] == _DEPTH
+    assert provenance["query"] == "What is the capital of France and roughly its population?"
+    cassette = Cassette.load(str(_FIXTURE.with_name("loop_paris_standard_low_v4.cassette.jsonl")))
     recorded = load_events(_FIXTURE)
+    assert len(recorded) == 286, "versioned current fixture must stay byte-exact (286 events)"
+    assert len(cassette) == 131, "versioned current fixture must stay byte-exact (131 interactions)"
+    for name, expected in provenance["artifact_sha256"].items():
+        actual = _sha256(_FIXTURE.with_name(name))
+        assert actual == expected, f"{name} diverged from provenance seal"
     assert not any(event.kind == EventKind.PLAN for event in recorded), (
-        "checked-in fixture must exercise the current gateless protocol; "
-        "recapture with make capture-loop"
+        "checked-in fixture must exercise the current gateless protocol"
     )
 
     def _builder(store):
-        return build_replay_runtime(cassette, store)
+        runtime = build_replay_runtime(cassette, store)
+        runtime.deep_research.set_depth(_CASE, _DEPTH)
+        return runtime
 
     outputs = await replay_conversation(
         recorded,
         build_runtime=_builder,
         store=SqliteEventStore(":memory:"),
-        # surface MUST match the capture, or the path (+ cassette key) differs
+        cid=_CASE,
+        # surface + depth + cid MUST match the capture, or the path (+ cassette key) differs
         surface="deep_research",
     )
     _, recorded_outputs = split_io(recorded)
-    assert diff_sequences(_with_reading_checkpoints(recorded_outputs), outputs) == []
+    # Strict: the current capture already contains its writing-stage checkpoint
+    # commits, so NO migration is applied here — any divergence is a regression.
+    assert diff_sequences(recorded_outputs, outputs) == []
+    cassette.assert_all_consumed()
+
+
+def test_historical_loop_paris_standard_low_v2_integrity():
+    """History-only seals: the allocation change needs a new genuine capture.
+
+    These bytes are not relabeled as responses to the new output budget, and
+    this integrity check does not claim v2 replays on the current runtime.
+    """
+    from harness.cassette import Cassette
+    from harness.replay_runner import load_events
+
+    root = _FIXTURE.parent
+    seals = {
+        "events.jsonl": "d59672670031cff5d43cd896e5dc184b5e48b72ce7a44b281111ac0c70b7858d",
+        "cassette.jsonl": "9b49d00a2b2fec9208547fa8be23708f6fee5b274658b442a85b70f618a7fc47",
+        "provenance.json": "04fe50ffd526a6c0adb7b1727c4760caf093864c53589b08fa230d7b2c53280c",
+    }
+    for suffix, expected in seals.items():
+        assert _sha256(root / f"loop_paris_standard_low_v2.{suffix}") == expected
+    provenance = json.loads((root / "loop_paris_standard_low_v2.provenance.json").read_text())
+    assert provenance["case"] == provenance["cid"] == "loop_paris_standard_low_v2"
+    assert len(load_events(root / "loop_paris_standard_low_v2.events.jsonl")) == 304
+    assert len(Cassette.load(root / "loop_paris_standard_low_v2.cassette.jsonl")) == 149
+    for name, expected in provenance["artifact_sha256"].items():
+        assert _sha256(root / name) == expected
+
+
+def test_historical_loop_paris_standard_low_v3_integrity():
+    """Preserve the genuine pre-selector capture without relabeling its requests."""
+    from harness.cassette import Cassette
+    from harness.replay_runner import load_events
+
+    root = _FIXTURE.parent
+    seals = {
+        "events.jsonl": "82104a3171f690a7f3b474c40334e2753e01ef472bb7c3afc525d08d7c31bed1",
+        "cassette.jsonl": "bb593cd7adfff28c727967c1a76cf6a3e28003d4cd187bb2814e71700aad824b",
+        "provenance.json": "3216cdb25bb2b7028d38fa7ba36f2e9a430acfc93369ecc8c8ff93a77cc08e6c",
+    }
+    for suffix, expected in seals.items():
+        assert _sha256(root / f"loop_paris_standard_low_v3.{suffix}") == expected
+    provenance = json.loads((root / "loop_paris_standard_low_v3.provenance.json").read_text())
+    assert provenance["case"] == provenance["cid"] == "loop_paris_standard_low_v3"
+    assert len(load_events(root / "loop_paris_standard_low_v3.events.jsonl")) == 293
+    assert len(Cassette.load(root / "loop_paris_standard_low_v3.cassette.jsonl")) == 129
+    for name, expected in provenance["artifact_sha256"].items():
+        assert _sha256(root / name) == expected
+
+
+def test_historical_loop_demo_migration_still_applies():
+    """The preserved loop_demo pair + its reading-checkpoint migration stay coherent.
+
+    History-only: no runtime, no replay. Guards the legacy evidence the current
+    fixture superseded (see loop_paris_standard_low_v2.provenance.json)."""
+    from harness.replay_runner import load_events, split_io
+
+    recorded = load_events(_LEGACY_FIXTURE)
+    _, recorded_outputs = split_io(recorded)
+    migration = json.loads(
+        _LEGACY_FIXTURE.with_name("loop_demo.reading-checkpoints.json").read_text()
+    )
+    assert len(migration["insertions"]) == 9, "migration must keep its 9 insertion rows"
+    assert sum(len(row["events"]) for row in migration["insertions"]) == 36, (
+        "migration must insert exactly 36 writing-stage checkpoint commits"
+    )
+    migrated = _with_reading_checkpoints(recorded_outputs)
+    assert len(migrated) - len(recorded_outputs) == 36
 
 
 def test_research_replay_ignores_transport_pulses_but_keeps_checkpoint_work():

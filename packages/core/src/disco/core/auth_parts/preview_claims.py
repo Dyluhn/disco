@@ -1,12 +1,6 @@
-"""Preview capability scalar payload helpers.
-
-Extracted from ``auth.py`` under the same rule as the other parts here: nothing
-in this module is public API — ``auth.py`` re-imports both names unchanged.
-"""
+"""Scalar and authority type checks for signed Preview payloads."""
 
 from __future__ import annotations
-
-from typing import Any
 
 
 def _cap_scalar_fields(
@@ -35,11 +29,7 @@ def _cap_scalar_fields(
     return None
 
 
-def _partitioned_cookies_from_payload(payload: dict[str, Any]) -> bool | None:
-    """Legacy absence stays False; present must be a real bool."""
-    if "partitioned_cookies" not in payload:
-        return False
-    value = payload["partitioned_cookies"]
-    if not isinstance(value, bool):
-        return None
-    return value
+def _cap_authority_invalid(authority_id: object) -> bool:
+    return authority_id is not None and (
+        not isinstance(authority_id, str) or not authority_id or len(authority_id) > 256
+    )

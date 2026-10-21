@@ -41,27 +41,50 @@ function parseChartPayload(node: React.ReactNode): {
 
 const CITE = /\[\[(\w+)\]\]/g;
 
+function proseText(children: React.ReactNode): string {
+  return React.Children.toArray(children).map((child) => {
+    if (typeof child === "string" || typeof child === "number") return String(child);
+    if (React.isValidElement<{ children?: React.ReactNode }>(child)) return proseText(child.props.children);
+    return "";
+  }).join("");
+}
+
 /** Recursively traverse React children to find string nodes and replace [[id]] with CitationMarker. */
-function processCitations(children: React.ReactNode, answer: GroundedAnswer | null): React.ReactNode {
+function processCitations(
+  children: React.ReactNode,
+  answer: GroundedAnswer | null,
+  context = { text: "", fullText: proseText(children) },
+): React.ReactNode {
   return React.Children.map(children, (child) => {
     if (typeof child === "string") {
       const parts = child.split(CITE);
-      if (parts.length === 1) return child;
+      if (parts.length === 1) {
+        context.text += child;
+        return child;
+      }
       const result: React.ReactNode[] = [];
       for (let i = 0; i < parts.length; i++) {
         if (i % 2 === 0) {
           if (parts[i]) result.push(parts[i]);
+          context.text += parts[i];
         } else {
-          result.push(<CitationMarker key={i} id={parts[i]} answer={answer} />);
+          result.push(<CitationMarker key={i} id={parts[i]} answer={answer} textBefore={context.text} textAfter={context.fullText.slice(context.text.length + parts[i].length + 4)} />);
+          context.text += `[[${parts[i]}]]`;
         }
       }
       return result;
     }
-    if (React.isValidElement<{ children?: React.ReactNode }>(child) && child.props.children) {
+    if (React.isValidElement<{ children?: React.ReactNode; node?: { tagName?: string } }>(child) && child.props.children) {
       // Skip recursion for code/pre blocks
-      if (child.type === "code" || child.type === "pre") return child;
+      if (child.type === "code" || child.type === "pre" || child.props.node?.tagName === "code" || child.props.node?.tagName === "pre") {
+        // Inline code contributes to claim text (e.g. `example.com`) even
+        // though literal citation syntax inside code is never activated.
+        context.text += React.Children.toArray(child.props.children)
+          .filter((value): value is string => typeof value === "string").join("");
+        return child;
+      }
       return React.cloneElement(child, {
-        children: processCitations(child.props.children, answer),
+        children: processCitations(child.props.children, answer, context),
       });
     }
     return child;

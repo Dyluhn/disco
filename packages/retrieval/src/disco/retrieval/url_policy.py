@@ -107,3 +107,31 @@ def query_domain_scopes(query: str) -> tuple[frozenset[str] | None, frozenset[st
         if domain:
             (deny if sign else allow).add(domain)
     return frozenset(allow) if allow else None, frozenset(deny)
+
+
+def query_scoped_domains(
+    query: str,
+    allow: frozenset[str] | None,
+    deny: frozenset[str] | None,
+) -> tuple[frozenset[str] | None, frozenset[str] | None]:
+    """Intersect site operators with host policy, preserving subdomain semantics.
+
+    A configured ``example.com`` and requested ``docs.example.com`` permit the
+    latter and its subdomains. Disjoint policies permit nothing, never a union.
+    Quoted prose stays prose through the existing operator parser.
+    """
+    query_allow, query_deny = query_domain_scopes(query)
+    if allow is None:
+        allow = query_allow
+    elif query_allow is not None:
+        common = set()
+        for domain in allow:
+            for scoped in query_allow:
+                if host_matches_domain(domain, scoped):
+                    common.add(normalize_domain(domain))
+                elif host_matches_domain(scoped, domain):
+                    common.add(normalize_domain(scoped))
+        allow = frozenset(common)
+    if query_deny:
+        deny = (deny or frozenset()) | query_deny
+    return allow, deny

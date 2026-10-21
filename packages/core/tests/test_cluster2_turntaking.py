@@ -3,6 +3,7 @@ tools, the no-op backstop, and the circuit breaker."""
 
 from __future__ import annotations
 
+import pytest
 from disco.core import (
     ConversationStatus,
     EventSource,
@@ -218,6 +219,16 @@ async def test_circuit_breaker_hands_off_after_distinct_failures():
         and e.status == ConversationStatus.AWAITING_USER_DECISION
     )
     assert terminal.detail == alt.id
+
+    # The synthesized recovery gate retains an honest failure waiver.
+    state = await loop.pick_alternative("__continue__", resume=False)
+    assert state.execution_status == ConversationStatus.RUNNING
+    events = await store.get_events(CID)
+    message = next(
+        e for e in reversed(events) if isinstance(e, MessageEvent) and e.source == EventSource.USER
+    )
+    assert "5 recent failure(s) that opened the circuit breaker" in message.message.content
+    assert signals.count_recent_failures(events) == 0
 
 
 async def test_no_breaker_when_failures_below_threshold():
@@ -459,3 +470,54 @@ async def test_real_action_after_bare_running_resume_does_not_escalate():
     assert statuses[-2].status == ConversationStatus.PAUSED
     assert statuses[-2].detail == "actionless"
     assert not any(s.status == ConversationStatus.STUCK for s in statuses)
+
+
+@pytest.mark.parametrize("failures", [0, 2, 4])
+async def test_continue_wording_distinguishes_actual_recovery_from_ordinary_choices(failures):
+    result = ToolResult(
+        call_id="c",
+        tool_name="shell",
+        success=not failures,
+        content="done" if not failures else "",
+        error="boom" if failures else None,
+    )
+    steps = [action_step(args={"cmd": f"attempt-{i}"}) for i in range(max(1, failures))]
+    steps.append(
+        action_step(
+            "ask_user",
+            args={
+                "question": "Which direction?",
+                "options": [{"id": "one", "title": "First option"}],
+            },
+        )
+    )
+    agent = ScriptedAgent(steps)
+    loop, store = build_loop(agent, executor=FakeExecutor(result=result))
+    # A marker from a prior user turn is not evidence about this gate.
+    await store.append(
+        CID, StatusEvent(status=ConversationStatus.RUNNING, detail="recovery_requested")
+    )
+    await loop.send_message("Perform the task")
+    state = await loop.run()
+    assert state.execution_status == ConversationStatus.AWAITING_USER_DECISION
+    calls_before = len(loop.executor.calls)
+    state = await loop.pick_alternative("__continue__", resume=False)
+    assert state.execution_status == ConversationStatus.RUNNING
+    assert state.pending_alternatives_id is None
+    assert len(loop.executor.calls) == calls_before
+    events = await store.get_events(CID)
+    message = next(
+        e for e in reversed(events) if isinstance(e, MessageEvent) and e.source == EventSource.USER
+    )
+    content = message.message.content
+    if failures == 4:
+        assert "4 recent failure(s) that opened the circuit breaker" in content
+        assert "adjust your approach" in content
+    else:
+        assert (
+            content
+            == "Continue — keep working. Use your own judgment to choose the best next step."
+        )
+        assert "failure" not in content
+        assert "circuit breaker" not in content
+    assert signals.count_recent_failures(events) == 0

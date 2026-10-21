@@ -12,6 +12,7 @@ from fastapi import APIRouter, HTTPException, Query, Request, Response
 from ..auth import current_owner_id, current_session
 from ..runtime import ConversationRuntime
 from ._common import require_owned_conversation
+from .project_files import register_project_file_route
 from .projects_download import (
     _zip_workspace_with_overlay as _zip_workspace_with_overlay,
 )
@@ -301,6 +302,8 @@ def make_projects_router(
             store=store,
             runtime=runtime,
         )
+
+    register_project_file_route(router, store=store, runtime=runtime)
 
     @router.delete("/api/projects/{conversation_id}")
     async def delete_project(conversation_id: str, request: Request) -> dict:

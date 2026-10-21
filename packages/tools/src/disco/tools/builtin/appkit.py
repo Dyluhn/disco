@@ -15,6 +15,7 @@ app_set_tweak / app_snapshot_version.
 from __future__ import annotations
 
 import hashlib
+import json
 from collections.abc import Callable
 from typing import Any
 
@@ -22,6 +23,7 @@ from disco.core import SecurityRisk
 from disco.core.appkit import AppSection, AppSpec, render_html
 from disco.core.appkit.models import DEFAULT_DESIGN
 from disco.core.effects import EffectCapability
+from disco.core.flags import appkit_enabled
 from disco.core.kits import lead_form_appspec
 from disco.core.tweaks import TweakEditor, TweakField, TweakSpec
 from pydantic import BaseModel, Field
@@ -240,9 +242,7 @@ class AppReorderSectionTool:
 # --- app_set_design / app_set_tweak -------------------------------------------
 class AppSetKVArgs(BaseModel):
     key: str = Field(
-        description=(
-            "Tweak key exactly as defined in .disco/tweaks.json (e.g. 'lead.include_phone')."
-        )
+        description=("Tweak key exactly as defined in .disco/tweaks.json (e.g. 'brand.name').")
     )
     value: str = Field(
         description="New value, as a string; validated against the tweak's spec (e.g. 'true')."
@@ -261,13 +261,32 @@ class AppSetDesignTool:
 class AppSetTweakTool:
     definition = _def(
         "app_set_tweak",
-        "Set a tweak DEFINED in .disco/tweaks.json (validated against its TweakSpec, e.g. "
-        "lead.include_phone='true'). Rejects unknown tweaks + invalid values.",
+        "Set a tweak DEFINED in .disco/tweaks.json; validates and regenerates the app. "
+        "Canonical lead_gen controls: brand.name, design.accent, design.text, layout.density, "
+        "layout.width, motion.reduced. Read the spec for allowed palettes/ranges. Legacy "
+        "persisted apps retain their own defined keys. Unknown keys or invalid values fail.",
         AppSetKVArgs,
     )
 
     async def run(self, args: AppSetKVArgs, ctx: ToolContext) -> ToolOutcome:
         assert ctx.sandbox is not None
+        # Persisted v1 specs keep their adapter. Canonical v2 specs must never
+        # pass through the legacy renderer (which would overwrite the React app).
+        if await ctx.sandbox.file_exists(_SPEC_PATH):
+            try:
+                payload = json.loads(await ctx.sandbox.read_file(_SPEC_PATH))
+            except (ValueError, UnicodeDecodeError):
+                payload = None
+            if isinstance(payload, dict) and "schema_version" in payload:
+                from .app_kit_parts.set_tweak import set_owner_tweak
+
+                if not appkit_enabled():
+                    return ToolOutcome(
+                        success=False,
+                        error="appkit_disabled",
+                        content="Canonical AppKit edits are disabled on this deployment.",
+                    )
+                return await set_owner_tweak(ctx, args.key, args.value)
         store = AppSpecStore(ctx.sandbox)
         # Precedence: no_app > corrupt_appspec > no_tweakspec > corrupt_tweakspec >
         # unknown_tweak > invalid_tweak_value. Validate fully BEFORE writing the appspec.

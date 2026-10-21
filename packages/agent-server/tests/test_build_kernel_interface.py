@@ -30,7 +30,14 @@ from disco.agent_server.run_registry import (
 )
 from disco.agent_server.run_supervision_ports import DiscoKernelSelector
 from disco.agent_server.runtime import ConversationRuntime
-from disco.core import Event, EventSource, SqliteEventStore, WorkspaceMutationEvent
+from disco.core import (
+    ConversationState,
+    ConversationStatus,
+    Event,
+    EventSource,
+    SqliteEventStore,
+    WorkspaceMutationEvent,
+)
 from disco.core.verification import (
     VerificationClaimKind,
     VerificationRequestedClaim,
@@ -223,7 +230,7 @@ async def test_disco_kernel_control_ops_delegate_unchanged(store: SqliteEventSto
 
     await k.pick_alternative(CID, "opt-2")
     rt.loops.loop_for.assert_called_with(CID)
-    rt.loop.pick_alternative.assert_awaited_once_with("opt-2")
+    rt.loop.pick_alternative.assert_awaited_once_with("opt-2", resume=False)
 
 
 def test_disco_kernel_start_kicks(store: SqliteEventStore) -> None:
@@ -412,3 +419,27 @@ async def test_runtime_control_ops_route_through_disco_kernel(
     await runtime.request_plan(CID, "replan please")
     runtime._control.request_plan.assert_awaited_once_with(CID, "replan please")
     assert runtime._kernel_pins.current(CID) is runtime._disco_kernel
+
+
+@pytest.mark.parametrize(
+    "status",
+    [
+        ConversationStatus.RUNNING,
+        ConversationStatus.WAITING_FOR_CONFIRMATION,
+        ConversationStatus.AWAITING_USER_DECISION,
+        ConversationStatus.PAUSED,
+        ConversationStatus.FINISHED,
+    ],
+)
+async def test_alternative_control_schedules_only_resolved_running_gate(store, status):
+    rt = _kernel_harness(store)
+    rt.loop.pick_alternative.return_value = ConversationState(
+        conversation_id=CID,
+        execution_status=status,
+    )
+    await rt.control.pick_alternative(CID, "chosen")
+    rt.loop.pick_alternative.assert_awaited_once_with("chosen", resume=False)
+    if status is ConversationStatus.RUNNING:
+        rt.controller.kick.assert_called_once_with(CID)
+    else:
+        rt.controller.kick.assert_not_called()

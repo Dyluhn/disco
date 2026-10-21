@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime
 
 import httpx
+import pytest
 from disco.retrieval.models import SearchHit
 from disco.retrieval.providers import SearchProvider
 from disco.retrieval.source_adapters import (
@@ -11,6 +12,7 @@ from disco.retrieval.source_adapters import (
     NewsSearchProvider,
     SemanticScholarSearchProvider,
     SiteScopedSearchProvider,
+    _SearchSourceUnavailable,
 )
 
 
@@ -36,7 +38,7 @@ async def test_arxiv_maps_atom_hits_and_satisfies_protocol():
     </feed>"""
 
     def handler(req: httpx.Request) -> httpx.Response:
-        assert req.url.params["search_query"] == "all:agent memory"
+        assert req.url.params["search_query"] == 'all:"agent" AND all:"memory"'
         assert req.url.params["max_results"] == "2"
         return httpx.Response(200, content=xml)
 
@@ -75,7 +77,7 @@ async def test_arxiv_follows_redirects_before_parsing_atom_hits():
                 headers={"Location": str(req.url.copy_with(scheme="https"))},
             )
         assert req.url.scheme == "https"
-        assert req.url.params["search_query"] == "all:redirect test"
+        assert req.url.params["search_query"] == 'all:"redirect" AND all:"test"'
         return httpx.Response(200, content=xml)
 
     provider = ArxivSearchProvider(
@@ -230,12 +232,13 @@ async def test_semantic_scholar_maps_json_and_sends_api_key():
     assert hits[1].snippet == ""
 
 
-async def test_semantic_scholar_http_error_degrades_to_empty():
+async def test_semantic_scholar_http_error_is_not_an_empty_result():
     provider = SemanticScholarSearchProvider(
         transport=_transport(lambda req: httpx.Response(500, text="nope"))
     )
 
-    assert await provider.search("q") == []
+    with pytest.raises(_SearchSourceUnavailable, match="HTTP 500"):
+        await provider.search("q")
 
 
 async def test_semantic_scholar_threads_strict_recency_filter():

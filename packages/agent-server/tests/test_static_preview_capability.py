@@ -12,9 +12,11 @@ from urllib.parse import urlsplit
 import pytest
 from _static_preview_capability_support import (  # noqa: E402
     _app,
+    _assert_foreign_owner_cannot_mint_preview,
     _exercise_path_preview_capability_contract,
     _finished_site,
     _install_owner_session,
+    _published_preview_transport,
     _redeem,
     _redeem_steps,
     _runtime_router,
@@ -318,6 +320,7 @@ async def test_committed_static_snapshot_survives_stopped_managed_preview(
 async def test_sealed_dynamic_preview_restarts_from_immutable_bytes_and_rotates_authority(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    published_transport: str = "reachable",
 ) -> None:
     """A fresh runtime replays typed intent over exact sealed bytes, never the mirror."""
 
@@ -531,6 +534,14 @@ async def test_sealed_dynamic_preview_restarts_from_immutable_bytes_and_rotates_
         restored_projection = restored_session.projection_id
         restored_upstream = restarted.preview.port_upstream(cid, restored_session.port)
         assert restored_upstream is not None
+        host_fetch, isolated_fetch = _published_preview_transport(
+            monkeypatch,
+            restarted,
+            restored_sandbox,
+            restored_manager,
+            restored_upstream,
+            published_transport,
+        )
         proxy_app = _app(store, cast(Any, restarted), live_upstream=restored_upstream)
 
         current_origin = urlsplit(new_mint["bootstrap_url"])
@@ -555,6 +566,15 @@ async def test_sealed_dynamic_preview_restarts_from_immutable_bytes_and_rotates_
         assert "SEALED DYNAMIC BYTES" in page.text
         assert "MUTATED MIRROR" not in page.text
         assert asset.content == b"document.body.dataset.sealed='yes';"
+        host_fetch.assert_not_awaited()
+        if published_transport != "reachable":
+            assert any(
+                call.args[:4]
+                == (restored_manager._sandbox, restored_session.port, "GET", "/asset.js")
+                for call in isolated_fetch.await_args_list
+            )
+
+        _assert_foreign_owner_cannot_mint_preview(capability_app, cid)
 
         with TestClient(
             proxy_app,
@@ -1081,8 +1101,7 @@ async def test_canonical_loopback_preserves_route_during_real_vite_react_hmr(
     # dev server is exercised. A missing node_modules is an unprepared
     # environment, so fail loudly and name the fix.
     assert vite_bin.is_file(), (
-        f"frontend node_modules not installed (no {vite_bin}); "
-        "run `npm ci` in frontend"
+        f"frontend node_modules not installed (no {vite_bin}); run `npm ci` in frontend"
     )
 
     probe = bind_socket()

@@ -7,6 +7,7 @@ export interface PreviewLaunchState {
   launchKey: string;
   launchVersionSeq: number | null;
   minting: boolean;
+  reloadPreview: () => Promise<void>;
   launchFailure: string | null;
   /** Reason code for a launch that MINTED FINE but whose frame never handed
    * back its bootstrap handshake. Separate from `launchFailure` on purpose —
@@ -47,7 +48,10 @@ export function usePreviewLaunch(
   const [launchFailure, setLaunchFailure] = useState<string | null>(null);
   const [frameReady, setFrameReady] = useState(false);
   const [bootstrapFailure, setBootstrapFailure] = useState<string | null>(null);
+  const installedLaunch = useRef<PreviewLaunch | null>(null);
   const mintRef = useRef<OwnedPreviewMint | null>(null);
+  const reloadOwner = useRef(0);
+  useEffect(() => () => { reloadOwner.current += 1; }, [cid, ownsCanonicalPreview, requestedLaunchKey]);
   const bootstrapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const onBootstrapReady = useCallback(() => {
@@ -83,36 +87,64 @@ export function usePreviewLaunch(
       mintRef.current = null;
       return;
     }
+    const owner = ++reloadOwner.current;
     setMinting(true);
     setLaunchFailure(null);
     void mintOnceForNavigation(mintRef, requestedLaunchKey, () =>
       previewBootstrapUrl(cid, selectedTarget, selectedVersionSeq),
     )
       .then((nextLaunch) => {
-        if (cancelled) return;
+        if (cancelled || reloadOwner.current !== owner) return;
         if (nextLaunch === null) {
           setLaunchFailure("isolated preview access could not be established");
           return;
         }
+        if (nextLaunch === installedLaunch.current) return;
+        installedLaunch.current = nextLaunch;
         setLaunch(nextLaunch);
         setLaunchKey(requestedLaunchKey);
         setLaunchVersionSeq(selectedVersionSeq);
         setFrameReady(false);
       })
       .catch((error: unknown) => {
-        if (cancelled) return;
+        if (cancelled || reloadOwner.current !== owner) return;
         const reason = error instanceof Error ? previewErrorReason(error.message) : null;
         setLaunchFailure(reason ?? "isolated preview access could not be established");
       })
       .finally(() => {
-        if (!cancelled) setMinting(false);
+        if (!cancelled && reloadOwner.current === owner) setMinting(false);
       });
     return () => {
       cancelled = true;
     };
   }, [cid, ownsCanonicalPreview, requestedLaunchKey, selectedTarget, selectedVersionSeq]);
 
+  async function reloadPreview() {
+    if (!cid || !ownsCanonicalPreview) return;
+    const owner = ++reloadOwner.current;
+    setMinting(true);
+    setLaunchFailure(null);
+    try {
+      const next = await previewBootstrapUrl(cid, selectedTarget, selectedVersionSeq);
+      if (reloadOwner.current !== owner) return;
+      if (!next) throw new Error("Preview access unavailable");
+      installedLaunch.current = next;
+      mintRef.current = { key: requestedLaunchKey, promise: Promise.resolve(next) };
+      setLaunch(next);
+      setLaunchKey(requestedLaunchKey);
+      setLaunchVersionSeq(selectedVersionSeq);
+      setFrameReady(false);
+    } catch (error) {
+      if (reloadOwner.current !== owner) return;
+      setLaunchFailure("isolated preview access could not be established");
+      throw error;
+    } finally {
+      if (reloadOwner.current === owner) setMinting(false);
+    }
+  }
+
   return {
+    reloadPreview,
     launch,
     launchKey,
     launchVersionSeq,

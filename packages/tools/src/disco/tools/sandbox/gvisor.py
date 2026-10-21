@@ -294,6 +294,10 @@ class GvisorSandboxService:
                 else:
                     _probe_local_socket_reachable(base_url, float(self._cfg.client_timeout_s))
                 client = docker.DockerClient(**kwargs)
+                if base_url.startswith("ssh://"):
+                    from .gvisor_parts.ssh_transport import configure_ssh_cleanup
+
+                    configure_ssh_cleanup(client, base_url, float(self._cfg.client_timeout_s))
                 client.ping()
             except Exception as exc:  # noqa: BLE001 — map to a typed infra error
                 if client is not None:

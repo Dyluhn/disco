@@ -4,7 +4,7 @@ import { cn } from "@/lib/cn";
 export function SaveRow({
   fieldsDirty,
   savePending,
-  invalid,
+  invalid = false,
   onSave,
 }: {
   fieldsDirty: boolean;

@@ -372,6 +372,17 @@ def test_import_zip_creates_build_project_and_seed_message(store, tmp_path):
     assert len(env) == 1
     assert "Imported 2 files from sample-app.zip" in env[0].message.content
     assert "largest: src/App.tsx" in env[0].message.content
+    assert env[0].meta["project_import"] == {"workspace_ready": True}
+    # The signal survives the same event read used when the browser reloads,
+    # and the ready host manifest exists before any agent continuation.
+    wire = client.get(f"/conversations/{cid}/events").json()["events"]
+    assert wire[0]["meta"]["project_import"] == {"workspace_ready": True}
+    manifest = client.get(f"/api/projects/{cid}/manifest")
+    assert manifest.status_code == 200
+    assert {entry["path"] for entry in manifest.json()["files"]} == {
+        "package.json",
+        "src/App.tsx",
+    }
 
     rows = {p["id"]: p for p in client.get("/api/projects").json()["projects"]}
     assert rows[cid]["surface"] == "build"

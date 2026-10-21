@@ -7,10 +7,15 @@ logical-LOC limit. These functions are pure over event lists.
 from __future__ import annotations
 
 import re
+from typing import TypeGuard
+
+from pydantic import TypeAdapter, ValidationError
 
 from .events import (
     ActionEvent,
+    AgentErrorEvent,
     Event,
+    ObservationEvent,
     PlanEvent,
     StatusEvent,
 )
@@ -64,6 +69,30 @@ def _carry_completed_steps(
     return states
 
 
+_PROGRESS_INDEX = TypeAdapter(int)
+
+
+def _progress_index(value: object) -> int | None:
+    # Match the tool's Pydantic integer coercion, without importing tools into core.
+    try:
+        return _PROGRESS_INDEX.validate_python(value)
+    except ValidationError:
+        return None
+
+
+def _valid_progress_snapshot(
+    rows: object, total: int | None = None
+) -> TypeGuard[list[dict[str, object]]]:
+    # The tool rejects the whole malformed snapshot, not just its bad rows.
+    return isinstance(rows, list) and all(
+        isinstance(row, dict)
+        and (index := _progress_index(row.get("index"))) is not None
+        and (total is None or 1 <= index <= total)
+        and row.get("state") in ("pending", "active", "done")
+        for row in rows
+    )
+
+
 def _apply_one_progress_event(
     e: ActionEvent,
     plan_seq: int,
@@ -83,17 +112,20 @@ def _apply_one_progress_event(
     args = e.tool_call.arguments or {}
 
     def _set(idx_raw: object, state_raw: object) -> None:
-        idx = int(idx_raw)  # type: ignore[arg-type]
-        if 1 <= idx <= total:
+        idx = _progress_index(idx_raw)
+        if idx is not None and 1 <= idx <= total:
             states[idx] = str(state_raw)
 
-    if name == "plan_step":
+    if name == "plan_step" and args.get("state") in ("active", "done"):
         try:
             _set(args.get("index"), args.get("state"))
         except (TypeError, ValueError):
             pass
     elif name == "update_plan_progress":
-        for s in args.get("steps") or []:
+        rows = args.get("steps")
+        if not _valid_progress_snapshot(rows, total):
+            return
+        for s in rows:
             try:
                 _set(s.get("index"), s.get("state"))
             except (TypeError, ValueError, AttributeError):
@@ -109,8 +141,14 @@ def _apply_progress_events(
 ) -> None:
     """Apply plan_step and update_plan_progress marks to ``states``."""
     plan_seq = plan.seq or 0
+    rejected = {
+        event.action_id
+        for event in events
+        if isinstance(event, AgentErrorEvent)
+        or (isinstance(event, ObservationEvent) and not event.tool_result.success)
+    }
     for i, e in enumerate(events):
-        if not isinstance(e, ActionEvent) or e.tool_call is None:
+        if not isinstance(e, ActionEvent) or e.tool_call is None or e.id in rejected:
             continue
         _apply_one_progress_event(e, plan_seq, plan_pos, i, total, states)
 

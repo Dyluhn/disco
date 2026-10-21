@@ -16,19 +16,24 @@ Session auth, integrity-pinned:
 
 ## How to mount it
 
-```js
-import { openDatabase, runMigrations } from "../database-kit/core/db.js";
-import { AUTH_MIGRATIONS } from "./core/schema.js";
-import { seedDevUser } from "./core/auth.js";
-import { createAuthApp } from "./core/middleware.js";
-import config from "./config/auth.config.json" with { type: "json" };
+Run this server module from the app's root with Node 22 or later. Supply your
+`yourAppHandler` request handler and `port` before starting the server.
 
-const db = openDatabase("./data/app.db.config.json"); // your database-kit config
+```js
+import http from "node:http";
+import { openDatabase, runMigrations } from "./src/trusted/database-kit/core/db.js";
+import { AUTH_MIGRATIONS } from "./src/trusted/auth-kit/core/schema.js";
+import { seedDevUser } from "./src/trusted/auth-kit/core/auth.js";
+import { createAuthApp } from "./src/trusted/auth-kit/core/middleware.js";
+import config from "./src/trusted/auth-kit/config/auth.config.json" with { type: "json" };
+
+const db = openDatabase(); // reads the installed database-kit config
 runMigrations(db, AUTH_MIGRATIONS);
 seedDevUser(db, config);
 
 const app = createAuthApp({ db, config, handler: yourAppHandler });
-http.createServer(app).listen(port);
+const server = http.createServer(app);
+server.listen(port);
 ```
 
 Add every one of YOUR public pages/assets to `publicAllowlist` (exact path,

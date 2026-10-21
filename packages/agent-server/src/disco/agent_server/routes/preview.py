@@ -174,8 +174,14 @@ def _register_preview_app_routes(
 
     @router.get("/conversations/{conversation_id}/preview-app/{path:path}")
     @router.get("/conversations/{conversation_id}/preview-app/")
-    @router.get(f"{ISOLATED_PATH_PREVIEW_PREFIX}/{{conversation_id}}/{{path:path}}")
-    @router.get(f"{ISOLATED_PATH_PREVIEW_PREFIX}/{{conversation_id}}/")
+    @router.api_route(
+        f"{ISOLATED_PATH_PREVIEW_PREFIX}/{{conversation_id}}/{{path:path}}",
+        methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    )
+    @router.api_route(
+        f"{ISOLATED_PATH_PREVIEW_PREFIX}/{{conversation_id}}/",
+        methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    )
     async def preview_app(
         request: Request,
         conversation_id: str,

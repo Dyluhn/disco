@@ -51,10 +51,62 @@ afterEach(() => {
 // ---- Tests -----------------------------------------------------------------
 
 describe("useSessions — polling gates", () => {
-  it("does not poll when active=false", async () => {
+  it("does not poll when inactive and hidden", async () => {
     renderHook(() => useSessions("cid1", false, false), { wrapper: makeWrapper() });
     await act(() => vi.advanceTimersByTimeAsync(5000));
     expect(mockGetSessions).not.toHaveBeenCalled();
+  });
+
+  it("reads retained sessions on a finished run and switches their live output", async () => {
+    mockGetSessions.mockResolvedValue({ sessions: [
+      { name: "amber", busy: false, last_line: "AMBER_SESSION_73" },
+      { name: "cedar", busy: false, last_line: "CEDAR_SESSION_91" },
+    ] });
+    mockGetSessionView.mockImplementation(async (_cid, name) => ({
+      name, busy: false, content: name === "amber" ? "AMBER_SESSION_73" : "CEDAR_SESSION_91",
+    }));
+    const { result, rerender } = renderHook(
+      ({ visible }) => useSessions("finished", false, visible),
+      { wrapper: makeWrapper(), initialProps: { visible: true } },
+    );
+    await act(() => vi.advanceTimersByTimeAsync(200));
+    await act(() => vi.advanceTimersByTimeAsync(200));
+    expect(result.current.view?.content).toBe("AMBER_SESSION_73");
+    act(() => result.current.setSelectedName("cedar"));
+    await act(() => vi.advanceTimersByTimeAsync(200));
+    expect(result.current.view?.content).toBe("CEDAR_SESSION_91");
+
+    rerender({ visible: false });
+    mockGetSessions.mockClear();
+    mockGetSessionView.mockClear();
+    await act(() => vi.advanceTimersByTimeAsync(5000));
+    expect(mockGetSessions).not.toHaveBeenCalled();
+    expect(mockGetSessionView).not.toHaveBeenCalled();
+  });
+
+  it("keeps reading while visible across run completion and stops after teardown", async () => {
+    mockGetSessions.mockResolvedValue({ sessions: [
+      { name: "dev", busy: false, last_line: "alive" },
+    ] });
+    const { result, rerender } = renderHook(
+      ({ active }) => useSessions("completing", active, true),
+      { wrapper: makeWrapper(), initialProps: { active: true } },
+    );
+    await act(() => vi.advanceTimersByTimeAsync(200));
+    await act(() => vi.advanceTimersByTimeAsync(200));
+    rerender({ active: false });
+    mockGetSessionView.mockClear();
+    await act(() => vi.advanceTimersByTimeAsync(2000));
+    expect(mockGetSessionView).toHaveBeenCalled();
+
+    mockGetSessions.mockResolvedValue({ sessions: [] });
+    await act(() => vi.advanceTimersByTimeAsync(2200));
+    expect(result.current.sessions).toEqual([]);
+    expect(result.current.selectedName).toBeNull();
+    expect(result.current.view).toBeNull();
+    mockGetSessionView.mockClear();
+    await act(() => vi.advanceTimersByTimeAsync(3000));
+    expect(mockGetSessionView).not.toHaveBeenCalled();
   });
 
   it("does not poll when cid=null", async () => {

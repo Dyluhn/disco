@@ -126,3 +126,14 @@ export interface WorkflowDraftFromDescriptionResult extends WorkflowDraftResult 
   summary: string;
   description: string;
 }
+export interface WorkflowSchedule {
+  schedule_id: string;
+  spec: {
+    instance_id: string;
+    instance_digest: string;
+    cron: string;
+    timezone: string;
+    enabled: boolean;
+  };
+  next_run: string | null;
+}

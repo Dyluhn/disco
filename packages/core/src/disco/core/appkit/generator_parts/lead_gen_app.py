@@ -65,6 +65,18 @@ def generate(app_spec: AppSpec, design_spec: DesignSpec) -> dict[str, str]:
         or app_spec.webhooks is not None
     ):
         _apply_host_services_shim(tree)
+    if app_spec.owner_controls is not None:
+        from ..owner_controls import owner_tweak_spec
+
+        tree[".disco/tweaks.json"] = (
+            owner_tweak_spec(app_spec, design_spec).model_dump_json(indent=2) + "\n"
+        )
+    if design_spec.reduced_motion and "src/styles.css" in tree:
+        tree["src/styles.css"] += (
+            "\n/* Owner-selected reduced motion. */\n"
+            "*, *::before, *::after { animation: none !important; "
+            "transition: none !important; scroll-behavior: auto !important; }\n"
+        )
     return tree
 
 

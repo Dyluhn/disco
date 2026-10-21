@@ -5,7 +5,15 @@
 ## When to use
 Any brief that needs accounts, durable data, realtime, or third-party services. A static page or a single-file prototype does not need this — use `scaffold_starter` there.
 
-## Layout
+## Choose the deployment contract
+Choose the deployment shape the brief needs before declaring a release:
+
+- **Authored multi-service Compose:** keep the `api` + `web` layout below, including any required companion services. Deliver the Compose file, Dockerfiles and documented environment names for manual deployment with `docker compose up --build`. Do not also call `release_declare` for this topology: the current Self-host detector treats a typed intent alongside an existing container manifest as competing declarations. Compose alone needs owner review; the Self-host UI does not yet provide that review/verification flow. Preserve the useful Compose setup and report this limitation rather than silently replacing it with a single service.
+- **Typed single-ingress Self-host export:** when the app can run as one service, have that service serve both UI and API and declare its actual build/start commands, port variable, health route and environment names with `release_declare`. The generated service ID is `web`; every declared resource consumer must name that actual service (`consumers: ["web"]`), not a separate `api` service. Declare SQLite paths that match the app's real container paths. Leave generated container manifests and bundle files to the exporter; do not combine this declaration with authored Compose/Dockerfiles. A declaration is a candidate input, not proof the bundle ran.
+
+`release_declare` is optional release metadata, not a prerequisite for sandbox browser verification. If an existing project already has both declarations, report the conflict and agree on the intended deployment contract; a workspace file edit cannot clear the host-owned intent. See `sandbox-verification` for checks, and distinguish preview verification from testing the exported deployment.
+
+## Layout (authored multi-service Compose)
 ```
 api/          Node 22 ESM service (node:http + Express 5), SQLite via database-kit
   package.json  src/server.js  src/routes/*.js  src/realtime.js  src/migrations.js
@@ -89,7 +97,7 @@ volumes: { app-data: {} }
 `api/Dockerfile`: `FROM node:22-bookworm-slim`, `npm ci --omit=dev`, `CMD ["node","src/server.js"]`. `web/Dockerfile`: build stage `node:22-alpine` → `nginx:alpine`.
 
 ## Env vars
-Every variable the app reads appears in `.env.example` with a comment and is declared with `release_declare`. Read them once at startup; fail at startup with a message naming the variable when a required one is missing. Never write a value into the repository.
+For the authored Compose layout, document every environment variable the app reads in `.env.example` with a comment and wire the required names into the appropriate service. For a typed single-ingress export, declare those names through `release_declare` and let the exporter generate its environment template. Read variables once at startup; fail at startup with a message naming any missing required variable. Never write a secret value into the repository.
 
 ## Delivery checklist
-Registration → login → the feature → logout works in a real browser (`verify_web_app`); `compose up` from a clean checkout reaches healthy; `README.md` states the env vars and where the data lives.
+Registration → login → the feature → logout works in a real browser (`verify_web_app`). For authored Compose, `docker compose up --build` from a clean checkout reaches healthy and data survives a restart; document any deployment checks that could not run. For typed Self-host, resolve its actual release blockers and test the emitted bundle separately. `README.md` states the chosen deployment contract, env vars and where the data lives. A passing preview is not evidence that either exported deployment has been tested.

@@ -11,17 +11,11 @@ or a timestamp, so the same logical call replays the same response.
 
 from __future__ import annotations
 
-import hashlib
 import json
 from pathlib import Path
 from typing import Any
 
-
-def cassette_key(seam: str, payload: dict[str, Any]) -> str:
-    """Stable 16-hex key from a seam name + its semantic-input payload. `default=str`
-    so any stray non-JSON value still hashes (it just won't collide-protect it)."""
-    canon = json.dumps(payload, sort_keys=True, default=str, ensure_ascii=False)
-    return hashlib.sha256(f"{seam}:{canon}".encode()).hexdigest()[:16]
+from disco.core.share_projection import cassette_key as cassette_key
 
 
 class CassetteMiss(KeyError):
@@ -39,6 +33,8 @@ class Cassette:
         self._log: list[dict[str, Any]] = []
         self._ordered: dict[tuple[str, str], list[Any]] = {}
         self._positions: dict[tuple[str, str], int] = {}
+        # successful reusable (occurrence-free) lookups; matching unchanged.
+        self._seen_reusable: set[tuple[str, str]] = set()
 
     # ---- io -----------------------------------------------------------------
 
@@ -121,6 +117,29 @@ class Cassette:
         self._positions[identity] = position + 1
         return values[position]
 
+    def assert_all_consumed(self) -> None:
+        """Fail if any recorded row — ordered or reusable — was never replayed.
+
+        Audit only — matching (`lookup`/`lookup_next`) is unchanged. Ordered
+        rows advance only when replay serves them; reusable (occurrence-free)
+        rows are tracked on successful `lookup` and any untracked one means
+        replay skipped recorded calls.
+        """
+        leftover = sorted(
+            f"{seam} key={key} consumed={self._positions.get((seam, key), 0)}/{len(values)}"
+            for (seam, key), values in self._ordered.items()
+            if self._positions.get((seam, key), 0) != len(values)
+        )
+        leftover.extend(
+            sorted(
+                f"{seam} key={key} reusable-unused"
+                for (seam, key) in self._entries
+                if (seam, key) not in self._ordered and (seam, key) not in self._seen_reusable
+            )
+        )
+        if leftover:
+            raise CassetteMiss("cassette reads left over: " + "; ".join(leftover))
+
     def save(self, path: str | Path) -> None:
         p = Path(path)
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -140,9 +159,11 @@ class Cassette:
     def lookup(self, seam: str, payload: dict[str, Any]) -> Any:
         key = cassette_key(seam, payload)
         try:
-            return self._entries[(seam, key)]
+            value = self._entries[(seam, key)]
         except KeyError as e:
             raise CassetteMiss(f"cassette miss: {seam} key={key} input={payload!r:.200}") from e
+        self._seen_reusable.add((seam, key))
+        return value
 
     def __len__(self) -> int:
         return len(self._log)

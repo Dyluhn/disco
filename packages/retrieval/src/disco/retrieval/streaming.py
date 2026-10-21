@@ -18,17 +18,17 @@ import json
 import logging
 import re
 from collections.abc import AsyncIterator, Sequence
-from typing import Any, NamedTuple
+from typing import Any, NamedTuple, cast
 
 from disco.core.events import LLMMessage
 from disco.core.llm import (
-    CapabilityProfile,
-    CompletionRequest,
     LLMRouter,
-    ModelRole,
 )
 from disco.core.think import strip_think_spans
 
+from ._answer_budget import answer_request, followup_request
+from ._direct_source import _direct_discovery, _source_url
+from ._transport_retry import degradation_markers
 from .engine import annotate_passage_dates, extract_discovered_hits
 from .grounding import (
     _CITE,
@@ -42,7 +42,8 @@ from .local_encoders import EncoderUnavailable
 from .models import ExtractedDoc, Passage, RetrievalRequest, SearchHit
 from .providers import ExtractionProvider, SearchProvider
 from .ranking import Embedder, QueryRewriter, Reranker
-from .url_policy import source_url_key
+from .source_adapters import _SearchSourceUnavailable
+from .url_policy import query_scoped_domains, source_url_key, url_allowed
 from .vectorstore import VectorStore
 
 _LOG = logging.getLogger(__name__)
@@ -212,25 +213,20 @@ def _to_blocks(text: str) -> list[dict]:
 
 
 async def _follow_ups(router: LLMRouter, query: str, answer: str) -> list[str]:
-    prompt = (
-        f"Given this question and answer, suggest 3 short follow-up questions, "
-        f"one per line, no numbering.\n\nQ: {query}\n\nA: {answer[:1500]}"
-    )
     try:
-        for attempt, max_tokens in ((1, 160), (2, 2048)):
-            req = CompletionRequest(
-                profile=CapabilityProfile(role=ModelRole.SUMMARIZER),
-                messages=[LLMMessage(role="user", content=prompt)],
-                temperature=0.3,
-                max_tokens=max_tokens,
-                enable_thinking=False,
-                attempt=attempt,
-            )
+        for attempt in (1, 2):
+            req = followup_request(router, query, answer, attempt)
             resp = await router.complete(req)
+            if resp.finish_reason == "length":
+                _LOG.warning("Follow-up completion hit its output limit on attempt %d", attempt)
+                continue
+            if resp.finish_reason != "stop":
+                _LOG.warning("Follow-up completion ended with %s", resp.finish_reason)
+                break
             lines: list[str] = []
             for raw in resp.text.splitlines():
                 item = re.sub(r"^\s*(?:[-•*]|\d+[.)])\s*", "", raw).strip()
-                if len(item) < 8 or item in lines:
+                if len(item) < 8 or item in lines or not item.endswith(("?", "？", "؟")):
                     continue
                 lines.append(item)
             if len(lines) >= 2:
@@ -242,7 +238,7 @@ async def _follow_ups(router: LLMRouter, query: str, answer: str) -> list[str]:
     except Exception as exc:  # noqa: BLE001 — retain useful deterministic fallbacks
         _LOG.warning("Follow-up generation failed; using deterministic fallbacks: %s", exc)
 
-    _LOG.warning("Follow-up model remained empty; using deterministic fallbacks")
+    _LOG.warning("Follow-up model returned no complete question set; using deterministic fallbacks")
     subject = " ".join(query.strip().rstrip("?").split())[:140] or "this topic"
     return [
         f"What evidence would most strengthen the answer about {subject}?",
@@ -348,39 +344,44 @@ async def _generate_visible_answer(
     passages: Sequence[Passage],
     *,
     think: bool,
-) -> tuple[str, list[dict[str, Any]]]:
-    """Generate one visible answer, with one bounded empty-content repair."""
-    base_tokens = 4096 if think else 1200
-    base_messages = _answer_prompt(query, passages)
+) -> tuple[str, list[dict[str, Any]], list[Passage]]:
+    """Generate a complete answer, with one bounded empty/truncated repair."""
+    selected = list(passages)
+    repair_message = (
+        "The previous completion returned no visible answer. "
+        "Return the final grounded answer now, with the required "
+        "source ids; do not return only reasoning."
+    )
     for generation_attempt in (1, 2):
         token_frames: list[dict[str, Any]] = []
         raw_answer = ""
         in_think = False
         carry = ""
-        messages = base_messages
-        if generation_attempt == 2:
-            messages = [
-                *base_messages,
-                LLMMessage(
-                    role="user",
-                    content=(
-                        "The previous completion returned no visible answer. "
-                        "Return the final grounded answer now, with the required "
-                        "source ids; do not return only reasoning."
-                    ),
-                ),
-            ]
-        async for chunk in router.stream_complete(
-            CompletionRequest(
-                profile=CapabilityProfile(role=ModelRole.RAG_ANSWERER),
-                messages=messages,
-                temperature=0.0,
-                enable_thinking=think if generation_attempt == 1 else False,
-                max_tokens=(base_tokens if generation_attempt == 1 else max(4096, base_tokens * 2)),
-                attempt=generation_attempt,
-                stream=True,
-            )
-        ):
+        finish_reason = None
+
+        def render(
+            evidence: Sequence[Passage],
+            attempt: int = generation_attempt,
+            reminder: str = repair_message,
+        ) -> list[LLMMessage]:
+            messages = _answer_prompt(query, evidence)
+            if attempt == 2:
+                messages.append(
+                    LLMMessage(
+                        role="user",
+                        content=reminder,
+                    )
+                )
+            return messages
+
+        request, selected = answer_request(
+            router, passages, render, think=think, attempt=generation_attempt
+        )
+        async for chunk in router.stream_complete(request):
+            # The terminal chunk often has no delta. Inspect its status before
+            # skipping empty chunks, while all visible text is still buffered.
+            if chunk.final is not None:
+                finish_reason = chunk.final.finish_reason
             if not chunk.delta_text:
                 continue
             raw_answer += chunk.delta_text
@@ -389,6 +390,23 @@ async def _generate_visible_answer(
             if emit:
                 token_frames.append({"type": "token", "token": emit, "block_id": "answer"})
 
+        if finish_reason == "length":
+            if generation_attempt == 2:
+                raise _ResearchAborted(
+                    "The answer model reached its output limit after one bounded repair. "
+                    "Try a shorter question or a larger output budget."
+                )
+            repair_message = (
+                "The previous completion was cut off at its output limit. "
+                "Return a shorter, complete grounded answer within the available output budget, "
+                "with the required source ids. Do not continue the truncated draft."
+            )
+            _LOG.warning("Research answerer hit its output limit; running one bounded repair")
+            continue
+        if finish_reason not in (None, "stop"):
+            raise _ResearchAborted(
+                f"The answer model did not complete its response (finish reason: {finish_reason})."
+            )
         answer_text = _strip_think_spans(raw_answer).strip()
         if answer_text:
             streamed = "".join(frame["token"] for frame in token_frames)
@@ -396,10 +414,10 @@ async def _generate_visible_answer(
                 tail = answer_text[len(streamed) :]
                 if tail:
                     token_frames.append({"type": "token", "token": tail, "block_id": "answer"})
-            return answer_text, token_frames
+            return answer_text, token_frames, selected
         if generation_attempt == 1:
             _LOG.warning("Research answerer returned no visible text; running one bounded repair")
-    return "", []
+    return "", [], selected
 
 
 class _ResearchAborted(Exception):
@@ -431,13 +449,37 @@ async def _discover_round(
     current_query: str,
     domains_deny: frozenset[str],
     discover_limit: int,
+    *,
+    domains_allow: frozenset[str] | None = None,
 ) -> list[SearchHit]:
-    """Search for this round (honoring the denied domains from re-scope);
+    """Read a complete URL or search (honoring denied domains from re-scope);
     raises `_ResearchAborted` on zero hits."""
-    hits = await search.search(
-        current_query, limit=discover_limit, domains_deny=domains_deny or None
+    allow, deny = query_scoped_domains(current_query, domains_allow, domains_deny)
+    direct = _direct_discovery(
+        RetrievalRequest(query=current_query, domains_allow=allow, domains_deny=deny)
     )
+    if direct is not None:
+        hits, _diagnostic = direct
+        if not hits:
+            raise _ResearchAborted("The requested URL is excluded by the source domain filters.")
+        return hits
+    detailed = getattr(search, "search_detailed", None)
+    diagnostic: object = {}
+    if callable(detailed):
+        hits, diagnostic = await cast(Any, detailed)(
+            current_query, limit=discover_limit, domains_allow=allow, domains_deny=deny or None
+        )
+    else:
+        hits = await search.search(
+            current_query, limit=discover_limit, domains_allow=allow, domains_deny=deny or None
+        )
+    hits = [hit for hit in hits if url_allowed(hit.url, allow, deny)]
     if not hits:
+        if degradation_markers(diagnostic) != ((), ()):
+            raise _ResearchAborted(
+                "Search could not complete because one or more selected sources failed. "
+                "Try again later or choose different sources."
+            )
         raise _ResearchAborted("No search results were found for this query.")
     return hits
 
@@ -500,11 +542,14 @@ async def _run_research_round(
     corpus_ids: frozenset[str],
     embedder: Embedder | None,
     vector_store: VectorStore | None,
+    domains_allow: frozenset[str] | None = None,
 ) -> _RoundResult:
     """Run one discover → extract → rerank → generate → verify round. Raises
     `_ResearchAborted` for any of the pipeline's three honest-failure exits;
     the caller (`stream_research_answer`) yields the error frame and stops."""
-    hits = await _discover_round(search, current_query, domains_deny, discover_limit)
+    hits = await _discover_round(
+        search, current_query, domains_deny, discover_limit, domains_allow=domains_allow
+    )
     docs, passages, all_hits, this_round_urls = await _extract_round_passages(
         extraction, hits, exclude_urls, extract_cap=extract_cap, discover_limit=discover_limit
     )
@@ -526,10 +571,8 @@ async def _run_research_round(
     # rerank to the working set (web passages + any seeds that survived the
     # dedup above).
     top = await reranker.rerank(current_query, passages, top_k=top_k)
-    by_id = {p.id: p for p in top}
-
     # constrained generation.
-    answer_text, token_frames = await _generate_visible_answer(
+    answer_text, token_frames, top = await _generate_visible_answer(
         router, current_query, top, think=think
     )
     if not answer_text:
@@ -539,9 +582,15 @@ async def _run_research_round(
             "repair. Try another model or retry the search."
         )
 
+    by_id = {p.id: p for p in top}
     # An invented id has no provenance card and cannot be meaningfully graded.
     # Remove its complete statement before both rendering and verification.
-    answer_text = _remove_unknown_citation_claims(answer_text, set(by_id))
+    sanitized_answer = _remove_unknown_citation_claims(answer_text, set(by_id))
+    if sanitized_answer != answer_text:
+        # Tokens are buffered until grounding succeeds. Reconcile that buffer
+        # too, so rejected claims cannot flash before the authoritative final.
+        token_frames = [{"type": "token", "token": sanitized_answer, "block_id": "answer"}]
+    answer_text = sanitized_answer
     if not answer_text:
         raise _ResearchAborted(
             "The answer model cited only unknown sources. Try another model or retry the search."
@@ -578,6 +627,23 @@ def _build_final_answer(query: str, result: _RoundResult, follow_ups: list[str])
         "unsupported_count": sum(1 for c in result.claims if c["verdict"] == "unsupported"),
         "follow_ups": follow_ups,
     }
+
+
+async def _accepted_round_frames(
+    router: LLMRouter, query: str, result: _RoundResult, *, drop_weak: bool
+) -> AsyncIterator[dict[str, Any]]:
+    if not drop_weak:
+        for frame in result.token_frames:
+            yield frame
+    follow_ups = await _follow_ups(router, query, result.answer_text)
+    answer = _build_final_answer(query, result, follow_ups)
+    if drop_weak:
+        # Filtering must not flash claims withheld from the final answer.
+        answer = _drop_weak(answer)
+        for block in answer["blocks"]:
+            yield {"type": "block", "block": block}
+    yield {"type": "final", "answer": answer}
+    yield {"type": "state", "status": "finished"}
 
 
 async def stream_research_answer(
@@ -620,6 +686,14 @@ async def stream_research_answer(
     ``seed_passages`` and ``corpus_ids`` add local evidence before rerank."""
     # F1: cap extra rounds at 2 regardless of the caller's value.
     bounded_extra = min(max(max_research_rounds - 1, 0), 2)
+    # A direct source read must not silently become open-web discovery when its
+    # evidence cannot support an answer. The answerer's bounded repair remains.
+    if _source_url(query) is not None:
+        bounded_extra = 0
+    # Rewriting may change search wording, but cannot loosen the user's
+    # original explicit host scope. New round scopes can only narrow it.
+    domains_allow, scoped_deny = query_scoped_domains(query, None, domains_deny)
+    domains_deny = scoped_deny or frozenset()
 
     yield {"type": "state", "status": "running"}
     try:
@@ -639,6 +713,7 @@ async def stream_research_answer(
                     nli=nli,
                     think=think,
                     domains_deny=domains_deny,
+                    domains_allow=domains_allow,
                     discover_limit=discover_limit,
                     extract_cap=extract_cap,
                     top_k=top_k,
@@ -654,14 +729,10 @@ async def stream_research_answer(
 
             if result.supported > 0:
                 # Accepted round — emit the buffered tokens, then the final frames.
-                for frame in result.token_frames:
+                async for frame in _accepted_round_frames(
+                    router, query, result, drop_weak=drop_weak
+                ):
                     yield frame
-                follow_ups = await _follow_ups(router, query, result.answer_text)
-                answer = _build_final_answer(query, result, follow_ups)
-                if drop_weak:
-                    answer = _drop_weak(answer)
-                yield {"type": "final", "answer": answer}
-                yield {"type": "state", "status": "finished"}
                 return
 
             if rewriter is None or is_last_round:
@@ -680,6 +751,8 @@ async def stream_research_answer(
             current_query = await rewriter.rewrite(current_query)
             # Buffered token_frames from the doomed round are discarded here.
 
+    except _SearchSourceUnavailable as exc:
+        yield {"type": "error", "message": str(exc)}
     except EncoderUnavailable as exc:
         # RAM guard: the encoder pre-check stopped a model load that would OOM the
         # process.  Emit an honest, actionable error frame so the UI shows the real

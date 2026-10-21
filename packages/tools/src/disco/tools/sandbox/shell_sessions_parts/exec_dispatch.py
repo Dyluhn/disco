@@ -23,7 +23,7 @@ import secrets
 import shlex
 from typing import TYPE_CHECKING
 
-from . import text
+from . import foreground, text
 
 if TYPE_CHECKING:
     from ..shell_sessions import ExecOutcome, ShellSessionManager
@@ -115,20 +115,21 @@ async def _dispatch(
     # A transport error can occur after tmux accepted the bytes.  From this
     # point until a private completion record is observed, cached idle proof
     # is invalid even when the first send call raises.
-    manager._foreground_state[name] = "busy"
+    foreground._begin(manager, name, "busy", token=completion_re)
     try:
         await manager._run_tmux(f"send-keys -t {shlex.quote(full)} -l {shlex.quote(dispatched)}")
-    except Exception:
-        manager._foreground_state.pop(name, None)
+    except BaseException:
+        foreground._settle(manager, name, completion_re, None)
         raise
     try:
         await manager._run_tmux(f"send-keys -t {shlex.quote(full)} Enter")
-    except Exception:
+    except BaseException:
         # Command text is now sitting unsubmitted at the prompt. It is neither
         # proven idle nor running; clearing proof prevents a later exec from
         # appending a second command and accidentally submitting the concatenation.
-        manager._foreground_state.pop(name, None)
+        foreground._settle(manager, name, completion_re, None)
         raise
+    foreground._settle(manager, name, completion_re, "busy")
     return pre_cap, backgrounded, background_owner_before, dispatched, completion_re
 
 
@@ -184,7 +185,7 @@ async def exec_command(
             exit_code=exit_code,
             output=cleaned[-shell_sessions._EXEC_RETURN_CHARS :],
         )
-        manager._foreground_state[name] = "idle"
+        foreground._settle(manager, name, completion_re, "idle")
         recorded = await record_persistent_if_match(
             manager,
             name,

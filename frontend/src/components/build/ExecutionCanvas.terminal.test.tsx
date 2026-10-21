@@ -75,6 +75,17 @@ afterEach(() => {
 // ---- Tests ------------------------------------------------------------------
 
 describe("ExecutionCanvas Terminal — two-mode switch", () => {
+  it("does not request live sessions for an untrusted imported run", async () => {
+    mockUseSessions.mockReturnValue(noSessions());
+    render(
+      <QueryClientProvider client={makeQc()}>
+        <ExecutionCanvas events={events} status="FINISHED" cid="imported" untrusted />
+      </QueryClientProvider>,
+    );
+    await userEvent.click(screen.getByRole("tab", { name: /Terminal/ }));
+    expect(mockUseSessions).toHaveBeenLastCalledWith(null, false, true);
+  });
+
   it("shows 'history (no live sessions)' caption when sessions list is empty", async () => {
     mockUseSessions.mockReturnValue(noSessions());
     const qc = makeQc();

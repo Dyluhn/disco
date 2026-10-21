@@ -65,6 +65,7 @@ export function ImageGenSection() {
 
   // Switching provider preserves the current field drafts so edits aren't lost.
   const selectProvider = (provider: Provider) => {
+    // Escape hatch: a bad ComfyUI draft never blocks switching providers.
     if (!data || provider === active) return;
     save.mutate({
       provider,
@@ -98,7 +99,9 @@ export function ImageGenSection() {
     });
   };
 
-  const setupNote = getSetupNote(data, orKey.data);
+  const setupNote = activeWorkflowInvalid
+    ? "The saved image workflow needs valid JSON before it can be used. Correct or clear the workflow below."
+    : getSetupNote(data, orKey.data);
 
   return (
     <section className="flex flex-col gap-inline">

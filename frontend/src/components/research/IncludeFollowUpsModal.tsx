@@ -21,8 +21,9 @@
  */
 
 import * as Dialog from "@radix-ui/react-dialog";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 import { Check, X } from "lucide-react";
+import { useDialogRestoreFocus } from "@/hooks/useDialogRestoreFocus";
 import { cn } from "@/lib/cn";
 import type { MessageEvent } from "@/types/agent";
 
@@ -74,22 +75,9 @@ export interface IncludeFollowUpsModalProps {
   onConfirm: (selectedSeqs: number[]) => void;
   /** Label for the action (e.g. "Export" or "Generate audio"). */
   actionLabel?: string;
-  /** Exact activated card opener to return focus to on cancel. Optional:
-   *  callers without a ref keep default Radix behavior. */
-  triggerRef?: { current: HTMLButtonElement | null };
-}
-
-/** Guard: only a still-connected, enabled, visible opener may take focus.
- *  Never falls back to another card's button (no selectors, no globals). */
-function isReturnTargetFocusable(el: HTMLButtonElement | null | undefined): el is HTMLButtonElement {
-  if (!el) return false;
-  if (!el.isConnected) return false;
-  if (el.disabled) return false;
-  if (el.closest("[hidden], [inert]")) return false;
-  const view = el.ownerDocument?.defaultView;
-  const style = view?.getComputedStyle?.(el);
-  if (style && (style.display === "none" || style.visibility === "hidden" || style.visibility === "collapse")) return false;
-  return true;
+  returnFocusRef?: RefObject<HTMLElement | null>;
+  /** Confirmation hands focus to a successor dialog instead of the invoker. */
+  confirmOpensDialog?: boolean;
 }
 
 export function IncludeFollowUpsModal({
@@ -98,12 +86,11 @@ export function IncludeFollowUpsModal({
   followUps,
   onConfirm,
   actionLabel = "Export",
-  triggerRef,
+  returnFocusRef,
+  confirmOpensDialog = false,
 }: IncludeFollowUpsModalProps) {
-  // Confirm/Skip handoff: caller synchronously opens the next dialog. Suppress
-  // this selector's close autofocus only for explicit-ref handoffs so the new
-  // dialog keeps initial focus; no-ref callers keep prior default behavior.
-  const handoffRef = useRef(false);
+  const handingOff = useRef(false);
+  const focus = useDialogRestoreFocus(returnFocusRef, handingOff);
   const pairs = groupIntoPairs(followUps);
 
   // Default: all pairs with answers are selected.
@@ -113,10 +100,8 @@ export function IncludeFollowUpsModal({
   const [selected, setSelected] = useState<Set<number>>(defaultSelected);
 
   // Reset selection whenever the modal opens (or the follow-ups change).
-  // Also resets the Confirm/Skip handoff mark so a fresh open can autofocus-close normally.
   useEffect(() => {
     if (open) {
-      handoffRef.current = false;
       setSelected(
         new Set(
           pairs.filter((p) => p.hasAnswer).map((p) => p.questionSeq),
@@ -149,35 +134,16 @@ export function IncludeFollowUpsModal({
   const deselectAll = useCallback(() => setSelected(new Set()), []);
 
   const handleConfirm = useCallback(() => {
-    handoffRef.current = true;
+    handingOff.current = confirmOpensDialog;
     onOpenChange(false);
     onConfirm(Array.from(selected));
-  }, [selected, onConfirm, onOpenChange]);
+  }, [selected, onConfirm, onOpenChange, confirmOpensDialog]);
 
   const handleSkip = useCallback(() => {
-    handoffRef.current = true;
+    handingOff.current = confirmOpensDialog;
     onOpenChange(false);
     onConfirm([]); // no follow-ups → proceed without them
-  }, [onConfirm, onOpenChange]);
-
-  // Controlled Dialog has no registered Trigger, so default cancel focus
-  // lands on BODY. Return focus explicitly to the exact activated opener;
-  // guarded targets leave default behavior. During Confirm/Skip handoff the
-  // caller opens the next dialog: suppress our autofocus only for
-  // explicit-ref handoffs so the new dialog keeps focus and containment.
-  const handleSelectorCloseAutoFocus = useCallback(
-    (event: Event) => {
-      if (handoffRef.current) {
-        if (triggerRef?.current) event.preventDefault();
-        return;
-      }
-      const opener = triggerRef?.current;
-      if (!isReturnTargetFocusable(opener)) return;
-      event.preventDefault();
-      opener.focus({ preventScroll: true });
-    },
-    [triggerRef],
-  );
+  }, [onConfirm, onOpenChange, confirmOpensDialog]);
 
   const allSelected = pairs.filter((p) => p.hasAnswer).every((p) => selected.has(p.questionSeq));
 
@@ -186,7 +152,11 @@ export function IncludeFollowUpsModal({
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-40 bg-black/40 backdrop-blur-md" />
         <Dialog.Content
-          onCloseAutoFocus={handleSelectorCloseAutoFocus}
+          onOpenAutoFocus={() => {
+            handingOff.current = false;
+            focus.onOpenAutoFocus();
+          }}
+          onCloseAutoFocus={focus.onCloseAutoFocus}
           className={cn(
             "fixed left-1/2 top-1/2 z-50 w-[min(32rem,92vw)]",
             "-translate-x-1/2 -translate-y-1/2",

@@ -275,19 +275,22 @@ async def rehydrate_workspace(sandbox: _WorkspaceIO, src: Path) -> int:
     file count restored. Empty src directories are a silent no-op — the
     "rehydrate after files were deleted under us" case is handled by the
     caller checking up front whether src has any contents."""
-    if not src.exists() or not src.is_dir():
-        return 0
-    count = 0
-    for path in sorted(p for p in src.rglob("*") if p.is_file() and not p.is_symlink()):
-        rel = path.relative_to(src).as_posix()
-        if is_runtime_secret_path(rel):
-            continue
-        try:
-            await sandbox.write_file(rel, path.read_bytes())
-        except Exception as exc:  # noqa: BLE001 — surface the real path
-            raise WorkspaceArchiveError(f"rehydrate {rel!r} failed: {exc}") from exc
-        count += 1
-    return count
+    from .archive_parts.rehydration import restore_files
+
+    return await restore_files(sandbox, src)
+
+
+async def rehydrate_workspace_files(
+    sandbox: _WorkspaceIO, files: tuple[tuple[str, bytes], ...]
+) -> int:
+    """Restore host-verified snapshot bytes through the same jailed batch seam.
+
+    The caller owns clearing the destination and selecting authoritative files.
+    Unsupported backends use ordinary writes; batch failures never fall back.
+    """
+    from .archive_parts.rehydration import restore_file_bytes
+
+    return await restore_file_bytes(sandbox, files)
 
 
 # ---- streaming zip for download -------------------------------------------

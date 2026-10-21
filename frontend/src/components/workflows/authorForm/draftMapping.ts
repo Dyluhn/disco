@@ -106,14 +106,13 @@ export function authorInputFromReview(review: WorkflowReview): WorkflowAuthorInp
   const output = asRecord(definition.output_contract);
   const verify = asRecord(definition.verify);
   const schemaParams = paramsFromSchema(definition.params_model_schema);
-  const params = schemaParams.length > 0 ? schemaParams : paramsFromFriendly(definition.params);
+  const params = definition.params_model_schema != null
+    ? schemaParams
+    : paramsFromFriendly(definition.params);
   return {
     name: typeof definition.name === "string" ? definition.name : review.name,
     card: typeof definition.card === "string" ? definition.card : review.card,
-    params:
-      params.length > 0
-        ? params
-        : [{ name: "query", type: DEFAULT_PARAM_TYPE, required: true, description: "" }],
+    params,
     tools: asStringArray(definition.tools),
     mcp_mounts: mcpMountsFromDefinition(definition.mcp_mounts),
     skills: asStringArray(definition.skills),

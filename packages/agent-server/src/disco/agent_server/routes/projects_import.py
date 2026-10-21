@@ -532,6 +532,9 @@ async def import_project(
         MessageEvent(
             source=EventSource.ENVIRONMENT,
             message=LLMMessage(role="user", content=_import_message(stats, source.label)),
+            # Presentation hint only: the owner-scoped manifest/file endpoints
+            # remain the authority for materialized bytes, not this event.
+            meta={"project_import": {"workspace_ready": True}},
         ),
     )
     return {

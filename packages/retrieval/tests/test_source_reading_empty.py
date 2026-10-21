@@ -207,11 +207,13 @@ async def test_truncated_visible_length_uses_compact_recovery():
     assert passage.text[kept.start : kept.end] == kept.quote
 
 
-async def test_valid_object_with_length_finish_is_accepted_without_recovery():
+async def test_valid_object_with_length_finish_takes_compact_recovery():
+    # A length stop is incomplete even when the prefix parses
+    # (docs/research-reliability.md); the chunk is re-read compactly.
     passage = _source("Source evidence. " * 800)
-    router = RecordingRouter([(_reply([]), "length")])
+    router = RecordingRouter([(_reply([]), "length"), _reply([])])
     notes = (await read(router, passage))[passage.id]
-    assert router.calls == 1 and notes.ok and not notes.compact_reading
+    assert router.calls == 2 and notes.ok and notes.compact_reading
 
 
 async def test_truncated_length_recovery_still_rejects_invented_quotes():

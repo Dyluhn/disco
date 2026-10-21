@@ -15,6 +15,7 @@ import { useToast } from "@/components/toastApi";
 import type { useDownloadProject, useExportManifest, useProjectRelease } from "@/hooks/useProjects";
 import type { DeliverableView } from "@/lib/buildTrace";
 import type { BuildController } from "./types";
+import { useSavedWorkspaceAvailability } from "@/hooks/useSavedWorkspaceAvailability";
 
 export function BuildDeliverableSection({
   b,
@@ -33,18 +34,17 @@ export function BuildDeliverableSection({
   downloadTitle?: string | null;
 }) {
   const toast = useToast();
+  const { hasAvailableWorkspace } = useSavedWorkspaceAvailability(b.events, b.status, b.cid);
+  const finishedReady = b.status === "FINISHED" && hasAvailableWorkspace;
   return (
     <>
       {/* finished-artifact handoff: open the live app / download the files.
-          WALK-09: gate on FINISHED — `serve` emits a DeliverableEvent mid-run
-          (before the plan/build ends) so `deriveDeliverable` returns non-null
-          while the manifest record doesn't exist yet → Manifest button 404s and
-          Open 503s. Only show the panel once the run is truly done. */}
+          FINISHED precedes capture; wait for this completion's durable seal. */}
       <DeliverablePanel
-        deliverable={b.status === "FINISHED" ? deliverable : null}
+        deliverable={finishedReady ? deliverable : null}
         cid={b.cid}
         onOpen={
-          b.status === "FINISHED" && b.cid && deliverable?.kind === "app"
+          finishedReady && b.cid && deliverable?.kind === "app"
             ? () =>
                 openFreshPreview(
                   () => canonicalPreviewBootstrapUrl(b.cid!, "/"),
@@ -71,7 +71,7 @@ export function BuildDeliverableSection({
           verdict ALONE (no mode/framing knowledge), so Build and Agent surfaces
           inherit an identical panel. Shown alongside the DeliverablePanel once
           the run is finished and the verdict has resolved. */}
-      {b.status === "FINISHED" && release.data && (
+      {finishedReady && release.data && (
         <SelfHostPanel
           release={release.data}
           onDownload={() => {

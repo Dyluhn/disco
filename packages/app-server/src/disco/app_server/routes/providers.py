@@ -383,7 +383,11 @@ class _ProviderCatalogue:
         try:
             await _fetch_provider_catalogue(provider, api_key)
         except (httpx.HTTPError, ValueError) as exc:
-            return _ProbeResult(False, _error_text(provider, exc), False)
+            rejected = (
+                isinstance(exc, httpx.HTTPStatusError)
+                and exc.response.status_code in (401, 403)
+            )
+            return _ProbeResult(False, _error_text(provider, exc), False if rejected else None)
         if not (provider.requires_api_key and api_key):
             return _ProbeResult(True, None, None)
         return _ProbeResult(True, None, await self._key_was_exercised(provider))
@@ -399,8 +403,10 @@ class _ProviderCatalogue:
         """
         try:
             await _fetch_provider_catalogue(provider, None)
+        except httpx.HTTPStatusError as exc:
+            return True if exc.response.status_code in (401, 403) else None
         except (httpx.HTTPError, ValueError):
-            return True
+            return None
         return None
 
     async def models(self, provider: ProviderDTO) -> list[ProviderCatalogueModelDTO]:

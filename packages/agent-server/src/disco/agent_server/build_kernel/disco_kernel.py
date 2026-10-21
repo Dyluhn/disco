@@ -221,10 +221,12 @@ class DiscoKernel:
         await self._controls.reject(conversation_id, reason)
 
     async def pick_alternative(self, conversation_id: str, option_id: str) -> None:
-        # The inner impl (runtime.pick_alternative does exactly this); replicated
-        # here so the public runtime method can route through the kernel safely.
         loop = self._loops.loop_for(conversation_id)
-        await loop.pick_alternative(option_id)
+        state = await loop.pick_alternative(option_id, resume=False)
+        # A HIGH-risk choice remains parked until explicit confirmation. Invalid
+        # or duplicate picks must not restart a waiting or completed conversation.
+        if state.execution_status is ConversationStatus.RUNNING:
+            self._controller.kick(conversation_id)
 
     # -- stop / resume --------------------------------------------------------
     async def pause(self, conversation_id: str) -> None:

@@ -142,7 +142,7 @@ def find_high_specificity_claims(
 def source_concentration(
     claims: Iterable[ClaimRecord], work_for_source: WorkResolver, *, threshold: float = 0.15
 ) -> SourceConcentration:
-    """Measure claim share by canonical work (not citation-marker frequency)."""
+    """Measure claim share by canonical work, breaking ties by work identity."""
     records = tuple(claims)
     counts: Counter[str] = Counter()
     for claim in records:
@@ -150,7 +150,11 @@ def source_concentration(
         for work in works:
             counts[work] += 1
     total = len(records)
-    dominant, dominant_count = counts.most_common(1)[0] if counts else (None, 0)
+    # Set iteration and claim order must not change the review prompt when
+    # several works support the same number of claims.
+    dominant, dominant_count = (
+        min(counts.items(), key=lambda item: (-item[1], item[0])) if counts else (None, 0)
+    )
     share = dominant_count / total if total else 0.0
     # A concentration warning is meaningful only when there are at least two
     # claims; a single authoritative claim should not be called a deficiency.

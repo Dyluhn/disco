@@ -104,7 +104,9 @@ def _artifact_identity_matches(
             return False
         if selected.verification_target_url(evidence.deliverable.artifact_path) != evidence.url:
             return False
-    return bool(evidence.url and evidence.deterministic_pass)
+    # Identity is independent of rendering, console, and network claims.
+    # Their failures must not misreport an exact live binding as a URL mismatch.
+    return bool(evidence.url)
 
 
 def _artifact_identity_result(
@@ -469,7 +471,30 @@ def _build_claim_results(
             continue
         result = _basic_structured_claim_result(claim, evidence)
         results.append(result or _extended_structured_claim_result(claim, evidence))
-    return results
+    return _reject_inconsistent_probe(results, evidence, infrastructure_unavailable)
+
+
+def _reject_inconsistent_probe(
+    results: list[HostVerificationClaimResult],
+    evidence: _StructuredWebEvidence,
+    infrastructure_unavailable: bool,
+) -> list[HostVerificationClaimResult]:
+    if infrastructure_unavailable or evidence.deterministic_pass:
+        return results
+    if any(result.required and result.status is VerificationClaimStatus.FAIL for result in results):
+        return results
+    # A failed/malformed aggregate with no matching failed claim is not a
+    # coherent host receipt. Reject its claims as inconsistent evidence instead
+    # of inventing a URL mismatch or permitting a later semantic judge to pass it.
+    return [
+        result.model_copy(
+            update={
+                "status": VerificationClaimStatus.FAIL,
+                "reason": "host structured-browser verdict is inconsistent with its claim evidence",
+            }
+        )
+        for result in results
+    ]
 
 
 def _observed_facts(
@@ -535,9 +560,7 @@ def structured_web_verification_result(
     )
 
     claims = deliverable.required_claims or default_structured_web_claims()
-    evidence = _build_structured_evidence(
-        deliverable, verdict, resolved_verifier_id, basis, refs
-    )
+    evidence = _build_structured_evidence(deliverable, verdict, resolved_verifier_id, basis, refs)
     results = _build_claim_results(
         claims, evidence, infrastructure_unavailable, verdict, resolved_verifier_id, basis, refs
     )
@@ -639,9 +662,7 @@ def _apply_semantic_to_result(
     visual = result.kind is VerificationClaimKind.VISUAL_SEMANTIC
     applied_status = (
         VerificationClaimStatus.UNAVAILABLE
-        if visual
-        and status is VerificationClaimStatus.PASS
-        and screenshot_sha256 is None
+        if visual and status is VerificationClaimStatus.PASS and screenshot_sha256 is None
         else status
     )
     return result.model_copy(

@@ -351,6 +351,18 @@ class DefaultLLMRouter:
         metadata = {**(req.metadata or {}), "conversation_id": ctx.conversation_id}
         return req.model_copy(update={"metadata": metadata})
 
+    def output_token_limit(self, role: ModelRole) -> int | None:
+        """Read the assigned model's declared output capacity without a provider call."""
+        key = self._config.model_for(role)
+        entry = self._config.models.get(key)
+        return entry.max_output_tokens if entry is not None else None
+
+    def context_token_limit(self, role: ModelRole) -> int | None:
+        """Read the assigned model's declared context without dispatching inference."""
+        key = self._config.model_for(role)
+        entry = self._config.models.get(key)
+        return entry.context_window if entry is not None else None
+
     # -- request budget preview -------------------------------------------------
 
     def request_budget_preview(
@@ -493,10 +505,10 @@ class DefaultLLMRouter:
     @staticmethod
     def _effective_requirements(req: CompletionRequest) -> frozenset[Requirement]:
         requirements = set(req.profile.requirements)
-        if any(getattr(message, "images", None) for message in req.messages):
-            requirements.add(Requirement.VISION)
         if req.tools:
             requirements.add(Requirement.TOOL_CALLING)
+        if any(getattr(message, "images", None) for message in req.messages):
+            requirements.add(Requirement.VISION)
         return frozenset(requirements)
 
     def _role_fallback_target(

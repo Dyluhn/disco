@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from ._terminal_content import _terminal_content
 from .common import (
     _APP_VERIFY_PREFIX,
     _STATIC_VERIFY_PREFIX,
@@ -17,7 +18,6 @@ from .common import (
     MessageEvent,
     StatusEvent,
     ToolCall,
-    VerifierVerdictEvent,
     _app_verify_command,
     _appkit_scope_active,
     _FinishGateComponent,
@@ -43,60 +43,6 @@ class _ResolvedVerify:
 
     command: str
     ignored_reason: str | None = None
-
-
-def _unverified_release_final_message(events: list[Event]) -> str:
-    """The host-owned final message for an unverified release, RENDERED.
-
-    GROUNDED FEEDBACK constraints 1 and 4: this replaces the model's own closing
-    summary, so it is the last thing the reader sees — and it used to be one
-    canned paragraph that never said WHICH verification was missing, though the
-    verdict log holds exactly that. It now names the host verdict on record (or
-    states that none was produced), which is the same source the release marker
-    itself is derived from, so message and marker cannot drift.
-    """
-    latest = next(
-        (event for event in reversed(events) if isinstance(event, VerifierVerdictEvent)),
-        None,
-    )
-    if latest is None:
-        observed = "No host verifier verdict was produced at all for this run."
-    else:
-        verdict = (latest.verdict or "none").strip() or "none"
-        observed = (
-            f"The last host verifier verdict on record is {verdict!r} (verified={latest.verified})."
-        )
-    return (
-        "⚠ UNVERIFIED FINAL RESULT: Required host/browser verification did not pass "
-        "or could not run. Browser rendering remains UNVERIFIED, and the deliverable "
-        "may be INCOMPLETE. Any model-authored verification claim is superseded by "
-        f"this host-owned result. {observed}"
-    )
-
-
-def _unverified_release_active(events: list[Event]) -> bool:
-    """Whether finalization is under the current unverified-release marker.
-
-    The marker is a RUNNING status scoped to the current finish attempt. A later
-    lifecycle transition makes an old marker stale, and a later passing host
-    verdict explicitly supersedes it even when a stop-hook kept the same run
-    segment alive. This is deliberately event-only: finalization must not spend
-    another provider call asking the model to correct its pre-gate summary.
-    """
-    active = False
-    for event in events:
-        if isinstance(event, StatusEvent):
-            active = (
-                event.status == ConversationStatus.RUNNING and event.detail == "unverified_release"
-            )
-        elif (
-            active
-            and isinstance(event, VerifierVerdictEvent)
-            and event.verified
-            and event.verdict == "pass"
-        ):
-            active = False
-    return active
 
 
 class _FinalizeService(_FinishGateComponent):
@@ -247,10 +193,7 @@ class _FinalizeService(_FinishGateComponent):
         if await self._loop._stop_allowed(state, events):
             if not await self._coordinator.verification.seal_gate_allows_finish():
                 return Disp.CONTINUE
-            unverified_release = _unverified_release_active(events)
-            final_content = (
-                _unverified_release_final_message(events) if unverified_release else step.thought
-            )
+            final_content, terminal_meta = _terminal_content(events, step.thought)
             # Record the agent's final message (the answer) before
             # finishing — the deliverable text belongs on the log, not
             # discarded on the finish signal. (When the model just
@@ -263,14 +206,7 @@ class _FinalizeService(_FinishGateComponent):
                     MessageEvent(
                         source=EventSource.AGENT,
                         message=LLMMessage(role="assistant", content=final_content),
-                        meta=(
-                            {
-                                "host_owned_terminal_warning": True,
-                                "unverified_release": True,
-                            }
-                            if unverified_release
-                            else {}
-                        ),
+                        meta=terminal_meta,
                     )
                 )
             # runthru-v2 (#3): "done" is driven by the REAL finish gate —

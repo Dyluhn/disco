@@ -356,4 +356,135 @@ async def test_model_verifier_empty_retry_is_bounded_and_remains_unavailable(
     assert verdict.failure_fingerprint == "model_verifier_unavailable"
     assert len(router.requests) == 2
     assert caplog.text.count("retrying once") == 1
-    assert "JSONDecodeError" in verdict.detail
+    assert "output budget exhausted" in verdict.detail
+
+
+@pytest.mark.parametrize("retry", [False, True])
+async def test_model_verifier_rejects_parseable_but_truncated_pass(retry):
+    truncated = CompletionResponse(
+        text=json.dumps({"verified": True, "verdict": "pass"}),
+        usage=TokenUsage(input_tokens=100, output_tokens=900),
+        finish_reason="length",
+        model_used="arbitrary-verifier",
+    )
+    responses = [truncated.model_copy(update={"text": ""})] if retry else []
+    router = _SequenceRouter([*responses, truncated])
+
+    verdict = await ModelVerifier(router).judge(VerifierContextSeed())
+
+    assert not verdict.verified and verdict.verdict == "unavailable"
+    assert "output budget exhausted" in verdict.detail
+    assert len(router.requests) == (2 if retry else 1)
+
+
+async def test_model_verifier_preserves_prose_and_structured_negative_findings():
+    failures = [
+        "Footer is missing.",
+        {"kind": "layout", "message": "Heading is clipped.", "path": "index.html"},
+        "The button does nothing.",
+    ]
+    router = _Router(
+        json.dumps(
+            {
+                "verified": False,
+                "verdict": "fail",
+                "detail": "Changes are required.",
+                "failures": failures,
+                "next_action": "Fix the footer and heading.",
+            }
+        )
+    )
+    verdict = await ModelVerifier(router).judge(VerifierContextSeed())
+    assert verdict.verified is False and verdict.verdict == "fail"
+    assert verdict.detail == "Changes are required."
+    assert verdict.next_action == "Fix the footer and heading."
+    assert verdict.failures == [
+        {"kind": "semantic_failure", "message": failures[0]},
+        failures[1],
+        {"kind": "semantic_failure", "message": failures[2]},
+    ]
+    assert len(router.requests) == 1
+    prompt = router.requests[0].messages[0].content
+    assert "JSON boolean" in prompt and "never a string" in prompt
+    assert "array of objects" in prompt and "string kind and message" in prompt
+    assert "every other verdict requires verified=false" in prompt
+
+
+@pytest.mark.parametrize("value", ["false", "true", "False", "yes", 0, 1, None, [], {}, [True]])
+async def test_model_verifier_rejects_nonboolean_verified_without_truthiness(value):
+    router = _Router(json.dumps({"verified": value, "verdict": "pass"}))
+    verdict = await ModelVerifier(router).judge(VerifierContextSeed())
+    assert verdict.verified is False and verdict.verdict == "unavailable"
+    assert len(router.requests) == 1
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"verdict": "pass"},
+        {"verified": True},
+        {"verified": False, "verdict": "pass"},
+        {"verified": True, "verdict": "fail"},
+        {"verified": True, "verdict": "unknown"},
+        {"verified": True, "verdict": "pass", "failures": "Footer missing"},
+        {"verified": True, "verdict": "pass", "failures": {"message": "Footer missing"}},
+        {"verified": True, "verdict": "pass", "failures": None},
+        {"verified": True, "verdict": "pass", "failures": ["Footer missing"]},
+        {
+            "verified": True,
+            "verdict": "pass",
+            "failures": [{"kind": "missing", "message": "Footer missing"}],
+        },
+        {"verified": True, "verdict": "pass", "failures": [""]},
+        {"verified": True, "verdict": "pass", "failures": [False]},
+        {"verified": True, "verdict": "pass", "detail": {"warning": "Not inspected"}},
+    ],
+)
+async def test_model_verifier_rejects_ambiguous_or_conflicting_pass(payload):
+    router = _Router(json.dumps(payload))
+    verdict = await ModelVerifier(router).judge(VerifierContextSeed())
+    assert verdict.verified is False and verdict.verdict == "unavailable"
+    assert len(router.requests) == 1
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        '{"verified":false,"verified":true,"verdict":"pass"}',
+        '{"verified":true,"verdict":"fail","verdict":"pass"}',
+        '{"verified":true,"verdict":"pass","failures":["Missing"],"failures":[]}',
+    ],
+)
+async def test_model_verifier_rejects_duplicate_judgment_keys(payload):
+    verdict = await ModelVerifier(_Router(payload)).judge(VerifierContextSeed())
+    assert verdict.verified is False and verdict.verdict == "unavailable"
+
+
+@pytest.mark.parametrize(
+    "label", ["pass", "passed", "ok", "fail", "failed", "degraded", "unavailable", "unverifiable"]
+)
+async def test_model_verifier_preserves_unambiguous_explicit_judgments(label):
+    passed = label in {"pass", "passed", "ok"}
+    verdict = await ModelVerifier(
+        _Router(json.dumps({"verified": passed, "verdict": label, "failures": []}))
+    ).judge(VerifierContextSeed())
+    assert verdict.verified is passed
+    assert verdict.verdict == ({"passed": "pass", "ok": "pass", "failed": "fail"}.get(label, label))
+    assert verdict.failures == []
+
+
+@pytest.mark.parametrize("finish", ["error", "content_filter", "tool_calls"])
+async def test_model_verifier_noncomplete_response_cannot_certify_pass(finish):
+    router = _SequenceRouter(
+        [
+            CompletionResponse(
+                text='{"verified":true,"verdict":"pass"}',
+                finish_reason=finish,
+                usage=TokenUsage(input_tokens=20, output_tokens=10),
+                model_used="arbitrary-verifier",
+            )
+        ]
+    )
+    verdict = await ModelVerifier(router).judge(VerifierContextSeed())
+    assert verdict.verified is False and verdict.verdict == "unavailable"
+    assert len(router.requests) == 1

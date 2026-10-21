@@ -44,6 +44,7 @@ from disco.core.llm import (
 from ..models import Passage
 from ._citation_aliases import NO_ALIASES, CitationAliases, citation_aliases
 from ._progress_events import emit_continuation, emit_section_done
+from ._source_notes import reading_disclosure
 from ._source_reading import SourceNotes, notes_blocks, read_sources, source_reading_trail
 from ._stop import ShouldCancelFn, await_stoppable, raise_if_stopped
 from ._synthesis_parts import _join_continuation_text
@@ -596,7 +597,9 @@ async def _writer_opening(
                 role="user",
                 content=_report_instruction(
                     query, outcome, recency_window, aliases, notes, evidence_char_budget
-                ),
+                )
+                + "\n\n"
+                + reading_disclosure(notes),
             ),
         ],
         notes,
@@ -742,6 +745,8 @@ async def write_report(
 
     written = await _finalize(final, by_id=by_id, nli=nli, emit=emit)
     _record_review_notes(written, review, review_trail)
+    if disclosure := reading_disclosure(source_notes):
+        written.review_notes.append(disclosure)
     if written.unverified_sentences:
         trail.append({"kind": "report_unverified", "sentences": len(written.unverified_sentences)})
     written.trail = trail

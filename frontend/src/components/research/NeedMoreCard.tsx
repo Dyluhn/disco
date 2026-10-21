@@ -81,6 +81,7 @@ export function NeedMoreCard({
   // Independent, resettable state per action.
   const [followUpOpen, setFollowUpOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
+  const exportInvoker = useRef<HTMLElement | null>(null);
 
   // WALK-20: include-follow-ups modal state for Export and Audio.
   const [includeForExportOpen, setIncludeForExportOpen] = useState(false);
@@ -88,6 +89,7 @@ export function NeedMoreCard({
   const [includeForAudioOpen, setIncludeForAudioOpen] = useState(false);
   const [audioFollowUpSeqs, setAudioFollowUpSeqs] = useState<number[]>([]);
   const [audioModeOpen, setAudioModeOpen] = useState(false);
+  const audioInvoker = useRef<HTMLElement | null>(null);
 
   const hasFollowUps = followUps.length > 0;
   const navigate = useNavigate();
@@ -140,33 +142,15 @@ export function NeedMoreCard({
     }
   }, [building, report, navigate, setMode]);
 
-  // Export opener for focus-return: the controlled Export Dialog has no
-  // registered Radix Trigger, so Close/Escape would otherwise leave focus on
-  // BODY. Preserve the exact activated Export button per card; ExportModal
-  // returns focus to it (guarded: connected/enabled/visible only).
-  const exportOpenerRef = useRef<HTMLButtonElement | null>(null);
-
-  // Audio opener for focus-return: the controlled audio selector + mode
-  // dialogs have no registered Radix Trigger, so cancel would leave BODY.
-  // Per-card ref; direct MouseEvent currentTarget only, never globals or
-  // document.activeElement inference. No-event (programmatic) calls clear
-  // any stale opener so a later cancel never returns to an unrelated target.
-  const audioOpenerRef = useRef<HTMLButtonElement | null>(null);
-
   // Export button: show include-modal first if follow-ups exist.
-  const handleExportClick = useCallback(
-    (event?: React.MouseEvent<HTMLButtonElement>) => {
-      if (event?.currentTarget) {
-        exportOpenerRef.current = event.currentTarget;
-      }
-      if (hasFollowUps) {
-        setIncludeForExportOpen(true);
-      } else {
-        setExportOpen(true);
-      }
-    },
-    [hasFollowUps],
-  );
+  const handleExportClick = useCallback((event: React.MouseEvent<HTMLButtonElement>) => {
+    exportInvoker.current = event.currentTarget;
+    if (hasFollowUps) {
+      setIncludeForExportOpen(true);
+    } else {
+      setExportOpen(true);
+    }
+  }, [hasFollowUps]);
 
   const handleExportIncludeConfirm = useCallback((seqs: number[]) => {
     setExportFollowUpSeqs(seqs);
@@ -175,24 +159,21 @@ export function NeedMoreCard({
   }, []);
 
   // Audio button: show include-modal first if follow-ups exist.
-  // Direct presses carry a MouseEvent origin; programmatic requestedAction
-  // calls have no DOM origin today, so clear any stale opener (keep
-  // opens/nonce behavior, never restore to a previously activated target).
-  const handleAudioClick = useCallback(
-    (event?: React.MouseEvent<HTMLButtonElement>) => {
-      if (event?.currentTarget) {
-        audioOpenerRef.current = event.currentTarget;
-      } else {
-        audioOpenerRef.current = null;
-      }
-      if (hasFollowUps) {
-        setIncludeForAudioOpen(true);
-      } else {
-        setAudioModeOpen(true);
-      }
-    },
-    [hasFollowUps],
-  );
+  const handleAudioClick = useCallback((event?: React.MouseEvent<HTMLButtonElement>) => {
+    // A click names its own button; a top-bar request keeps the focused
+    // external invoker, never a control inside this card.
+    const active = document.activeElement;
+    audioInvoker.current = event?.currentTarget ?? (
+      active instanceof HTMLButtonElement && !cardRef.current?.contains(active)
+        ? active
+        : null
+    );
+    if (hasFollowUps) {
+      setIncludeForAudioOpen(true);
+    } else {
+      setAudioModeOpen(true);
+    }
+  }, [hasFollowUps]);
 
   const handleAudioIncludeConfirm = useCallback((seqs: number[]) => {
     setAudioFollowUpSeqs(seqs);
@@ -265,7 +246,7 @@ export function NeedMoreCard({
           onModeOpenChange={setAudioModeOpen}
           reportQuery={report.query}
           onRequestGenerate={handleAudioClick}
-          triggerRef={audioOpenerRef}
+          returnFocusRef={audioInvoker}
         />
 
         {/* 4. Build a deck — autonomous handoff: turn this report into slides */}
@@ -303,8 +284,9 @@ export function NeedMoreCard({
         onOpenChange={setIncludeForExportOpen}
         followUps={followUps}
         onConfirm={handleExportIncludeConfirm}
+        returnFocusRef={exportInvoker}
+        confirmOpensDialog
         actionLabel="Export"
-        triggerRef={exportOpenerRef}
       />
 
       {/* WALK-20: include-follow-ups modal for Audio */}
@@ -313,18 +295,19 @@ export function NeedMoreCard({
         onOpenChange={setIncludeForAudioOpen}
         followUps={followUps}
         onConfirm={handleAudioIncludeConfirm}
+        confirmOpensDialog
+        returnFocusRef={audioInvoker}
         actionLabel="Generate audio"
-        triggerRef={audioOpenerRef}
       />
 
       {/* Export modal (Radix Dialog) */}
       <ExportModal
         open={exportOpen}
+        returnFocusRef={exportInvoker}
         onOpenChange={setExportOpen}
         report={report}
         cid={cid}
         followUpSeqs={exportFollowUpSeqs.length > 0 ? exportFollowUpSeqs : undefined}
-        triggerRef={exportOpenerRef}
       />
     </section>
   );

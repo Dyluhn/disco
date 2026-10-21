@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 
 import numpy as np
@@ -184,6 +185,81 @@ def configure_tts(monkeypatch: pytest.MonkeyPatch):
 
 
 # ---- tests ----------------------------------------------------------------
+
+
+def test_cached_mode_selection_survives_reload(tmp_path, tts_enabled):
+    """Choosing an older cached single track must beat a newer podcast on reload."""
+    report = _make_report()
+    paths = {}
+    for mode, timestamp in (("single", 100), ("podcast", 200)):
+        mp3, transcript = report_audio_mod._report_audio_cache_paths(report, None, mode, tmp_path)
+        report_audio_mod._write_audio_artifacts(
+            mp3, transcript, mode.encode(), mode,
+            {"mode": mode, "report_key": report_audio_mod.report_content_key(report)},
+        )
+        os.utime(mp3, (timestamp, timestamp))
+        paths[mode] = mp3
+    assert report_audio_mod.existing_report_audio(
+        tmp_path, report_audio_mod.report_content_key(report)
+    )[0]["mode"] == "podcast"
+    selected, _ = asyncio.run(report_audio_mod.generate_report_audio(
+        report, conversation_id="conv_cache", tts_settings=tts_enabled,
+        out_dir=tmp_path, mode="single",
+    ))
+    assert selected == paths["single"]
+    restored = report_audio_mod.existing_report_audio(
+        tmp_path, report_audio_mod.report_content_key(report)
+    )
+    assert restored[0]["mp3_name"] == selected.name
+    assert selected.read_bytes() == b"single"
+    assert selected.stat().st_mtime == 100
+    assert paths["podcast"].read_bytes() == b"podcast"
+
+
+
+def test_slow_older_generation_cannot_replace_newer_cached_selection(tmp_path, tts_enabled):
+    report = _make_report()
+    single, transcript = report_audio_mod._report_audio_cache_paths(
+        report, None, "single", tmp_path
+    )
+    report_audio_mod._write_audio_artifacts(single, transcript, b"single", "single", {
+        "mode": "single", "report_key": report_audio_mod.report_content_key(report),
+    })
+
+    async def exercise():
+        async def choose_single(event):
+            if event.get("stage") == "preparing":
+                await report_audio_mod.generate_report_audio(
+                    report, "conv_race", tts_settings=tts_enabled, out_dir=tmp_path, mode="single",
+                )
+        await report_audio_mod.generate_report_audio(
+            report, "conv_race", tts_settings=tts_enabled, out_dir=tmp_path,
+            mode="podcast", force=True, on_progress=choose_single,
+        )
+    asyncio.run(exercise())
+    restored = report_audio_mod.existing_report_audio(
+        tmp_path, report_audio_mod.report_content_key(report)
+    )
+    assert [item["mode"] for item in restored] == ["single", "podcast"]
+
+def test_audio_download_supports_ranges(client, store, monkeypatch, tmp_path):
+    from disco.agent_server.routes import report as report_routes
+
+    monkeypatch.setattr(report_routes, "report_audio_cache_dir", lambda: tmp_path)
+    cid = _create_conv(client)
+    directory = tmp_path / cid
+    directory.mkdir()
+    payload = bytes(range(256)) * 100
+    (directory / "audio_overview_single_example.mp3").write_bytes(payload)
+    url = f"/conversations/{cid}/report/audio/audio_overview_single_example.mp3"
+    response = client.get(url, headers={"Range": "bytes=10000-10999"})
+    assert response.status_code == 206
+    assert response.content == payload[10000:11000]
+    assert response.headers["content-range"] == f"bytes 10000-10999/{len(payload)}"
+    assert response.headers["accept-ranges"] == "bytes"
+    assert response.headers["cache-control"] == "private, no-store"
+    assert client.get(url, headers={"Range": "bytes=30000-"}).status_code == 416
+    assert client.get(url).content == payload
 
 
 def test_generate_report_audio_in_process(

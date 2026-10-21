@@ -73,7 +73,7 @@ describe("Research surface (integration + streaming reconcile)", () => {
     const article = screen.getByRole("article");
     // an unsupported claim's citation carries the verdict in its label
     expect(
-      within(article).getByRole("button", { name: /Not supported by the cited source/i }),
+      within(article).getByRole("button", { name: /Support not established/i }),
     ).toBeInTheDocument();
   }, TEST_TIMEOUT);
 });

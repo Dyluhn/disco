@@ -4,14 +4,23 @@ from dataclasses import replace
 
 import httpx
 import pytest
+from disco.agent_server import host_proxy
+from disco.agent_server.host_proxy import HostPreviewProxyMiddleware
 from disco.agent_server.host_proxy_parts._cookies import _rewrite_embedded_app_cookie
 from disco.agent_server.host_proxy_parts._forwarding import (
     _injected_html_headers,
     _response_forward_headers,
 )
 from disco.core.auth import (
+    PREVIEW_APP_HTTP_METHODS,
+    PREVIEW_BOOTSTRAP_PATH,
+    PREVIEW_COOKIE,
+    AuthSession,
     PreviewCapability,
+    PreviewCapabilitySigner,
 )
+from disco.core.store.sqlite import SqliteEventStore
+from starlette.applications import Starlette
 from test_host_proxy import upstream_http as upstream_http
 
 
@@ -138,3 +147,68 @@ def test_shared_response_paths_adapt_repeated_app_cookies_after_reserved_filteri
         "tc_session=opaque; HttpOnly; Path=/; Secure; SameSite=None; Partitioned",
         "theme=dark; Path=/; Secure; SameSite=None; Partitioned",
     ]
+
+
+@pytest.mark.parametrize("embedded", [False, True])
+async def test_canonical_live_bootstrap_carries_cookie_policy_to_later_fetch(
+    upstream_http, embedded, monkeypatch
+):
+    store = SqliteEventStore(":memory:")
+    signer = PreviewCapabilitySigner(redemption_store=store)
+    authority = "live:" + "a" * 64
+    app = Starlette()
+    app.add_middleware(
+        HostPreviewProxyMiddleware,
+        upstream_resolver=lambda *_args: upstream_http,
+        require_capability=True,
+        redemption_store=store,
+        canonical_authority_resolver=lambda *_args: authority,
+    )
+    intent = signer.mint_intent(
+        session=AuthSession("owner", "csrf", "session", 2**31),
+        conversation_id="conv_aaaaaaaaowner",
+        port=8000,
+        authority_id=authority,
+        http_methods=PREVIEW_APP_HTTP_METHODS,
+    )
+    try:
+        base = "http://p2-aaaaaaaa-8000.localhost"
+        async with (
+            httpx.AsyncClient() as upstream_client,
+            httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url=base) as client,
+        ):
+            # Own the transport on this test's loop; another test's pooled sockets
+            # may belong to an already closed event loop.
+            monkeypatch.setattr(host_proxy, "_get_client", lambda: upstream_client)
+            redeemed = await client.post(
+                PREVIEW_BOOTSTRAP_PATH,
+                headers={
+                    "Sec-Fetch-Dest": "iframe" if embedded else "document",
+                    "Sec-Fetch-Site": "cross-site",
+                },
+                data={"intent": intent},
+            )
+            assert redeemed.status_code == 200
+            cookie = redeemed.headers["set-cookie"].split(";", 1)[0]
+            # Login/fetch no longer carries iframe bootstrap metadata.
+            fetched = await client.get(
+                "/cookies",
+                headers={
+                    "Cookie": cookie,
+                    "Sec-Fetch-Dest": "empty",
+                    "Sec-Fetch-Site": "same-origin",
+                },
+            )
+            assert fetched.status_code == 200
+            values = fetched.headers.get_list("set-cookie")
+            expected = "app_session=preserved; Path=/"
+            if embedded:
+                expected += "; Secure; SameSite=None; Partitioned"
+            assert expected in values
+            assert not any(value.startswith(PREVIEW_COOKIE + "=") for value in values)
+            rejected = await client.post(
+                "/write", headers={"Cookie": cookie, "Origin": "https://other.example"}
+            )
+            assert rejected.status_code == 403
+    finally:
+        store.close()

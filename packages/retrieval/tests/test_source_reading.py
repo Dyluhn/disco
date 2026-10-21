@@ -265,7 +265,10 @@ async def test_the_run_call_bound_stops_reading_further_sources(monkeypatch) -> 
     )
 
     assert router.calls == 1
-    assert list(notes) == ["p1"]
+    assert list(notes) == ["p1", "p2"]
+    assert notes["p1"].ok
+    assert notes["p2"].complete and not notes["p2"].ok and notes["p2"].calls == 0
+    assert "run allowance exhausted" in notes["p2"].error
 
 
 # ---------------------------------------------------------------------------
@@ -525,6 +528,7 @@ async def test_write_report_reads_a_long_source_and_puts_its_notes_in_the_draft_
             "calls": 3,
             "input_tokens": 3,
             "output_tokens": 3,
+            "reader_output_tokens_charged": 3,
             "findings_accepted": 3,
             "findings_rejected": 0,
             "ok": True,
@@ -703,7 +707,10 @@ async def test_the_per_run_reader_bound_stops_before_the_next_source(monkeypatch
     )
 
     assert router.calls == 2
-    assert list(notes) == ["p1", "p2"]
+    assert list(notes) == ["p1", "p2", "p3"]
+    assert notes["p1"].ok and notes["p2"].ok
+    assert notes["p3"].complete and not notes["p3"].ok and notes["p3"].calls == 0
+    assert "run allowance exhausted" in notes["p3"].error
 
 
 async def test_a_reader_call_asks_the_provider_not_to_think() -> None:

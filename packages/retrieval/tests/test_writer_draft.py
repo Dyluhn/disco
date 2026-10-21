@@ -377,10 +377,10 @@ async def test_a_missing_model_verdict_is_recorded_on_the_report() -> None:
         "report_draft",
         "report_review",
         "report_review_reask",
-        "report_final_check",
-        "report_final_check",
     ]
     assert _rows(written, "report_review")[0]["outcome"] == REVIEW_OUTCOME_UNAVAILABLE
+    assert not _rows(written, "report_final_check")
+    assert _rows(written, "report_review")[0]["decisions_used"] == 2
 
 
 async def test_findings_buy_exactly_one_rework() -> None:

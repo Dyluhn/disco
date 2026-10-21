@@ -290,7 +290,7 @@ async def test_stop_names_a_port_the_platform_could_not_release(monkeypatch) -> 
 
     async def _still_bound(_instance, ports):
         return {
-            port: PortOwner(port=port, pid=4242, cmdline="node server.js", session="server")
+            port: PortOwner(port=port, pid=4242, cmdline="node server.js", session="disco-server")
             for port in ports
         }
 
@@ -303,7 +303,7 @@ async def test_stop_names_a_port_the_platform_could_not_release(monkeypatch) -> 
     assert "shell_kill_process(session='server')" in stop.content
     assert stop.structured is not None
     assert stop.structured["ports_still_served"] == [
-        {"port": 3000, "session": "server", "pid": 4242}
+        {"port": 3000, "session": "disco-server", "pid": 4242}
     ]
 
 
@@ -385,3 +385,102 @@ async def test_stop_stays_quiet_when_the_port_is_actually_free(monkeypatch) -> N
     assert "STILL served by" not in stop.content
     assert stop.structured is not None
     assert stop.structured["ports_still_served"] == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("namespace", ["", "conversation-a-"])
+async def test_stop_residual_owner_uses_tool_facing_session_name(monkeypatch, namespace) -> None:
+    from disco.tools.sandbox.port_owner import PortOwner
+    from disco.tools.sandbox.shell_sessions import ShellSessionManager
+
+    sandbox = _FakeSandbox()
+    sandbox.sessions.namespace = namespace
+    _attach_manager(sandbox)
+    ctx = _ctx(sandbox)
+    await PreviewStartTool().run(PreviewStartArgs(serve_dir="dist", name="preview"), ctx)
+    raw_name = f"disco-{namespace}preview"
+
+    async def _owner(_instance, ports):
+        return {p: PortOwner(p, 1268, "node server.js", raw_name) for p in ports}
+
+    monkeypatch.setattr("disco.tools.sandbox.port_owner.port_owners", _owner)
+    stop = await PreviewStopTool().run(_stop_args(), ctx)
+
+    assert "shell_kill_process(session='preview')" in stop.content
+    # The suggested argument resolves to exactly the observed owning tmux session.
+    assert ShellSessionManager._full_name(sandbox.sessions, "preview") == raw_name
+    assert stop.structured["ports_still_served"][0]["session"] == raw_name
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "raw_name",
+    ["disco-other-preview", "pmx-conversation-a-preview", "disco-conversation-a-__kernel"],
+)
+async def test_stop_does_not_offer_local_kill_for_unaddressable_owner(
+    monkeypatch, raw_name
+) -> None:
+    from disco.tools.sandbox.port_owner import PortOwner
+
+    sandbox = _FakeSandbox()
+    sandbox.sessions.namespace = "conversation-a-"
+    _attach_manager(sandbox)
+    ctx = _ctx(sandbox)
+    await PreviewStartTool().run(PreviewStartArgs(serve_dir="dist", name="app"), ctx)
+
+    async def _owner(_instance, ports):
+        return {p: PortOwner(p, 4242, "node server.js", raw_name) for p in ports}
+
+    monkeypatch.setattr("disco.tools.sandbox.port_owner.port_owners", _owner)
+    stop = await PreviewStopTool().run(_stop_args(), ctx)
+
+    assert stop.success
+    assert raw_name in stop.content
+    assert "shell_kill_process(session=" not in stop.content
+    assert stop.structured["ports_still_served"] == [
+        {"port": 3000, "session": raw_name, "pid": 4242}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_stop_real_probe_without_owner_does_not_invent_surviving_server(monkeypatch) -> None:
+    import json
+    from types import SimpleNamespace
+
+    sandbox = _FakeSandbox()
+    _attach_manager(sandbox)
+    ctx = _ctx(sandbox)
+    await PreviewStartTool().run(PreviewStartArgs(serve_dir="dist", name="app"), ctx)
+
+    async def _probe(command, *, timeout_s):
+        return SimpleNamespace(exit_code=0, stdout=json.dumps([{"port": 3000, "pid": None}]))
+
+    # Exercise the real port_owners deserializer, not a fake returning None.
+    monkeypatch.setattr(sandbox, "exec_shell", _probe, raising=False)
+    stop = await PreviewStopTool().run(_stop_args(), ctx)
+
+    assert stop.success
+    assert stop.content == "Stopped preview(s): app"
+    assert stop.structured["ports_still_served"] == []
+
+
+@pytest.mark.asyncio
+async def test_stop_reports_unattributed_live_pid_without_inventing_origin(monkeypatch) -> None:
+    from disco.tools.sandbox.port_owner import PortOwner
+
+    sandbox = _FakeSandbox()
+    _attach_manager(sandbox)
+    ctx = _ctx(sandbox)
+    await PreviewStartTool().run(PreviewStartArgs(serve_dir="dist", name="app"), ctx)
+
+    async def _owner(_instance, ports):
+        return {p: PortOwner(p, 4242, "node server.js", None) for p in ports}
+
+    monkeypatch.setattr("disco.tools.sandbox.port_owner.port_owners", _owner)
+    stop = await PreviewStopTool().run(_stop_args(), ctx)
+
+    assert "STILL served by pid 4242 (node server.js)" in stop.content
+    assert "no owning shell session has been identified" in stop.content
+    assert "not started by the platform" not in stop.content
+    assert "shell_kill_process(session=" not in stop.content
+    assert stop.structured["ports_still_served"] == [{"port": 3000, "session": None, "pid": 4242}]

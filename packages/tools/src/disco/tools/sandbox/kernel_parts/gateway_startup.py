@@ -36,10 +36,18 @@ def _resolve_gateway_url(gk: GatewayKernel, port: int) -> str:
     # no transport to its own gateway. Container provisioning must provide
     # the explicit loopback mapping or code_exec fails closed.
     mapping = None
-    if hasattr(gk._sandbox, "internal_port_mapping"):
+    opener = getattr(gk._sandbox, "_open_kernel_port", None)
+    if callable(opener):
+        mapping = opener(port)
+    elif hasattr(gk._sandbox, "internal_port_mapping"):
         mapping = gk._sandbox.internal_port_mapping(port)
 
-    if not mapping:
+    if (
+        not isinstance(mapping, tuple)
+        or len(mapping) != 2
+        or not isinstance(mapping[0], str)
+        or not isinstance(mapping[1], int)
+    ):
         raise kernel.SandboxError(
             "kernel gateway internal transport is unavailable; "
             "code_exec cannot start for this sandbox session"
