@@ -1,5 +1,33 @@
 # Current State
 
+## 2026-10-21 v0.2.3 landing
+
+Package **PKG-65-V023-LANDING** lands the v0.2.3 stack
+(`fix/next-ui-fixes-20260925`, 182 reviewed commits) and PR #30 onto main in one
+landing. Main's PRs #4-#29 had re-derived some of the same fixes; where both
+sides fixed one bug the landing keeps one mechanism and every test id from both
+sides. Collected test ids go from 14,834 to 15,744; frontend public modules from
+448 to 468. The receipt is `development/notes/landing-v023-20261021.md`; the
+working notes and gate logs are in
+`/var/home/dylan/AI-Work/disco-v023-landing-20261021/`.
+
+Owner decisions of 2026-10-21, written: finish line **"v0.2.3 + launch-ready"**;
+landing shape **"One rebased landing"**; gVisor **"Test it on a rootful VM"**;
+merge authority **"Merge when gates pass"** (authorizes this landing, the
+authority regeneration and the seal rebaseline). The owner's top concerns,
+verbatim: **"My concerns are deep research reports taking forever, and
+functionality that appears that it works but doesn't actually."**
+
+Not done by this landing: the v0.2.3 tag and image publication, Deep Research
+speed work (a measured breakdown of past runs is in
+`/var/home/dylan/AI-Work/disco-dr-speed-20261021/REPORT.md`), the
+false-affordance audit, gVisor on a rootful host, and clean-machine verification
+of the published images.
+
+Evidence note: `/var/home/dylan/AI-Work/disco-gap-closure-2026-09-05/`, cited
+below and in the Launch Checklist, was deleted in the 2026-10-16 storage
+cleanup. Those citations are dangling; no replacement evidence is claimed.
+
 ## 2026-09-21 validation cleanup
 
 Package **PKG-64-VALIDATION-CLEANUP** fixes the remaining validation failures
