@@ -1,8 +1,0 @@
-{
-  "id": "p07",
-  "category": "educational",
-  "description": "training module with section headers and progressive disclosure",
-  "goal": "Create a 6-slide employee onboarding training deck. Slide 1: Welcome to NovaCorp — Day 1 Orientation. Slide 2: Company mission and values (3 values: Innovation, Integrity, Impact — each with a 1-sentence description). Slide 3: Your first week — checklist of 7 items (setup laptop, join Slack, meet your team, review handbook, complete security training, set 30-day goals, 1:1 with manager). Slide 4: Tools we use — table of tool categories (comms: Slack, docs: Notion, code: GitHub, meetings: Zoom). Slide 5: Who to ask — org chart text (your manager → team lead → department head → CTO). Slide 6: Resources and next steps with links.",
-  "expected_layouts": ["title", "bullets_with_icons", "checklist", "table", "hierarchy", "resources"],
-  "stress": "educational structure, checklists, progressive learning"
-}

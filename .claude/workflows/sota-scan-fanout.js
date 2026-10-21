@@ -1,1 +1,0 @@
-../../development/sota-scan/workflows/sota-scan-fanout.js

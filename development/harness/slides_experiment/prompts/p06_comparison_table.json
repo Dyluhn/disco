@@ -1,8 +1,0 @@
-{
-  "id": "p06",
-  "category": "comparison",
-  "description": "competitive comparison with two-column layout needs",
-  "goal": "Create a 4-slide competitive analysis deck. Slide 1: 'Market Landscape — Where We Win'. Slide 2: Two-column comparison — Us (fast, cited, private) vs Perplexity (ad-supported, no enterprise, US-only). Slide 3: Two-column comparison — Us vs ChatGPT Search (no structured reports, no build mode, hallucination risk). Slide 4: Summary differentiation table — 5 rows (speed, citations, privacy, enterprise, build mode) with checkmarks/crosses for each competitor.",
-  "expected_layouts": ["title", "two_column", "two_column", "table"],
-  "stress": "two-column layouts, comparison, structured table"
-}
