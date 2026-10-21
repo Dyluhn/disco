@@ -97,3 +97,12 @@ def test_search_extraction_rate_limit_is_not_success():
     )
     assert not ok and status == "error" and "429" in detail
     assert "authenticated" not in detail
+
+
+@pytest.mark.parametrize("message", [{}, {"content": ""}, {"content": None}])
+async def test_one_token_empty_completion_envelopes_remain_transport_success(monkeypatch, message):
+    response = httpx.Response(
+        200, json={"choices": [{"message": message, "finish_reason": "length"}]}
+    )
+    ok, status, _ = await run_probe(monkeypatch, response)
+    assert ok and status == "ok"
