@@ -581,5 +581,8 @@ PUBLIC_API_MEMBER_NAMES = frozenset(
         # the NAME count now differ by one.
         "SqliteEventStore",
         "WSClientFrame",
+        # The v0.2.3 landing carries v0.2.3's DesignSpec member transition
+        # (content_width, reduced_motion; PKG-24-UI-ACCEPTANCE).
+        "DesignSpec",
     }
 )

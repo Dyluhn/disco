@@ -27,8 +27,10 @@ OTHER = "packages/tools/tests/test_audio_overview_integration.py"
 # Advanced by the package that lands a rename; 0 until one does.
 # PKG-38-UI-FIXES-V51 is the first: 14 renames over 6 files, 7 python and 7
 # TypeScript, every one a behaviour restated under a name that is true again.
-SHIPPED_RENAME_FILES = 6
-SHIPPED_RENAMES = 14
+# The v0.2.3 landing adds v0.2.3's four records (9 renames) and its own one
+# (test_source_reading_empty, the reader length rule).
+SHIPPED_RENAME_FILES = 11
+SHIPPED_RENAMES = 24
 OLD = f"{PATH}::test_short_batch_is_still_rejected"
 NEW = f"{PATH}::test_short_batch_is_asked_for_again_not_rejected"
 

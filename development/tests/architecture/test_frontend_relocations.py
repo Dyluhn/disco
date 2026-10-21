@@ -25,7 +25,9 @@ from architecture.public_api_parts import _relocations  # noqa: E402
 # Advanced by the package that lands a relocation; 0 until one does.
 # PKG-38-UI-FIXES-V51 is the first: the three ActivityFeed download components
 # and the image-gen setup note, all four moved without losing a capability.
-SHIPPED_RELOCATIONS = 4
+# The v0.2.3 landing adds eight: v0.2.3's six (AppCard, the four TweakPanel
+# exports, PreviewInfo) and the two McpConnectionForm renames.
+SHIPPED_RELOCATIONS = 12
 OLD_PATH = "frontend/src/components/build/ActivityFeed.tsx"
 NEW_PATH = "frontend/src/components/build/activityFeedParts/FileDownload.tsx"
 NAME = "FileDownload"

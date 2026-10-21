@@ -708,7 +708,7 @@ class TestMappingStatic:
             # Attempt diagnostics add two Python files, 12 static IDs and 48 cases.
             # The v0.2.3 landing (PKG-65-V023-LANDING) merges the v0.2.3 stack and
             # PR #30 onto main: +65 python test files, +401 static IDs (net +393),
-            # +37 TypeScript files, +168 TypeScript static IDs (net +166). Ten
+            # +37 TypeScript files, +168 TypeScript static IDs (net +166). Nine
             # identities are renamed under v0.2.3's four records and one more
             # (test_source_reading_empty) under the landing's own record.
             "python_test_file_count": 1055,
@@ -756,7 +756,8 @@ class TestMappingStatic:
         # probes, the pairing-token CLI and the store title-uniqueness suite.
         # Concurrent encoder tests reset the two process-wide singleton caches.
         # Numeric usage probes isolate the model_io journal with a fresh registry fixture.
-        assert len(fixtures) == 210
+        # The v0.2.3 landing adds twelve fixtures with v0.2.3's and PR #30's suites.
+        assert len(fixtures) == 222
         assert fixtures == sorted(fixtures, key=_canonical_row)
         assert len({_canonical_row(row) for row in fixtures}) == len(fixtures)
         assert all(
